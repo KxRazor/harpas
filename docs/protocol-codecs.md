@@ -5,8 +5,9 @@ Bedrock packets (`harpas-protocol-bedrock`): the protocol schema they are genera
 hand-written exceptions, testing, and the constraints on the sources. Bedrock transport is covered in
 [raknet.md](raknet.md); translation and gameplay in [bedrock-interop.md](bedrock-interop.md).
 
-Status: design. Nothing here is implemented. Facts about sources cite them in [References](#references);
-everything else is a design decision of this project.
+Status: prototype. The Java 26.1 Handshaking, Status and Login codecs are generated from the schema
+([Prototype results](#prototype-results)); Configuration, Play and Bedrock are design. Facts about sources cite
+them in [References](#references); everything else is a design decision of this project.
 
 ---
 
@@ -56,15 +57,59 @@ reviewing them all again. Harpas generates its codecs from a schema instead.
     implementations used to cross-check fields.
 - Attribution for every source goes in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
+### Format
+
+The schema is TOML, in `crates/harpas-protocol-<edition>/schema/<version>/`: a `version.toml` with the version
+name and protocol number, and one file per connection state (`handshaking.toml`, `status.toml`, …). A state file
+has:
+
+- `[[clientbound]]` and `[[serverbound]]` packets, each with its ID, Rust name, minecraft-data name, doc and
+  fields;
+- `[structs.<Name>]` and `[enums.<Name>]` used by those packets;
+- `[[hand_written]]` entries for minecraft-data packets that are not generated, each with the reason.
+
+```toml
+[[clientbound]]
+id = 0x02
+name = "LoginSuccess"
+mcdata = "success"
+doc = "Ends login with the player's profile; the client answers with Login Acknowledged."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "username", type = "string(16)" },
+    { name = "properties", type = "array(16, ProfileProperty)" },
+]
+```
+
+Field types are short expressions: fixed-size types (`bool`, `u8` to `i64`, `f32`, `f64`, `varint`, `varlong`,
+`uuid`), `string(max)`, `bytes(max)`, `rest(max)`, `option(T)`, `array(max, T)`, and the names of structs and
+enums. Limits are vanilla's, taken from the protocol documentation [7]: a string limit counts UTF-16 code units,
+as vanilla does, and a string without one gets vanilla's default of 32767. Byte arrays and arrays without a
+limit are bounded by the packet's own length.
+
+Names are Harpas' own: Rust names follow the packet names of the community protocol documentation [7], and each
+packet keeps its minecraft-data name only to be compared with it.
+
 ---
 
 ## Codegen
 
-- A generator turns each schema into Rust codecs at build time, one set per supported protocol version.
-  Differences between versions are visible as differences in the schema.
+- A generator (`harpas-protocol-codegen`) turns each schema into Rust codecs at build time, from the protocol
+  crate's `build.rs`, one module per supported protocol version (`v26_1`), with one module per state and per
+  direction inside it. Each packet is a struct with its `ID`; each direction has a `Packet` enum that encodes
+  and decodes any of its packets. Differences between versions are visible as differences in the schema.
+- The generated code calls a small hand-written runtime (`codec.rs`): one read and one write function per wire
+  type, the `Encode` and `Decode` traits and `DecodeError`.
+- `cargo run -p harpas-protocol-codegen -- check <schema-version-dir> <protocol.json>` compares a schema with
+  minecraft-data: the packets in each state and direction, their IDs, and the sequence of wire types in each
+  packet. Every minecraft-data packet must be generated or listed as hand-written. A test runs the same check
+  against a committed subset of minecraft-data, so the schema cannot drift from its source unnoticed.
 - Generated encoders write into reusable buffers and keep no per-player state, so one encoded packet can be
   shared by every player who receives it.
 - Generated decoders validate lengths and bounds before allocating, since they parse untrusted network input.
+  Every length is checked against its limit and against the bytes left, and every array element counts as at
+  least one byte, so no packet makes a decoder allocate, or loop, more than the packet's own size. A decoded
+  packet must use all of its bytes.
 
 ### Hand-written exceptions
 
@@ -80,6 +125,7 @@ Packets and types whose structure the schema cannot express cleanly are written 
 
 **Java:**
 
+- the legacy server list ping, sent by pre-1.7 clients before any framing;
 - chunk data and light data;
 - item stacks and their data components;
 - text components, sent as NBT;
@@ -149,9 +195,45 @@ EULA [12]. To keep the project free of those terms:
 
 ---
 
+## Prototype results
+
+M1 prototype: the Java 26.1 Handshaking, Status and Login codecs, generated from the schema, measured on
+2026-11-01 against minecraft-data commit `bd8b5c6`.
+
+| Measure | Result |
+|---|---|
+| Packets generated | 17 (1 Handshaking, 4 Status, 12 Login); 1 hand-written (legacy ping) |
+| Schema size | 153 lines of TOML, against 449 lines of minecraft-data JSON for the same states |
+| Generator | About 1,350 lines without tests (schema loader, Rust emitter, minecraft-data check); runtime about 290 lines |
+| Generated code | 966 lines for the three states |
+| Build cost | 4.1 s for a clean build of `harpas-protocol-java` with the generator and its dependencies (`serde`, `toml`, `serde_json`), 12 threads; regeneration after a schema change is under 0.1 s |
+| Correctness | Byte-for-byte round trips against packets written by hand from the protocol documentation; the schema matches minecraft-data with no differences; a vanilla Java 26.1 client lists the example server with its MOTD, player count and latency, and joining it shows the Login Disconnect message with the player's name |
+| Coverage of the rest of Java 26.1 | 137 of the 240 Configuration and Play packets use only types the format already has; 195 once it gains enums from mappers, bit fields, switches, registry holders and `lpVec3`; the remaining 45 need hand-written types (NBT, entity metadata) that the schema refers to by name |
+
+### Decision: our own format, checked against ProtoDef
+
+The schema uses its own format, and minecraft-data's ProtoDef stays the source it is checked against, not the
+format it is written in. This closes the open question on the schema format. Reasons:
+
+- **Limits.** ProtoDef carries no vanilla limits (username 16, cookie 5120 bytes, server address 255), and the
+  decoders need them before allocating. They would have to live in a second file anyway.
+- **Names and docs.** ProtoDef names come from minecraft-data (`success`, `encryption_begin`, used in both
+  directions), not from the protocol documentation, and carry no docs. Rust types need stable names of their
+  own, and the schema is where they are reviewed.
+- **Semantics.** Several ProtoDef types are defined only by node-minecraft-protocol's implementation
+  (`entityMetadataLoop`, `topBitSetTerminatedArray`, `registryEntryHolder`), and switches compare against
+  relative paths such as `../flags`. Our format names the hand-written types instead of describing them.
+- **Same maintenance.** The `check` command reduces both formats to wire types, so a new minecraft-data release
+  still shows exactly which packets changed; updating the schema means editing those packets.
+
+The cost is that our schema is maintained by hand rather than copied: for a new release, `check` lists the
+packets to update. Whether a converter that drafts new packets from ProtoDef is worth writing is decided with
+the Play state in M2.
+
 ## Open questions
 
-1. Schema format: adopt ProtoDef as-is, or define our own and convert from it?
+1. Decoders return owned values (`String`, `Vec<u8>`). Borrowed decoding (`&str`, `&[u8]`) avoids copies for
+   Play packets *(measure in M2)*.
 
 ---
 

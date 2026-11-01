@@ -1,0 +1,119 @@
+# Login state: authentication, encryption and compression.
+#
+# Limits follow minecraft.wiki's "Java Edition protocol/Packets". Byte arrays without a limit are bounded by
+# the packet's own length.
+
+[[clientbound]]
+id = 0x00
+name = "LoginDisconnect"
+mcdata = "disconnect"
+doc = "Closes the connection during login, with a reason shown to the player."
+fields = [
+    { name = "reason", type = "string(262144)", doc = "Text component as JSON." },
+]
+
+[[clientbound]]
+id = 0x01
+name = "EncryptionRequest"
+mcdata = "encryption_begin"
+doc = "Starts encryption, and authentication when online mode is on."
+fields = [
+    { name = "server_id", type = "string(20)", doc = "Empty on vanilla servers." },
+    { name = "public_key", type = "bytes", doc = "Server's RSA public key, DER encoded." },
+    { name = "verify_token", type = "bytes" },
+    { name = "should_authenticate", type = "bool", doc = "Whether the client must join through Mojang's session server." },
+]
+
+[[clientbound]]
+id = 0x02
+name = "LoginSuccess"
+mcdata = "success"
+doc = "Ends login with the player's profile; the client answers with Login Acknowledged."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "username", type = "string(16)" },
+    { name = "properties", type = "array(16, ProfileProperty)" },
+]
+
+[[clientbound]]
+id = 0x03
+name = "SetCompression"
+mcdata = "compress"
+doc = "Enables compression for every later packet."
+fields = [
+    { name = "threshold", type = "varint", doc = "Smallest packet size that is compressed; negative disables compression." },
+]
+
+[[clientbound]]
+id = 0x04
+name = "LoginPluginRequest"
+mcdata = "login_plugin_request"
+doc = "Custom query, used by proxies to forward player information."
+fields = [
+    { name = "message_id", type = "varint" },
+    { name = "channel", type = "string(32767)", doc = "Identifier of the channel." },
+    { name = "data", type = "rest(1048576)" },
+]
+
+[[clientbound]]
+id = 0x05
+name = "CookieRequest"
+mcdata = "cookie_request"
+doc = "Asks for a cookie stored by an earlier server, after a transfer."
+fields = [
+    { name = "key", type = "string(32767)", doc = "Identifier of the cookie." },
+]
+
+[[serverbound]]
+id = 0x00
+name = "LoginStart"
+mcdata = "login_start"
+doc = "Starts login with the player's name and UUID."
+fields = [
+    { name = "username", type = "string(16)" },
+    { name = "player_uuid", type = "uuid", doc = "UUID of the account; ignored by vanilla in online mode." },
+]
+
+[[serverbound]]
+id = 0x01
+name = "EncryptionResponse"
+mcdata = "encryption_begin"
+doc = "Shared secret and verify token, both encrypted with the server's public key."
+fields = [
+    { name = "shared_secret", type = "bytes" },
+    { name = "verify_token", type = "bytes" },
+]
+
+[[serverbound]]
+id = 0x02
+name = "LoginPluginResponse"
+mcdata = "login_plugin_response"
+doc = "Answer to a Login Plugin Request; no data means the client did not understand it."
+fields = [
+    { name = "message_id", type = "varint" },
+    { name = "data", type = "option(rest(1048576))" },
+]
+
+[[serverbound]]
+id = 0x03
+name = "LoginAcknowledged"
+mcdata = "login_acknowledged"
+doc = "Confirms Login Success; the connection moves to the Configuration state."
+
+[[serverbound]]
+id = 0x04
+name = "CookieResponse"
+mcdata = "cookie_response"
+doc = "Answer to a Cookie Request."
+fields = [
+    { name = "key", type = "string(32767)" },
+    { name = "payload", type = "option(bytes(5120))", doc = "None when the client has no such cookie." },
+]
+
+[structs.ProfileProperty]
+doc = "Signed profile property, such as the skin."
+fields = [
+    { name = "name", type = "string(64)" },
+    { name = "value", type = "string(32767)" },
+    { name = "signature", type = "option(string(1024))" },
+]

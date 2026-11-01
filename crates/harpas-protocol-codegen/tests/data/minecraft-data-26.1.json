@@ -1,0 +1,524 @@
+{
+  "types": {
+    "varint": "native",
+    "varlong": "native",
+    "optvarint": "varint",
+    "pstring": "native",
+    "buffer": "native",
+    "u8": "native",
+    "u16": "native",
+    "u32": "native",
+    "u64": "native",
+    "i8": "native",
+    "i16": "native",
+    "i32": "native",
+    "i64": "native",
+    "bool": "native",
+    "f32": "native",
+    "f64": "native",
+    "UUID": "native",
+    "option": "native",
+    "entityMetadataLoop": "native",
+    "topBitSetTerminatedArray": "native",
+    "bitfield": "native",
+    "bitflags": "native",
+    "container": "native",
+    "switch": "native",
+    "void": "native",
+    "array": "native",
+    "restBuffer": "native",
+    "anonymousNbt": "native",
+    "anonOptionalNbt": "native",
+    "registryEntryHolder": "native",
+    "registryEntryHolderSet": "native",
+    "lpVec3": "native",
+    "ByteArray": [
+      "buffer",
+      {
+        "countType": "varint"
+      }
+    ],
+    "string": [
+      "pstring",
+      {
+        "countType": "varint"
+      }
+    ],
+    "packet_common_cookie_request": [
+      "container",
+      [
+        {
+          "name": "cookie",
+          "type": "string"
+        }
+      ]
+    ],
+    "packet_common_cookie_response": [
+      "container",
+      [
+        {
+          "name": "key",
+          "type": "string"
+        },
+        {
+          "name": "value",
+          "type": [
+            "option",
+            "ByteArray"
+          ]
+        }
+      ]
+    ]
+  },
+  "handshaking": {
+    "toClient": {
+      "types": {
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {}
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {}
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "toServer": {
+      "types": {
+        "packet_set_protocol": [
+          "container",
+          [
+            {
+              "name": "protocolVersion",
+              "type": "varint"
+            },
+            {
+              "name": "serverHost",
+              "type": "string"
+            },
+            {
+              "name": "serverPort",
+              "type": "u16"
+            },
+            {
+              "name": "nextState",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_legacy_server_list_ping": [
+          "container",
+          [
+            {
+              "name": "payload",
+              "type": "u8"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "set_protocol",
+                    "0xfe": "legacy_server_list_ping"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "set_protocol": "packet_set_protocol",
+                    "legacy_server_list_ping": "packet_legacy_server_list_ping"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  "status": {
+    "toClient": {
+      "types": {
+        "packet_server_info": [
+          "container",
+          [
+            {
+              "name": "response",
+              "type": "string"
+            }
+          ]
+        ],
+        "packet_ping": [
+          "container",
+          [
+            {
+              "name": "time",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "server_info",
+                    "0x01": "ping"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "server_info": "packet_server_info",
+                    "ping": "packet_ping"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "toServer": {
+      "types": {
+        "packet_ping_start": [
+          "container",
+          []
+        ],
+        "packet_ping": [
+          "container",
+          [
+            {
+              "name": "time",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "ping_start",
+                    "0x01": "ping"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "ping_start": "packet_ping_start",
+                    "ping": "packet_ping"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  "login": {
+    "toClient": {
+      "types": {
+        "packet_disconnect": [
+          "container",
+          [
+            {
+              "name": "reason",
+              "type": "string"
+            }
+          ]
+        ],
+        "packet_encryption_begin": [
+          "container",
+          [
+            {
+              "name": "serverId",
+              "type": "string"
+            },
+            {
+              "name": "publicKey",
+              "type": [
+                "buffer",
+                {
+                  "countType": "varint"
+                }
+              ]
+            },
+            {
+              "name": "verifyToken",
+              "type": [
+                "buffer",
+                {
+                  "countType": "varint"
+                }
+              ]
+            },
+            {
+              "name": "shouldAuthenticate",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_success": [
+          "container",
+          [
+            {
+              "name": "uuid",
+              "type": "UUID"
+            },
+            {
+              "name": "username",
+              "type": "string"
+            },
+            {
+              "name": "properties",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "name",
+                        "type": "string"
+                      },
+                      {
+                        "name": "value",
+                        "type": "string"
+                      },
+                      {
+                        "name": "signature",
+                        "type": [
+                          "option",
+                          "string"
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_compress": [
+          "container",
+          [
+            {
+              "name": "threshold",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_login_plugin_request": [
+          "container",
+          [
+            {
+              "name": "messageId",
+              "type": "varint"
+            },
+            {
+              "name": "channel",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "restBuffer"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "disconnect",
+                    "0x01": "encryption_begin",
+                    "0x02": "success",
+                    "0x03": "compress",
+                    "0x04": "login_plugin_request",
+                    "0x05": "cookie_request"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "disconnect": "packet_disconnect",
+                    "encryption_begin": "packet_encryption_begin",
+                    "success": "packet_success",
+                    "compress": "packet_compress",
+                    "login_plugin_request": "packet_login_plugin_request",
+                    "cookie_request": "packet_common_cookie_request"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "toServer": {
+      "types": {
+        "packet_login_start": [
+          "container",
+          [
+            {
+              "name": "username",
+              "type": "string"
+            },
+            {
+              "name": "playerUUID",
+              "type": "UUID"
+            }
+          ]
+        ],
+        "packet_encryption_begin": [
+          "container",
+          [
+            {
+              "name": "sharedSecret",
+              "type": [
+                "buffer",
+                {
+                  "countType": "varint"
+                }
+              ]
+            },
+            {
+              "name": "verifyToken",
+              "type": [
+                "buffer",
+                {
+                  "countType": "varint"
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_login_plugin_response": [
+          "container",
+          [
+            {
+              "name": "messageId",
+              "type": "varint"
+            },
+            {
+              "name": "data",
+              "type": [
+                "option",
+                "restBuffer"
+              ]
+            }
+          ]
+        ],
+        "packet_login_acknowledged": [
+          "container",
+          []
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "login_start",
+                    "0x01": "encryption_begin",
+                    "0x02": "login_plugin_response",
+                    "0x03": "login_acknowledged",
+                    "0x04": "cookie_response"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "login_start": "packet_login_start",
+                    "encryption_begin": "packet_encryption_begin",
+                    "login_plugin_response": "packet_login_plugin_response",
+                    "login_acknowledged": "packet_login_acknowledged",
+                    "cookie_response": "packet_common_cookie_response"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  "configuration": {},
+  "play": {}
+}

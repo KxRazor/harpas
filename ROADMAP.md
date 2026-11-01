@@ -47,7 +47,7 @@ documents.
 - [ ] JVM bridge benchmark ([docs/jvm.md](docs/jvm.md#validation)): synchronous event dispatch, FFM vs. JNI,
       shared-memory reads, 200 simulated players.
 - [ ] Temurin vs. GraalVM Community Edition comparison on the same benchmark.
-- [ ] Protocol codegen prototype: generate the Java 26.1 Status and Login codecs from a schema built from
+- [x] Protocol codegen prototype: generate the Java 26.1 Status and Login codecs from a schema built from
       minecraft-data ([docs/protocol-codecs.md](docs/protocol-codecs.md)); decide on ProtoDef vs. our own format.
 - [ ] RakNet prototype: offline phase and a Bedrock client reaching the login packet
       ([docs/raknet.md](docs/raknet.md)).

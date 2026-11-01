@@ -1,6 +1,6 @@
 name: Bug report
 description: Something behaves differently from vanilla, or does not work
-labels: [bug]
+labels: [bug, "needs triage"]
 body:
   - type: textarea
     id: what-happened

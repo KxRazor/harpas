@@ -1,6 +1,6 @@
 name: Feature request
 description: Propose new behavior or a change to the design
-labels: [enhancement]
+labels: [enhancement, "needs triage"]
 body:
   - type: textarea
     id: problem

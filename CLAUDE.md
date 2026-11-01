@@ -76,3 +76,14 @@ Issues are opened from the forms in [.github/ISSUE_TEMPLATE](.github/ISSUE_TEMPL
 
 Issue titles describe the problem in plain words, without an area prefix: "Bedrock players fall through
 slabs", "Support Velocity modern forwarding".
+
+## Labels
+
+Issues and pull requests combine one label from each group that applies:
+
+| Group | Labels |
+|---|---|
+| Type | `bug`, `enhancement`, `documentation`, `question`, `parity` (differs from vanilla), `performance`, `security`, `dependencies` |
+| Area | `area: <crate>` (the crate name without `harpas-`), `area: ci`, `area: workspace` — the same areas as pull request titles |
+| Edition | `edition: java`, `edition: bedrock`, when only one edition is affected |
+| Status | `needs triage` (added by the issue forms), `blocked`, `breaking`, `good first issue`, `help wanted` |

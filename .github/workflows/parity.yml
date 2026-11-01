@@ -1,0 +1,45 @@
+name: Parity
+
+# Differential tests against Mojang's server (docs/world.md#parity-strategy).
+# The reference server runs only here: it is never committed, cached, uploaded or released.
+# Maintainers accept the Minecraft EULA for CI by setting the repository variable
+# MOJANG_EULA_ACCEPTED to "true"; without it this workflow skips.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      minecraft-version:
+        description: Minecraft server version to compare against
+        default: "26.1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MINECRAFT_VERSION: ${{ inputs.minecraft-version || '26.1' }}
+
+jobs:
+  parity:
+    name: parity against vanilla ${{ inputs.minecraft-version || '26.1' }}
+    if: vars.MOJANG_EULA_ACCEPTED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Download Mojang's server
+        env:
+          MOJANG_EULA_ACCEPTED: ${{ vars.MOJANG_EULA_ACCEPTED }}
+        run: ci/fetch-vanilla-server.sh "$MINECRAFT_VERSION" "$RUNNER_TEMP/vanilla"
+      - name: Parity harnesses
+        env:
+          HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
+        # Harnesses arrive with the subsystems they compare (generation parity in M3).
+        run: echo "No parity harnesses yet."

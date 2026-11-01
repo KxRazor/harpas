@@ -1,0 +1,10 @@
+[package]
+name = "harpas-engine"
+description = "Harpas engine: vanilla tick order on one logic thread"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "harpas-bedrock"
+description = "Translation between the Harpas engine and Bedrock packets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

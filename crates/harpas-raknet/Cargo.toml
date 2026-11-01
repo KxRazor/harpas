@@ -1,0 +1,10 @@
+[package]
+name = "harpas-raknet"
+description = "RakNet transport for Bedrock connections"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

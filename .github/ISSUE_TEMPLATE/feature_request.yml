@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose new behavior or a change to the design
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and why Harpas does not let you do it today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What Harpas should do. Describe the behavior, not only the implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: design-document
+    attributes:
+      label: Design document it affects
+      description: See docs/README.md for what each document covers.
+      options:
+        - Not sure
+        - engine-core.md
+        - versions.md
+        - world.md
+        - java-connection.md
+        - identity.md
+        - commands.md
+        - jvm.md
+        - bedrock-interop.md
+        - raknet.md
+        - protocol-codecs.md
+        - networks.md
+        - plugin-api.md
+        - mod-support.md
+        - operations.md
+        - qol.md
+        - releases.md
+        - licensing.md
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways to solve the problem you considered, including existing plugins or tools.

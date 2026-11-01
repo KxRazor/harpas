@@ -1,0 +1,10 @@
+[package]
+name = "harpas-protocol-java"
+description = "Java Edition packet codecs, generated from Harpas' protocol schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "harpas-core"
+description = "Shared types used by every Harpas crate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

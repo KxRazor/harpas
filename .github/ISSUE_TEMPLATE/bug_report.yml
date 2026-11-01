@@ -1,0 +1,68 @@
+name: Bug report
+description: Something behaves differently from vanilla, or does not work
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, as precisely as you can.
+    validations:
+      required: true
+  - type: textarea
+    id: vanilla
+    attributes:
+      label: What vanilla does
+      description: What a vanilla server does in the same situation. Harpas follows vanilla, so this is the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Join with a Java 26.1 client
+        2. Place a slab on ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: harpas-version
+    attributes:
+      label: Harpas version
+      description: The output of `harpas --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Client edition
+      options:
+        - Java
+        - Bedrock
+        - Both
+        - Not related to a client
+    validations:
+      required: true
+  - type: input
+    id: client-version
+    attributes:
+      label: Client version
+      placeholder: Java 26.1, Bedrock 26.60
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system and how Harpas runs (binary, container, hosting panel).
+      placeholder: Linux x86_64, container image
+  - type: textarea
+    id: plugins
+    attributes:
+      label: Plugins and mods
+      description: Plugins in `plugins/` and mods in `mods/`, if any. Check whether the problem happens without them.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant part of `logs/latest.log`. Remove IP addresses and anything private.
+      render: text

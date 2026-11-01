@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+harpas-core = { path = "crates/harpas-core" }
+harpas-engine = { path = "crates/harpas-engine" }
+harpas-protocol-java = { path = "crates/harpas-protocol-java" }
+harpas-protocol-bedrock = { path = "crates/harpas-protocol-bedrock" }
+harpas-raknet = { path = "crates/harpas-raknet" }
+harpas-bedrock = { path = "crates/harpas-bedrock" }
+harpas-jvm = { path = "crates/harpas-jvm" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

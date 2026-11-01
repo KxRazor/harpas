@@ -126,8 +126,10 @@ Bedrock lets the server tell the client, in `StartGame`, that block network IDs 
 into the expected block palette [5][16]. The hash is computed from the block state's canonical NBT *(verify the
 exact algorithm; FNV-1a is the expected one)*. Harpas uses hashed IDs from the start, which makes encoded
 sections stable across sessions and versions, as the blob cache requires, and covers custom blocks without a
-version-specific palette. The trade-off is that every block in a sub-chunk palette takes a few more bytes [16]
-*(measure)*. Hash collisions are checked when the mapping table is built.
+version-specific palette. The trade-off is that every block in a sub-chunk palette takes a few more bytes [16]:
+on a synthetic overworld column, 1.3% more before compression and 2.7% more after it (2,928 bytes instead of
+2,852; [protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). Hash collisions are checked when the
+mapping table is built.
 
 ### 5. Encode and compress once per audience
 
@@ -149,7 +151,10 @@ depend on the connection. So Harpas:
 - does only the checksum and AES-CTR pass per connection, which is much cheaper than compressing.
 
 Trade-off: a shared batch cannot be merged with that player's own packets, so there are more batches per
-tick. Whether this wins depends on how many viewers share a batch *(measure)*.
+tick. Measured on one chunk column, sharing wins from the second viewer: 104 µs per viewer for two viewers
+instead of 203 µs, and 3.8 µs with 200 viewers, where the per-connection checksum and AES-CTR pass is all that is
+left ([protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). The cost of the extra batches is the
+checksum, encryption and RakNet framing of a small batch *(measure)*.
 
 ### 6. Native authentication
 

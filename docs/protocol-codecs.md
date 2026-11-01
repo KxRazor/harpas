@@ -155,10 +155,17 @@ Consequences:
   packet sent to many players (chunk data, entity movement) is encoded and compressed **once**; only encryption
   is done per connection. Unlike Bedrock batches, there is no need to separate shared packets from each player's
   own packets.
-- **Encryption has a real CPU cost.** CFB8 runs one AES block operation per byte rather than per 16 bytes;
-  hardware AES helps, but the cost grows with traffic *(measure)*.
-- **The zlib implementation is our choice.** The protocol requires zlib-format data, not a specific library, so
-  a faster implementation can be used *(measure)*.
+- **Encryption has a real CPU cost.** CFB8 runs one AES block operation per byte rather than per 16 bytes,
+  and each operation waits for the previous one, so hardware AES cannot run them in parallel. Measured: 42 MB/s
+  with the RustCrypto `cfb8` crate and 70 MB/s with AES-NI instructions written directly, about 65 µs per
+  compressed chunk column ([Shared encoding results](#shared-encoding-results)). Once compression is shared,
+  encryption is most of the cost of each extra online-mode viewer; a hand-written AES-NI CFB8 is the optimization
+  to try first.
+- **The zlib implementation is our choice.** The protocol requires zlib-format data, not a specific library.
+  Harpas uses **zlib-rs** (pure Rust, Zlib license), at level 6 like vanilla's default: it gave the smallest
+  output and was 2.8 times faster than miniz_oxide, the default backend of `flate2`, at the same level.
+  libdeflate was faster on Bedrock data but needs a C build; it remains an option if compression shows up in
+  profiles.
 
 ---
 
@@ -197,6 +204,8 @@ EULA [12]. To keep the project free of those terms:
 
 ## Prototype results
 
+### Codec generation
+
 M1 prototype: the Java 26.1 Handshaking, Status and Login codecs, generated from the schema, measured on
 2026-11-01 against minecraft-data commit `bd8b5c6`.
 
@@ -229,6 +238,50 @@ format it is written in. This closes the open question on the schema format. Rea
 The cost is that our schema is maintained by hand rather than copied: for a new release, `check` lists the
 packets to update. Whether a converter that drafts new packets from ProtoDef is worth writing is decided with
 the Play state in M2.
+
+### Shared encoding results
+
+M1 prototype (`cargo run --release -p harpas-bench --example shared-encoding`), measured on 2026-11-01 on an AMD
+Ryzen 5 5600H, single thread. The input is a synthetic overworld column: 24 sections with palettes of 7 to 9
+blocks below the surface and single-value air above, full sky light above the ground. It is encoded from palette
+indices, as the engine stores sections.
+
+| Step | Java | Bedrock |
+|---|---|---|
+| Uncompressed column | 54,502 bytes | 17,821 bytes (hashed IDs) |
+| Encode from palette indices | 24 µs | 26 µs |
+| Compress, zlib-rs level 6 | 172 µs, 2,639 bytes | 173 µs, 2,928 bytes |
+| Encrypt per connection | 65 µs (AES-128-CFB8) | 2.8 µs (SHA-256 checksum and AES-256-CTR) |
+
+Compression by library and level, same column (µs, bytes):
+
+| Library | Level 1 | Level 4 | Level 6 |
+|---|---|---|---|
+| miniz_oxide, Java | 42, 3,794 | 225, 2,818 | 489, 2,702 |
+| zlib-rs, Java | 29, 4,361 | 100, 2,864 | 172, 2,639 |
+| libdeflate, Java | 58, 2,930 | 140, 2,868 | 186, 2,753 |
+| miniz_oxide, Bedrock | 35, 3,925 | 147, 3,100 | 411, 2,982 |
+| zlib-rs, Bedrock | 27, 4,483 | 102, 3,126 | 173, 2,928 |
+| libdeflate, Bedrock | 29, 3,245 | 70, 3,151 | 114, 3,027 |
+
+CPU per viewer to send one column to every viewer, encoding and compressing for each viewer or once for all:
+
+| Viewers | Java, each | Java, shared | Java, shared, unencrypted | Bedrock, each | Bedrock, shared |
+|---|---|---|---|---|---|
+| 1 | 266 µs | 264 µs | 199 µs | 205 µs | 205 µs |
+| 2 | 264 µs | 164 µs | 101 µs | 203 µs | 104 µs |
+| 10 | 264 µs | 84 µs | 20 µs | 205 µs | 23 µs |
+| 50 | 268 µs | 68 µs | 4.1 µs | 204 µs | 6.9 µs |
+| 200 | 266 µs | 64 µs | 1.0 µs | 204 µs | 3.8 µs |
+
+Conclusions:
+
+- **Sharing pays from the second viewer.** Two viewers already halve the cost; with 200 viewers, a Bedrock
+  viewer costs 54 times less, and an unencrypted Java viewer (offline mode, or behind a proxy) 266 times less.
+- **Compression, not encoding, is the cost to share.** Encoding from palette indices is 24 µs; compression is 7
+  times that. The shared encoding cache must hold compressed bytes, not just encoded ones.
+- **Online-mode Java viewers are bounded by CFB8.** With sharing, 64 of the 65 µs left per viewer are
+  encryption. It runs on the connection's network thread, not on the logic thread.
 
 ## Open questions
 

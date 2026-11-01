@@ -51,7 +51,7 @@ documents.
       minecraft-data ([docs/protocol-codecs.md](docs/protocol-codecs.md)); decide on ProtoDef vs. our own format.
 - [ ] RakNet prototype: offline phase and a Bedrock client reaching the login packet
       ([docs/raknet.md](docs/raknet.md)).
-- [ ] Shared encoding prototype: encode and compress a chunk section once and serve it to many simulated
+- [x] Shared encoding prototype: encode and compress a chunk section once and serve it to many simulated
       connections, measuring cost per viewer.
 - [ ] Record results and update the affected documents; close or reopen design questions accordingly.
 

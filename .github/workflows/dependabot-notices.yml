@@ -1,0 +1,46 @@
+name: Dependabot notices
+
+# Dependabot changes Cargo.lock but cannot regenerate THIRD_PARTY_NOTICES.md, so its pull requests would fail
+# the notices check in CI. This workflow regenerates the file on the pull request branch and commits it.
+#
+# Commits pushed with GITHUB_TOKEN do not trigger workflows, so CI is started again explicitly on the branch;
+# its checks then report on the new commit.
+
+on:
+  pull_request:
+    paths: [Cargo.lock]
+
+permissions:
+  contents: read
+
+jobs:
+  notices:
+    name: regenerate third-party notices
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: ci/third-party-notices.sh
+      - name: Commit and restart CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if git diff --quiet THIRD_PARTY_NOTICES.md; then
+            echo "THIRD_PARTY_NOTICES.md is up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "deps: regenerate third-party notices"
+          git push origin "HEAD:$BRANCH"
+          gh workflow run ci.yml --ref "$BRANCH"

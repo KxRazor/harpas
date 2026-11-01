@@ -1,6 +1,7 @@
 # Contributing to Harpas
 
-Thank you for helping. This file is the set of rules every contribution follows. The design behind the code is
+Thank you for helping. This file is the set of rules every contribution follows, and everyone in the project
+follows the [code of conduct](CODE_OF_CONDUCT.md). The design behind the code is
 in [docs/](docs/README.md), and the order of work is in [ROADMAP.md](ROADMAP.md).
 
 ## Licensing of contributions

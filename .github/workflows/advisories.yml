@@ -1,0 +1,25 @@
+name: Advisories
+
+# Checks Cargo.lock against the RustSec advisory database. New advisories appear without any change in the
+# repository, so this runs on a schedule instead of blocking pull requests.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    branches: [main]
+    paths: [Cargo.lock, deny.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: cargo deny advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

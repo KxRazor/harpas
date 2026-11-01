@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/KxRazor/harpas/discussions
+    about: Ask how something works or discuss an idea before opening a feature request.
+  - name: Report a vulnerability
+    url: https://github.com/KxRazor/harpas/security/advisories/new
+    about: Report security issues privately, never in a public issue.

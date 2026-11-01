@@ -12,5 +12,6 @@ accepted = [
     "Unicode-3.0",
 ]
 private = { ignore = true }
-ignore-build-dependencies = false
+# Build dependencies run at compile time and are not part of the binary.
+ignore-build-dependencies = true
 ignore-dev-dependencies = true

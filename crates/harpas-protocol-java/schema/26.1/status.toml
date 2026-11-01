@@ -1,0 +1,34 @@
+# Status state: the server list ping.
+
+[[clientbound]]
+id = 0x00
+name = "StatusResponse"
+mcdata = "server_info"
+doc = "Server list entry: version, players, MOTD and icon."
+fields = [
+    { name = "json", type = "string(32767)", doc = "Status as a JSON object." },
+]
+
+[[clientbound]]
+id = 0x01
+name = "PongResponse"
+mcdata = "ping"
+doc = "Answer to a Ping Request, echoing its payload."
+fields = [
+    { name = "timestamp", type = "i64" },
+]
+
+[[serverbound]]
+id = 0x00
+name = "StatusRequest"
+mcdata = "ping_start"
+doc = "Asks for the Status Response."
+
+[[serverbound]]
+id = 0x01
+name = "PingRequest"
+mcdata = "ping"
+doc = "Measures latency; the server answers with a Pong Response."
+fields = [
+    { name = "timestamp", type = "i64", doc = "Any value; clients send the current time in milliseconds." },
+]

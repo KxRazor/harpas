@@ -14,7 +14,7 @@ it will be validated, with sources for every external claim. The build order is 
 | [jvm.md](jvm.md) | Embedded JVM for Bukkit/Paper plugins: bridge design, threading, JVM tuning | Design |
 | [bedrock-interop.md](bedrock-interop.md) | Java ↔ Bedrock interoperability: shared encoding, blob cache, authentication, skins, hard problems | Design |
 | [raknet.md](raknet.md) | Our own RakNet transport for Bedrock: protocol scope, robustness, performance | Design |
-| [protocol-codecs.md](protocol-codecs.md) | Java and Bedrock packet codecs generated from our own schema; currently supported client versions | Design |
+| [protocol-codecs.md](protocol-codecs.md) | Java and Bedrock packet codecs generated from our own schema; currently supported client versions | Prototype |
 | [networks.md](networks.md) | Server networks: Velocity/BungeeCord forwarding, Bedrock transfers, Harpas networks without a proxy | Design |
 | [plugin-api.md](plugin-api.md) | Native plugin API: WIT definition, WASM and JVM hosts, languages, sandbox | Design |
 | [mod-support.md](mod-support.md) | Fabric/NeoForge modded mode (26.x), plugins with mods, mod content for Java and Bedrock players without the modpack | Design |

@@ -1,0 +1,23 @@
+# Handshaking state: the first packet of every connection.
+
+[[serverbound]]
+id = 0x00
+name = "Handshake"
+mcdata = "set_protocol"
+doc = "Opens the connection and names the state the client wants next."
+fields = [
+    { name = "protocol_version", type = "varint", doc = "Protocol version of the client." },
+    { name = "server_address", type = "string(255)", doc = "Host name or address the client connected to." },
+    { name = "server_port", type = "u16" },
+    { name = "intent", type = "Intent" },
+]
+
+[[hand_written]]
+mcdata = "legacy_server_list_ping"
+direction = "serverbound"
+reason = "Sent by pre-1.7 clients before any framing; the connection layer detects its first byte, 0xFE."
+
+[enums.Intent]
+doc = "State the client asks for in the Handshake packet."
+repr = "varint"
+values = { Status = 1, Login = 2, Transfer = 3 }

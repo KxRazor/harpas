@@ -9,7 +9,8 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 |---|---|
 | `harpas-core` | Shared types used by every crate |
 | `harpas-engine` | Game engine: vanilla tick order on one logic thread |
-| `harpas-protocol-java` | Java Edition packet codecs |
+| `harpas-protocol-java` | Java Edition packet codecs, generated from `schema/` at build time |
+| `harpas-protocol-codegen` | Protocol schema loader, Rust code generator and minecraft-data check |
 | `harpas-protocol-bedrock` | Bedrock Edition batching, compression, encryption and packet codecs |
 | `harpas-raknet` | RakNet transport for Bedrock connections |
 | `harpas-bedrock` | Translation between the engine and Bedrock packets |

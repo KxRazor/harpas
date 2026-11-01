@@ -1,0 +1,9 @@
+# Harpas protocol schema for Java Edition 26.1. The format is described in docs/protocol-codecs.md.
+#
+# Built from PrismarineJS/minecraft-data (MIT), data/pc/26.1/protocol.json at commit
+# bd8b5c6048e5af9694374b83f25f5b4aade619cc. Check it again with:
+#
+#   cargo run -p harpas-protocol-codegen -- check crates/harpas-protocol-java/schema/26.1 protocol.json
+
+minecraft = "26.1"
+protocol = 775

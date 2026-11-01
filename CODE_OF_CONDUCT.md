@@ -18,12 +18,6 @@ someone represents the project.
 - Publishing someone's private information, such as their address, email or real name, without their consent.
 - Trolling, deliberate disruption, and repeatedly pushing a topic after maintainers asked to stop.
 
-## Reporting
-
-Report content that breaks this code with GitHub's **Report content** option, in the `···` menu of any
-issue, pull request, discussion or comment, and choose to report it to the repository's maintainers. Reports
-are seen only by the maintainers and are handled confidentially.
-
 ## Enforcement
 
 Maintainers decide how to respond, in proportion to what happened: a private or public warning, hiding or

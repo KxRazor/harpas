@@ -24,8 +24,9 @@ extracted on the server owner's machine, never committed ([docs/world.md](docs/w
 - **One change per pull request.** A pull request does one thing that can be reviewed on its own: usually one
   task of the roadmap, or part of one. Unrelated fixes and refactors go in their own pull requests.
 - **Small enough to review.** Aim for under 400 changed lines, not counting generated code, schemas and test
-  data. Larger changes are split into steps that each build and pass the tests; if that is not possible,
-  explain why in the description.
+  data. A larger pull request is fine when its description says why it is easier to review as one change, for
+  example a new subsystem or prototype whose parts only make sense together. Split it into steps that each
+  build and pass the tests when the parts can be reviewed on their own.
 - **Design first for new subsystems.** A change that departs from a design document updates that document in
   the same pull request, or in an earlier one.
 - **Describe the change:** what it does, why, which roadmap task or issue it belongs to, and how it was tested.

@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and only its `data/` files are extracted into one zip, `.harpas/vanilla-data/26.1.zip`; without internet
   access, `harpas vanilla-data install --from <server.jar>` does the same with a jar the owner provides
   (`harpas-server`).
+- Chunk sections with block states and biomes in paletted containers stored as vanilla stores them in memory,
+  vanilla's compacted Anvil form, and a version that changes with every change (`harpas-core`).
 
 ### Changed
 

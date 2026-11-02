@@ -4,8 +4,8 @@ Scope: how the Rust engine runs the game in normal mode: the tick loop and its o
 parallel, how threads are laid out, how the world and entities are stored, and how plugins are called from
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
-Status: in progress. The logic thread, tick skeleton and players in the void world are implemented; world
-storage and the remaining entity logic are still design. Facts about vanilla cite their source in
+Status: in progress. The logic thread, tick skeleton, players in the void world and chunk sections are
+implemented; the rest of world storage and the remaining entity logic are still design. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -134,10 +134,24 @@ Harpas uses its own storage:
 
 ### 6. Chunks
 
-- Sections of 16×16×16 blocks stored as **paletted containers**, the same structure vanilla uses.
-- A **version counter per section**, incremented on every change. The shared encoding of Java and Bedrock
-  packets caches encoded sections by version ([protocol-codecs.md](protocol-codecs.md#java-wire-format),
+- Sections of 16×16×16 blocks stored as **paletted containers**, the same structure vanilla uses
+  (`harpas_core::chunk`). A section holds 4,096 block states and 64 biomes, one per 4×4×4 blocks, both indexed
+  Y, then Z, then X [5]:
+  - **In memory as in vanilla:** one value with no data, a palette with packed indices, or global IDs. Block
+    state palettes use 4 bits per index from the second value, then 5 to 8; biome palettes use 1 to 3. Past
+    that, the container stores global IDs with as many bits as the registry needs. Indices are packed into
+    longs, lowest bits first, never across two longs. The palette grows as values are set and never shrinks.
+  - **Java chunk packets carry this form as it is**, so encoding a section copies its containers [6].
+  - **Anvil files use a compacted form** [5]: a palette of the values in use, in order of first use, always kept
+    even past 8 bits; at least 4 bits per block state index; no data when there is one value. Reading checks
+    the data length and every index, as vanilla does.
+- A **version per section** that changes on every change. Versions come from one process-wide counter, so a
+  section that is unloaded and loaded again never takes a version a cache already holds. The shared encoding
+  of Java and Bedrock packets caches encoded sections by version
+  ([protocol-codecs.md](protocol-codecs.md#java-wire-format),
   [bedrock-interop.md](bedrock-interop.md#1-shared-chunk-encoding)).
+- The counts vanilla keeps per section (non-air blocks, which Java chunk packets carry, and ticking blocks
+  and fluids) need the block registry and arrive with it.
 - Block entities in a per-chunk map keyed by position.
 
 ### 7. Determinism
@@ -179,3 +193,7 @@ Harpas uses its own storage:
    https://github.com/xKumorio/Minecraft-Packet-ID-Reference/blob/main/versions/26.1.md
 4. Minecraft Docs, "Input to movement" (speed and flight checks; current Java behavior).
    https://minecraftdocs.dev/systems/player/input-to-movement
+5. minecraft.wiki, "Chunk format" (sections, block state and biome palettes, bits per index in Anvil files).
+   https://minecraft.wiki/w/Chunk_format
+6. minecraft.wiki, "Java Edition protocol/Chunk format" (paletted containers on the wire, bits per entry,
+   index order). https://minecraft.wiki/w/Java_Edition_protocol/Chunk_format

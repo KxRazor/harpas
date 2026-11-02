@@ -4,8 +4,8 @@ Scope: where Harpas' settings live, and how a server is operated: console, logs,
 metrics, profiling, shutdown, hosting, and telemetry.
 
 Status: partly implemented. `server.properties` with every 26.1 key, `harpas.toml` checking, `HARPAS_*`
-overrides, the console (`help`, `list`, `stop`) and `logs/latest.log` with its archives are built; the rest is
-design. Facts about vanilla cite their source in
+overrides, the console (`help`, `list`, `stop`), `logs/latest.log` with its archives, and stopping on SIGTERM and SIGINT
+are built; the rest is design. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -113,7 +113,9 @@ Java and WASM plugins, timings, and world pregeneration.
 
 ## Shutdown and health
 
-- On SIGTERM or SIGINT, Harpas saves every world and stops cleanly. The embedded JVM leaves these signals to
+- On SIGTERM, SIGINT or SIGHUP, as on the console's `stop`, Harpas closes new connections, disconnects every
+  player with vanilla's "Server closed", stops the logic thread, gives connections five seconds to close and
+  exits with status 0. Saving every world joins this sequence with worlds. The embedded JVM leaves these signals to
   Harpas ([jvm.md](jvm.md#signals)).
 - A health endpoint reports whether the server is running and accepting players, for containers and hosting
   panels.

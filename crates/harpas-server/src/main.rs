@@ -15,9 +15,10 @@ mod logging;
 mod player;
 mod properties;
 mod session;
+mod shutdown;
 
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{self, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +32,7 @@ use log::{error, info, warn};
 
 use properties::Properties;
 use session::{SessionServer, format_uuid};
+use shutdown::Shutdown;
 
 /// Vanilla closes a connection that sends nothing for 30 seconds.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -91,17 +93,24 @@ fn run() -> io::Result<()> {
         }
     })?;
     let (logic, logic_thread) = harpas_engine::start()?;
+    let shutdown = Shutdown::new(logic.clone(), logic_thread);
+    shutdown.handle_signals()?;
     info!("Listening for Java Edition on {}", listener.local_addr()?);
     console::start(console::Server {
         logic: logic.clone(),
         max_players: info.max_players,
+        shutdown: Arc::clone(&shutdown),
     })?;
     info!(
         "Done ({:.3}s)! For help, type \"help\"",
         started.elapsed().as_secs_f64()
     );
     for stream in listener.incoming() {
-        if logic_thread.is_finished() {
+        // Once stopping, new connections are closed until the process exits.
+        if shutdown.is_stopping() {
+            continue;
+        }
+        if shutdown.logic_failed() {
             return Err(io::Error::other("logic thread stopped"));
         }
         let stream = match stream {
@@ -115,6 +124,7 @@ fn run() -> io::Result<()> {
         let key = Arc::clone(&key);
         let session = session.clone();
         let logic = logic.clone();
+        let guard = shutdown.connection();
         let peer = stream
             .peer_addr()
             .map_or_else(|_| "unknown".to_owned(), |a| a.to_string());
@@ -124,6 +134,7 @@ fn run() -> io::Result<()> {
                 if let Err(e) = serve(stream, &info, key, session.as_deref(), &logic) {
                     info!("{peer} disconnected: {e}");
                 }
+                drop(guard);
             })?;
     }
     Ok(())
@@ -214,7 +225,7 @@ fn serve(
     stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
     stream.set_nodelay(true)?;
     let result = drive(&mut stream, info, key, session, logic);
-    let _ = stream.shutdown(Shutdown::Both);
+    let _ = stream.shutdown(net::Shutdown::Both);
     result
 }
 
@@ -337,8 +348,12 @@ fn play(
             player_session = Some(session);
         }
         if let Some(session) = &player_session {
-            player::receive(&mut connection, session)?;
+            // The logic thread's output first: once it disconnects the player, there is nothing left to
+            // forward, and forwarding to a stopped logic thread would hide its reason.
             departure.kick = departure.kick.or(player::send(&mut connection, session));
+            if !connection.is_closed() {
+                player::receive(&mut connection, session)?;
+            }
             stream.write_all(&connection.take_output())?;
         }
     }
@@ -601,6 +616,49 @@ mod tests {
         drop(input);
         drop(logic);
         logic_thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_shutdown_disconnects_players_with_server_closed() {
+        let info = ServerInfo {
+            online_mode: false,
+            compression_threshold: -1,
+            view_distance: 2,
+            ..ServerInfo::default()
+        };
+        let key = Arc::new(ServerKey::generate());
+        let (logic, logic_thread) = harpas_engine::start().unwrap();
+        let (input, server_input) = mpsc::channel();
+        let (server_output, _output) = mpsc::channel();
+        let server = {
+            let (info, key, logic) = (info.clone(), Arc::clone(&key), logic.clone());
+            thread::spawn(move || {
+                let mut stream = ChannelStream {
+                    input: server_input,
+                    output: server_output,
+                };
+                let mut departure = Departure::default();
+                let result = play(&mut stream, &info, key, None, &logic, &mut departure);
+                (result, departure)
+            })
+        };
+        for packet in login_packets("Steve") {
+            input.send(packet).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while logic.online_players() != 1 {
+            assert!(Instant::now() < deadline, "Steve did not join");
+            thread::sleep(Duration::from_millis(5));
+        }
+        logic.shutdown("Server closed").unwrap();
+        logic_thread.join().unwrap();
+        // A real client keeps sending; its packets must not hide the reason the logic thread gave.
+        let packet: play::serverbound::Packet =
+            play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into();
+        input.send(frame(|buf| packet.encode(buf))).unwrap();
+        let (result, departure) = server.join().unwrap();
+        result.unwrap();
+        assert_eq!(departure.kick, Some("Server closed"));
     }
 
     struct ChannelStream {

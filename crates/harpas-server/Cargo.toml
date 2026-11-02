@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+ctrlc = { version = "3.5.2", features = ["termination"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 getrandom = "0.4.3"
 harpas-engine.workspace = true
@@ -28,3 +29,6 @@ ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-pro
 
 [lints]
 workspace = true
+
+[target."cfg(unix)".dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["term"] }

@@ -48,6 +48,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   at startup and when the day changes, with vanilla's UUID, join and lost connection messages. An interactive
   console with history and completion runs `help`, `list` and `stop`; Ctrl-C stops the server
   (`harpas-engine`, `harpas-server`).
+- Graceful shutdown on `stop`, SIGINT, SIGTERM and SIGHUP: new connections are closed, players are disconnected
+  with "Server closed", the logic thread stops, connections get five seconds to close and the terminal is
+  restored before exiting (`harpas-engine`, `harpas-server`).
 
 ### Changed
 

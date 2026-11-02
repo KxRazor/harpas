@@ -6,18 +6,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use harpas_java::{AuthOutcome, AuthRequest, Player};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use harpas_java::{AuthOutcome, AuthRequest, ChatAuthority, Player};
 use harpas_protocol_java::v26_1::login::ProfileProperty;
 use serde_json::Value;
 use ureq::tls::{Certificate, RootCerts, TlsConfig, TlsProvider};
 
 const HAS_JOINED: &str = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
+const PUBLIC_KEYS: &str = "https://api.minecraftservices.com/publickeys";
 /// Longest wait for the session server, as a whole request.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A client for the session server.
 pub struct SessionServer {
     agent: ureq::Agent,
+    chat_authority: ChatAuthority,
 }
 
 impl SessionServer {
@@ -46,7 +50,24 @@ impl SessionServer {
             .http_status_as_error(false)
             .build()
             .new_agent();
-        Ok(Self { agent })
+        let chat_authority = match load_chat_authority(&agent) {
+            Ok(authority) => authority,
+            Err(error) => {
+                eprintln!(
+                    "could not load Minecraft Services chat keys; signed chat cannot be verified: {error}"
+                );
+                ChatAuthority::default()
+            }
+        };
+        Ok(Self {
+            agent,
+            chat_authority,
+        })
+    }
+
+    /// The trusted player-certificate keys fetched from Minecraft Services.
+    pub fn chat_authority(&self) -> ChatAuthority {
+        self.chat_authority.clone()
     }
 
     /// Asks whether `request.username` joined with `request.server_hash`.
@@ -86,6 +107,36 @@ impl SessionServer {
             }
         }
     }
+}
+
+fn load_chat_authority(agent: &ureq::Agent) -> Result<ChatAuthority, String> {
+    let mut response = agent.get(PUBLIC_KEYS).call().map_err(|e| e.to_string())?;
+    if response.status().as_u16() != 200 {
+        return Err(format!("Minecraft Services returned {}", response.status()));
+    }
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    parse_chat_authority(&body)
+}
+
+fn parse_chat_authority(body: &str) -> Result<ChatAuthority, String> {
+    let json: Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let entries = json["playerCertificateKeys"]
+        .as_array()
+        .ok_or("missing player certificate keys")?;
+    let keys: Vec<Vec<u8>> = entries
+        .iter()
+        .map(|entry| {
+            let key = entry["publicKey"].as_str().ok_or("missing public key")?;
+            STANDARD
+                .decode(key)
+                .map_err(|_| "invalid base64 public key")
+        })
+        .collect::<Result<_, _>>()
+        .map_err(str::to_owned)?;
+    ChatAuthority::from_der(&keys).map_err(str::to_owned)
 }
 
 /// Reads a profile: `{"id": "<32 hex digits>", "name": "...", "properties": [{"name", "value", "signature"}]}`.
@@ -151,5 +202,20 @@ mod tests {
         assert_eq!(player.properties[0].signature.as_deref(), Some("c2ln"));
         assert!(parse_profile(r#"{"id":"short","name":"x"}"#).is_none());
         assert!(parse_profile("not json").is_none());
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_chat_authority_responses() {
+        assert!(parse_chat_authority("not json").is_err());
+        assert!(parse_chat_authority(r#"{"profilePropertyKeys":[]}"#).is_err());
+        assert!(parse_chat_authority(r#"{"playerCertificateKeys":[]}"#).is_err());
+        assert!(parse_chat_authority(r#"{"playerCertificateKeys":[{}]}"#).is_err());
+        assert!(
+            parse_chat_authority(r#"{"playerCertificateKeys":[{"publicKey":"not-base64"}]}"#)
+                .is_err()
+        );
+        assert!(
+            parse_chat_authority(r#"{"playerCertificateKeys":[{"publicKey":"AQID"}]}"#).is_err()
+        );
     }
 }

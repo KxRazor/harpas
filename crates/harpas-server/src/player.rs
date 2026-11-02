@@ -4,8 +4,8 @@ use std::io;
 
 use harpas_engine::PlayerSession;
 use harpas_engine::player::{self, Input, Movement, Output, Position, Profile};
-use harpas_java::Connection;
-use harpas_protocol_java::codec::LpVec3;
+use harpas_java::{ChatEvent, Connection, PlayEvent};
+use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
 
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
@@ -35,36 +35,56 @@ pub(crate) fn profile(player: &harpas_java::Player, mode: play::GameMode) -> Pro
 
 pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> io::Result<()> {
     use serverbound::Packet;
-    for packet in connection.take_play_input() {
-        let input = match packet {
-            Packet::ConfirmTeleportation(p) => Input::ConfirmTeleport(p.teleport_id),
-            Packet::SetPlayerPosition(p) => Input::Movement(Movement {
-                position: Some([p.x, p.y, p.z]),
-                rotation: None,
-                on_ground: p.flags.on_ground,
-            }),
-            Packet::SetPlayerPositionAndRotation(p) => Input::Movement(Movement {
-                position: Some([p.x, p.y, p.z]),
-                rotation: Some([p.yaw, p.pitch]),
-                on_ground: p.flags.on_ground,
-            }),
-            Packet::SetPlayerRotation(p) => Input::Movement(Movement {
-                position: None,
-                rotation: Some([p.yaw, p.pitch]),
-                on_ground: p.flags.on_ground,
-            }),
-            Packet::SetPlayerMovementFlags(p) => Input::Movement(Movement {
-                position: None,
-                rotation: None,
-                on_ground: p.flags.on_ground,
-            }),
-            Packet::PlayerAbilities(p) => Input::Flying(p.flags.flying),
-            Packet::ClientInformation(p) => {
-                let distance = p.view_distance.clamp(2, 32) as u8;
-                connection.update_view_distance(distance);
-                Input::ViewDistance(distance)
+    for event in connection.take_play_events() {
+        let input = match event {
+            PlayEvent::Packet(packet) => match *packet {
+                Packet::ConfirmTeleportation(p) => Input::ConfirmTeleport(p.teleport_id),
+                Packet::SetPlayerPosition(p) => Input::Movement(Movement {
+                    position: Some([p.x, p.y, p.z]),
+                    rotation: None,
+                    on_ground: p.flags.on_ground,
+                }),
+                Packet::SetPlayerPositionAndRotation(p) => Input::Movement(Movement {
+                    position: Some([p.x, p.y, p.z]),
+                    rotation: Some([p.yaw, p.pitch]),
+                    on_ground: p.flags.on_ground,
+                }),
+                Packet::SetPlayerRotation(p) => Input::Movement(Movement {
+                    position: None,
+                    rotation: Some([p.yaw, p.pitch]),
+                    on_ground: p.flags.on_ground,
+                }),
+                Packet::SetPlayerMovementFlags(p) => Input::Movement(Movement {
+                    position: None,
+                    rotation: None,
+                    on_ground: p.flags.on_ground,
+                }),
+                Packet::PlayerAbilities(p) => Input::Flying(p.flags.flying),
+                Packet::ClientInformation(p) => {
+                    let distance = p.view_distance.clamp(2, 32) as u8;
+                    connection.update_view_distance(distance);
+                    Input::ViewDistance(distance)
+                }
+                _ => continue,
+            },
+            PlayEvent::Chat(ChatEvent::Session(session)) => {
+                Input::ChatSession(player::ChatSession {
+                    id: session.session_id,
+                    expires_at: session.public_key.expires_at,
+                    key: session.public_key.key,
+                    key_signature: session.public_key.key_signature,
+                })
             }
-            _ => continue,
+            PlayEvent::Chat(ChatEvent::Message(message)) => {
+                Input::ChatMessage(Box::new(player::ChatMessage {
+                    index: message.index,
+                    signature: message.signature,
+                    message: message.message,
+                    timestamp: message.timestamp,
+                    salt: message.salt,
+                    last_seen: message.last_seen,
+                }))
+            }
         };
         session.send(input).map_err(io::Error::other)?;
     }
@@ -102,6 +122,50 @@ fn sync(position: Position, teleport_id: i32) -> clientbound::SynchronizePlayerP
 pub(crate) fn send(connection: &mut Connection, session: &PlayerSession) {
     while let Some(output) = session.try_recv() {
         let packet = match output {
+            Output::ChatSession { uuid, session } => clientbound::PlayerInfoUpdate {
+                updates: play::PlayerInfoUpdates {
+                    actions: play::PlayerInfoActions {
+                        initialize_chat: true,
+                        ..Default::default()
+                    },
+                    entries: vec![play::PlayerInfoEntry {
+                        uuid,
+                        chat_session: Some(play::ChatSession {
+                            session_id: session.id,
+                            public_key: play::PublicKeyData {
+                                expires_at: session.expires_at,
+                                key: session.key,
+                                key_signature: session.key_signature,
+                            },
+                        }),
+                        ..Default::default()
+                    }],
+                },
+            }
+            .into(),
+            Output::ChatMessage { sender, message } => {
+                connection.send_player_chat(clientbound::PlayerChatMessage {
+                    global_index: 0, // Set separately for each receiving connection.
+                    sender: sender.uuid,
+                    index: message.index,
+                    signature: message.signature,
+                    message: message.message,
+                    timestamp: message.timestamp,
+                    salt: message.salt,
+                    last_seen: message
+                        .last_seen
+                        .into_iter()
+                        .map(play::PackedSignature::Full)
+                        .collect(),
+                    unsigned_content: None,
+                    filter_mask: play::FilterMask::PassThrough,
+                    // The synchronized 26.1 minecraft:chat_type registry starts with minecraft:chat.
+                    chat_type: Holder::Reference(0),
+                    sender_name: Nbt::from(sender.name.as_str()),
+                    target_name: None,
+                });
+                continue;
+            }
             Output::AddPlayer(profile) => clientbound::PlayerInfoUpdate {
                 updates: play::PlayerInfoUpdates {
                     actions: play::PlayerInfoActions {

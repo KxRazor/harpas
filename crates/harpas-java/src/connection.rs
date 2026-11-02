@@ -3,12 +3,13 @@
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use harpas_protocol_java::codec::{self, DecodeError, Nbt};
 use harpas_protocol_java::v26_1::{self, configuration, handshaking, login, play, status};
 use md5::{Digest, Md5};
 
+use crate::chat::{ChatAuthority, ChatEvent, ChatState, MessageError};
 use crate::compression::{Compression, CompressionError};
 use crate::crypto::{Encryption, ServerKey, ct_equal, server_hash};
 use crate::frame::{FrameError, FrameReader, write_frame};
@@ -23,6 +24,14 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", v26_1::MINECRAFT_VERSION);
 /// Where players appear in the void world: above the middle of chunk (0, 0).
 const SPAWN: (f64, f64, f64) = (0.5, 65.0, 0.5);
+
+fn unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|time| i64::try_from(time.as_millis()).ok())
+        .unwrap_or(0)
+}
 
 /// The connection states, in the order a connection goes through them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +108,15 @@ pub struct Player {
     pub properties: Vec<login::ProfileProperty>,
 }
 
+/// Play input to apply on the logic thread, in the order it arrived on this connection.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlayEvent {
+    /// A movement or settings packet.
+    Packet(Box<play::serverbound::Packet>),
+    /// An accepted chat session or message.
+    Chat(ChatEvent),
+}
+
 /// A request to Mojang's session server that the caller makes for the connection, off the logic thread:
 /// `GET https://sessionserver.mojang.com/session/minecraft/hasJoined?username=<username>&serverId=<server_hash>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +183,8 @@ pub struct Connection {
     pending_keepalive: Option<PendingKeepAlive>,
     keepalive_counter: i64,
     entity_id: i32,
-    play_input: Vec<play::serverbound::Packet>,
+    play_input: Vec<PlayEvent>,
+    chat: ChatState,
     client_view_distance: Option<u8>,
     server_view_distance: i32,
     view_distance: i32,
@@ -199,6 +218,7 @@ impl Connection {
             keepalive_counter: 0,
             entity_id,
             play_input: Vec::new(),
+            chat: ChatState::default(),
             client_view_distance: None,
             server_view_distance: 2,
             view_distance: 2,
@@ -255,9 +275,29 @@ impl Connection {
         std::mem::take(&mut self.out)
     }
 
-    /// Takes the Play packets that must be handled by the logic thread.
-    pub fn take_play_input(&mut self) -> Vec<play::serverbound::Packet> {
+    /// Sets the certificate authorities used to verify online chat sessions.
+    pub fn set_chat_authority(&mut self, authority: ChatAuthority) {
+        self.chat.authority(authority);
+    }
+
+    /// Takes all player inputs in arrival order, including verified chat events.
+    pub fn take_play_events(&mut self) -> Vec<PlayEvent> {
         std::mem::take(&mut self.play_input)
+    }
+
+    /// Sends a player message and records its signature for this client's acknowledgement window.
+    pub fn send_player_chat(&mut self, mut packet: play::clientbound::PlayerChatMessage) {
+        if self.state != State::Play {
+            return;
+        }
+        match self.chat.outgoing(packet.signature) {
+            Ok(Some(index)) => {
+                packet.global_index = index;
+                self.send_play(packet.into());
+            }
+            Ok(None) => {}
+            Err(reason) => self.disconnect_play(reason),
+        }
     }
 
     /// The client's requested view distance, if it sent its settings.
@@ -460,7 +500,7 @@ impl Connection {
                     self.configuration(packet, info)?;
                 }
                 State::Play => match play::serverbound::Packet::decode(&frame) {
-                    Ok(packet) => self.play(packet)?,
+                    Ok(packet) => self.play(packet, info)?,
                     // Play packets the schema does not have yet are ignored rather than fatal.
                     Err(DecodeError::UnknownPacket(_)) => {}
                     Err(e) => return Err(decode_error(State::Play, e)),
@@ -719,6 +759,10 @@ impl Connection {
             Packet::KeepAlive(keepalive) => self.keepalive_answered(keepalive.id)?,
             Packet::ClientInformation(settings) => {
                 self.client_view_distance = Some(settings.view_distance.clamp(2, 32) as u8);
+                self.chat.enabled(matches!(
+                    settings.chat_mode,
+                    configuration::ChatMode::Enabled
+                ));
             }
             // The client's brand and answers to things the server never sent are not used yet.
             Packet::PluginMessage(_)
@@ -867,19 +911,70 @@ impl Connection {
         self.send_play(play::clientbound::ChunkBatchFinished { batch_size: count }.into());
     }
 
-    fn play(&mut self, packet: play::serverbound::Packet) -> Result<(), ConnectionError> {
+    fn play(
+        &mut self,
+        packet: play::serverbound::Packet,
+        info: &ServerInfo,
+    ) -> Result<(), ConnectionError> {
         use play::serverbound::Packet;
         match packet {
             Packet::KeepAlive(keepalive) => self.keepalive_answered(keepalive.id)?,
+            Packet::PlayerSession(session) if info.online_mode => {
+                let uuid = self.player.as_ref().expect("Play has a player").uuid;
+                if let Err(reason) = self.chat.session(uuid, session, unix_millis()) {
+                    self.disconnect_play(reason);
+                }
+            }
+            Packet::ChatMessage(message) => {
+                let uuid = self.player.as_ref().expect("Play has a player").uuid;
+                if let Err(error) = self.chat.message(
+                    uuid,
+                    message,
+                    info.online_mode,
+                    info.online_mode && info.enforces_secure_chat,
+                    unix_millis(),
+                ) {
+                    match error {
+                        MessageError::Fatal(reason) => self.disconnect_play(reason),
+                        MessageError::Refused(reason) => self.send_play(
+                            play::clientbound::SystemChatMessage {
+                                content: Nbt::Compound(
+                                    [("text", reason), ("color", "red")].into_iter().collect(),
+                                ),
+                                overlay: false,
+                            }
+                            .into(),
+                        ),
+                    }
+                }
+            }
+            Packet::MessageAcknowledgment(ack) => {
+                if let Err(reason) = self.chat.offset(ack.offset) {
+                    self.disconnect_play(reason);
+                }
+            }
+            Packet::SignedChatCommand(command) => {
+                if let Err(reason) = self.chat.ignored_command(command) {
+                    self.disconnect_play(reason);
+                }
+            }
+            Packet::ClientInformation(ref settings) => {
+                self.chat
+                    .enabled(matches!(settings.chat_mode, play::ChatMode::Enabled));
+                self.play_input.push(PlayEvent::Packet(Box::new(packet)));
+            }
             Packet::ConfirmTeleportation(_)
             | Packet::SetPlayerPosition(_)
             | Packet::SetPlayerPositionAndRotation(_)
             | Packet::SetPlayerRotation(_)
             | Packet::SetPlayerMovementFlags(_)
-            | Packet::PlayerAbilities(_)
-            | Packet::ClientInformation(_) => self.play_input.push(packet),
+            | Packet::PlayerAbilities(_) => {
+                self.play_input.push(PlayEvent::Packet(Box::new(packet)))
+            }
             _ => {}
         }
+        self.play_input
+            .extend(self.chat.take_events().into_iter().map(PlayEvent::Chat));
         Ok(())
     }
 

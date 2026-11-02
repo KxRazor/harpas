@@ -38,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Player entities in the void world: a shared player list, profile and skin properties, visibility within each
   viewer's tracking range, synchronized movement, movement and `allow-flight` checks, and chunk updates as
   players travel (`harpas-engine`, `harpas-java`, `harpas-server`).
+- Java 26.1 player chat: unsigned messages in offline mode and verified signing sessions, message signatures
+  and acknowledgements in online mode. Session and message fan-out includes the sender and late joiners;
+  real-client validation of signed chat remains pending (`harpas-engine`, `harpas-java`, `harpas-server`).
 
 ### Changed
 

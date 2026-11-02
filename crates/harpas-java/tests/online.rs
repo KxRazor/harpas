@@ -9,13 +9,15 @@ use aes::cipher::array::Array;
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use flate2::read::ZlibDecoder;
 use harpas_java::{
-    AuthOutcome, AuthRequest, Connection, ConnectionError, FrameReader, Player, ServerInfo,
-    ServerKey, State, server_hash, write_frame,
+    AuthOutcome, AuthRequest, ChatAuthority, ChatEvent, Connection, ConnectionError, FrameReader,
+    PlayEvent, Player, ServerInfo, ServerKey, State, server_hash, write_frame,
 };
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::{configuration, handshaking, login, play};
-use rsa::pkcs8::DecodePublicKey;
-use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
+use rsa::pkcs8::{DecodePublicKey, EncodePublicKey};
+use rsa::{Pkcs1v15Encrypt, Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 
 const STEVE: u128 = 0x8667ba71_b85a_4004_af54_457a9734eed7;
 
@@ -305,7 +307,197 @@ fn online_login_encrypts_compresses_and_uses_the_mojang_profile() {
     connection
         .receive(&client.send(|buf| movement.encode(buf)), &info)
         .unwrap();
-    assert_eq!(connection.take_play_input(), vec![movement]);
+    assert_eq!(
+        connection.take_play_events(),
+        vec![PlayEvent::Packet(Box::new(movement))]
+    );
+}
+
+#[test]
+fn encrypted_online_session_verifies_signed_chat_and_its_acknowledgements() {
+    let info = ServerInfo {
+        online_mode: true,
+        enforces_secure_chat: true,
+        compression_threshold: -1,
+        view_distance: 2,
+        ..ServerInfo::default()
+    };
+    let mut rng = rsa::rand_core::UnwrapErr(getrandom::SysRng);
+    let authority = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let signing = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let root = authority
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let mut connection = Connection::new(key());
+    connection.set_chat_authority(ChatAuthority::from_der(&[root]).unwrap());
+    let mut client = Client::new();
+    encrypted_login(&mut connection, &mut client, &info, false);
+    connection.take_auth_request().unwrap();
+    connection.authenticated(AuthOutcome::Verified(steve()), &info);
+    client.receive(connection.take_output());
+    let ack = login_packet(&mut client, login::serverbound::LoginAcknowledged.into());
+    connection.receive(&ack, &info).unwrap();
+    client.receive(connection.take_output());
+    let known: configuration::serverbound::Packet = configuration::serverbound::SelectKnownPacks {
+        packs: vec![configuration::KnownPack {
+            namespace: "minecraft".into(),
+            id: "core".into(),
+            version: "26.1".into(),
+        }],
+    }
+    .into();
+    connection
+        .receive(&client.send(|buf| known.encode(buf)), &info)
+        .unwrap();
+    client.receive(connection.take_output());
+    let finish: configuration::serverbound::Packet =
+        configuration::serverbound::AcknowledgeFinishConfiguration.into();
+    connection
+        .receive(&client.send(|buf| finish.encode(buf)), &info)
+        .unwrap();
+    client.receive(connection.take_output());
+
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let expires = now + 60_000;
+    let session_id = 0x123456789abcdef0123456789abcdef0u128;
+    let public_key = signing
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let mut certificate = STEVE.to_be_bytes().to_vec();
+    certificate.extend(expires.to_be_bytes());
+    certificate.extend(&public_key);
+    let key_signature = authority
+        .sign(Pkcs1v15Sign::new::<Sha1>(), &Sha1::digest(certificate))
+        .unwrap();
+    let session: play::serverbound::Packet = play::serverbound::PlayerSession {
+        session_id,
+        public_key: play::PublicKeyData {
+            expires_at: expires,
+            key: public_key,
+            key_signature,
+        },
+    }
+    .into();
+    connection
+        .receive(&client.send(|buf| session.encode(buf)), &info)
+        .unwrap();
+    assert!(
+        matches!(&connection.take_play_events()[..], [PlayEvent::Chat(ChatEvent::Session(session))] if session.session_id == session_id)
+    );
+
+    // Independently construct the client's signature payload, including the previous echo on message 2.
+    let sign = |text: &str, index: i32, previous: Option<[u8; 256]>| {
+        let salt = 37i64;
+        let mut payload = 1i32.to_be_bytes().to_vec();
+        payload.extend(STEVE.to_be_bytes());
+        payload.extend(session_id.to_be_bytes());
+        payload.extend(index.to_be_bytes());
+        payload.extend(salt.to_be_bytes());
+        payload.extend((now / 1000).to_be_bytes());
+        payload.extend((text.len() as i32).to_be_bytes());
+        payload.extend(text.as_bytes());
+        payload.extend(i32::from(previous.is_some()).to_be_bytes());
+        if let Some(signature) = previous {
+            payload.extend(signature);
+        }
+        let signature: [u8; 256] = signing
+            .sign(Pkcs1v15Sign::new::<Sha256>(), &Sha256::digest(payload))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        play::serverbound::ChatMessage {
+            message: text.into(),
+            timestamp: now,
+            salt,
+            signature: Some(signature),
+            offset: i32::from(previous.is_some()),
+            acknowledged: if previous.is_some() {
+                [0, 0, 8]
+            } else {
+                [0; 3]
+            },
+            checksum: 0,
+        }
+    };
+    let first = sign("hello", 0, None);
+    let first_signature = first.signature.unwrap();
+    let packet: play::serverbound::Packet = first.into();
+    connection
+        .receive(&client.send(|buf| packet.encode(buf)), &info)
+        .unwrap();
+    assert!(
+        matches!(&connection.take_play_events()[..], [PlayEvent::Chat(ChatEvent::Message(message))] if message.index == 0 && message.signature == Some(first_signature))
+    );
+    connection.send_player_chat(play::clientbound::PlayerChatMessage {
+        global_index: 99,
+        sender: STEVE,
+        index: 0,
+        signature: Some(first_signature),
+        message: "hello".into(),
+        timestamp: now,
+        salt: 37,
+        last_seen: vec![],
+        unsigned_content: None,
+        filter_mask: play::FilterMask::PassThrough,
+        chat_type: codec::Holder::Reference(0),
+        sender_name: codec::Nbt::from("Steve"),
+        target_name: None,
+    });
+    let output = client.receive(connection.take_output());
+    assert!(
+        matches!(play::clientbound::Packet::decode(&output[0]), Ok(play::clientbound::Packet::PlayerChatMessage(p)) if p.global_index == 0 && p.signature == Some(first_signature))
+    );
+    let second: play::serverbound::Packet = sign("reply", 1, Some(first_signature)).into();
+    connection
+        .receive(&client.send(|buf| second.encode(buf)), &info)
+        .unwrap();
+    assert!(
+        matches!(&connection.take_play_events()[..], [PlayEvent::Chat(ChatEvent::Message(message))] if message.index == 1 && message.last_seen == vec![first_signature])
+    );
+    let mut forged = sign("forged", 2, Some(first_signature));
+    forged.offset = 0;
+    forged.signature.as_mut().unwrap()[0] ^= 1;
+    let forged: play::serverbound::Packet = forged.into();
+    connection
+        .receive(&client.send(|buf| forged.encode(buf)), &info)
+        .unwrap();
+    assert!(!connection.is_closed());
+    assert!(connection.take_play_events().is_empty());
+    let output = client.receive(connection.take_output());
+    assert!(matches!(
+        play::clientbound::Packet::decode(&output[0]),
+        Ok(play::clientbound::Packet::SystemChatMessage(_))
+    ));
+    let mut after_forgery = sign("valid but chain broken", 2, Some(first_signature));
+    after_forgery.offset = 0;
+    let after_forgery: play::serverbound::Packet = after_forgery.into();
+    connection
+        .receive(&client.send(|buf| after_forgery.encode(buf)), &info)
+        .unwrap();
+    assert!(connection.take_play_events().is_empty());
+    client.receive(connection.take_output());
+    // Replaying the last signed packet must close the encrypted connection.
+    connection
+        .receive(&client.send(|buf| second.encode(buf)), &info)
+        .unwrap();
+    assert!(connection.is_closed());
+    let output = client.receive(connection.take_output());
+    assert!(matches!(
+        play::clientbound::Packet::decode(&output[0]),
+        Ok(play::clientbound::Packet::Disconnect(_))
+    ));
 }
 
 #[test]

@@ -101,15 +101,16 @@ fn run() -> io::Result<()> {
 /// The server's settings and list entry, from `server.properties` and `server-icon.png`.
 fn server_info(properties: &Properties) -> ServerInfo {
     let defaults = ServerInfo::default();
+    let online_mode = properties.parsed("online-mode", defaults.online_mode);
     ServerInfo {
         motd: properties.string("motd", &defaults.motd),
         max_players: properties.parsed("max-players", defaults.max_players),
         online_players: 0,
         favicon: load_icon(Path::new("server-icon.png")),
-        enforces_secure_chat: properties
-            .parsed("enforce-secure-profile", defaults.enforces_secure_chat),
+        enforces_secure_chat: online_mode
+            && properties.parsed("enforce-secure-profile", defaults.enforces_secure_chat),
         accepts_transfers: properties.parsed("accepts-transfers", defaults.accepts_transfers),
-        online_mode: properties.parsed("online-mode", defaults.online_mode),
+        online_mode,
         allow_flight: properties.parsed("allow-flight", defaults.allow_flight),
         view_distance: properties.parsed("view-distance", defaults.view_distance),
         simulation_distance: properties.parsed("simulation-distance", defaults.simulation_distance),
@@ -183,6 +184,9 @@ fn drive(
         .next_entity_id()
         .ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
     let mut connection = Connection::with_entity_id(key, entity_id);
+    if let Some(session) = session {
+        connection.set_chat_authority(session.chat_authority());
+    }
     let mut info = info.clone();
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
@@ -416,6 +420,28 @@ mod tests {
         assert!(server_info(&Properties::parse("allow-flight=true")).allow_flight);
     }
 
+    #[test]
+    fn secure_chat_status_requires_online_mode() {
+        assert!(
+            !server_info(&Properties::parse(
+                "online-mode=false\nenforce-secure-profile=true"
+            ))
+            .enforces_secure_chat
+        );
+        assert!(
+            server_info(&Properties::parse(
+                "online-mode=true\nenforce-secure-profile=true"
+            ))
+            .enforces_secure_chat
+        );
+        assert!(
+            !server_info(&Properties::parse(
+                "online-mode=true\nenforce-secure-profile=false"
+            ))
+            .enforces_secure_chat
+        );
+    }
+
     struct ChannelStream {
         input: Receiver<Vec<u8>>,
         output: Sender<Vec<u8>>,
@@ -564,6 +590,38 @@ mod tests {
         assert!(
             matches!(alex.next_play(), play::clientbound::Packet::SpawnEntity(p) if p.entity_id == steve_id)
         );
+
+        // Both clients see the original unsigned text, including their own messages.
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        for (index, text) in ["Hello, Alex!", "Hola, Steve!"].into_iter().enumerate() {
+            let packet: play::serverbound::Packet = play::serverbound::ChatMessage {
+                message: text.into(),
+                timestamp: now,
+                salt: 42,
+                signature: None,
+                offset: 0,
+                acknowledged: [0; 3],
+                checksum: 1,
+            }
+            .into();
+            if index == 0 {
+                steve.send(packet);
+            } else {
+                alex.send(packet);
+            }
+            for recipient in [&mut steve, &mut alex] {
+                assert!(
+                    matches!(recipient.next_play(), play::clientbound::Packet::PlayerChatMessage(p)
+                    if p.message == text && p.signature.is_none())
+                );
+            }
+        }
 
         alex.send(play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into());
         alex.send(

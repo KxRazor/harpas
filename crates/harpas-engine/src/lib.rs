@@ -208,12 +208,51 @@ impl TickWork for Game {
                 }
                 Event::Left(entity_id) => self.leave(entity_id),
                 Event::Input { entity_id, input } => {
+                    match input {
+                        player::Input::ChatSession(session) => {
+                            if let Some(state) = self
+                                .players
+                                .iter_mut()
+                                .find(|p| p.player.entity_id == entity_id && !p.disconnecting)
+                            {
+                                state.chat_session = Some(session.clone());
+                                let uuid = state.player.profile.uuid;
+                                for player in &self.players {
+                                    player.send(player::Output::ChatSession {
+                                        uuid,
+                                        session: session.clone(),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
+                        player::Input::ChatMessage(message) => {
+                            if let Some(sender) = self
+                                .players
+                                .iter()
+                                .find(|p| p.player.entity_id == entity_id && !p.disconnecting)
+                            {
+                                let sender = sender.player.profile.clone();
+                                for player in &self.players {
+                                    player.send(player::Output::ChatMessage {
+                                        sender: sender.clone(),
+                                        message: message.clone(),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
                     if let Some(state) = self
                         .players
                         .iter_mut()
                         .find(|p| p.player.entity_id == entity_id)
                     {
                         match input {
+                            player::Input::ChatSession(_) | player::Input::ChatMessage(_) => {
+                                unreachable!()
+                            }
                             player::Input::Movement(movement) => {
                                 if state.accepts(movement) {
                                     moved.insert(entity_id);
@@ -279,6 +318,12 @@ impl Game {
         let player = player::PlayerState::new(id, profile, view_distance, allow_flight, output);
         for existing in &self.players {
             player.send(player::Output::AddPlayer(existing.player.profile.clone()));
+            if let Some(session) = &existing.chat_session {
+                player.send(player::Output::ChatSession {
+                    uuid: existing.player.profile.uuid,
+                    session: session.clone(),
+                });
+            }
             existing.send(player::Output::AddPlayer(player.player.profile.clone()));
         }
         self.players.push(player);
@@ -478,6 +523,55 @@ mod tests {
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
         tick(&mut game, 2);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn chat_sessions_precede_messages_and_are_sent_to_late_joiners() {
+        let mut game = game();
+        let steve = join(&mut game, 1, "Steve", 10);
+        let alex = join(&mut game, 2, "Alex", 10);
+        tick(&mut game, 1);
+        steve.try_iter().for_each(drop);
+        alex.try_iter().for_each(drop);
+        let chat_session = player::ChatSession {
+            id: 88,
+            expires_at: 1000,
+            key: vec![1],
+            key_signature: vec![2],
+        };
+        let message = player::ChatMessage {
+            index: 0,
+            signature: Some([3; 256]),
+            message: "hello".into(),
+            timestamp: 42,
+            salt: 5,
+            last_seen: vec![],
+        };
+        input(&mut game, 1, Input::ChatSession(chat_session.clone()));
+        input(&mut game, 1, Input::ChatMessage(Box::new(message.clone())));
+        tick(&mut game, 2);
+        for recipient in [&steve, &alex] {
+            assert_eq!(
+                recipient.try_recv(),
+                Ok(Output::ChatSession {
+                    uuid: 1,
+                    session: chat_session.clone()
+                })
+            );
+            assert!(
+                matches!(recipient.try_recv(), Ok(Output::ChatMessage { sender, message: sent })
+                if sender.uuid == 1 && *sent == message)
+            );
+        }
+        let newcomer = join(&mut game, 3, "Newcomer", 10);
+        tick(&mut game, 3);
+        let initial: Vec<_> = newcomer.try_iter().collect();
+        let profile = initial
+            .iter()
+            .position(|event| matches!(event, Output::AddPlayer(p) if p.uuid == 1))
+            .unwrap();
+        let chat = initial.iter().position(|event| matches!(event, Output::ChatSession { uuid: 1, session } if *session == chat_session)).unwrap();
+        assert!(profile < chat);
     }
 
     #[test]

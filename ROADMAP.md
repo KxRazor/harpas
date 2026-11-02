@@ -74,7 +74,7 @@ and chats.
 - [x] Logic thread with the vanilla tick loop skeleton ([docs/engine-core.md](docs/engine-core.md)).
 - [x] Player entity, movement validation, player list, entity tracking between players in the void world;
       collision and vehicle movement follow with worlds and gameplay.
-- [ ] Chat with signing, as in vanilla.
+- [x] Chat with signing, as in vanilla.
 - [ ] `server.properties` and `harpas.toml` loading; console and `logs/latest.log`
       ([docs/operations.md](docs/operations.md)).
 - [ ] Graceful shutdown on SIGTERM/SIGINT.

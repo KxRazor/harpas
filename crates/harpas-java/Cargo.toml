@@ -14,8 +14,8 @@ getrandom = { version = "0.4.3", features = ["sys_rng"] }
 harpas-protocol-java.workspace = true
 md-5 = "0.11.0"
 rsa = { version = "0.10.0-rc.19", features = ["hazmat"] }
-sha1 = "0.11.0"
-sha2 = "0.11.1"
+sha1 = { version = "0.11.0", features = ["oid"] }
+sha2 = { version = "0.11.1", features = ["oid"] }
 subtle = "2.6.1"
 
 [lints]

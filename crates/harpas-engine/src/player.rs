@@ -40,6 +40,36 @@ pub struct Profile {
     pub game_mode: GameMode,
 }
 
+/// A player's verified chat session, carried to other connections without changing its key material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatSession {
+    /// Session identifier.
+    pub id: u128,
+    /// Key expiration in milliseconds since the Unix epoch.
+    pub expires_at: i64,
+    /// Encoded public key.
+    pub key: Vec<u8>,
+    /// Identity service's signature of the key.
+    pub key_signature: Vec<u8>,
+}
+
+/// An accepted player message, including its original signing context when available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    /// Message index in the sender's session.
+    pub index: i32,
+    /// Original signature, if the connection verified it.
+    pub signature: Option<[u8; 256]>,
+    /// Original text.
+    pub message: String,
+    /// Timestamp in milliseconds since the Unix epoch.
+    pub timestamp: i64,
+    /// Signing salt.
+    pub salt: i64,
+    /// Previously seen message signatures, in order.
+    pub last_seen: Vec<[u8; 256]>,
+}
+
 /// The player's position, rotation, and ground state.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Position {
@@ -84,6 +114,10 @@ pub struct Movement {
 /// Input from one player's connection, applied during the packet phase.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
+    /// Publish a verified signing session.
+    ChatSession(ChatSession),
+    /// Broadcast an accepted message.
+    ChatMessage(Box<ChatMessage>),
     /// The player moved or rotated.
     Movement(Movement),
     /// The client acknowledged a position synchronization.
@@ -108,6 +142,20 @@ pub struct Player {
 /// A message for a player's connection to translate into edition-specific packets.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
+    /// Publish a player's signing session before any messages using it.
+    ChatSession {
+        /// Player who owns the session.
+        uuid: u128,
+        /// Verified signing session.
+        session: ChatSession,
+    },
+    /// Deliver a player message, including to its sender.
+    ChatMessage {
+        /// Sender's identity.
+        sender: Profile,
+        /// Original message and signing context.
+        message: Box<ChatMessage>,
+    },
     /// Add a profile to the player list before spawning its entity.
     AddPlayer(Profile),
     /// Remove a profile from the player list.
@@ -138,6 +186,7 @@ pub enum Output {
 
 pub(crate) struct PlayerState {
     pub(crate) player: Player,
+    pub(crate) chat_session: Option<ChatSession>,
     pub(crate) output: Sender<Output>,
     pub(crate) view_distance: u8,
     pub(crate) max_view_distance: u8,
@@ -168,6 +217,7 @@ impl PlayerState {
                 profile,
                 position,
             },
+            chat_session: None,
             output,
             view_distance: view_distance.clamp(2, 32),
             max_view_distance: view_distance.clamp(2, 32),

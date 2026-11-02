@@ -4,9 +4,11 @@ Scope: how Harpas stores worlds, where it gets vanilla's game data (world genera
 tags, structures), how it generates and saves chunks, and how it reaches and checks parity with vanilla. The
 tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
-Status: design. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
-provisioning are implemented; both happen on every start, since every start needs the vanilla game data. Facts about vanilla cite their source in
-[References](#references); everything else is a design decision of this project.
+Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
+provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
+Region files are read and written; the rest of the save format, generation and parity are design. Facts
+about vanilla cite their source in [References](#references); everything else is a design decision of this
+project.
 
 ---
 
@@ -24,14 +26,16 @@ In priority order. When two goals conflict, the higher one wins.
 
 ## Save format: Anvil
 
-Harpas reads and writes vanilla's region format [1]:
+Harpas reads and writes vanilla's region format [1], in the `harpas-anvil` crate. The crate knows nothing of
+the engine: it takes and gives NBT, so the engine, its worker threads and the parity tools share it.
 
 - Region files `r.x.z.mca`, each holding 32×32 chunks, built from 4 KiB sectors, with a location table and a
   timestamp table as the first two sectors.
 - Three folders use region files: `region/` (chunks), `entities/` and `poi/`.
 - Each chunk's data starts with its length and a compression byte. Harpas writes **zlib**, as vanilla does.
   Other types vanilla supports, including LZ4 since 24w04a, are read [1]. Whether to write LZ4 is decided by a
-  benchmark, and only if it wins clearly.
+  benchmark, and only if it wins clearly. Gzip and uncompressed chunks are read today; an LZ4 chunk is
+  reported with how to convert the world, until LZ4 reading lands with a test file written by vanilla.
 - Chunks larger than 255 sectors are stored in external `c.x.z.mcc` files, as vanilla does [1].
 - The rest of the world folder (`level.dat`, player data, statistics, advancements, saved data such as maps,
   raids and scoreboards) uses vanilla's files and formats.
@@ -51,7 +55,9 @@ Harpas reads and writes vanilla's region format [1]:
   shutdown.
 - At a save point the logic thread only takes a **snapshot** of the changed sections and entities; worker
   threads serialize, compress and write them. The tick does not wait for disk.
-- Writes are atomic per region file, so a crash never leaves a half-written region.
+- Writes are atomic per region file, so a crash never leaves a half-written region: a region is saved whole
+  under a temporary name and renamed into place, after the `.mcc` files of its large chunks. A chunk whose
+  region entry cannot be read is reported when it is read, without hiding the region's other chunks.
 
 ---
 

@@ -90,6 +90,9 @@ vanilla for the same seed.
 - [x] Vanilla data provisioning from Mojang's server jar ([docs/world.md](docs/world.md#vanilla-game-data)).
 - [x] Paletted chunk sections with version counters ([docs/engine-core.md](docs/engine-core.md#6-chunks)).
 - [ ] Anvil reading and writing, including `.mcc` files; `level.dat` and player data.
+  - [x] Region files with `.mcc` files, in the new `harpas-anvil` crate.
+  - [ ] Chunk NBT to and from sections, with the block state registry.
+  - [ ] `level.dat` and player data.
 - [ ] Chunk loading, saving and sending on worker threads; non-blocking autosave.
 - [ ] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.

@@ -49,7 +49,7 @@ fn ping(timestamp: i64) -> Vec<u8> {
 
 fn login_start(name: &str) -> Vec<u8> {
     let packet: login::serverbound::Packet = login::serverbound::LoginStart {
-        username: name.into(),
+        name: name.into(),
         player_uuid: 0,
     }
     .into();

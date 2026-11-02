@@ -137,7 +137,7 @@ fn encrypted_login(
     tamper_token: bool,
 ) -> ([u8; 16], Vec<u8>) {
     let start = login::serverbound::LoginStart {
-        username: "Steve".into(),
+        name: "Steve".into(),
         player_uuid: 0,
     };
     let bytes = [handshake(client), login_packet(client, start.into())].concat();
@@ -550,7 +550,7 @@ fn offline_mode_compresses_large_packets() {
     let mut connection = Connection::new(key());
     let mut client = Client::new();
     let start = login::serverbound::LoginStart {
-        username: "Steve".into(),
+        name: "Steve".into(),
         player_uuid: 0,
     };
     let bytes = [

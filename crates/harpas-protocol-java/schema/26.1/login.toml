@@ -70,7 +70,7 @@ name = "LoginStart"
 mcdata = "login_start"
 doc = "Starts login with the player's name and UUID."
 fields = [
-    { name = "username", type = "string(16)" },
+    { name = "name", type = "string(16)", doc = "The player's name." },
     { name = "player_uuid", type = "uuid", doc = "UUID of the account; ignored by vanilla in online mode." },
 ]
 

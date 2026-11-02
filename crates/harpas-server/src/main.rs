@@ -453,7 +453,7 @@ mod tests {
 
     fn login_packets(name: &str) -> VecDeque<Vec<u8>> {
         let start: login::serverbound::Packet = login::serverbound::LoginStart {
-            username: name.into(),
+            name: name.into(),
             player_uuid: 0,
         }
         .into();

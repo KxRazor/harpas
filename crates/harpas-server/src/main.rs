@@ -149,7 +149,8 @@ fn run() -> io::Result<()> {
     // Every start needs Minecraft's game data, downloaded from Mojang (`docs/world.md`).
     eula::require(Path::new(""), &settings)?;
     vanilla_data::provision(Path::new(""))?;
-    check_world(Path::new(&properties.string("level-name", "world")))?;
+    let world_dir = PathBuf::from(properties.string("level-name", "world"));
+    check_world(&world_dir)?;
     let info = Arc::new(server_info(&properties));
     info!("Default game type: {:?}", info.game_mode);
     info!("Generating keypair");
@@ -179,7 +180,10 @@ fn run() -> io::Result<()> {
             Err(e)
         }
     })?;
-    let (logic, logic_thread) = harpas_engine::start()?;
+    // Poll the listener so an asynchronous fatal world error also stops an otherwise idle server.
+    listener.set_nonblocking(true)?;
+    let (logic, logic_thread) =
+        harpas_engine::start_with_world(&world_dir, harpas_java::biome_names())?;
     let shutdown = Shutdown::new(logic.clone(), logic_thread);
     shutdown.handle_signals()?;
     info!("Listening for Java Edition on {}", listener.local_addr()?);
@@ -193,21 +197,31 @@ fn run() -> io::Result<()> {
         started.elapsed().as_secs_f64()
     );
     let limits = Arc::new(Limits::default());
-    for stream in listener.incoming() {
+    loop {
         // Once stopping, new connections are closed until the process exits.
         if shutdown.is_stopping() {
+            thread::sleep(CONNECTION_POLL_INTERVAL);
             continue;
         }
         if shutdown.logic_failed() {
             return Err(io::Error::other("logic thread stopped"));
         }
-        let stream = match stream {
-            Ok(stream) => stream,
+        let stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(CONNECTION_POLL_INTERVAL);
+                continue;
+            }
             Err(e) => {
                 warn!("Could not accept a connection: {e}");
+                thread::sleep(CONNECTION_POLL_INTERVAL);
                 continue;
             }
         };
+        if let Err(e) = stream.set_nonblocking(false) {
+            warn!("Could not configure a connection: {e}");
+            continue;
+        }
         let Ok(peer) = stream.peer_addr() else {
             continue;
         };
@@ -233,7 +247,6 @@ fn run() -> io::Result<()> {
             warn!("Could not start a thread for {peer}: {e}");
         }
     }
-    Ok(())
 }
 
 /// Refuses to start on a world another Minecraft version saved (`docs/world.md#supported-world-versions`). A

@@ -23,4 +23,5 @@ pub use connection::{
 };
 pub use crypto::{ServerKey, server_hash};
 pub use frame::{FrameError, FrameReader, MAX_FRAME_LEN, write_frame};
+pub use registries::biome_names;
 pub use status::ServerInfo;

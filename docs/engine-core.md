@@ -4,9 +4,10 @@ Scope: how the Rust engine runs the game in normal mode: the tick loop and its o
 parallel, how threads are laid out, how the world and entities are stored, and how plugins are called from
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
-Status: in progress. The logic thread, tick skeleton, players in the void world and chunk sections are
-implemented; the rest of world storage and the remaining entity logic are still design. Facts about vanilla cite their source in
-[References](#references); everything else is a design decision of this project.
+Status: in progress. The logic thread, tick skeleton, players in the void world, chunk sections and loading the
+occupied overworld chunks are implemented; the rest of world storage and the remaining entity logic are still
+design. Facts about vanilla cite their source in [References](#references); everything else is a design decision
+of this project.
 
 ---
 
@@ -55,8 +56,9 @@ This order is observable (redstone timing, farms, entity interactions), so Harpa
 
 **Implemented skeleton:** the server starts one logic thread with a 50 ms tick target. It catches up after
 short delays and resets the target after a delay over two seconds. The tick has phases for functions,
-dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. Only the
-connection and player work is implemented; the other phases remain placeholders.
+dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. The dimension
+phase applies completed chunk reads; connection and player work is implemented. The other phases remain
+placeholders.
 
 Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting
 messages into edition-specific packets. The logic thread owns each player's profile and position and publishes
@@ -104,6 +106,12 @@ Work that cannot change the result of the tick runs in parallel, off the logic t
 | **Plugin async threads** | Bukkit async tasks (Java) and asynchronous I/O for WASM plugins |
 
 The logic thread is attached to the JVM at startup when Java plugins are present ([jvm.md](jvm.md#threads)).
+
+The current chunk loader uses up to four workers and a bounded queue. The logic thread requests the overworld
+chunk occupied by each player and applies finished reads in the dimension phase. Requests shared by players
+are deduplicated; results no longer needed are discarded, except that discovering an incompatible chunk still
+stops the server. The Java configuration registry supplies the biome ID order. Loading the rest of each
+player's view and sending chunks are still to come.
 
 ### 4. Plugins are called from inside the tick
 

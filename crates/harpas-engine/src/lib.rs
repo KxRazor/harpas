@@ -3,6 +3,7 @@
 //! Design: `docs/engine-core.md`.
 
 pub mod player;
+pub mod world;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -127,6 +128,19 @@ impl std::error::Error for LogicStopped {}
 /// Starts the single logic thread. It stops on [`Handle::shutdown`], or once all handles and player sessions
 /// have been dropped.
 pub fn start() -> io::Result<(Handle, JoinHandle<()>)> {
+    start_game(None)
+}
+
+/// Starts the logic thread with an existing world's overworld and the server's ordered biome registry.
+/// Until chunk sending is implemented, players still see the void world.
+pub fn start_with_world(
+    world_dir: &std::path::Path,
+    biomes: &[&str],
+) -> io::Result<(Handle, JoinHandle<()>)> {
+    start_game(Some(world::World::open(world_dir, biomes)?))
+}
+
+fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<()>)> {
     let (sender, receiver) = mpsc::channel();
     let online_players = Arc::new(AtomicU32::new(0));
     let handle = Handle {
@@ -136,7 +150,7 @@ pub fn start() -> io::Result<(Handle, JoinHandle<()>)> {
     };
     let thread = thread::Builder::new()
         .name("harpas-logic".to_owned())
-        .spawn(move || run(receiver, online_players))?;
+        .spawn(move || run(receiver, online_players, world))?;
     Ok((handle, thread))
 }
 
@@ -204,11 +218,38 @@ struct Game {
     pending: Vec<Event>,
     players: Vec<player::PlayerState>,
     online_players: Arc<AtomicU32>,
+    world: Option<world::World>,
     stopped: bool,
 }
 
 impl TickWork for Game {
+    fn dimensions(&mut self) {
+        let Some(world) = &mut self.world else {
+            return;
+        };
+        // For this first loading step, retain only the chunk occupied by each player. View-distance loading
+        // and sending the resulting chunks follow separately.
+        let wanted = self
+            .players
+            .iter()
+            .filter(|p| !p.disconnecting)
+            .map(|p| world::ChunkPos::at(p.player.position.x, p.player.position.z));
+        if let Err(error) = world.update(wanted) {
+            log::error!("{error}");
+            for state in &mut self.players {
+                if !state.disconnecting {
+                    state.disconnecting = true;
+                    state.send(player::Output::Disconnect("Cannot load the world"));
+                }
+            }
+            self.stopped = true;
+        }
+    }
+
     fn connections(&mut self) {
+        if self.stopped {
+            return;
+        }
         for state in &mut self.players {
             state.tick_start = state.player.position;
         }
@@ -415,11 +456,12 @@ impl Game {
     }
 }
 
-fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>) {
+fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>, world: Option<world::World>) {
     let mut game = Game {
         pending: Vec::new(),
         players: Vec::new(),
         online_players,
+        world,
         stopped: false,
     };
     let mut schedule = Schedule::new(Instant::now());
@@ -463,6 +505,7 @@ mod tests {
             pending: Vec::new(),
             players: Vec::new(),
             online_players: Arc::new(AtomicU32::new(0)),
+            world: None,
             stopped: false,
         }
     }

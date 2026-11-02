@@ -18,6 +18,15 @@ pub(crate) fn registries() -> &'static [Registry] {
     REGISTRIES.get_or_init(|| parse(include_str!("../data/registries-26.1.txt")))
 }
 
+/// Biome names in the same order as their numeric IDs in the Java Configuration state.
+pub fn biome_names() -> &'static [&'static str] {
+    &registries()
+        .iter()
+        .find(|registry| registry.id == "minecraft:worldgen/biome")
+        .expect("the biome registry is synchronized")
+        .entries
+}
+
 /// The tags the client needs before it accepts the registries, by registry. They are sent empty for now.
 pub(crate) fn required_tags() -> &'static [Registry] {
     static TAGS: OnceLock<Vec<Registry>> = OnceLock::new();
@@ -66,6 +75,9 @@ mod tests {
             Some(0)
         );
         assert!(entry_id("minecraft:worldgen/biome", "minecraft:plains").is_some());
+        for (id, &name) in biome_names().iter().enumerate() {
+            assert_eq!(entry_id("minecraft:worldgen/biome", name), Some(id as i32));
+        }
         assert_eq!(
             entry_id("minecraft:worldgen/biome", "minecraft:nowhere"),
             None

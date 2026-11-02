@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - World versions: worlds of 26.1 and its hotfixes 26.1.1 and 26.1.2 open, and the server does not start on a
   `level-name` world saved by any other version, explaining how to upgrade an older one with vanilla's
   `--forceUpgrade`; chunks of another version are refused as they are read (`harpas-anvil`, `harpas-server`).
+- Existing overworld chunks occupied by players are read on a bounded worker pool and delivered to the logic
+  thread. Missing and damaged chunks are distinguished, and an incompatible chunk stops the server with an
+  error. Clients still see the void until chunk sending is implemented (`harpas-engine`, `harpas-server`).
 
 ### Changed
 

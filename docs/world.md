@@ -6,9 +6,10 @@ tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
 Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
-Region files, chunk sections, `level.dat` and player data are read and written; opening a world, the rest of
-the save format, generation and parity are design. Facts about vanilla cite their source in [References](#references); everything else is a design
-decision of this project.
+Region files, chunk sections, `level.dat` and player data are read and written. The engine loads the existing
+overworld chunk occupied by each player, but players still see the void until chunk sending is implemented;
+the rest of world loading and the save format, generation and parity are design. Facts about vanilla cite
+their source in [References](#references); everything else is a design decision of this project.
 
 ---
 
@@ -59,16 +60,26 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
   and a spectator exploit, and share 26.1's protocol (775) and data pack format (101.1) [6]. They are listed
   one by one, so a later hotfix is accepted only once it has been checked the same way. `level.dat` and every
   chunk record the data version that saved them; a world saved before 1.9 records none and counts as older.
-- **Older world:** the server does not start, and the error explains how to upgrade it: start the vanilla
+- **Older world:** the server refuses it, and the error explains how to upgrade it: start the vanilla
   server of the supported version once with `--forceUpgrade`. Vanilla upgrades chunks only when it loads them,
   so a world merely opened in vanilla can still hold old chunks; `--forceUpgrade` upgrades every chunk at once.
   Converters for older versions may come later.
-- **Newer world,** or any data version not listed: the server does not start, to avoid damaging data it does
-  not understand.
+- **Newer world,** or any data version not listed: the server refuses it, to avoid damaging data it does not
+  understand.
 - A chunk keeps the data version it was read with when it is saved again, so a world from 26.1.2 still opens
   in vanilla 26.1.2 as its own.
 - `level.dat` is checked before the server starts. Chunks are checked one by one as they are read, since a
-  world can mix versions; a chunk of another version is an error, not a chunk to generate again.
+  world can mix versions; a chunk of another version stops the running server with an error when it is read.
+  It is never treated as a missing chunk to generate again.
+
+### Loading
+
+The server currently requests the existing overworld chunk occupied by each player. A bounded worker pool
+reads the region and decodes the chunk; the logic thread receives the result in its dimension phase. A missing
+chunk is recorded as missing, a read error is logged and retained separately, and an incompatible data version
+stops the server, even if the player left while the read was in progress. Chunks no player occupies are
+released, and other results no longer wanted are discarded. Loading the full view distance, generation and
+sending chunks to players are later steps.
 
 ### Saving
 

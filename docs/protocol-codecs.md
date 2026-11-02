@@ -251,6 +251,7 @@ M1 prototype: the Java 26.1 Handshaking, Status and Login codecs, generated from
 | Generated code | 966 lines for the three states |
 | Build cost | 4.1 s for a clean build of `harpas-protocol-java` with the generator and its dependencies (`serde`, `toml`, `serde_json`), 12 threads; regeneration after a schema change is under 0.1 s |
 | Correctness | Byte-for-byte round trips against packets written by hand from the protocol documentation; the schema matches minecraft-data with no differences; a vanilla Java 26.1 client lists the example server with its MOTD, player count and latency, and joining it shows the Login Disconnect message with the player's name |
+| Player Info Update bit order | minecraft-data lists the hat (`update_hat`) before the list order (`update_list_order`), but its entry fields and the protocol documentation [7] put the list order first. The documentation is right: a 26.1 client joined with list order 2 and the hat set, which only decodes with list order as bit 6 and the hat as bit 7 (2026-11-01) |
 | Play state, first part (M2) | 62 packets generated, 38 clientbound and 24 serverbound; 148 pending. The format gained fixed byte arrays, flags, bit fields, registry holders, `lp_vec3`, optional NBT, default union variants and externs; the check matches integers of the same size, `bytes` with arrays of bytes, and switches whose default sends nothing. One extern: the Player Info Update body, compared by ID only |
 | Configuration state (M2) | 30 packets generated, 20 clientbound and 10 serverbound, none hand-written; the format gained `nbt`, tagged unions and enum values checked against minecraft-data's mappers |
 | Coverage of the rest of Java 26.1 | 137 of the 240 Configuration and Play packets use only types the format already has; 195 once it gains enums from mappers, bit fields, switches, registry holders and `lpVec3`; the remaining 45 need hand-written types (NBT, entity metadata) that the schema refers to by name |
@@ -321,11 +322,7 @@ Conclusions:
 
 ## Open questions
 
-1. minecraft-data lists the Player Info Update actions with the hat (`update_hat`) before the list order
-   (`update_list_order`), but its entry fields, and the protocol documentation [7], put the list order first.
-   The hand-written codec follows the documentation: list order is bit 6 and the hat bit 7. To be confirmed
-   with a 26.1 client once Play connections work *(test in M2)*.
-2. Decoders return owned values (`String`, `Vec<u8>`). Borrowed decoding (`&str`, `&[u8]`) avoids copies for
+1. Decoders return owned values (`String`, `Vec<u8>`). Borrowed decoding (`&str`, `&[u8]`) avoids copies for
    Play packets *(measure in M2)*.
 
 ---

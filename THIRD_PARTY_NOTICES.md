@@ -16,14 +16,22 @@ this section is out of date.
 <!-- BEGIN cargo-about -->
 | License | Used by |
 |---|---|
-| MIT License | `base64 0.23.1` `equivalent 1.0.3` `hashbrown 0.17.1` `indexmap 2.14.2` |
+| MIT License | `base64 0.23.1` `block-buffer 0.12.1` `cfg-if 1.0.5` `const-oid 0.10.2` `crypto-common 0.2.2` `digest 0.11.3` `equivalent 1.0.3` `hashbrown 0.17.1` `hybrid-array 0.4.15` `indexmap 2.14.2` `md-5 0.11.0` `typenum 1.20.1` |
 
 ### MIT License
 
 - `base64 0.23.1`: Copyright (c) 2025 Alice Maz, Marshall Pierce
+- `block-buffer 0.12.1`: Copyright (c) 2018-2025 The RustCrypto Project Developers
+- `cfg-if 1.0.5`: Copyright (c) 2014 Alex Crichton
+- `const-oid 0.10.2`: Copyright (c) 2020-2026 The RustCrypto Project Developers
+- `crypto-common 0.2.2`: Copyright (c) 2021-2026 RustCrypto Developers
+- `digest 0.11.3`: Copyright (c) 2017-2025 RustCrypto Developers; Copyright (c) 2017 Artyom Pavlov
 - `equivalent 1.0.3`: Copyright (c) 2016--2023
 - `hashbrown 0.17.1`: Copyright (c) 2016 Amanieu d'Antras
+- `hybrid-array 0.4.15`: Copyright (c) 2022-2026 The RustCrypto Project Developers
 - `indexmap 2.14.2`: Copyright (c) 2016--2017
+- `md-5 0.11.0`: Copyright (c) 2016-2026 The RustCrypto Project Developers; Copyright (c) 2016 Artyom Pavlov; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2006-2009 Graydon Hoare
+- `typenum 1.20.1`: Copyright (c) 2014 Paho Lurie-Gregg
 
 ```text
 Permission is hereby granted, free of charge, to any
@@ -58,7 +66,9 @@ DEALINGS IN THE SOFTWARE.
 
 The Java protocol schema in `crates/harpas-protocol-java/schema/` is built from minecraft-data's
 `data/pc/<version>/protocol.json`, and `crates/harpas-protocol-codegen/tests/data/minecraft-data-26.1.json` is a
-subset of that file ([docs/protocol-codecs.md](docs/protocol-codecs.md)). Source:
+subset of that file ([docs/protocol-codecs.md](docs/protocol-codecs.md)). The registry names in
+`crates/harpas-java/data/registries-26.1.txt` come from its `data/pc/26.1/loginPacket.json`
+([crates/harpas-java/data/README.md](crates/harpas-java/data/README.md)). Source:
 https://github.com/PrismarineJS/minecraft-data. Its README states the license as MIT; the repository has no
 `LICENSE` file and names no copyright holder, so the notice below names the project.
 

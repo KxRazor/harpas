@@ -9,8 +9,10 @@
 mod connection;
 mod frame;
 mod legacy;
+mod registries;
 mod status;
+mod void_world;
 
-pub use connection::{Connection, ConnectionError, State};
+pub use connection::{Connection, ConnectionError, Player, State, offline_uuid};
 pub use frame::{FrameError, FrameReader, MAX_FRAME_LEN, write_frame};
 pub use status::ServerInfo;

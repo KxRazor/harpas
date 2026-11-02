@@ -5,9 +5,9 @@ authentication, encryption and compression, the configuration state, chat signin
 abusive connections. Packet codecs are covered in [protocol-codecs.md](protocol-codecs.md); the Bedrock
 counterpart is [nethernet.md](nethernet.md).
 
-Status: in progress. Handshaking, Status, the server list (legacy ping included) and the refusal of other
-protocol versions and transfers are implemented in `harpas-java`; Login stops at Login Start for now, and the
-rest is design. Facts about the protocol cite their source in
+Status: in progress. Every state is implemented in `harpas-java` for offline mode: Handshaking, Status and the
+server list (legacy ping included), Login, Configuration with registry data, and Play up to a void world.
+Online mode, encryption, compression and the protection against abuse are design. Facts about the protocol cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -53,8 +53,20 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 - **Legacy ping:** a connection whose first byte is `0xFE` gets the pre-1.7 answer vanilla gives: the beta
   format for `0xFE` alone, the 1.4 format with protocol 127 otherwise.
 - **Timeout:** a connection that sends nothing for 30 seconds is closed, as in vanilla.
+- **Login:** offline mode only for now. The player's UUID is vanilla's offline UUID, a version 3 UUID of
+  `OfflinePlayer:<name>`; names with spaces, control characters or non-ASCII characters are refused, as in
+  vanilla. With `online-mode=true`, Login Start is answered with a message asking for `online-mode=false` until
+  authentication exists.
+- **Configuration:** see [Configuration state](#configuration-state).
+- **Play:** until the engine exists, the player joins a void world: the Login packet, abilities for the
+  `gamemode` of `server.properties`, the player's own entry in the player list, the spawn point, the position
+  at (0.5, 65, 0.5), and empty overworld chunks over `view-distance`, sent as one chunk batch. Play packets the
+  schema does not have yet are ignored instead of closing the connection.
+- **Keep Alive:** every 15 seconds in Configuration and Play; a client that does not answer within 15 seconds,
+  or answers with another ID, is disconnected, as in vanilla.
 - **Tested with a client:** on 2026-11-01, a vanilla Java 26.1 client listed the server with its MOTD colors,
-  icon, player counts and latency, and joining showed the Login Disconnect message with the player's name.
+  icon, player counts and latency; it then joined the void world in creative mode, flew around, and saw itself
+  in the player list, with no error in the client's log.
 
 ---
 
@@ -93,6 +105,21 @@ Before play, the server sends the client what it needs for the server version: r
 tags and resource packs. For a client of another protocol version, these go through version translation
 ([versions.md](versions.md#how-translation-works)). The configuration state can be re-entered later, as
 vanilla does, for example to change resource packs.
+
+How it works now:
+
+1. The server sends its brand, the `minecraft:vanilla` feature flag and the data pack it knows,
+   `minecraft:core` at the server version, as vanilla does.
+2. The client answers with the packs it has. A 26.1 client has the core pack built in, so the server sends the
+   28 synchronized registries **by name only**, in vanilla's order, and the client takes their data from its
+   own copy. The names come from minecraft-data ([versions.md](versions.md)); a client without the core pack is
+   disconnected with a message, since sending the data itself needs vanilla's data files (M3).
+3. Tags: the registry data and the client's item components refer to tags, and the client refuses the
+   registries, or fails when it builds its items, if one is missing. Until Harpas has vanilla's data
+   ([world.md](world.md#vanilla-game-data)), the server sends the tags the client needs **empty**: 122 of them,
+   found from the errors a 26.1 client reports and completed with the vanilla tags its item components use.
+   Empty tags change nothing in a void world; with real worlds, the real tags replace them.
+4. Finish Configuration; the client acknowledges it and the connection moves to Play.
 
 ---
 

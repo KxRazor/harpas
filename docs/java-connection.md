@@ -5,7 +5,9 @@ authentication, encryption and compression, the configuration state, chat signin
 abusive connections. Packet codecs are covered in [protocol-codecs.md](protocol-codecs.md); the Bedrock
 counterpart is [nethernet.md](nethernet.md).
 
-Status: design. Nothing here is implemented. Facts about the protocol cite their source in
+Status: in progress. Handshaking, Status, the server list (legacy ping included) and the refusal of other
+protocol versions and transfers are implemented in `harpas-java`; Login stops at Login Start for now, and the
+rest is design. Facts about the protocol cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -31,6 +33,28 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 | **Login** | Authentication, encryption and compression (below) |
 | **Configuration** | Registry data and the other data the client needs before playing (below) |
 | **Play** | The game |
+
+### Implementation
+
+- **No I/O in the state machine.** `harpas_java::Connection` takes the bytes read from the socket and produces
+  the bytes to send, like the NetherNet transport ([nethernet.md](nethernet.md)). The `harpas` binary drives
+  it with one thread per connection for now; the network runtime that replaces those threads is chosen with
+  the protection against abuse (below).
+- **Framing:** a frame's VarInt length is at most 3 bytes and 2,097,151, as in vanilla; the length is checked
+  before waiting for the frame, so a connection never buffers more than one frame.
+- **Handshake:** a Login or Transfer handshake with another protocol version gets vanilla's Login Disconnect,
+  `multiplayer.disconnect.outdated_client` below protocol 754 (Java 1.16.5) and
+  `multiplayer.disconnect.incompatible` otherwise, both with the server's version. A Transfer is refused with
+  `multiplayer.disconnect.transfers_disabled` unless `accepts-transfers=true`. Status answers any version, and
+  the response's protocol number tells the client whether it can join.
+- **Status:** the response carries the version, `max-players`, the online count, the `motd`, the
+  `server-icon.png` (only a 64×64 PNG, as in vanilla) and `enforcesSecureChat`. It is answered once; the
+  connection closes after the Pong, as in vanilla.
+- **Legacy ping:** a connection whose first byte is `0xFE` gets the pre-1.7 answer vanilla gives: the beta
+  format for `0xFE` alone, the 1.4 format with protocol 127 otherwise.
+- **Timeout:** a connection that sends nothing for 30 seconds is closed, as in vanilla.
+- **Tested with a client:** on 2026-11-01, a vanilla Java 26.1 client listed the server with its MOTD colors,
+  icon, player counts and latency, and joining showed the Login Disconnect message with the player's name.
 
 ---
 

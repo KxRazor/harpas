@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Java 26.1 Configuration packet codecs, with network NBT, tagged unions and enum values checked against
   minecraft-data (`harpas-protocol-java`, `harpas-protocol-codegen`).
 - NBT values with Java Edition's network encoding (`harpas-core`).
+- Java Edition server list: the `harpas` binary listens on `server-ip` and `server-port` and answers the status
+  ping with the MOTD, player counts and `server-icon.png` from `server.properties`, as well as the pre-1.7
+  legacy ping. Other protocol versions and disabled transfers are refused at login with vanilla's messages
+  (`harpas-java`, `harpas-server`).
 - Java 26.1 Play packet codecs for joining, moving, seeing other players and chatting, with fixed byte arrays,
   bit flags, bit fields, registry holders, low-precision vectors and hand-written types in the schema
   (`harpas-protocol-java`, `harpas-protocol-codegen`).

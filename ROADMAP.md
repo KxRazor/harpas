@@ -65,6 +65,8 @@ and chats.
   - [x] Play: joining, moving, seeing other players and chatting.
   - [ ] Play: the rest of the packets.
 - [ ] Connection states, status ping and server list ([docs/java-connection.md](docs/java-connection.md)).
+  - [x] Framing, Handshaking, Status and the server list, legacy ping included.
+  - [ ] Login, Configuration and Play states, with the tasks below.
 - [ ] Online-mode authentication with Mojang's session server; offline mode.
 - [ ] Encryption and compression following `server.properties`.
 - [ ] Configuration state with registry data for 26.1.

@@ -1,1 +1,4 @@
 /target
+
+# Local server folder for manual tests with a client
+/test-environment/

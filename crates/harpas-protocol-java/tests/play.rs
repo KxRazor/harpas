@@ -1,7 +1,7 @@
 //! Play packets against bytes written by hand from the documented wire format (minecraft.wiki, "Java
 //! Edition protocol/Packets" and "Java Edition protocol/Data types"), not from the generator's output.
 
-use harpas_protocol_java::codec::{DecodeError, Holder, LpVec3, Nbt};
+use harpas_protocol_java::codec::{DecodeError, Encode, Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
 
 const STEVE: u128 = 0x8667ba71_b85a_4004_af54_457a9734eed7;
@@ -448,4 +448,149 @@ fn movement() {
             hand: play::Hand::OffHand,
         }
     );
+}
+
+#[test]
+fn map_patches_follow_their_column_count() {
+    // Map 3, scale 0, not locked, no icons, then a 2 by 1 patch at (5, 6).
+    round_trip!(
+        clientbound::Packet,
+        vec![
+            0x33, 0x03, 0x00, 0x00, 0x00, 0x02, 0x01, 0x05, 0x06, 0x02, 0x22, 0x23
+        ],
+        clientbound::MapData {
+            map_id: 3,
+            scale: 0,
+            locked: false,
+            icons: None,
+            patch: play::MapPatch::Patch(
+                2,
+                play::MapPatchData {
+                    rows: 1,
+                    x: 5,
+                    y: 6,
+                    colors: vec![0x22, 0x23],
+                }
+            ),
+        }
+    );
+    // Zero columns: nothing follows.
+    round_trip!(
+        clientbound::Packet,
+        vec![0x33, 0x03, 0x00, 0x01, 0x00, 0x00],
+        clientbound::MapData {
+            map_id: 3,
+            scale: 0,
+            locked: true,
+            icons: None,
+            patch: play::MapPatch::Unchanged,
+        }
+    );
+}
+
+#[test]
+fn objectives_carry_an_optional_number_format() {
+    let name = Nbt::from("Kills");
+    // A network NBT string: its tag, a u16 length and the UTF-8 bytes.
+    let name_bytes = concat(&[&[0x08, 0x00, 0x05], b"Kills"]);
+    // Create "k", hearts, with a fixed number format.
+    round_trip!(
+        clientbound::Packet,
+        concat(&[
+            &[0x6a, 0x01, b'k', 0x00],
+            &name_bytes,
+            &[0x01, 0x01, 0x02],
+            &name_bytes,
+        ]),
+        clientbound::UpdateObjectives {
+            name: "k".into(),
+            action: play::ObjectiveAction::Create(play::ObjectiveInfo {
+                display_name: name.clone(),
+                render_type: play::ObjectiveRenderType::Hearts,
+                number_format: Some(play::NumberFormat::Fixed(name.clone())),
+            }),
+        }
+    );
+    // Remove has nothing after the action.
+    round_trip!(
+        clientbound::Packet,
+        vec![0x6a, 0x01, b'k', 0x01],
+        clientbound::UpdateObjectives {
+            name: "k".into(),
+            action: play::ObjectiveAction::Remove,
+        }
+    );
+}
+
+#[test]
+fn structure_block_flags_are_bits() {
+    let mut bytes = concat(&[&[0x3b], &0_i64.to_be_bytes(), &[0x00, 0x01, 0x00]]);
+    bytes.extend_from_slice(&[0, 0, 0, 1, 1, 1, 0, 0, 0x00]);
+    bytes.extend_from_slice(&1.0_f32.to_be_bytes());
+    // Seed 0, then ignore entities (0x01) and strict (0x08).
+    bytes.extend_from_slice(&[0x00, 0x09]);
+    let decoded = serverbound::Packet::decode(&bytes).unwrap();
+    let serverbound::Packet::ProgramStructureBlock(packet) = decoded else {
+        panic!("expected Program Structure Block, got {decoded:?}");
+    };
+    assert_eq!(
+        packet.flags,
+        play::StructureBlockFlags {
+            ignore_entities: true,
+            show_air: false,
+            show_bounding_box: false,
+            strict: true,
+        }
+    );
+}
+
+#[test]
+fn using_an_item_on_a_block_decodes_as_a_client_sends_it() {
+    // Main hand on the top face of (1, 64, -1), at the center of the face, sequence 7.
+    let position = play::BlockPos { x: 1, y: 64, z: -1 };
+    let mut packed = Vec::new();
+    position.encode(&mut packed);
+    round_trip!(
+        serverbound::Packet,
+        concat(&[
+            &[0x42, 0x00],
+            &packed,
+            &[0x01],
+            &0.5_f32.to_be_bytes(),
+            &1.0_f32.to_be_bytes(),
+            &0.5_f32.to_be_bytes(),
+            &[0x00, 0x00, 0x07],
+        ]),
+        serverbound::UseItemOn {
+            hand: play::Hand::MainHand,
+            position,
+            face: play::BlockFace::Top,
+            cursor_x: 0.5,
+            cursor_y: 1.0,
+            cursor_z: 0.5,
+            inside_block: false,
+            world_border_hit: false,
+            sequence: 7,
+        }
+    );
+    // An unknown face is refused rather than guessed.
+    let mut bad = concat(&[&[0x42, 0x00], &packed, &[0x09]]);
+    bad.extend_from_slice(&[0; 15]);
+    assert!(matches!(
+        serverbound::Packet::decode(&bad),
+        Err(DecodeError::UnknownEnumValue { .. })
+    ));
+}
+
+#[test]
+fn edited_books_are_limited_as_in_vanilla() {
+    // Slot 0, 101 empty pages: one over vanilla's limit of 100.
+    let mut bytes = vec![0x18, 0x00, 0x65];
+    bytes.extend(std::iter::repeat_n(0x00, 101));
+    bytes.push(0x00);
+    assert!(serverbound::Packet::decode(&bytes).is_err());
+    let mut bytes = vec![0x18, 0x00, 0x64];
+    bytes.extend(std::iter::repeat_n(0x00, 100));
+    bytes.push(0x00);
+    assert!(serverbound::Packet::decode(&bytes).is_ok());
 }

@@ -167,8 +167,8 @@ pub struct Variant {
     pub name: String,
     /// Tag value that selects the variant; `0` and `1` for a `bool` tag. None for the default variant.
     pub tag: Option<i64>,
-    /// Whether this variant takes every tag value the others do not. It keeps the tag value and has nothing
-    /// after it.
+    /// Whether this variant takes every tag value the others do not. It keeps the tag value, followed by its
+    /// type if it has one.
     #[serde(default)]
     pub default: bool,
     /// Value that follows the tag; none for a variant with nothing after it.
@@ -747,13 +747,16 @@ fn check_union(state: &State, name: &str, item: &Union) -> Result<(), String> {
         }
         let tag = match (variant.tag, variant.default) {
             (Some(tag), false) => tag,
-            (None, true) if variant.ty.is_none() && item.tag != Prim::Bool => {
+            (None, true) if item.tag != Prim::Bool => {
+                if let Some(ty) = &variant.ty {
+                    check_type_refs(state, name, ty)?;
+                }
                 defaults += 1;
                 continue;
             }
             (None, true) => {
                 return Err(format!(
-                    "default variant `{name}::{}` cannot have a type or a `bool` tag",
+                    "default variant `{name}::{}` cannot have a `bool` tag",
                     variant.name
                 ));
             }
@@ -986,6 +989,13 @@ mod tests {
             union(
                 "varint",
                 "{ name = \"A\", tag = 0 }, { name = \"B\", default = true }"
+            )
+            .is_ok()
+        );
+        assert!(
+            union(
+                "u8",
+                "{ name = \"A\", tag = 0 }, { name = \"B\", default = true, type = \"varint\" }"
             )
             .is_ok()
         );

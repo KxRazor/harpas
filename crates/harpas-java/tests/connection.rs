@@ -332,8 +332,8 @@ fn offline_players_join_the_void_world() {
         Some(&play::clientbound::ChunkBatchFinished { batch_size: 25 }.into())
     );
 
-    // Play packets the schema does not have yet, such as Use Item (0x43), are ignored.
-    connection.receive(&[0x02, 0x43, 0x00], &info).unwrap();
+    // Play packets the schema does not have yet, such as Set Creative Mode Slot (0x38), are ignored.
+    connection.receive(&[0x02, 0x38, 0x00], &info).unwrap();
     assert_eq!(connection.state(), State::Play);
 }
 

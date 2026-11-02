@@ -257,9 +257,18 @@ fn union_type(out: &mut Out, name: &str, item: &Union) {
             out.line("///");
         }
         match (variant.tag, &variant.ty) {
-            (None, _) => {
+            (None, None) => {
                 out.line("/// Sent with any other tag, which it holds.");
                 out.line(&format!("{}({}),", variant.name, item.tag.rust_type()));
+            }
+            (None, Some(ty)) => {
+                out.line("/// Sent with any other tag, which it holds, followed by the value.");
+                out.line(&format!(
+                    "{}({}, {}),",
+                    variant.name,
+                    item.tag.rust_type(),
+                    rust_type(ty)
+                ));
             }
             (Some(value), ty) => {
                 out.line(&format!("/// Sent with tag `{}`.", tag(value)));
@@ -279,11 +288,17 @@ fn union_type(out: &mut Out, name: &str, item: &Union) {
     for variant in &item.variants {
         let write = |value: &str| format!("codec::write_{}(buf, {value})", item.tag.name());
         match (variant.tag, &variant.ty) {
-            (None, _) => out.line(&format!(
+            (None, None) => out.line(&format!(
                 "Self::{}(tag) => {},",
                 variant.name,
                 write("*tag")
             )),
+            (None, Some(ty)) => {
+                out.open(&format!("Self::{}(tag, value) =>", variant.name));
+                out.line(&format!("{};", write("*tag")));
+                out.line(&format!("{};", encode(ty, "value", true)));
+                out.close();
+            }
             (Some(value), Some(ty)) => {
                 out.open(&format!("Self::{}(value) =>", variant.name));
                 out.line(&format!("{};", write(&tag(value))));
@@ -322,7 +337,14 @@ fn union_type(out: &mut Out, name: &str, item: &Union) {
         }
     }
     match item.variants.iter().find(|variant| variant.default) {
-        Some(variant) => out.line(&format!("tag => Ok(Self::{}(tag)),", variant.name)),
+        Some(variant) => match &variant.ty {
+            None => out.line(&format!("tag => Ok(Self::{}(tag)),", variant.name)),
+            Some(ty) => out.line(&format!(
+                "tag => Ok(Self::{}(tag, {}?)),",
+                variant.name,
+                decode(ty)
+            )),
+        },
         // Both values of a `bool` tag can be covered, and then there is nothing left to reject.
         None if item.tag == Prim::Bool && item.variants.len() == 2 => {}
         None => out.line(&format!(

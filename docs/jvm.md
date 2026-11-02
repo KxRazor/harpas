@@ -3,8 +3,9 @@
 Scope: how Harpas runs Bukkit/Paper plugins written in Java inside the Rust server, and how the bridge keeps
 overhead low without giving up functionality, compatibility or performance.
 
-Status: design. Nothing here is implemented. Every number marked *(measure)* must be confirmed by the bridge
-benchmark in [Validation](#validation) before the design is frozen. Claims about the JDK cite their source in
+Status: design, with the M1 bridge prototype measured in [Validation](#validation). The production bridge and
+shim are not implemented. Remaining *(measure)* markers need plugin workloads before the design is frozen.
+Claims about the JDK cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -251,7 +252,7 @@ pinned.
 | `-XX:+UseCompactObjectHeaders` | Product feature in JDK 25, off by default. Shrinks object headers to 64 bits; the JEP reports 22% less heap and 8% less CPU in one SPECjbb2015 setting *(measure for plugin workloads)*. It does not change Java semantics; only code that inspects object layout through `Unsafe` could notice. Enabled unless the plugin compatibility suite finds a plugin it breaks | [8] |
 | `-XX:AOTCacheOutput` (training run) / `-XX:AOTCache` (production) | AOT cache of loaded and linked classes (JEP 483) plus method profiles (JEP 515), created in one step with JEP 514. Faster startup and warmup. Must be regenerated when the JDK or the plugin set changes | [9][10] |
 | GC: G1 or Serial for small heaps; ZGC for large ones | The plugin heap is small because the world lives in Rust. In JDK 24/25 the AOT cache did not support ZGC; JEP 516 (JDK 26) removes that limit | [9][11] |
-| Generational Shenandoah (`-XX:+UseShenandoahGC -XX:ShenandoahGCMode=generational`) | Product in JDK 25; candidate for low-pause setups *(measure)* | [12] |
+| Generational Shenandoah (`-XX:+UseShenandoahGC -XX:ShenandoahGCMode=generational`) | Product in JDK 25; candidate for low-pause setups, tested in the M1 synthetic benchmark below *(measure with real plugins)* | [12] |
 | `--enable-native-access=<shim module>` | FFM downcalls and upcall stubs are restricted methods; enabling native access only for the shim keeps plugins from using them unintentionally | [2][1] |
 | `-Xmx` sized automatically | The heap holds plugin data only. The default must be generous enough for heavy plugins (map renderers, logging plugins); an out-of-memory error is a compatibility failure, so the heap errs on the large side | design |
 
@@ -410,7 +411,9 @@ host must therefore:
 
 ## Validation
 
-A benchmark in `bench/jvm-bridge` decides the open performance questions before the shim is written:
+A benchmark in `crates/harpas-bench/examples/jvm-bridge.rs` measures the bridge before the shim is written.
+Its [run guide](../crates/harpas-bench/examples/jvm-bridge/README.md) documents the fixture, ABI, checks and JVM
+configurations. The broader validation plan is:
 
 1. Rust embeds JDK 25; a minimal shim exposes `Player`, `getLocation()`, `teleport()` and `PlayerMoveEvent`.
 2. 200 simulated players at 20 TPS with several listeners.
@@ -425,7 +428,76 @@ A benchmark in `bench/jvm-bridge` decides the open performance questions before 
    behavioral difference disqualifies a candidate.
 6. **Provisioning:** download size and time per platform, and first-start time including verification.
 
-Results are recorded in this document and replace the *(measure)* markers.
+The M1 synthetic results below answer the crossing-cost and synchronous-event questions. Real plugin
+compatibility and allocation workloads, the separate Temurin/GraalVM comparison, automatic heap/GC sizing,
+reentrant events and provisioning remain to be validated; they cannot be decided by this small fixture.
+
+### M1 bridge results — 1 November 2026
+
+Measured on Linux x86_64, AMD Ryzen 5 5600H, Rust 1.99.0, embedded Eclipse Temurin **25.0.5+8-LTS**.
+The host used `-Xrs -Xms64m -Xmx256m --enable-native-access=ALL-UNNAMED`. Runs were sequential, without CPU
+pinning. Each case had two seconds of unpaced warmup; each event-dispatch path then ran 200 measured ticks at
+20 TPS, with 200 simulated players and three listeners. These are synthetic listeners, not Bukkit plugins:
+they cancel and modify moves, read a shared `Player.getLocation()`, and perform occasional immediate
+`teleport()` downcalls. Every run checks the behavior of both paths before measuring.
+
+The default G1 configuration was repeated in three fresh processes. The following are the median and range
+of the three per-process medians (seven timed batches within each process), without subtracting loop cost:
+
+| Operation | Median ns/op | Range ns/op |
+|---|---:|---:|
+| Java loop baseline | 0.73 | 0.73–0.73 |
+| Shared-memory `x` read | 1.82 | 1.73–1.87 |
+| Shared-memory `getLocation()` (three doubles) | 5.36 | 4.94–6.25 |
+| Java → Rust `x` read, JNI | 5.20 | 5.17–5.87 |
+| Java → Rust `x` read, plain FFM | 8.35 | 8.12–9.83 |
+| Java → Rust `x` read, critical FFM | 7.68 | 7.39–9.37 |
+| Rust → Java ping, cached JNI including exception check | 87.64 | 82.64–101.40 |
+| Rust → Java ping, FFM upcall | 21.43 | 20.36–29.57 |
+
+Full synchronous ticks include Rust's event-slot writes, one crossing per event, all listeners, and reading
+and applying the event result. Times exclude the sleep between ticks. The figures below are medians of the
+three per-process means/p99s, rather than a pooled p99; the p99 uses the nearest-rank method.
+
+| Dispatch path | Mean µs/tick (range) | p99 µs/tick (range) | Deadline overruns |
+|---|---:|---:|---:|
+| Cached JNI | 45.09 (43.65–45.73) | 92.50 (77.46–96.44) | 0 |
+| FFM upcall | 23.18 (22.03–23.38) | 55.42 (41.86–59.34) | 0 |
+
+**Bridge decision:** retain synchronous, individual event dispatch on the attached logic thread and shared
+entity views. In this fixture, the FFM route spends about 0.046% of a 50 ms tick on 200 events; there is no
+measured need to defer events or change their semantics. Use FFM upcalls as the leading dispatcher candidate,
+with JNI for VM creation and bootstrap. Benchmark production downcall signatures before choosing their
+binding: JNI beats plain and critical FFM for this scalar read, and `critical` gives only a small gain here.
+These results do not justify marking a callback-capable write as critical.
+
+### Heap, GC and AOT configuration probes
+
+The same workload and checks also passed with Serial, ZGC, generational Shenandoah, compact headers, and
+compact headers plus an AOT cache trained by a full run. Each alternative below is one fresh process, so
+these figures are exploratory, not a ranking. Default G1 shows medians across its three processes, except
+the pause column, which shows the largest pause across all three. No measured path missed a tick deadline.
+
+| Configuration | FFM mean / p99 µs/tick | Process RSS MiB | Largest logged GC pause ms | VM creation ms |
+|---|---:|---:|---:|---:|
+| Default G1 | 23.18 / 55.42 | 161.7 | 1.985 | 24.9 |
+| Serial | 24.65 / 54.85 | 79.4 | 1.689 | 25.7 |
+| ZGC | 27.31 / 85.99 | 297.5 | 0.160 | 69.7 |
+| Generational Shenandoah | 22.56 / 43.57 | 312.4 | 0.396 | 30.2 |
+| G1 + compact headers | 22.26 / 42.27 | 159.7 | 1.513 | 43.5 |
+| G1 + compact headers + AOT | 21.97 / 45.07 | 129.8 | 1.104 | 29.3 |
+
+RSS is the entire Rust/JVM process at the end of the run, not the configured maximum Java heap. GC pauses
+come from `-Xlog:gc*:file=...:uptimemillis` across the whole run, including the unpaced allocation-heavy
+warmups. VM creation times only `JavaVM::new`, excluding fixture compilation, Java class initialization,
+native linking and plugin loading; these values are not first-start times. The AOT cache was 14,336,000
+bytes. Training and cache assembly run separately and are not included in the AOT production row.
+
+Serial used the least RSS in this small workload; the concurrent collectors traded more RSS for shorter GC
+pauses. Compact headers alone did not produce a clear RSS reduction relative to the default's 159.9–173.0
+MiB range. AOT reuse worked with changed native addresses in a new process, but this run does not establish
+faster plugin startup or time to steady state. Keep the production GC, heap, compact-header compatibility
+and AOT policy subject to real plugin measurements. The Temurin/GraalVM task remains open.
 
 ---
 

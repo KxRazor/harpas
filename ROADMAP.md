@@ -44,7 +44,7 @@ are in place.
 **Done when:** the *(measure)* questions that decide architecture have numbers, recorded in the design
 documents.
 
-- [ ] JVM bridge benchmark ([docs/jvm.md](docs/jvm.md#validation)): synchronous event dispatch, FFM vs. JNI,
+- [x] JVM bridge benchmark ([docs/jvm.md](docs/jvm.md#validation)): synchronous event dispatch, FFM vs. JNI,
       shared-memory reads, 200 simulated players.
 - [ ] Temurin vs. GraalVM Community Edition comparison on the same benchmark.
 - [x] Protocol codegen prototype: generate the Java 26.1 Status and Login codecs from a schema built from

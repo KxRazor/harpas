@@ -150,8 +150,12 @@ Harpas uses its own storage:
   of Java and Bedrock packets caches encoded sections by version
   ([protocol-codecs.md](protocol-codecs.md#java-wire-format),
   [bedrock-interop.md](bedrock-interop.md#1-shared-chunk-encoding)).
+- Block states are global IDs from the **block state registry** (`harpas_core::block`). Blocks are defined by
+  the game's code, so the registry is fixed for a version: built from minecraft-data's `blocks.json`, it names
+  each state by its block and property values, in vanilla's order. Biomes are global IDs from the biome
+  registry the server loads, since data packs can add biomes.
 - The counts vanilla keeps per section (non-air blocks, which Java chunk packets carry, and ticking blocks
-  and fluids) need the block registry and arrive with it.
+  and fluids) arrive with the block behavior that defines which blocks tick.
 - Block entities in a per-chunk map keyed by position.
 
 ### 7. Determinism

@@ -6,9 +6,9 @@ tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
 Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
-Region files are read and written; the rest of the save format, generation and parity are design. Facts
-about vanilla cite their source in [References](#references); everything else is a design decision of this
-project.
+Region files and chunk sections are read and written; the rest of the save format, generation and parity
+are design. Facts about vanilla cite their source in [References](#references); everything else is a design
+decision of this project.
 
 ---
 
@@ -37,6 +37,11 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
   benchmark, and only if it wins clearly. Gzip and uncompressed chunks are read today; an LZ4 chunk is
   reported with how to convert the world, until LZ4 reading lands with a test file written by vanilla.
 - Chunks larger than 255 sectors are stored in external `c.x.z.mcc` files, as vanilla does [1].
+- A chunk's NBT is turned into sections and back (`harpas_anvil::Chunk`): palettes of block and biome names
+  become global IDs, and every other field of the chunk and its sections is kept as it was, so a chunk saved
+  again differs from the one read only where it changed. As in vanilla, a damaged section is not fatal: an
+  unknown block becomes air, an unknown biome plains, and a container that cannot be read its default, each
+  with a warning.
 - The rest of the world folder (`level.dat`, player data, statistics, advancements, saved data such as maps,
   raids and scoreboards) uses vanilla's files and formats.
 

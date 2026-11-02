@@ -119,7 +119,8 @@ fn sync(position: Position, teleport_id: i32) -> clientbound::SynchronizePlayerP
     }
 }
 
-pub(crate) fn send(connection: &mut Connection, session: &PlayerSession) {
+/// Sends the logic thread's output for this player; returns the reason if the player was disconnected.
+pub(crate) fn send(connection: &mut Connection, session: &PlayerSession) -> Option<&'static str> {
     while let Some(output) = session.try_recv() {
         let packet = match output {
             Output::ChatSession { uuid, session } => clientbound::PlayerInfoUpdate {
@@ -255,9 +256,10 @@ pub(crate) fn send(connection: &mut Connection, session: &PlayerSession) {
             } => sync(position, teleport_id).into(),
             Output::Disconnect(reason) => {
                 connection.disconnect_play(reason);
-                break;
+                return Some(reason);
             }
         };
         connection.send_play_packet(packet);
     }
+    None
 }

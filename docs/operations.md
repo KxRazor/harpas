@@ -3,7 +3,9 @@
 Scope: where Harpas' settings live, and how a server is operated: console, logs, remote administration,
 metrics, profiling, shutdown, hosting, and telemetry.
 
-Status: design. Nothing here is implemented. Facts about vanilla cite their source in
+Status: partly implemented. `server.properties` with every 26.1 key, `harpas.toml` checking, `HARPAS_*`
+overrides, the console (`help`, `list`, `stop`) and `logs/latest.log` with its archives are built; the rest is
+design. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---

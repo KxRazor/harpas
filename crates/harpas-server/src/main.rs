@@ -3,10 +3,15 @@
 //! Listens for Java Edition connections on `server-ip` and `server-port` from `server.properties`, answers the
 //! server list, logs players in (online mode through Mojang's session server, or offline mode) and brings them
 //! into a void world. The engine runs on one logic thread; there is one thread per connection for now. The
-//! network runtime comes with the protection against abusive connections (`docs/java-connection.md`).
+//! network runtime comes with the protection against abusive connections (`docs/java-connection.md`). Settings
+//! come from `server.properties`, `harpas.toml` and `HARPAS_*` environment variables; the log goes to the
+//! console and `logs/latest.log`.
 //!
 //! Design: `docs/operations.md`.
 
+mod console;
+mod harpas_toml;
+mod logging;
 mod player;
 mod properties;
 mod session;
@@ -22,6 +27,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use harpas_java::{AuthOutcome, Connection, ServerInfo, ServerKey, State};
 use harpas_protocol_java::v26_1::play::GameMode;
+use log::{error, info, warn};
 
 use properties::Properties;
 use session::{SessionServer, format_uuid};
@@ -32,23 +38,38 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn main() {
-    println!("harpas {}", env!("CARGO_PKG_VERSION"));
+    if let Err(e) = logging::init(Path::new("logs")) {
+        eprintln!("Could not open logs/latest.log: {e}");
+        std::process::exit(1);
+    }
     if let Err(e) = run() {
-        eprintln!("error: {e}");
+        error!("{e}");
+        log::logger().flush();
         std::process::exit(1);
     }
 }
 
 fn run() -> io::Result<()> {
-    let properties = Properties::load(Path::new("server.properties"))?;
+    let started = Instant::now();
+    info!(
+        "Starting Harpas {} for Minecraft {}",
+        env!("CARGO_PKG_VERSION"),
+        harpas_protocol_java::v26_1::MINECRAFT_VERSION
+    );
+    info!("Loading properties");
+    let properties = load_properties(Path::new("server.properties"))?;
+    for warning in harpas_toml::check(Path::new("harpas.toml"))? {
+        warn!("{warning}");
+    }
     let info = Arc::new(server_info(&properties));
-    println!("Generating keypair");
+    info!("Default game type: {:?}", info.game_mode);
+    info!("Generating keypair");
     let key = Arc::new(ServerKey::generate());
     let session = if info.online_mode {
         Some(Arc::new(SessionServer::new().map_err(io::Error::other)?))
     } else {
-        println!("**** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!");
-        println!("The server will make no attempt to authenticate usernames. Beware.");
+        warn!("**** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!");
+        warn!("The server will make no attempt to authenticate usernames. Beware.");
         None
     };
     let ip = properties.string("server-ip", "");
@@ -70,7 +91,15 @@ fn run() -> io::Result<()> {
         }
     })?;
     let (logic, logic_thread) = harpas_engine::start()?;
-    println!("Listening for Java Edition on {}", listener.local_addr()?);
+    info!("Listening for Java Edition on {}", listener.local_addr()?);
+    console::start(console::Server {
+        logic: logic.clone(),
+        max_players: info.max_players,
+    })?;
+    info!(
+        "Done ({:.3}s)! For help, type \"help\"",
+        started.elapsed().as_secs_f64()
+    );
     for stream in listener.incoming() {
         if logic_thread.is_finished() {
             return Err(io::Error::other("logic thread stopped"));
@@ -78,7 +107,7 @@ fn run() -> io::Result<()> {
         let stream = match stream {
             Ok(stream) => stream,
             Err(e) => {
-                eprintln!("could not accept a connection: {e}");
+                warn!("Could not accept a connection: {e}");
                 continue;
             }
         };
@@ -86,16 +115,33 @@ fn run() -> io::Result<()> {
         let key = Arc::clone(&key);
         let session = session.clone();
         let logic = logic.clone();
-        thread::spawn(move || {
-            let peer = stream
-                .peer_addr()
-                .map_or_else(|_| "unknown".to_owned(), |a| a.to_string());
-            if let Err(e) = serve(stream, &info, key, session.as_deref(), &logic) {
-                println!("{peer} disconnected: {e}");
-            }
-        });
+        let peer = stream
+            .peer_addr()
+            .map_or_else(|_| "unknown".to_owned(), |a| a.to_string());
+        thread::Builder::new()
+            .name(format!("Connection {peer}"))
+            .spawn(move || {
+                if let Err(e) = serve(stream, &info, key, session.as_deref(), &logic) {
+                    info!("{peer} disconnected: {e}");
+                }
+            })?;
     }
     Ok(())
+}
+
+/// Loads `server.properties`, completes and rewrites it as vanilla does, and applies `HARPAS_*` overrides.
+fn load_properties(path: &Path) -> io::Result<Properties> {
+    let mut properties = Properties::load(path)?;
+    properties.complete();
+    // Java's `Date.toString`, which vanilla writes as the second comment.
+    let timestamp = chrono::Local::now().format("%a %b %d %H:%M:%S %Z %Y");
+    if let Err(e) = properties.store(path, &timestamp.to_string()) {
+        warn!("Failed to save {}: {e}", path.display());
+    }
+    for name in properties.apply_env(std::env::vars()) {
+        warn!("{name} has an invalid value; it is ignored");
+    }
+    Ok(properties)
 }
 
 /// The server's settings and list entry, from `server.properties` and `server-icon.png`.
@@ -147,7 +193,7 @@ fn load_icon(path: &Path) -> Option<String> {
             .map(|b| u32::from_be_bytes(b.try_into().unwrap()))
     };
     if !png || size(16) != Some(64) || size(20) != Some(64) {
-        eprintln!(
+        warn!(
             "{} must be a 64x64 PNG image; it is not shown",
             path.display()
         );
@@ -172,13 +218,52 @@ fn serve(
     result
 }
 
-/// Drives the I/O-free connection state machine over a stream.
+/// Drives the I/O-free connection state machine over a stream. Once the player has joined, the end of the
+/// connection is logged as vanilla logs it, errors included; errors before that are returned.
 fn drive(
     stream: &mut (impl Read + Write),
     info: &ServerInfo,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+) -> io::Result<()> {
+    let mut departure = Departure::default();
+    let result = play(stream, info, key, session, logic, &mut departure);
+    let Some(name) = departure.name else {
+        return result;
+    };
+    info!(
+        "{name} lost connection: {}",
+        lost_connection_reason(departure.kick, result)
+    );
+    info!("{name} left the game");
+    Ok(())
+}
+
+/// The reason vanilla gives when a player in Play loses connection.
+fn lost_connection_reason(kick: Option<&str>, result: io::Result<()>) -> String {
+    match (kick, result) {
+        (Some(kick), _) => kick.to_owned(),
+        (None, Ok(())) => "Disconnected".to_owned(),
+        (None, Err(e)) if e.kind() == io::ErrorKind::TimedOut => "Timed out".to_owned(),
+        (None, Err(e)) => e.to_string(),
+    }
+}
+
+/// Who left the game, and why if the server disconnected them.
+#[derive(Default)]
+struct Departure {
+    name: Option<String>,
+    kick: Option<&'static str>,
+}
+
+fn play(
+    stream: &mut (impl Read + Write),
+    info: &ServerInfo,
+    key: Arc<ServerKey>,
+    session: Option<&SessionServer>,
+    logic: &harpas_engine::Handle,
+    departure: &mut Departure,
 ) -> io::Result<()> {
     let entity_id = logic
         .next_entity_id()
@@ -191,6 +276,7 @@ fn drive(
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
     let mut player_session = None;
+    let mut uuid_logged = false;
     while !connection.is_closed() {
         let result = match stream.read(&mut buf) {
             Ok(0) => return Ok(()),
@@ -216,15 +302,17 @@ fn drive(
         stream.write_all(&connection.take_output())?;
         if let Some(request) = connection.take_auth_request() {
             let outcome = session.map_or(AuthOutcome::Unavailable, |s| s.has_joined(&request));
-            if let AuthOutcome::Verified(player) = &outcome {
-                println!(
-                    "UUID of player {} is {}",
-                    player.name,
-                    format_uuid(player.uuid)
-                );
-            }
             connection.authenticated(outcome, &info);
             stream.write_all(&connection.take_output())?;
+        }
+        // In offline mode too, as vanilla logs it.
+        if !uuid_logged && let Some(player) = connection.player() {
+            info!(
+                "UUID of player {} is {}",
+                player.name,
+                format_uuid(player.uuid)
+            );
+            uuid_logged = true;
         }
         result.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         if player_session.is_none() && connection.state() == State::Play {
@@ -244,12 +332,13 @@ fn drive(
                     .send(harpas_engine::player::Input::ViewDistance(distance))
                     .map_err(io::Error::other)?;
             }
-            println!("{} joined the void world", player.name);
+            info!("{} joined the game", player.name);
+            departure.name = Some(player.name.clone());
             player_session = Some(session);
         }
         if let Some(session) = &player_session {
             player::receive(&mut connection, session)?;
-            player::send(&mut connection, session);
+            departure.kick = departure.kick.or(player::send(&mut connection, session));
             stream.write_all(&connection.take_output())?;
         }
     }
@@ -406,7 +495,8 @@ mod tests {
             wait_for_count(&logic, 1);
             assert_eq!(status_count(&info, &key, &logic), 1);
             close.send(error).unwrap();
-            assert_eq!(connection.join().unwrap().is_err(), error);
+            // The error is logged as the reason the player lost connection.
+            connection.join().unwrap().unwrap();
             wait_for_count(&logic, 0);
             assert_eq!(status_count(&info, &key, &logic), 0);
         }
@@ -440,6 +530,77 @@ mod tests {
             ))
             .enforces_secure_chat
         );
+    }
+
+    #[test]
+    fn lost_connection_reasons_follow_vanilla() {
+        assert_eq!(
+            lost_connection_reason(Some("Kicked"), Err(io::ErrorKind::BrokenPipe.into())),
+            "Kicked"
+        );
+        assert_eq!(lost_connection_reason(None, Ok(())), "Disconnected");
+        assert_eq!(
+            lost_connection_reason(
+                None,
+                Err(io::Error::new(io::ErrorKind::TimedOut, "read timed out"))
+            ),
+            "Timed out"
+        );
+        assert_eq!(
+            lost_connection_reason(None, Err(io::Error::other("connection reset"))),
+            "connection reset"
+        );
+    }
+
+    #[test]
+    fn a_hovering_survival_player_is_kicked_with_the_reason() {
+        let info = ServerInfo {
+            online_mode: false,
+            compression_threshold: -1,
+            view_distance: 2,
+            ..ServerInfo::default()
+        };
+        let key = Arc::new(ServerKey::generate());
+        let (logic, logic_thread) = harpas_engine::start().unwrap();
+        let (input, server_input) = mpsc::channel();
+        let (server_output, _output) = mpsc::channel();
+        let server = {
+            let (info, key, logic) = (info.clone(), Arc::clone(&key), logic.clone());
+            thread::spawn(move || {
+                let mut stream = ChannelStream {
+                    input: server_input,
+                    output: server_output,
+                };
+                let mut departure = Departure::default();
+                let result = play(&mut stream, &info, key, None, &logic, &mut departure);
+                (result, departure)
+            })
+        };
+        for packet in login_packets("Steve") {
+            input.send(packet).unwrap();
+        }
+        let packets: [play::serverbound::Packet; 2] = [
+            play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into(),
+            // In the air at spawn height, without falling.
+            play::serverbound::SetPlayerPosition {
+                x: 0.5,
+                y: 65.0,
+                z: 0.5,
+                flags: play::MovementFlags::default(),
+            }
+            .into(),
+        ];
+        for packet in packets {
+            input.send(frame(|buf| packet.encode(buf))).unwrap();
+        }
+        // Vanilla allows 80 ticks of floating, four seconds.
+        let (result, departure) = server.join().unwrap();
+        result.unwrap();
+        assert_eq!(departure.name.as_deref(), Some("Steve"));
+        assert_eq!(departure.kick, Some("Flying is not enabled on this server"));
+        drop(input);
+        drop(logic);
+        logic_thread.join().unwrap();
     }
 
     struct ChannelStream {

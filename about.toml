@@ -10,6 +10,7 @@ accepted = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    "BSL-1.0",
 ]
 private = { ignore = true }
 # Build dependencies run at compile time and are not part of the binary.

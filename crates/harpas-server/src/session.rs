@@ -53,8 +53,8 @@ impl SessionServer {
         let chat_authority = match load_chat_authority(&agent) {
             Ok(authority) => authority,
             Err(error) => {
-                eprintln!(
-                    "could not load Minecraft Services chat keys; signed chat cannot be verified: {error}"
+                log::warn!(
+                    "Could not load Minecraft Services chat keys; signed chat cannot be verified: {error}"
                 );
                 ChatAuthority::default()
             }
@@ -81,7 +81,7 @@ impl SessionServer {
         let mut response = match response {
             Ok(response) => response,
             Err(e) => {
-                eprintln!("session server unreachable: {e}");
+                log::warn!("Session server unreachable: {e}");
                 return AuthOutcome::Unavailable;
             }
         };
@@ -90,7 +90,7 @@ impl SessionServer {
             // No content: the player did not join through the session server.
             204 => return AuthOutcome::NotVerified,
             status => {
-                eprintln!("session server answered with status {status}");
+                log::warn!("Session server answered with status {status}");
                 return AuthOutcome::Unavailable;
             }
         }
@@ -102,7 +102,7 @@ impl SessionServer {
         {
             Some(player) => AuthOutcome::Verified(player),
             None => {
-                eprintln!("session server answered with an invalid profile");
+                log::warn!("Session server answered with an invalid profile");
                 AuthOutcome::Unavailable
             }
         }

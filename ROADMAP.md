@@ -75,7 +75,7 @@ and chats.
 - [x] Player entity, movement validation, player list, entity tracking between players in the void world;
       collision and vehicle movement follow with worlds and gameplay.
 - [x] Chat with signing, as in vanilla.
-- [ ] `server.properties` and `harpas.toml` loading; console and `logs/latest.log`
+- [x] `server.properties` and `harpas.toml` loading; console and `logs/latest.log`
       ([docs/operations.md](docs/operations.md)).
 - [ ] Graceful shutdown on SIGTERM/SIGINT.
 

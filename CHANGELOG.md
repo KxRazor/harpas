@@ -58,6 +58,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `harpas-server`).
 - Logins are refused with vanilla's "The server is full!" when `max-players` players are in Play
   (`harpas-java`).
+- Java 26.1 Play codecs for 127 more packets: blocks, entities, the world border, titles, boss bars,
+  scoreboards and teams, sounds, maps, waypoints, resource packs and the client's actions. The 21 packets that
+  need item stacks, entity metadata, particles, the command tree or debug subscriptions remain, for M4. Union
+  default variants may carry a value, and the minecraft-data check handles nested and optional switches
+  (`harpas-protocol-java`, `harpas-protocol-codegen`).
 
 ### Changed
 

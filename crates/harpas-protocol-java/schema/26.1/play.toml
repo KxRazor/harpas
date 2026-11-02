@@ -1,8 +1,9 @@
 # Play state: the game itself.
 #
-# Partial: the packets a player needs to join a void world, move, see other players and chat. The other
-# minecraft-data packets are pending. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles
-# sent as one byte are 1/256 of a turn. Text components are network NBT.
+# Partial: every packet except the 21 that carry item stacks and their data components, entity metadata,
+# particles, the command tree or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
+# M4) and are pending. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
+# are 1/256 of a turn. Text components are network NBT.
 
 partial = true
 
@@ -42,6 +43,88 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x03
+name = "AwardStatistics"
+mcdata = "statistics"
+doc = "The player's statistics, answering Client Status."
+fields = [
+    { name = "statistics", type = "array(Statistic)" },
+]
+
+[[clientbound]]
+id = 0x04
+name = "AcknowledgeBlockChange"
+mcdata = "acknowledge_player_digging"
+doc = "Confirms the block changes the client predicted up to a sequence number."
+fields = [
+    { name = "sequence", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x05
+name = "SetBlockDestroyStage"
+mcdata = "block_break_animation"
+doc = "Shows a block being broken by an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "position", type = "BlockPos" },
+    { name = "destroy_stage", type = "i8", doc = "0 to 9; any other value removes it." },
+]
+
+[[clientbound]]
+id = 0x06
+name = "BlockEntityData"
+mcdata = "tile_entity_data"
+doc = "Updates the data of a block entity."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "kind", type = "varint", doc = "Numeric ID in the `minecraft:block_entity_type` registry." },
+    { name = "data", type = "optional_nbt" },
+]
+
+[[clientbound]]
+id = 0x07
+name = "BlockAction"
+mcdata = "block_action"
+doc = "Plays a block action, such as a note block note or a chest opening."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "action_id", type = "u8" },
+    { name = "action_parameter", type = "u8" },
+    { name = "block", type = "varint", doc = "Numeric ID in the `minecraft:block` registry." },
+]
+
+[[clientbound]]
+id = 0x08
+name = "BlockUpdate"
+mcdata = "block_change"
+doc = "Changes one block."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "block_state", type = "varint", doc = "Numeric block state ID." },
+]
+
+[[clientbound]]
+id = 0x09
+name = "BossBar"
+mcdata = "boss_bar"
+doc = "Adds, changes or removes a boss bar."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "action", type = "BossBarAction" },
+]
+
+[[clientbound]]
+id = 0x0a
+name = "ChangeDifficulty"
+mcdata = "difficulty"
+doc = "The world's difficulty, shown in the options."
+fields = [
+    { name = "difficulty", type = "Difficulty" },
+    { name = "locked", type = "bool" },
+]
+
+[[clientbound]]
 id = 0x0b
 name = "ChunkBatchFinished"
 mcdata = "chunk_batch_finished"
@@ -57,6 +140,85 @@ mcdata = "chunk_batch_start"
 doc = "Starts a batch of chunks."
 
 [[clientbound]]
+id = 0x0d
+name = "ChunkBiomes"
+mcdata = "chunk_biomes"
+doc = "New biomes for chunk columns the client has."
+fields = [
+    { name = "chunks", type = "array(ChunkBiomeData)" },
+]
+
+[[clientbound]]
+id = 0x0e
+name = "ClearTitles"
+mcdata = "clear_titles"
+doc = "Clears the title and subtitle on screen."
+fields = [
+    { name = "reset", type = "bool", doc = "Whether the title times are reset too." },
+]
+
+[[clientbound]]
+id = 0x0f
+name = "CommandSuggestionsResponse"
+mcdata = "tab_complete"
+doc = "Suggestions for the command the player is typing."
+fields = [
+    { name = "id", type = "varint", doc = "The ID of the request." },
+    { name = "start", type = "varint", doc = "Start of the text to replace." },
+    { name = "length", type = "varint", doc = "Length of the text to replace." },
+    { name = "suggestions", type = "array(CommandSuggestion)" },
+]
+
+[[clientbound]]
+id = 0x11
+name = "CloseContainer"
+mcdata = "close_window"
+doc = "Closes a container screen."
+fields = [
+    { name = "container_id", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x13
+name = "SetContainerProperty"
+mcdata = "craft_progress_bar"
+doc = "Changes a property of a container, such as a furnace's progress."
+fields = [
+    { name = "container_id", type = "varint" },
+    { name = "property", type = "i16" },
+    { name = "value", type = "i16" },
+]
+
+[[clientbound]]
+id = 0x15
+name = "CookieRequest"
+mcdata = "cookie_request"
+doc = "Asks for a cookie the client stored."
+fields = [
+    { name = "key", type = "string(32767)", doc = "Identifier of the cookie." },
+]
+
+[[clientbound]]
+id = 0x16
+name = "SetCooldown"
+mcdata = "set_cooldown"
+doc = "Puts a group of items on cooldown."
+fields = [
+    { name = "group", type = "string(32767)", doc = "Identifier of the cooldown group." },
+    { name = "ticks", type = "varint", doc = "0 removes the cooldown." },
+]
+
+[[clientbound]]
+id = 0x17
+name = "ChatSuggestions"
+mcdata = "chat_suggestions"
+doc = "Adds, removes or sets the words chat completion suggests."
+fields = [
+    { name = "action", type = "ChatSuggestionsAction" },
+    { name = "entries", type = "array(string(32767))" },
+]
+
+[[clientbound]]
 id = 0x18
 name = "PluginMessage"
 mcdata = "custom_payload"
@@ -64,6 +226,29 @@ doc = "Data on a custom channel, such as `minecraft:brand`."
 fields = [
     { name = "channel", type = "string(32767)", doc = "Identifier of the channel." },
     { name = "data", type = "rest(1048576)" },
+]
+
+[[clientbound]]
+id = 0x19
+name = "DamageEvent"
+mcdata = "damage_event"
+doc = "An entity took damage."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "source_type", type = "varint", doc = "Numeric ID in the `minecraft:damage_type` registry." },
+    { name = "source_cause", type = "varint", doc = "Entity ID of the cause plus one, or 0 for none." },
+    { name = "source_direct", type = "varint", doc = "Entity ID of the direct source plus one, or 0 for none." },
+    { name = "source_position", type = "option(Vec3d)" },
+]
+
+[[clientbound]]
+id = 0x1e
+name = "DebugSample"
+mcdata = "debug_sample"
+doc = "Tick time samples for the debug screen."
+fields = [
+    { name = "sample", type = "array(i64)" },
+    { name = "kind", type = "varint" },
 ]
 
 [[clientbound]]
@@ -94,6 +279,16 @@ fields = [
     { name = "chat_type", type = "holder(ChatTypeData)" },
     { name = "sender_name", type = "nbt", doc = "Text component." },
     { name = "target_name", type = "option(nbt)", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x22
+name = "EntityEvent"
+mcdata = "entity_status"
+doc = "Plays an entity event, such as an animal's heart particles."
+fields = [
+    { name = "entity_id", type = "i32" },
+    { name = "event", type = "i8" },
 ]
 
 [[clientbound]]
@@ -135,6 +330,62 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x27
+name = "GameRuleValues"
+mcdata = "game_rule_values"
+doc = "The values of game rules, answering Client Status."
+fields = [
+    { name = "rules", type = "array(GameRule)" },
+]
+
+[[clientbound]]
+id = 0x28
+name = "GameTestHighlightPosition"
+mcdata = "game_test_highlight_pos"
+doc = "Highlights a block in a game test."
+fields = [
+    { name = "absolute_position", type = "BlockPos" },
+    { name = "relative_position", type = "BlockPos" },
+]
+
+[[clientbound]]
+id = 0x29
+name = "OpenHorseScreen"
+mcdata = "open_horse_window"
+doc = "Opens the inventory of a horse or other mount."
+fields = [
+    { name = "container_id", type = "varint" },
+    { name = "inventory_columns", type = "varint" },
+    { name = "entity_id", type = "i32" },
+]
+
+[[clientbound]]
+id = 0x2a
+name = "HurtAnimation"
+mcdata = "hurt_animation"
+doc = "Plays the hurt animation of an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "yaw", type = "f32", doc = "Direction the damage came from." },
+]
+
+[[clientbound]]
+id = 0x2b
+name = "InitializeWorldBorder"
+mcdata = "initialize_world_border"
+doc = "The world border: center, size, its change over time and warnings."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "old_diameter", type = "f64" },
+    { name = "new_diameter", type = "f64" },
+    { name = "lerp_time", type = "varint", doc = "Milliseconds until the new diameter." },
+    { name = "portal_teleport_boundary", type = "varint" },
+    { name = "warning_blocks", type = "varint" },
+    { name = "warning_time", type = "varint" },
+]
+
+[[clientbound]]
 id = 0x2c
 name = "KeepAlive"
 mcdata = "keep_alive"
@@ -155,6 +406,18 @@ fields = [
     { name = "data", type = "bytes(2097152)", doc = "The chunk sections, encoded by the server's chunk encoder." },
     { name = "block_entities", type = "array(ChunkBlockEntity)" },
     { name = "light", type = "LightData" },
+]
+
+[[clientbound]]
+id = 0x2e
+name = "WorldEvent"
+mcdata = "world_event"
+doc = "Plays a sound or particle effect at a block."
+fields = [
+    { name = "event", type = "i32" },
+    { name = "position", type = "BlockPos" },
+    { name = "data", type = "i32" },
+    { name = "disable_relative_volume", type = "bool", doc = "Whether the sound is heard at full volume everywhere." },
 ]
 
 [[clientbound]]
@@ -188,6 +451,25 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x32
+name = "LowDiskSpaceWarning"
+mcdata = "low_disk_space_warning"
+doc = "Warns that the server is low on disk space."
+
+[[clientbound]]
+id = 0x33
+name = "MapData"
+mcdata = "map"
+doc = "Updates a map item's icons or image."
+fields = [
+    { name = "map_id", type = "varint" },
+    { name = "scale", type = "i8" },
+    { name = "locked", type = "bool" },
+    { name = "icons", type = "option(array(MapIcon))" },
+    { name = "patch", type = "MapPatch" },
+]
+
+[[clientbound]]
 id = 0x35
 name = "UpdateEntityPosition"
 mcdata = "rel_entity_move"
@@ -216,6 +498,16 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x37
+name = "MoveMinecartAlongTrack"
+mcdata = "move_minecart"
+doc = "Moves a minecart along a track, with the new minecart behavior."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "steps", type = "array(MinecartStep)" },
+]
+
+[[clientbound]]
 id = 0x38
 name = "UpdateEntityRotation"
 mcdata = "entity_look"
@@ -225,6 +517,49 @@ fields = [
     { name = "yaw", type = "i8" },
     { name = "pitch", type = "i8" },
     { name = "on_ground", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x39
+name = "MoveVehicle"
+mcdata = "vehicle_move"
+doc = "Moves the vehicle the player is riding."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+]
+
+[[clientbound]]
+id = 0x3a
+name = "OpenBook"
+mcdata = "open_book"
+doc = "Opens the book in the player's hand."
+fields = [
+    { name = "hand", type = "Hand" },
+]
+
+[[clientbound]]
+id = 0x3b
+name = "OpenScreen"
+mcdata = "open_window"
+doc = "Opens a container screen."
+fields = [
+    { name = "container_id", type = "varint" },
+    { name = "kind", type = "varint", doc = "Numeric ID in the `minecraft:menu` registry." },
+    { name = "title", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x3c
+name = "OpenSignEditor"
+mcdata = "open_sign_entity"
+doc = "Opens the sign editor."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "is_front_text", type = "bool" },
 ]
 
 [[clientbound]]
@@ -278,6 +613,31 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x42
+name = "EndCombat"
+mcdata = "end_combat_event"
+doc = "The player left combat."
+fields = [
+    { name = "duration", type = "varint", doc = "Ticks the combat lasted." },
+]
+
+[[clientbound]]
+id = 0x43
+name = "EnterCombat"
+mcdata = "enter_combat_event"
+doc = "The player entered combat."
+
+[[clientbound]]
+id = 0x44
+name = "CombatDeath"
+mcdata = "death_combat_event"
+doc = "The player died; opens the death screen."
+fields = [
+    { name = "player_id", type = "varint" },
+    { name = "message", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
 id = 0x45
 name = "PlayerInfoRemove"
 mcdata = "player_remove"
@@ -293,6 +653,19 @@ mcdata = "player_info"
 doc = "Adds players to the player list, or updates their entries."
 fields = [
     { name = "updates", type = "PlayerInfoUpdates" },
+]
+
+[[clientbound]]
+id = 0x47
+name = "LookAt"
+mcdata = "face_player"
+doc = "Turns the player toward a point or an entity."
+fields = [
+    { name = "anchor", type = "varint", doc = "0 for the feet, 1 for the eyes." },
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "target", type = "LookAtTarget" },
 ]
 
 [[clientbound]]
@@ -326,12 +699,85 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x4b
+name = "RecipeBookRemove"
+mcdata = "recipe_book_remove"
+doc = "Removes recipes from the recipe book."
+fields = [
+    { name = "recipes", type = "array(varint)" },
+]
+
+[[clientbound]]
+id = 0x4c
+name = "RecipeBookSettings"
+mcdata = "recipe_book_settings"
+doc = "The recipe book's open and filter state for each kind of crafting."
+fields = [
+    { name = "crafting", type = "RecipeBookSetting" },
+    { name = "furnace", type = "RecipeBookSetting" },
+    { name = "blast_furnace", type = "RecipeBookSetting" },
+    { name = "smoker", type = "RecipeBookSetting" },
+]
+
+[[clientbound]]
 id = 0x4d
 name = "RemoveEntities"
 mcdata = "entity_destroy"
 doc = "Removes entities from the client's world."
 fields = [
     { name = "entity_ids", type = "array(varint)" },
+]
+
+[[clientbound]]
+id = 0x4e
+name = "RemoveEntityEffect"
+mcdata = "remove_entity_effect"
+doc = "Removes an effect from an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "effect", type = "varint", doc = "Numeric ID in the `minecraft:mob_effect` registry." },
+]
+
+[[clientbound]]
+id = 0x4f
+name = "ResetScore"
+mcdata = "reset_score"
+doc = "Removes a score, from one objective or from all."
+fields = [
+    { name = "holder", type = "string(32767)" },
+    { name = "objective", type = "option(string(32767))", doc = "None for every objective." },
+]
+
+[[clientbound]]
+id = 0x50
+name = "RemoveResourcePack"
+mcdata = "remove_resource_pack"
+doc = "Removes a resource pack, or all of them."
+fields = [
+    { name = "uuid", type = "option(uuid)", doc = "None for every pack." },
+]
+
+[[clientbound]]
+id = 0x51
+name = "AddResourcePack"
+mcdata = "add_resource_pack"
+doc = "Asks the client to apply a resource pack."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "url", type = "string(32767)" },
+    { name = "hash", type = "string(40)", doc = "SHA-1 of the pack in hexadecimal." },
+    { name = "forced", type = "bool" },
+    { name = "prompt_message", type = "option(nbt)", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x52
+name = "Respawn"
+mcdata = "respawn"
+doc = "Moves the player to a new dimension or respawns them."
+fields = [
+    { name = "spawn", type = "SpawnInfo" },
+    { name = "data_kept", type = "u8", doc = "Bit 0 keeps attributes, bit 1 keeps entity data." },
 ]
 
 [[clientbound]]
@@ -345,6 +791,25 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x54
+name = "UpdateSectionBlocks"
+mcdata = "multi_block_change"
+doc = "Changes blocks in one chunk section."
+fields = [
+    { name = "section", type = "SectionPos" },
+    { name = "blocks", type = "array(varint)", doc = "Each a block state ID shifted left 12, with the position in the section in the low 12 bits." },
+]
+
+[[clientbound]]
+id = 0x55
+name = "SelectAdvancementsTab"
+mcdata = "select_advancement_tab"
+doc = "Selects a tab in the advancements screen."
+fields = [
+    { name = "tab", type = "option(string(32767))" },
+]
+
+[[clientbound]]
 id = 0x56
 name = "ServerData"
 mcdata = "server_data"
@@ -352,6 +817,72 @@ doc = "The server's MOTD and icon, shown in the server list after the player lea
 fields = [
     { name = "motd", type = "nbt", doc = "Text component." },
     { name = "icon", type = "option(bytes)", doc = "PNG image." },
+]
+
+[[clientbound]]
+id = 0x57
+name = "SetActionBarText"
+mcdata = "action_bar"
+doc = "Shows text above the hotbar."
+fields = [
+    { name = "text", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x58
+name = "SetBorderCenter"
+mcdata = "world_border_center"
+doc = "Moves the world border's center."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "z", type = "f64" },
+]
+
+[[clientbound]]
+id = 0x59
+name = "SetBorderLerpSize"
+mcdata = "world_border_lerp_size"
+doc = "Changes the world border's size over time."
+fields = [
+    { name = "old_diameter", type = "f64" },
+    { name = "new_diameter", type = "f64" },
+    { name = "lerp_time", type = "varint", doc = "Milliseconds until the new diameter." },
+]
+
+[[clientbound]]
+id = 0x5a
+name = "SetBorderSize"
+mcdata = "world_border_size"
+doc = "Sets the world border's size."
+fields = [
+    { name = "diameter", type = "f64" },
+]
+
+[[clientbound]]
+id = 0x5b
+name = "SetBorderWarningDelay"
+mcdata = "world_border_warning_delay"
+doc = "Sets the world border's warning time."
+fields = [
+    { name = "warning_time", type = "varint", doc = "Seconds." },
+]
+
+[[clientbound]]
+id = 0x5c
+name = "SetBorderWarningDistance"
+mcdata = "world_border_warning_reach"
+doc = "Sets the world border's warning distance."
+fields = [
+    { name = "warning_blocks", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x5d
+name = "SetCamera"
+mcdata = "camera"
+doc = "Sets the entity the player sees from, as in spectator mode."
+fields = [
+    { name = "entity_id", type = "varint" },
 ]
 
 [[clientbound]]
@@ -385,12 +916,125 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x62
+name = "DisplayObjective"
+mcdata = "scoreboard_display_objective"
+doc = "Shows an objective in a display slot."
+fields = [
+    { name = "slot", type = "varint" },
+    { name = "objective", type = "string(32767)", doc = "Empty to clear the slot." },
+]
+
+[[clientbound]]
+id = 0x64
+name = "LinkEntities"
+mcdata = "attach_entity"
+doc = "Attaches a leash from one entity to another."
+fields = [
+    { name = "attached", type = "i32" },
+    { name = "holder", type = "i32", doc = "-1 to detach." },
+]
+
+[[clientbound]]
+id = 0x65
+name = "SetEntityVelocity"
+mcdata = "entity_velocity"
+doc = "Sets an entity's velocity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "velocity", type = "lp_vec3" },
+]
+
+[[clientbound]]
+id = 0x67
+name = "SetExperience"
+mcdata = "experience"
+doc = "The player's experience."
+fields = [
+    { name = "progress", type = "f32", doc = "From 0 to 1." },
+    { name = "level", type = "varint" },
+    { name = "total_experience", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x68
+name = "SetHealth"
+mcdata = "update_health"
+doc = "The player's health and food."
+fields = [
+    { name = "health", type = "f32" },
+    { name = "food", type = "varint" },
+    { name = "saturation", type = "f32" },
+]
+
+[[clientbound]]
+id = 0x69
+name = "SetHeldItem"
+mcdata = "held_item_slot"
+doc = "Selects a hotbar slot."
+fields = [
+    { name = "slot", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x6a
+name = "UpdateObjectives"
+mcdata = "scoreboard_objective"
+doc = "Creates, removes or changes a scoreboard objective."
+fields = [
+    { name = "name", type = "string(32767)" },
+    { name = "action", type = "ObjectiveAction" },
+]
+
+[[clientbound]]
+id = 0x6b
+name = "SetPassengers"
+mcdata = "set_passengers"
+doc = "Sets the entities riding an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "passengers", type = "array(varint)" },
+]
+
+[[clientbound]]
+id = 0x6d
+name = "UpdateTeams"
+mcdata = "teams"
+doc = "Creates, removes or changes a team, or its members."
+fields = [
+    { name = "team", type = "string(32767)" },
+    { name = "action", type = "TeamAction" },
+]
+
+[[clientbound]]
+id = 0x6e
+name = "UpdateScore"
+mcdata = "scoreboard_score"
+doc = "Sets a score."
+fields = [
+    { name = "holder", type = "string(32767)", doc = "Name of the entity or player that holds the score." },
+    { name = "objective", type = "string(32767)" },
+    { name = "value", type = "varint" },
+    { name = "display_name", type = "option(nbt)", doc = "Text component." },
+    { name = "number_format", type = "option(NumberFormat)" },
+]
+
+[[clientbound]]
 id = 0x6f
 name = "SetSimulationDistance"
 mcdata = "simulation_distance"
 doc = "The server's simulation distance."
 fields = [
     { name = "simulation_distance", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x70
+name = "SetSubtitleText"
+mcdata = "set_title_subtitle"
+doc = "Sets the subtitle shown with the title."
+fields = [
+    { name = "text", type = "nbt", doc = "Text component." },
 ]
 
 [[clientbound]]
@@ -404,10 +1048,79 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x72
+name = "SetTitleText"
+mcdata = "set_title_text"
+doc = "Shows a title."
+fields = [
+    { name = "text", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x73
+name = "SetTitleAnimationTimes"
+mcdata = "set_title_time"
+doc = "Sets how long titles fade in, stay and fade out, in ticks."
+fields = [
+    { name = "fade_in", type = "i32" },
+    { name = "stay", type = "i32" },
+    { name = "fade_out", type = "i32" },
+]
+
+[[clientbound]]
+id = 0x74
+name = "EntitySoundEffect"
+mcdata = "entity_sound_effect"
+doc = "Plays a sound that follows an entity."
+fields = [
+    { name = "sound", type = "holder(SoundEvent)" },
+    { name = "source", type = "SoundSource" },
+    { name = "entity_id", type = "varint" },
+    { name = "volume", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "seed", type = "i64", doc = "Seed for the sound's variations." },
+]
+
+[[clientbound]]
+id = 0x75
+name = "SoundEffect"
+mcdata = "sound_effect"
+doc = "Plays a sound at a position."
+fields = [
+    { name = "sound", type = "holder(SoundEvent)" },
+    { name = "source", type = "SoundSource" },
+    { name = "x", type = "i32", doc = "Position times 8." },
+    { name = "y", type = "i32" },
+    { name = "z", type = "i32" },
+    { name = "volume", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "seed", type = "i64", doc = "Seed for the sound's variations." },
+]
+
+[[clientbound]]
 id = 0x76
 name = "StartConfiguration"
 mcdata = "start_configuration"
 doc = "Moves the connection back to the Configuration state; the client answers with Acknowledge Configuration."
+
+[[clientbound]]
+id = 0x77
+name = "StopSound"
+mcdata = "stop_sound"
+doc = "Stops sounds, all of them or by source or name."
+fields = [
+    { name = "filter", type = "StopSoundFilter" },
+]
+
+[[clientbound]]
+id = 0x78
+name = "StoreCookie"
+mcdata = "store_cookie"
+doc = "Stores a cookie on the client."
+fields = [
+    { name = "key", type = "string(32767)", doc = "Identifier of the cookie." },
+    { name = "value", type = "bytes(5120)" },
+]
 
 [[clientbound]]
 id = 0x79
@@ -417,6 +1130,37 @@ doc = "A message from the server, in the chat or above the hotbar."
 fields = [
     { name = "content", type = "nbt", doc = "Text component." },
     { name = "overlay", type = "bool", doc = "Whether it is shown above the hotbar instead of in the chat." },
+]
+
+[[clientbound]]
+id = 0x7a
+name = "SetTabListHeaderAndFooter"
+mcdata = "playerlist_header"
+doc = "Text above and below the player list."
+fields = [
+    { name = "header", type = "nbt", doc = "Text component." },
+    { name = "footer", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x7b
+name = "TagQueryResponse"
+mcdata = "nbt_query_response"
+doc = "The data of a block entity or entity, answering a query."
+fields = [
+    { name = "id", type = "varint", doc = "The ID of the query." },
+    { name = "nbt", type = "optional_nbt" },
+]
+
+[[clientbound]]
+id = 0x7c
+name = "PickupItem"
+mcdata = "collect"
+doc = "An entity picked up an item, experience orb or arrow."
+fields = [
+    { name = "collected", type = "varint" },
+    { name = "collector", type = "varint" },
+    { name = "count", type = "varint" },
 ]
 
 [[clientbound]]
@@ -438,6 +1182,130 @@ fields = [
     { name = "on_ground", type = "bool" },
 ]
 
+[[clientbound]]
+id = 0x7e
+name = "TestInstanceBlockStatus"
+mcdata = "test_instance_block_status"
+doc = "The status of a test instance block."
+fields = [
+    { name = "status", type = "nbt", doc = "Text component." },
+    { name = "size", type = "option(Vec3i)" },
+]
+
+[[clientbound]]
+id = 0x7f
+name = "SetTickingState"
+mcdata = "set_ticking_state"
+doc = "The server's tick rate and whether the game is frozen."
+fields = [
+    { name = "tick_rate", type = "f32" },
+    { name = "is_frozen", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x80
+name = "StepTick"
+mcdata = "step_tick"
+doc = "Steps a frozen game by a number of ticks."
+fields = [
+    { name = "tick_steps", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x81
+name = "Transfer"
+mcdata = "transfer"
+doc = "Moves the player to another server."
+fields = [
+    { name = "host", type = "string(32767)" },
+    { name = "port", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x83
+name = "UpdateAttributes"
+mcdata = "entity_update_attributes"
+doc = "Sets attributes of an entity, such as its speed."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "attributes", type = "array(AttributeProperty)" },
+]
+
+[[clientbound]]
+id = 0x84
+name = "EntityEffect"
+mcdata = "entity_effect"
+doc = "Gives an entity an effect."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "effect", type = "varint", doc = "Numeric ID in the `minecraft:mob_effect` registry." },
+    { name = "amplifier", type = "varint" },
+    { name = "duration", type = "varint", doc = "Ticks; -1 for infinite." },
+    { name = "flags", type = "EffectFlags" },
+]
+
+[[clientbound]]
+id = 0x86
+name = "UpdateTags"
+mcdata = "tags"
+doc = "The tags of each registry."
+fields = [
+    { name = "registries", type = "array(RegistryTags)" },
+]
+
+[[clientbound]]
+id = 0x87
+name = "ProjectilePower"
+mcdata = "set_projectile_power"
+doc = "Sets the acceleration of a projectile."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "acceleration_power", type = "f64" },
+]
+
+[[clientbound]]
+id = 0x88
+name = "CustomReportDetails"
+mcdata = "custom_report_details"
+doc = "Details added to crash reports and the debug report."
+fields = [
+    { name = "details", type = "array(32, ReportDetail)" },
+]
+
+[[clientbound]]
+id = 0x89
+name = "ServerLinks"
+mcdata = "server_links"
+doc = "Links shown in the pause menu."
+fields = [
+    { name = "links", type = "array(ServerLink)" },
+]
+
+[[clientbound]]
+id = 0x8a
+name = "Waypoint"
+mcdata = "tracked_waypoint"
+doc = "Adds, removes or updates a waypoint on the locator bar."
+fields = [
+    { name = "operation", type = "WaypointOperation" },
+    { name = "waypoint", type = "TrackedWaypoint" },
+]
+
+[[clientbound]]
+id = 0x8b
+name = "ClearDialog"
+mcdata = "clear_dialog"
+doc = "Closes the dialog on screen."
+
+[[clientbound]]
+id = 0x8c
+name = "ShowDialog"
+mcdata = "show_dialog"
+doc = "Shows a dialog."
+fields = [
+    { name = "dialog", type = "holder(nbt)", doc = "A `minecraft:dialog` registry entry, or one sent inline." },
+]
+
 [[serverbound]]
 id = 0x00
 name = "ConfirmTeleportation"
@@ -445,6 +1313,53 @@ mcdata = "teleport_confirm"
 doc = "Confirms a Synchronize Player Position."
 fields = [
     { name = "teleport_id", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x01
+name = "Attack"
+mcdata = "attack"
+doc = "The player attacked an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x02
+name = "QueryBlockEntityTag"
+mcdata = "query_block_nbt"
+doc = "Asks for the data of a block entity, for the debug screen."
+fields = [
+    { name = "id", type = "varint" },
+    { name = "position", type = "BlockPos" },
+]
+
+[[serverbound]]
+id = 0x03
+name = "BundleItemSelected"
+mcdata = "select_bundle_item"
+doc = "Selects an item in a bundle."
+fields = [
+    { name = "slot", type = "varint" },
+    { name = "item", type = "varint", doc = "-1 for none." },
+]
+
+[[serverbound]]
+id = 0x04
+name = "ChangeDifficulty"
+mcdata = "set_difficulty"
+doc = "An operator changed the difficulty."
+fields = [
+    { name = "difficulty", type = "Difficulty" },
+]
+
+[[serverbound]]
+id = 0x05
+name = "ChangeGameMode"
+mcdata = "change_gamemode"
+doc = "An operator changed their game mode with the game mode switcher."
+fields = [
+    { name = "mode", type = "GameModeSelection" },
 ]
 
 [[serverbound]]
@@ -547,10 +1462,60 @@ fields = [
 ]
 
 [[serverbound]]
+id = 0x0f
+name = "CommandSuggestionsRequest"
+mcdata = "tab_complete"
+doc = "Asks for suggestions for the command being typed."
+fields = [
+    { name = "id", type = "varint" },
+    { name = "text", type = "string(32500)" },
+]
+
+[[serverbound]]
 id = 0x10
 name = "AcknowledgeConfiguration"
 mcdata = "configuration_acknowledged"
 doc = "Confirms Start Configuration; the connection moves to the Configuration state."
+
+[[serverbound]]
+id = 0x11
+name = "ClickContainerButton"
+mcdata = "enchant_item"
+doc = "Clicked a button in a container, such as an enchantment."
+fields = [
+    { name = "container_id", type = "varint" },
+    { name = "button", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x13
+name = "CloseContainer"
+mcdata = "close_window"
+doc = "Closed a container screen."
+fields = [
+    { name = "container_id", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x14
+name = "ChangeContainerSlotState"
+mcdata = "set_slot_state"
+doc = "Toggled a slot of a crafter."
+fields = [
+    { name = "slot", type = "varint" },
+    { name = "container_id", type = "varint" },
+    { name = "enabled", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x15
+name = "CookieResponse"
+mcdata = "cookie_response"
+doc = "A cookie, answering Cookie Request."
+fields = [
+    { name = "key", type = "string(32767)", doc = "Identifier of the cookie." },
+    { name = "value", type = "option(bytes(5120))", doc = "None if the client has no such cookie." },
+]
 
 [[serverbound]]
 id = 0x16
@@ -563,12 +1528,65 @@ fields = [
 ]
 
 [[serverbound]]
+id = 0x18
+name = "EditBook"
+mcdata = "edit_book"
+doc = "Edited or signed a book."
+fields = [
+    { name = "slot", type = "varint", doc = "Hotbar slot of the book." },
+    { name = "pages", type = "array(100, string(1024))" },
+    { name = "title", type = "option(string(32))", doc = "Present when signing." },
+]
+
+[[serverbound]]
+id = 0x19
+name = "QueryEntityTag"
+mcdata = "query_entity_nbt"
+doc = "Asks for the data of an entity, for the debug screen."
+fields = [
+    { name = "id", type = "varint" },
+    { name = "entity_id", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x1a
+name = "Interact"
+mcdata = "use_entity"
+doc = "Interacted with an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "hand", type = "Hand" },
+    { name = "target", type = "lp_vec3", doc = "Where on the entity, relative to it." },
+    { name = "sneaking", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x1b
+name = "JigsawGenerate"
+mcdata = "generate_structure"
+doc = "Generates a structure from a jigsaw block."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "levels", type = "varint" },
+    { name = "keep_jigsaws", type = "bool" },
+]
+
+[[serverbound]]
 id = 0x1c
 name = "KeepAlive"
 mcdata = "keep_alive"
 doc = "Answer to a Keep Alive, with its ID."
 fields = [
     { name = "id", type = "i64" },
+]
+
+[[serverbound]]
+id = 0x1d
+name = "LockDifficulty"
+mcdata = "lock_difficulty"
+doc = "An operator locked the difficulty."
+fields = [
+    { name = "locked", type = "bool" },
 ]
 
 [[serverbound]]
@@ -618,6 +1636,50 @@ fields = [
 ]
 
 [[serverbound]]
+id = 0x22
+name = "MoveVehicle"
+mcdata = "vehicle_move"
+doc = "Moved the vehicle the player is riding."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "on_ground", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x23
+name = "PaddleBoat"
+mcdata = "steer_boat"
+doc = "Which paddles of a boat are moving."
+fields = [
+    { name = "left_paddle", type = "bool" },
+    { name = "right_paddle", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x24
+name = "PickItemFromBlock"
+mcdata = "pick_item_from_block"
+doc = "Picked the item of a block with the middle button."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "include_data", type = "bool", doc = "Whether to copy the block entity's data." },
+]
+
+[[serverbound]]
+id = 0x25
+name = "PickItemFromEntity"
+mcdata = "pick_item_from_entity"
+doc = "Picked the item of an entity with the middle button."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "include_data", type = "bool", doc = "Whether to copy the entity's data." },
+]
+
+[[serverbound]]
 id = 0x26
 name = "PingRequest"
 mcdata = "ping_request"
@@ -627,12 +1689,35 @@ fields = [
 ]
 
 [[serverbound]]
+id = 0x27
+name = "PlaceRecipe"
+mcdata = "craft_recipe_request"
+doc = "Clicked a recipe in the recipe book."
+fields = [
+    { name = "container_id", type = "varint" },
+    { name = "recipe", type = "varint" },
+    { name = "make_all", type = "bool" },
+]
+
+[[serverbound]]
 id = 0x28
 name = "PlayerAbilities"
 mcdata = "abilities"
 doc = "The player started or stopped flying; only the `flying` flag is read."
 fields = [
     { name = "flags", type = "AbilityFlags" },
+]
+
+[[serverbound]]
+id = 0x29
+name = "PlayerAction"
+mcdata = "block_dig"
+doc = "Started, cancelled or finished breaking a block, dropped an item or swapped hands."
+fields = [
+    { name = "status", type = "PlayerActionStatus" },
+    { name = "position", type = "BlockPos" },
+    { name = "face", type = "i8", doc = "The face, as in `BlockFace`, sent as a byte." },
+    { name = "sequence", type = "varint" },
 ]
 
 [[serverbound]]
@@ -671,12 +1756,252 @@ fields = [
 ]
 
 [[serverbound]]
+id = 0x2e
+name = "ChangeRecipeBookSettings"
+mcdata = "recipe_book"
+doc = "Opened, closed or filtered one of the recipe books."
+fields = [
+    { name = "book", type = "varint" },
+    { name = "open", type = "bool" },
+    { name = "filtering", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x2f
+name = "SetSeenRecipe"
+mcdata = "displayed_recipe"
+doc = "Saw a recipe in the recipe book."
+fields = [
+    { name = "recipe", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x30
+name = "RenameItem"
+mcdata = "name_item"
+doc = "Typed a name in an anvil."
+fields = [
+    { name = "name", type = "string(32767)" },
+]
+
+[[serverbound]]
+id = 0x31
+name = "ResourcePackResponse"
+mcdata = "resource_pack_receive"
+doc = "The status of a resource pack the server sent."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "result", type = "ResourcePackResult" },
+]
+
+[[serverbound]]
+id = 0x32
+name = "SeenAdvancements"
+mcdata = "advancement_tab"
+doc = "Opened an advancements tab or closed the screen."
+fields = [
+    { name = "action", type = "SeenAdvancementsAction" },
+]
+
+[[serverbound]]
+id = 0x33
+name = "SelectTrade"
+mcdata = "select_trade"
+doc = "Selected a trade with a villager."
+fields = [
+    { name = "slot", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x34
+name = "SetBeaconEffect"
+mcdata = "set_beacon_effect"
+doc = "Chose the effects of a beacon."
+fields = [
+    { name = "primary_effect", type = "option(varint)", doc = "Numeric ID in the `minecraft:mob_effect` registry." },
+    { name = "secondary_effect", type = "option(varint)", doc = "Numeric ID in the `minecraft:mob_effect` registry." },
+]
+
+[[serverbound]]
+id = 0x35
+name = "SetHeldItem"
+mcdata = "held_item_slot"
+doc = "Selected a hotbar slot."
+fields = [
+    { name = "slot", type = "i16" },
+]
+
+[[serverbound]]
+id = 0x36
+name = "ProgramCommandBlock"
+mcdata = "update_command_block"
+doc = "Changed a command block."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "command", type = "string(32767)" },
+    { name = "mode", type = "CommandBlockMode" },
+    { name = "flags", type = "CommandBlockFlags" },
+]
+
+[[serverbound]]
+id = 0x37
+name = "ProgramCommandBlockMinecart"
+mcdata = "update_command_block_minecart"
+doc = "Changed a minecart with a command block."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "command", type = "string(32767)" },
+    { name = "track_output", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x39
+name = "SetGameRule"
+mcdata = "set_game_rule"
+doc = "An operator changed game rules in the game rules screen."
+fields = [
+    { name = "rules", type = "array(GameRule)" },
+]
+
+[[serverbound]]
+id = 0x3a
+name = "ProgramJigsawBlock"
+mcdata = "update_jigsaw_block"
+doc = "Changed a jigsaw block."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "name", type = "string(32767)" },
+    { name = "target", type = "string(32767)" },
+    { name = "pool", type = "string(32767)" },
+    { name = "final_state", type = "string(32767)" },
+    { name = "joint_type", type = "string(32767)" },
+    { name = "selection_priority", type = "varint" },
+    { name = "placement_priority", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x3b
+name = "ProgramStructureBlock"
+mcdata = "update_structure_block"
+doc = "Changed a structure block, or used one of its actions."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "action", type = "varint" },
+    { name = "mode", type = "varint" },
+    { name = "name", type = "string(32767)" },
+    { name = "offset_x", type = "i8" },
+    { name = "offset_y", type = "i8" },
+    { name = "offset_z", type = "i8" },
+    { name = "size_x", type = "i8" },
+    { name = "size_y", type = "i8" },
+    { name = "size_z", type = "i8" },
+    { name = "mirror", type = "varint" },
+    { name = "rotation", type = "varint" },
+    { name = "metadata", type = "string(32767)" },
+    { name = "integrity", type = "f32" },
+    { name = "seed", type = "varint" },
+    { name = "flags", type = "StructureBlockFlags" },
+]
+
+[[serverbound]]
+id = 0x3c
+name = "SetTestBlock"
+mcdata = "set_test_block"
+doc = "Changed a test block."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "mode", type = "varint" },
+    { name = "message", type = "string(32767)" },
+]
+
+[[serverbound]]
+id = 0x3d
+name = "UpdateSign"
+mcdata = "update_sign"
+doc = "Finished editing a sign."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "front", type = "bool" },
+    { name = "line1", type = "string(384)" },
+    { name = "line2", type = "string(384)" },
+    { name = "line3", type = "string(384)" },
+    { name = "line4", type = "string(384)" },
+]
+
+[[serverbound]]
+id = 0x3e
+name = "SpectateEntity"
+mcdata = "spectate_entity"
+doc = "Started spectating an entity by clicking it."
+fields = [
+    { name = "entity_id", type = "varint" },
+]
+
+[[serverbound]]
 id = 0x3f
 name = "SwingArm"
 mcdata = "arm_animation"
 doc = "The player swung an arm."
 fields = [
     { name = "hand", type = "Hand" },
+]
+
+[[serverbound]]
+id = 0x40
+name = "TeleportToEntity"
+mcdata = "spectate"
+doc = "Teleported to a player from the spectator menu."
+fields = [
+    { name = "target", type = "uuid" },
+]
+
+[[serverbound]]
+id = 0x41
+name = "TestInstanceBlockAction"
+mcdata = "test_instance_block_action"
+doc = "Used an action of a test instance block."
+fields = [
+    { name = "position", type = "BlockPos" },
+    { name = "action", type = "varint" },
+    { name = "data", type = "TestInstanceBlockData" },
+]
+
+[[serverbound]]
+id = 0x42
+name = "UseItemOn"
+mcdata = "block_place"
+doc = "Used the item in a hand on a block."
+fields = [
+    { name = "hand", type = "Hand" },
+    { name = "position", type = "BlockPos" },
+    { name = "face", type = "BlockFace" },
+    { name = "cursor_x", type = "f32", doc = "Where on the face, from 0 to 1." },
+    { name = "cursor_y", type = "f32" },
+    { name = "cursor_z", type = "f32" },
+    { name = "inside_block", type = "bool", doc = "Whether the player's head is inside the block." },
+    { name = "world_border_hit", type = "bool" },
+    { name = "sequence", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x43
+name = "UseItem"
+mcdata = "use_item"
+doc = "Used the item in a hand."
+fields = [
+    { name = "hand", type = "Hand" },
+    { name = "sequence", type = "varint" },
+    { name = "rotation", type = "Vec2f", doc = "The player's yaw and pitch." },
+]
+
+[[serverbound]]
+id = 0x44
+name = "CustomClickAction"
+mcdata = "custom_click_action"
+doc = "Clicked a custom action in a dialog."
+fields = [
+    { name = "id", type = "string(32767)", doc = "Identifier of the action." },
+    { name = "payload", type = "option(nbt)" },
 ]
 
 [structs.SpawnInfo]
@@ -886,3 +2211,476 @@ values = { Left = 0, Right = 1 }
 doc = "How many particles the client shows."
 repr = "varint"
 values = { All = 0, Decreased = 1, Minimal = 2 }
+
+[structs.Statistic]
+doc = "A statistic and its value."
+fields = [
+    { name = "category", type = "varint", doc = "Numeric ID in the `minecraft:stat_type` registry." },
+    { name = "statistic", type = "varint", doc = "Numeric ID in the category's registry." },
+    { name = "value", type = "varint" },
+]
+
+[structs.BossBarAdd]
+doc = "A new boss bar."
+fields = [
+    { name = "title", type = "nbt", doc = "Text component." },
+    { name = "health", type = "f32", doc = "From 0 to 1." },
+    { name = "color", type = "BossBarColor" },
+    { name = "division", type = "BossBarDivision" },
+    { name = "flags", type = "BossBarFlags" },
+]
+
+[structs.BossBarStyle]
+doc = "The color and divisions of a boss bar."
+fields = [
+    { name = "color", type = "BossBarColor" },
+    { name = "division", type = "BossBarDivision" },
+]
+
+[structs.ChunkPos]
+doc = "A chunk column's position."
+fields = [
+    { name = "z", type = "i32" },
+    { name = "x", type = "i32" },
+]
+
+[structs.ChunkBiomeData]
+doc = "The biomes of a chunk column."
+fields = [
+    { name = "position", type = "ChunkPos" },
+    { name = "data", type = "bytes(2097152)", doc = "The sections' biome palettes." },
+]
+
+[structs.CommandSuggestion]
+doc = "A suggested completion."
+fields = [
+    { name = "text", type = "string(32767)" },
+    { name = "tooltip", type = "option(nbt)", doc = "Text component." },
+]
+
+[structs.Vec3d]
+doc = "A position or vector of doubles."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+]
+
+[structs.GameRule]
+doc = "A game rule and its value."
+fields = [
+    { name = "name", type = "string(32767)", doc = "Identifier of the rule." },
+    { name = "value", type = "string(32767)" },
+]
+
+[structs.MapIcon]
+doc = "An icon on a map."
+fields = [
+    { name = "kind", type = "varint", doc = "Numeric ID in the `minecraft:map_decoration_type` registry." },
+    { name = "x", type = "i8", doc = "From -128 to 127, left to right." },
+    { name = "z", type = "i8", doc = "From -128 to 127, top to bottom." },
+    { name = "direction", type = "u8", doc = "From 0 to 15, in sixteenths of a turn." },
+    { name = "display_name", type = "option(nbt)", doc = "Text component." },
+]
+
+[structs.MapPatchData]
+doc = "A rectangle of a map's image, after its width."
+fields = [
+    { name = "rows", type = "u8" },
+    { name = "x", type = "u8" },
+    { name = "y", type = "u8" },
+    { name = "colors", type = "bytes(16384)", doc = "One map color per pixel, row by row." },
+]
+
+[structs.Vec3f]
+doc = "A vector of floats."
+fields = [
+    { name = "x", type = "f32" },
+    { name = "y", type = "f32" },
+    { name = "z", type = "f32" },
+]
+
+[structs.MinecartStep]
+doc = "One step of a minecart's movement along a track."
+fields = [
+    { name = "position", type = "Vec3f" },
+    { name = "velocity", type = "Vec3f" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "weight", type = "f32" },
+]
+
+[structs.LookAtEntity]
+doc = "An entity to look at, after the point."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "entity_anchor", type = "varint", doc = "0 for the feet, 1 for the eyes." },
+]
+
+[structs.RecipeBookSetting]
+doc = "The state of one recipe book."
+fields = [
+    { name = "open", type = "bool" },
+    { name = "filtering", type = "bool" },
+]
+
+[structs.ObjectiveInfo]
+doc = "How an objective is shown."
+fields = [
+    { name = "display_name", type = "nbt", doc = "Text component." },
+    { name = "render_type", type = "ObjectiveRenderType" },
+    { name = "number_format", type = "option(NumberFormat)", doc = "None for the default format." },
+]
+
+[structs.TeamInfo]
+doc = "How a team is shown and behaves."
+fields = [
+    { name = "display_name", type = "nbt", doc = "Text component." },
+    { name = "flags", type = "TeamFlags" },
+    { name = "name_tag_visibility", type = "NameTagVisibility" },
+    { name = "collision_rule", type = "CollisionRule" },
+    { name = "color", type = "varint", doc = "A chat formatting code index; 21 for none." },
+    { name = "prefix", type = "nbt", doc = "Text component." },
+    { name = "suffix", type = "nbt", doc = "Text component." },
+]
+
+[structs.TeamCreate]
+doc = "A new team."
+fields = [
+    { name = "info", type = "TeamInfo" },
+    { name = "entities", type = "array(string(32767))", doc = "Names of players and UUIDs of other entities." },
+]
+
+[structs.SoundEvent]
+doc = "A sound sent inline."
+fields = [
+    { name = "id", type = "string(32767)", doc = "Identifier of the sound." },
+    { name = "fixed_range", type = "option(f32)", doc = "Range in blocks; none for a range that depends on the volume." },
+]
+
+[structs.StopSoundSourceAndSound]
+doc = "A sound source and a sound."
+fields = [
+    { name = "source", type = "SoundSource" },
+    { name = "sound", type = "string(32767)", doc = "Identifier of the sound." },
+]
+
+[structs.Vec3i]
+doc = "A block position as three VarInts."
+fields = [
+    { name = "x", type = "varint" },
+    { name = "y", type = "varint" },
+    { name = "z", type = "varint" },
+]
+
+[structs.AttributeModifier]
+doc = "A modifier of an attribute."
+fields = [
+    { name = "id", type = "string(32767)", doc = "Identifier of the modifier." },
+    { name = "amount", type = "f64" },
+    { name = "operation", type = "AttributeOperation" },
+]
+
+[structs.AttributeProperty]
+doc = "An attribute's base value and modifiers."
+fields = [
+    { name = "attribute", type = "Attribute" },
+    { name = "base_value", type = "f64" },
+    { name = "modifiers", type = "array(AttributeModifier)" },
+]
+
+[structs.Tag]
+doc = "A tag and the registry entries in it."
+fields = [
+    { name = "name", type = "string(32767)", doc = "Identifier of the tag." },
+    { name = "entries", type = "array(varint)", doc = "Numeric IDs of the entries, in the order of Registry Data." },
+]
+
+[structs.RegistryTags]
+doc = "The tags of one registry."
+fields = [
+    { name = "registry", type = "string(32767)", doc = "Identifier of the registry." },
+    { name = "tags", type = "array(Tag)" },
+]
+
+[structs.ReportDetail]
+doc = "A crash report detail."
+fields = [
+    { name = "key", type = "string(128)" },
+    { name = "value", type = "string(4096)" },
+]
+
+[structs.ServerLink]
+doc = "A link shown in the pause menu."
+fields = [
+    { name = "label", type = "ServerLinkLabel" },
+    { name = "url", type = "string(32767)" },
+]
+
+[structs.WaypointColor]
+doc = "A waypoint's color."
+fields = [
+    { name = "red", type = "u8" },
+    { name = "green", type = "u8" },
+    { name = "blue", type = "u8" },
+]
+
+[structs.WaypointIcon]
+doc = "How a waypoint is drawn."
+fields = [
+    { name = "style", type = "string(32767)", doc = "Identifier of the waypoint style." },
+    { name = "color", type = "option(WaypointColor)" },
+]
+
+[structs.ChunkCoordinates]
+doc = "A chunk column's coordinates as VarInts."
+fields = [
+    { name = "x", type = "varint" },
+    { name = "z", type = "varint" },
+]
+
+[structs.TrackedWaypoint]
+doc = "A waypoint on the locator bar."
+fields = [
+    { name = "id", type = "WaypointId" },
+    { name = "icon", type = "WaypointIcon" },
+    { name = "data", type = "WaypointData" },
+]
+
+[structs.TestInstanceBlockData]
+doc = "The settings of a test instance block."
+fields = [
+    { name = "test", type = "option(string(32767))", doc = "Identifier of the test." },
+    { name = "size", type = "Vec3i" },
+    { name = "rotation", type = "varint" },
+    { name = "ignore_entities", type = "bool" },
+    { name = "status", type = "varint" },
+    { name = "error_message", type = "option(nbt)", doc = "Text component." },
+]
+
+[structs.Vec2f]
+doc = "Two floats."
+fields = [
+    { name = "x", type = "f32" },
+    { name = "y", type = "f32" },
+]
+
+[unions.BossBarAction]
+doc = "A change to a boss bar."
+tag = "varint"
+variants = [
+    { name = "Add", tag = 0, type = "BossBarAdd" },
+    { name = "Remove", tag = 1 },
+    { name = "UpdateHealth", tag = 2, type = "f32", doc = "From 0 to 1." },
+    { name = "UpdateTitle", tag = 3, type = "nbt", doc = "Text component." },
+    { name = "UpdateStyle", tag = 4, type = "BossBarStyle" },
+    { name = "UpdateFlags", tag = 5, type = "BossBarFlags" },
+]
+
+[unions.MapPatch]
+doc = "Part of a map's image, or nothing."
+tag = "u8"
+variants = [
+    { name = "Unchanged", tag = 0 },
+    { name = "Patch", default = true, type = "MapPatchData", doc = "The number of columns, then the patch." },
+]
+
+[unions.LookAtTarget]
+doc = "What the player looks at: a point only, or an entity."
+tag = "bool"
+variants = [
+    { name = "Position", tag = 0 },
+    { name = "Entity", tag = 1, type = "LookAtEntity" },
+]
+
+[unions.NumberFormat]
+doc = "How the numbers of scores are shown."
+tag = "varint"
+variants = [
+    { name = "Blank", tag = 0 },
+    { name = "Styled", tag = 1, type = "nbt", doc = "Style of the number, as a text component's style." },
+    { name = "Fixed", tag = 2, type = "nbt", doc = "Text shown instead of the number." },
+]
+
+[unions.ObjectiveAction]
+doc = "A change to a scoreboard objective."
+tag = "i8"
+variants = [
+    { name = "Create", tag = 0, type = "ObjectiveInfo" },
+    { name = "Remove", tag = 1 },
+    { name = "Update", tag = 2, type = "ObjectiveInfo" },
+]
+
+[unions.TeamAction]
+doc = "A change to a team."
+tag = "i8"
+variants = [
+    { name = "Create", tag = 0, type = "TeamCreate" },
+    { name = "Remove", tag = 1 },
+    { name = "Update", tag = 2, type = "TeamInfo" },
+    { name = "AddEntities", tag = 3, type = "array(string(32767))", doc = "Names of players and UUIDs of other entities." },
+    { name = "RemoveEntities", tag = 4, type = "array(string(32767))" },
+]
+
+[unions.StopSoundFilter]
+doc = "Which sounds to stop."
+tag = "i8"
+variants = [
+    { name = "All", tag = 0 },
+    { name = "Source", tag = 1, type = "SoundSource" },
+    { name = "Sound", tag = 2, type = "string(32767)", doc = "Identifier of the sound." },
+    { name = "SourceAndSound", tag = 3, type = "StopSoundSourceAndSound" },
+]
+
+[unions.ServerLinkLabel]
+doc = "The label of a server link: a known type, or any text."
+tag = "bool"
+variants = [
+    { name = "Custom", tag = 0, type = "nbt", doc = "Text component." },
+    { name = "Known", tag = 1, type = "ServerLinkType" },
+]
+
+[unions.WaypointId]
+doc = "A waypoint's identity: a name, or an entity's UUID."
+tag = "bool"
+variants = [
+    { name = "Name", tag = 0, type = "string(32767)" },
+    { name = "Uuid", tag = 1, type = "uuid" },
+]
+
+[unions.WaypointData]
+doc = "Where a waypoint is."
+tag = "varint"
+variants = [
+    { name = "Empty", tag = 0 },
+    { name = "Position", tag = 1, type = "Vec3i" },
+    { name = "Chunk", tag = 2, type = "ChunkCoordinates" },
+    { name = "Azimuth", tag = 3, type = "f32", doc = "Angle in radians." },
+]
+
+[unions.SeenAdvancementsAction]
+doc = "What the player did in the advancements screen."
+tag = "varint"
+variants = [
+    { name = "OpenedTab", tag = 0, type = "string(32767)", doc = "Identifier of the tab's root advancement." },
+    { name = "ClosedScreen", tag = 1 },
+]
+
+[flags.TeamFlags]
+doc = "Team options."
+repr = "u8"
+bits = { friendly_fire = 0, see_friendly_invisible = 1 }
+
+[bitfields.SectionPos]
+doc = "A chunk section's position packed in a long."
+repr = "i64"
+fields = [
+    { name = "x", bits = 22, signed = true },
+    { name = "z", bits = 22, signed = true },
+    { name = "y", bits = 20, signed = true },
+]
+
+[enums.Difficulty]
+doc = "A difficulty."
+repr = "varint"
+values = { Peaceful = 0, Easy = 1, Normal = 2, Hard = 3 }
+
+[enums.NameTagVisibility]
+doc = "Who sees the name tags of a team's members."
+repr = "varint"
+values = { Always = 0, Never = 1, HideForOtherTeams = 2, HideForOwnTeam = 3 }
+
+[enums.CollisionRule]
+doc = "Which entities a team's members push."
+repr = "varint"
+values = { Always = 0, Never = 1, PushOtherTeams = 2, PushOwnTeam = 3 }
+
+[enums.SoundSource]
+doc = "The volume slider a sound follows."
+repr = "varint"
+values = { Master = 0, Music = 1, Record = 2, Weather = 3, Block = 4, Hostile = 5, Neutral = 6, Player = 7, Ambient = 8, Voice = 9, Ui = 10 }
+
+[enums.Attribute]
+doc = "An attribute, by its ID in the `minecraft:attribute` registry."
+repr = "varint"
+values = { Armor = 0, ArmorToughness = 1, AttackDamage = 2, AttackKnockback = 3, AttackSpeed = 4, BlockBreakSpeed = 5, BlockInteractionRange = 6, BurningTime = 7, CameraDistance = 8, ExplosionKnockbackResistance = 9, EntityInteractionRange = 10, FallDamageMultiplier = 11, FlyingSpeed = 12, FollowRange = 13, Gravity = 14, JumpStrength = 15, KnockbackResistance = 16, Luck = 17, MaxAbsorption = 18, MaxHealth = 19, MiningEfficiency = 20, MovementEfficiency = 21, MovementSpeed = 22, OxygenBonus = 23, SafeFallDistance = 24, Scale = 25, SneakingSpeed = 26, SpawnReinforcements = 27, StepHeight = 28, SubmergedMiningSpeed = 29, SweepingDamageRatio = 30, TemptRange = 31, WaterMovementEfficiency = 32, WaypointTransmitRange = 33, WaypointReceiveRange = 34 }
+
+[enums.ServerLinkType]
+doc = "A kind of server link with a translated label."
+repr = "varint"
+values = { BugReport = 0, CommunityGuidelines = 1, Support = 2, Status = 3, Feedback = 4, Community = 5, Website = 6, Forums = 7, News = 8, Announcements = 9 }
+
+[enums.WaypointOperation]
+doc = "What to do with a waypoint."
+repr = "varint"
+values = { Track = 0, Untrack = 1, Update = 2 }
+
+[enums.GameModeSelection]
+doc = "A game mode, as a VarInt."
+repr = "varint"
+values = { Survival = 0, Creative = 1, Adventure = 2, Spectator = 3 }
+
+[enums.ChatSuggestionsAction]
+doc = "A change to chat completion suggestions."
+repr = "varint"
+values = { Add = 0, Remove = 1, Set = 2 }
+
+[flags.BossBarFlags]
+doc = "Effects of a boss bar."
+repr = "u8"
+bits = { darken_sky = 0, play_end_music = 1, create_fog = 2 }
+
+[enums.BossBarColor]
+doc = "The color of a boss bar."
+repr = "varint"
+values = { Pink = 0, Blue = 1, Red = 2, Green = 3, Yellow = 4, Purple = 5, White = 6 }
+
+[enums.BossBarDivision]
+doc = "The notches of a boss bar."
+repr = "varint"
+values = { None = 0, Six = 1, Ten = 2, Twelve = 3, Twenty = 4 }
+
+[enums.ObjectiveRenderType]
+doc = "How the scores of an objective are shown in the player list."
+repr = "varint"
+values = { Integer = 0, Hearts = 1 }
+
+[enums.AttributeOperation]
+doc = "How an attribute modifier applies."
+repr = "i8"
+values = { AddValue = 0, AddMultipliedBase = 1, AddMultipliedTotal = 2 }
+
+[flags.EffectFlags]
+doc = "How an effect is shown."
+repr = "u8"
+bits = { ambient = 0, show_particles = 1, show_icon = 2, blend = 3 }
+
+[enums.PlayerActionStatus]
+doc = "What the player did in Player Action."
+repr = "varint"
+values = { StartedDigging = 0, CancelledDigging = 1, FinishedDigging = 2, DropItemStack = 3, DropItem = 4, FinishUsingItem = 5, SwapItemInHand = 6, Stab = 7 }
+
+[enums.BlockFace]
+doc = "A face of a block."
+repr = "varint"
+values = { Bottom = 0, Top = 1, North = 2, South = 3, West = 4, East = 5 }
+
+[enums.ResourcePackResult]
+doc = "The status of a resource pack on the client."
+repr = "varint"
+values = { SuccessfullyLoaded = 0, Declined = 1, FailedDownload = 2, Accepted = 3, Downloaded = 4, InvalidUrl = 5, FailedToReload = 6, Discarded = 7 }
+
+[enums.CommandBlockMode]
+doc = "When a command block runs."
+repr = "varint"
+values = { Sequence = 0, Auto = 1, Redstone = 2 }
+
+[flags.CommandBlockFlags]
+doc = "Command block options."
+repr = "u8"
+bits = { track_output = 0, conditional = 1, automatic = 2 }
+
+[flags.StructureBlockFlags]
+doc = "Structure block options."
+repr = "u8"
+bits = { ignore_entities = 0, show_air = 1, show_bounding_box = 2, strict = 3 }

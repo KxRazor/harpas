@@ -6,8 +6,8 @@ hand-written exceptions, testing, and the constraints on the sources. Bedrock tr
 [nethernet.md](nethernet.md); translation and gameplay in [bedrock-interop.md](bedrock-interop.md).
 
 Status: in progress. The Java 26.1 Handshaking, Status, Login and Configuration codecs are generated from the
-schema, and so are the Play packets needed to join, move, see other players and chat
-([Prototype results](#prototype-results)); the rest of Play and Bedrock are design. Facts about sources cite
+schema, and so is Play except for 21 packets that need item stacks, entity metadata, particles, the command
+tree or debug subscriptions ([Prototype results](#prototype-results)); those and Bedrock are design. Facts about sources cite
 them in [References](#references); everything else is a design decision of this project.
 
 ---
@@ -97,7 +97,9 @@ limit are bounded by the packet's own length.
 
 A union is a tag, an integer or a `bool`, followed by the value of the variant it selects; it covers
 minecraft-data's switches on an earlier field. It becomes a Rust enum with one variant per tag value, and a
-variant marked `default = true` takes every other value and keeps it, as packed message signatures do:
+variant marked `default = true` takes every other value and keeps it, as packed message signatures do. A
+default variant may also have a type, sent after the tag, as a map's image patch follows its column count
+when that count is not zero:
 
 ```toml
 [unions.ServerLinkLabel]
@@ -134,7 +136,10 @@ packet keeps its minecraft-data name only to be compared with it.
 - `cargo run -p harpas-protocol-codegen -- check <schema-version-dir> <protocol.json>` compares a schema with
   minecraft-data: the packets in each state and direction, their IDs, and the sequence of wire types in each
   packet. Enums are also compared by value where minecraft-data has a mapper, and unions case by case against
-  its switches. Every minecraft-data packet must be generated or listed as hand-written. A test runs the same check
+  its switches, including switches inside another switch's cases and switches on an optional field, which
+  are an optional union. minecraft-data writes a few sets of bit flags as a mapper from each flag's bit to its
+  name, such as the structure block's flags; the schema has them as flags, and the check accepts that mapper
+  for them. Every minecraft-data packet must be generated or listed as hand-written. A test runs the same check
   against a committed subset of minecraft-data, so the schema cannot drift from its source unnoticed.
 - Generated encoders write into reusable buffers and keep no per-player state, so one encoded packet can be
   shared by every player who receives it.

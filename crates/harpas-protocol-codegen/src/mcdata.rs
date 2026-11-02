@@ -218,11 +218,15 @@ impl Wire {
                         let items = variant.ty.iter().map(|ty| Wire::from_schema(state, ty));
                         Some((variant.tag?, Wire::seq(items.collect())))
                     });
-                    let default = item
-                        .variants
-                        .iter()
-                        .any(|variant| variant.default)
-                        .then(|| Box::new(Wire::Seq(Vec::new())));
+                    let default =
+                        item.variants
+                            .iter()
+                            .find(|variant| variant.default)
+                            .map(|variant| {
+                                let items =
+                                    variant.ty.iter().map(|ty| Wire::from_schema(state, ty));
+                                Box::new(Wire::seq(items.collect()))
+                            });
                     Wire::Union(item.tag, cases.collect(), default)
                 } else if let Some(item) = state.flags.get(name) {
                     Wire::Flags(item.repr, item.bits.values().copied().collect())
@@ -266,6 +270,7 @@ impl Wire {
     /// Whether `self`, from the schema, sends the same bytes as `theirs`, from minecraft-data.
     ///
     /// - An enum or a set of flags matches a plain integer, since minecraft-data leaves many as integers.
+    /// - A set of flags matches a mapper whose values are the flags' bits, which minecraft-data uses for some.
     /// - Integers of the same size match whatever their sign, and `bytes` matches an array of bytes.
     /// - A union without a default variant matches a switch whose default sends nothing, as long as its
     ///   extra tags send nothing either: the schema rejects values that minecraft-data does not check.
@@ -282,6 +287,14 @@ impl Wire {
             }
             (Wire::Prim(a), Wire::Prim(b)) => same_int(a, b),
             (Wire::Enum(ours, _) | Wire::Flags(ours, _), Wire::Prim(prim)) => same_int(ours, prim),
+            // minecraft-data writes some bit flags as a mapper from each flag's bit to its name.
+            (Wire::Flags(a, bits), Wire::Enum(b, values)) => {
+                same_int(a, b)
+                    && bits
+                        .iter()
+                        .map(|&bit| i64::from(bit))
+                        .eq(values.iter().copied())
+            }
             (Wire::Enum(a, ours), Wire::Enum(b, theirs)) => same_int(a, b) && ours == theirs,
             (Wire::Flags(a, ours), Wire::Flags(b, theirs)) => same_int(a, b) && ours == theirs,
             (Wire::Bytes, Wire::Array(item)) | (Wire::Array(item), Wire::Bytes) => {
@@ -492,6 +505,19 @@ impl Resolver<'_> {
 
     /// Resolves the union tagged by the field `name` of type `tag`, made of the fields that follow it.
     fn resolve_union(&self, name: &str, tag: &Value, fields: &[Value]) -> Result<Wire, String> {
+        // A switch on an optional value sends nothing more when it is absent: an optional union.
+        if let Value::Array(parts) = self.expand(tag)?
+            && parts[0] == "option"
+        {
+            if fields
+                .iter()
+                .any(|field| switch_target(field) != Some(name))
+            {
+                return Err(format!("fields between optional `{name}` and its switches"));
+            }
+            let union = self.resolve_union(name, &parts[1], fields)?;
+            return Ok(Wire::Option(Box::new(union)));
+        }
         let (prim, names) = match self.expand(tag)? {
             Value::Array(parts) if parts[0] == "mapper" => match self.resolve(&parts[1]["type"])? {
                 Wire::Prim(prim) => mapper_values(&parts[1]).map(|(names, _)| (prim, names))?,
@@ -513,12 +539,14 @@ impl Resolver<'_> {
                 .or_else(|| parse_int(key))
                 .ok_or_else(|| format!("switch on `{name}` has an unknown case `{key}`"))
         };
-        // Each field: its type per tag value when it switches on the tag, or its only type otherwise.
+        // Each field: its name, and its type per tag value when it switches on the tag, or its only type
+        // otherwise.
         let mut columns = Vec::new();
         let mut tags = BTreeSet::new();
         for field in fields {
+            let field_name = field.get("name").cloned().unwrap_or(Value::Null);
             if switch_target(field) != Some(name) {
-                columns.push(Err(&field["type"]));
+                columns.push((field_name, Err(&field["type"])));
                 continue;
             }
             let args = &field["type"][1];
@@ -529,11 +557,12 @@ impl Resolver<'_> {
                 cases.insert(value, ty);
             }
             // A switch with no default sends nothing for the values it does not list.
-            columns.push(Ok((cases, args.get("default"))));
+            columns.push((field_name, Ok((cases, args.get("default")))));
         }
+        // A case is a container of the fields it sends, so switches inside it can refer to its fields.
         let case = |tag: Option<i64>| -> Result<Wire, String> {
             let mut items = Vec::new();
-            for column in &columns {
+            for (field_name, column) in &columns {
                 let ty = match column {
                     Ok((by_tag, default)) => {
                         tag.and_then(|tag| by_tag.get(&tag).copied()).or(*default)
@@ -541,10 +570,13 @@ impl Resolver<'_> {
                     Err(ty) => Some(*ty),
                 };
                 if let Some(ty) = ty {
-                    items.push(self.resolve(ty)?);
+                    let mut field = serde_json::Map::new();
+                    field.insert("name".to_owned(), field_name.clone());
+                    field.insert("type".to_owned(), ty.clone());
+                    items.push(Value::Object(field));
                 }
             }
-            Ok(Wire::seq(items))
+            self.resolve_container(&items)
         };
         let mut cases = BTreeMap::new();
         for tag in tags {

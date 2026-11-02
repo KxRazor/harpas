@@ -60,10 +60,11 @@ documents.
 **Done when:** a vanilla Java 26.1 client joins a void world in online mode, moves around, sees other players
 and chats.
 
-- [ ] Generated Java 26.1 codecs for all states ([docs/protocol-codecs.md](docs/protocol-codecs.md)).
+- [x] Generated Java 26.1 codecs for all states ([docs/protocol-codecs.md](docs/protocol-codecs.md)).
   - [x] Configuration, with network NBT and tagged unions in the schema format.
   - [x] Play: joining, moving, seeing other players and chatting.
-  - [ ] Play: the rest of the packets.
+  - [x] Play: the rest of the packets whose types the schema describes, 127 of them; the 21 that need item
+        stacks, entity metadata, particles, the command tree or debug subscriptions move to M4.
 - [x] Connection states, status ping and server list ([docs/java-connection.md](docs/java-connection.md)).
   - [x] Framing, Handshaking, Status and the server list, legacy ping included.
   - [x] Login, Configuration and Play states, up to a void world.
@@ -107,6 +108,9 @@ as shown by the parity report.
 - [ ] Block placement and breaking, block updates, scheduled and random ticks.
 - [ ] Redstone components and block events, with tick-by-tick parity harnesses.
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
+- [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
+      the command tree written by hand as the design says, and the debug subscription packets
+      ([docs/protocol-codecs.md](docs/protocol-codecs.md#hand-written-exceptions)).
 - [ ] Entity physics and collisions, ported one to one.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.

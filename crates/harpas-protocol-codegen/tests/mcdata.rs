@@ -22,7 +22,7 @@ fn java_26_1_matches_minecraft_data() {
     let report = mcdata::check(&java_schema(), &minecraft_data());
     assert_eq!(report.errors, Vec::<String>::new());
     assert_eq!(report.missing_states, Vec::<String>::new());
-    assert_eq!(report.pending.len(), 148);
+    assert_eq!(report.pending.len(), 21);
     assert_eq!(report.unchecked, ["play clientbound PlayerInfoUpdate"]);
 }
 
@@ -53,7 +53,7 @@ fn play_differences_are_reported() {
         .errors
         .iter()
         .partition(|error| error.ends_with("is not in the schema"));
-    assert_eq!(missing.len(), 148);
+    assert_eq!(missing.len(), 21);
     assert!(report.pending.is_empty());
     let packets: Vec<_> = wire
         .iter()
@@ -62,11 +62,30 @@ fn play_differences_are_reported() {
     assert_eq!(
         packets,
         [
+            "play clientbound SetBlockDestroyStage",
+            "play clientbound BlockEntityData",
+            "play clientbound BlockAction",
+            "play clientbound BlockUpdate",
+            "play clientbound GameTestHighlightPosition",
+            "play clientbound WorldEvent",
             "play clientbound Login",
+            "play clientbound OpenSignEditor",
             "play clientbound PlayerChatMessage",
             "play clientbound SynchronizePlayerPosition",
+            "play clientbound Respawn",
             "play clientbound SetDefaultSpawnPosition",
             "play clientbound TeleportEntity",
+            "play serverbound QueryBlockEntityTag",
+            "play serverbound JigsawGenerate",
+            "play serverbound PickItemFromBlock",
+            "play serverbound PlayerAction",
+            "play serverbound ProgramCommandBlock",
+            "play serverbound ProgramJigsawBlock",
+            "play serverbound ProgramStructureBlock",
+            "play serverbound SetTestBlock",
+            "play serverbound UpdateSign",
+            "play serverbound TestInstanceBlockAction",
+            "play serverbound UseItemOn",
         ]
     );
 }

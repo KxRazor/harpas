@@ -12,16 +12,18 @@
 mod console;
 mod eula;
 mod harpas_toml;
+mod http;
 mod limits;
 mod logging;
 mod player;
 mod properties;
 mod session;
 mod shutdown;
+mod vanilla_data;
 
 use std::io::{self, Read, Write};
 use std::net::{self, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fs, thread};
@@ -50,7 +52,13 @@ const MINECRAFT_DATA_REVISION: &str = "bd8b5c6048e5af9694374b83f25f5b4aade619cc"
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Run,
-    Version { verbose: bool },
+    Version {
+        verbose: bool,
+    },
+    /// Extract the vanilla data from a server jar the owner downloaded.
+    InstallVanillaData {
+        from: PathBuf,
+    },
 }
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
@@ -66,7 +74,12 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         ["--version" | "-V", "--verbose"] | ["--verbose", "--version" | "-V"] => {
             Ok(Command::Version { verbose: true })
         }
-        _ => Err("usage: harpas [nogui] | harpas --version [--verbose]".to_owned()),
+        ["vanilla-data", "install", "--from", jar] => Ok(Command::InstallVanillaData {
+            from: PathBuf::from(jar),
+        }),
+        _ => Err("usage: harpas [nogui] | harpas --version [--verbose] | \
+                  harpas vanilla-data install --from <server.jar>"
+            .to_owned()),
     }
 }
 
@@ -95,8 +108,8 @@ fn verbose_version() -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match parse_args(&args) {
-        Ok(Command::Run) => {}
+    let command = match parse_args(&args) {
+        Ok(command @ (Command::Run | Command::InstallVanillaData { .. })) => command,
         // Before the log opens, so that asking for the version leaves no files behind.
         Ok(Command::Version { verbose: false }) => return println!("harpas {}", version()),
         Ok(Command::Version { verbose: true }) => return println!("{}", verbose_version()),
@@ -104,12 +117,16 @@ fn main() {
             eprintln!("{usage}");
             std::process::exit(2);
         }
-    }
+    };
     if let Err(e) = logging::init(Path::new("logs")) {
         eprintln!("Could not open logs/latest.log: {e}");
         std::process::exit(1);
     }
-    if let Err(e) = run() {
+    let result = match command {
+        Command::InstallVanillaData { from } => install_vanilla_data(&from),
+        _ => run(),
+    };
+    if let Err(e) = result {
         error!("{e}");
         log::logger().flush();
         std::process::exit(1);
@@ -131,6 +148,7 @@ fn run() -> io::Result<()> {
     }
     // Every start needs Minecraft's game data, downloaded from Mojang (`docs/world.md`).
     eula::require(Path::new(""), &settings)?;
+    vanilla_data::provision(Path::new(""))?;
     let info = Arc::new(server_info(&properties));
     info!("Default game type: {:?}", info.game_mode);
     info!("Generating keypair");
@@ -214,6 +232,14 @@ fn run() -> io::Result<()> {
             warn!("Could not start a thread for {peer}: {e}");
         }
     }
+    Ok(())
+}
+
+/// `harpas vanilla-data install --from <jar>`: Mojang's files need the EULA even when the owner provides them.
+fn install_vanilla_data(jar: &Path) -> io::Result<()> {
+    let settings = harpas_toml::load(Path::new("harpas.toml"))?;
+    eula::require(Path::new(""), &settings)?;
+    vanilla_data::install_from(Path::new(""), jar)?;
     Ok(())
 }
 
@@ -643,6 +669,13 @@ mod tests {
         assert!(args(&["--verbose"]).is_err());
         assert_eq!(args(&["nogui"]), Ok(Command::Run));
         assert!(args(&["--port", "25566"]).is_err());
+        assert_eq!(
+            args(&["vanilla-data", "install", "--from", "server.jar"]),
+            Ok(Command::InstallVanillaData {
+                from: PathBuf::from("server.jar")
+            })
+        );
+        assert!(args(&["vanilla-data", "install"]).is_err());
         assert_eq!(version(), format!("{}+26.1", env!("CARGO_PKG_VERSION")));
         assert!(verbose_version().contains("Java clients: 26.1 (protocol 775)"));
     }

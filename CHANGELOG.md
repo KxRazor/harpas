@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Mojang EULA acceptance: the server starts once `eula = true` is in `harpas.toml`, `HARPAS_EULA=true` is
   set or a vanilla `eula.txt` accepts it; an interactive console asks once and saves the answer
   (`harpas-server`).
+- Vanilla game data: on the first start the Minecraft 26.1 server jar is downloaded from Mojang, verified
+  and only its `data/` files are extracted into one zip, `.harpas/vanilla-data/26.1.zip`; without internet
+  access, `harpas vanilla-data install --from <server.jar>` does the same with a jar the owner provides
+  (`harpas-server`).
 
 ### Changed
 

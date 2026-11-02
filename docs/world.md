@@ -4,8 +4,8 @@ Scope: how Harpas stores worlds, where it gets vanilla's game data (world genera
 tags, structures), how it generates and saves chunks, and how it reaches and checks parity with vanilla. The
 tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
-Status: design. Only the [Mojang EULA](#mojang-eula) acceptance is implemented; it is required on every start,
-since every start needs the vanilla game data. Facts about vanilla cite their source in
+Status: design. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
+provisioning are implemented; both happen on every start, since every start needs the vanilla game data. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -66,9 +66,28 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
 - Before downloading anything from Mojang, the owner must have accepted Mojang's EULA (see
   [Mojang EULA](#mojang-eula)).
 - On first start, Harpas downloads the official `server.jar` of the server version from Mojang's download
-  endpoints and verifies it against the hash in Mojang's version manifest [4].
-- It **extracts only the data files** into `.harpas/vanilla-data/<version>/`. The jar is never run and is
-  deleted after extraction.
+  endpoints and verifies it against the hash in Mojang's version manifest [4]. Each Harpas release also pins
+  that hash and size in its binary: a manifest naming a different jar is refused, and a jar provided offline
+  is checked as strictly as a download.
+- It **extracts only the data files** into one zip, `.harpas/vanilla-data/<version>.zip`: the `data/`
+  directory and `version.json` of the game jar, which the server jar bundles under `META-INF/versions/` since
+  1.18. The jar is never run and is deleted after extraction. The zip is written under a temporary name and
+  renamed into place, so an interrupted start leaves nothing behind and keeps the data already installed.
+
+The data stays in a zip, as vanilla reads it from inside its own jar, rather than being unpacked into a folder:
+
+- **It is a datapack like any other.** The zip is laid out like a zipped datapack, and datapacks in
+  `world/datapacks/` can be zips, so the vanilla data and the owner's datapacks go through the same loader.
+- **Size on disk.** The 26.1 data is about 8,300 small JSON files: 8.6 MB of content that takes about 36 MB
+  as a folder, because every file fills at least one file system block, and 5 MB as a zip. The files keep
+  Mojang's compression; they are copied without being inflated again. Installing and removing one file is also
+  much faster than thousands, on Windows above all.
+- **Reading speed does not matter.** The data is read once at startup and parsed into the engine's registries.
+- **Nobody edits it.** Vanilla data is changed with datapacks, not by hand, so a folder would offer nothing
+  the owner needs.
+
+Projects that ship the data with the server instead, generated from the game by an extractor and committed or
+compiled in, redistribute Mojang's data, which Harpas does not ([licensing.md](licensing.md)).
 - Without internet access, `harpas vanilla-data install --from <server.jar>` extracts the data from a jar the
   owner provides, with the same verification.
 - If the data cannot be provisioned, the server does not start and explains how to fix it.

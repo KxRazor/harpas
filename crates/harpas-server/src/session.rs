@@ -1,9 +1,8 @@
 //! Mojang's session server, which says whether an online-mode player joined through it
 //!
 //! Requests run on the connection's own thread, never on the logic thread
-//! (`docs/java-connection.md#authentication`). TLS is rustls with the system's root certificates.
+//! (`docs/java-connection.md#authentication`).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
@@ -11,7 +10,6 @@ use base64::engine::general_purpose::STANDARD;
 use harpas_java::{AuthOutcome, AuthRequest, ChatAuthority, Player};
 use harpas_protocol_java::v26_1::login::ProfileProperty;
 use serde_json::Value;
-use ureq::tls::{Certificate, RootCerts, TlsConfig, TlsProvider};
 
 const HAS_JOINED: &str = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
 const PUBLIC_KEYS: &str = "https://api.minecraftservices.com/publickeys";
@@ -27,23 +25,8 @@ pub struct SessionServer {
 impl SessionServer {
     /// A client that trusts the system's root certificates.
     pub fn new() -> Result<Self, String> {
-        let native = rustls_native_certs::load_native_certs();
-        if native.certs.is_empty() {
-            return Err(format!(
-                "no root certificates found on this system to reach the session server: {:?}",
-                native.errors
-            ));
-        }
-        let roots: Vec<Certificate<'static>> = native
-            .certs
-            .iter()
-            .map(|cert| Certificate::from_der(cert.as_ref()).to_owned())
-            .collect();
-        let tls = TlsConfig::builder()
-            .provider(TlsProvider::Rustls)
-            .root_certs(RootCerts::new_with_certs(&roots))
-            .unversioned_rustls_crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .build();
+        let tls =
+            crate::http::tls().map_err(|e| format!("cannot reach the session server: {e}"))?;
         let agent = ureq::Agent::config_builder()
             .tls_config(tls)
             .timeout_global(Some(TIMEOUT))

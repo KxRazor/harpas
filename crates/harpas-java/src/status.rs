@@ -3,8 +3,9 @@
 use std::fmt::Write;
 
 use harpas_protocol_java::v26_1;
+use harpas_protocol_java::v26_1::play::GameMode;
 
-/// The server's entry in the server list, and the settings connections need before Login.
+/// The server's entry in the server list, and the settings connections need to bring a player in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerInfo {
     /// Message of the day, from `motd` in `server.properties`. Legacy `§` formatting codes are kept.
@@ -19,6 +20,14 @@ pub struct ServerInfo {
     pub enforces_secure_chat: bool,
     /// Whether connections transferred from another server are accepted, from `accepts-transfers`.
     pub accepts_transfers: bool,
+    /// Whether players are authenticated with Mojang, from `online-mode`.
+    pub online_mode: bool,
+    /// View distance in chunks, from `view-distance`.
+    pub view_distance: u32,
+    /// Simulation distance in chunks, from `simulation-distance`.
+    pub simulation_distance: u32,
+    /// Game mode of new players, from `gamemode`.
+    pub game_mode: GameMode,
 }
 
 impl Default for ServerInfo {
@@ -31,6 +40,10 @@ impl Default for ServerInfo {
             favicon: None,
             enforces_secure_chat: true,
             accepts_transfers: false,
+            online_mode: true,
+            view_distance: 10,
+            simulation_distance: 10,
+            game_mode: GameMode::Survival,
         }
     }
 }

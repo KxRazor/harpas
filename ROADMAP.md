@@ -64,12 +64,14 @@ and chats.
   - [x] Configuration, with network NBT and tagged unions in the schema format.
   - [x] Play: joining, moving, seeing other players and chatting.
   - [ ] Play: the rest of the packets.
-- [ ] Connection states, status ping and server list ([docs/java-connection.md](docs/java-connection.md)).
+- [x] Connection states, status ping and server list ([docs/java-connection.md](docs/java-connection.md)).
   - [x] Framing, Handshaking, Status and the server list, legacy ping included.
-  - [ ] Login, Configuration and Play states, with the tasks below.
+  - [x] Login, Configuration and Play states, up to a void world.
 - [ ] Online-mode authentication with Mojang's session server; offline mode.
+  - [x] Offline mode.
+  - [ ] Online mode.
 - [ ] Encryption and compression following `server.properties`.
-- [ ] Configuration state with registry data for 26.1.
+- [x] Configuration state with registry data for 26.1.
 - [ ] Abuse protection: connection limits, packet size limits, decompression limits, timeouts.
 - [ ] Logic thread with the vanilla tick loop skeleton ([docs/engine-core.md](docs/engine-core.md)).
 - [ ] Player entity, movement validation, player list, entity tracking between players.

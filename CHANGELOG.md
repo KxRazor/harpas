@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   ping with the MOTD, player counts and `server-icon.png` from `server.properties`, as well as the pre-1.7
   legacy ping. Other protocol versions and disabled transfers are refused at login with vanilla's messages
   (`harpas-java`, `harpas-server`).
+- Offline-mode players join a void world: Login with vanilla's offline UUIDs, Configuration with the 26.1
+  registries by name from the client's `minecraft:core` pack and the tags they need (empty for now), and Play
+  with the player's abilities, player list entry, spawn, position, empty chunks and Keep Alive. `gamemode`,
+  `view-distance`, `simulation-distance` and `online-mode` are read from `server.properties` (`harpas-java`,
+  `harpas-server`).
 - Java 26.1 Play packet codecs for joining, moving, seeing other players and chatting, with fixed byte arrays,
   bit flags, bit fields, registry holders, low-precision vectors and hand-written types in the schema
   (`harpas-protocol-java`, `harpas-protocol-codegen`).

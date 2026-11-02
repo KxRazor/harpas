@@ -690,10 +690,11 @@ mod tests {
         }
         logic.shutdown("Server closed").unwrap();
         logic_thread.join().unwrap();
-        // A real client keeps sending; its packets must not hide the reason the logic thread gave.
+        // A real client keeps sending; its packets must not hide the reason the logic thread gave. The
+        // connection may already have closed, as it often has on Windows, and then there is nobody to send to.
         let packet: play::serverbound::Packet =
             play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into();
-        input.send(frame(|buf| packet.encode(buf))).unwrap();
+        let _ = input.send(frame(|buf| packet.encode(buf)));
         let (result, departure) = server.join().unwrap();
         result.unwrap();
         assert_eq!(departure.kick, Some("Server closed"));

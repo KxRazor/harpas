@@ -98,8 +98,8 @@ Java clients + Harpas client mod ──TCP──► Minecraft server + Fabric/Ne
                                                (inside Harpas' embedded JVM)
                                                          ▲
                                                          │ shared memory / FFM bridge
-Bedrock clients ──UDP──► Harpas (Rust) ◄──────── Harpas companion mod
-                   RakNet, codecs, Bedrock translation, pack generation
+Bedrock clients ─WebRTC─► Harpas (Rust) ◄──────── Harpas companion mod
+                   NetherNet, codecs, Bedrock translation, pack generation
 ```
 
 The modded server runs **inside Harpas' embedded JVM**, in the same process. The companion mod uses the same
@@ -152,7 +152,7 @@ Plugins never talk to the engine directly: the Bukkit shim, WASM plugins and Jav
 
 | In the JVM | In Rust |
 |---|---|
-| World simulation: chunk loading, generation and saving, entities, block ticks | Bedrock networking: RakNet, codecs, compression, encryption |
+| World simulation: chunk loading, generation and saving, entities, block ticks | Bedrock networking: NetherNet, codecs, compression |
 | All mod logic | Translating chunks, entities, inventories and movement for Bedrock, with shared encoding and the blob cache ([bedrock-interop.md](bedrock-interop.md)) |
 | Java client networking | Xbox authentication and skin signing |
 | The companion mod | Converting mod assets into Bedrock packs and Java client definitions |
@@ -353,7 +353,7 @@ server genuinely modded while changing only what clients receive.
 ## Phasing
 
 1. After the core engine, Bedrock interoperability, the Bukkit layer and the native API, since modded mode
-   reuses their JVM provisioning, RakNet, codecs and content pipeline.
+   reuses their JVM provisioning, NetherNet, codecs and content pipeline.
 2. Modded mode together with the Harpas client mod (Java players need it) and the companion mod's
    implementation of the core API (plugins need it).
 3. Community adapters and the adapter registry.

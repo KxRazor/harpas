@@ -31,7 +31,7 @@ body:
         - commands.md
         - jvm.md
         - bedrock-interop.md
-        - raknet.md
+        - nethernet.md
         - protocol-codecs.md
         - networks.md
         - plugin-api.md

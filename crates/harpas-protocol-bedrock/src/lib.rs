@@ -1,3 +1,3 @@
-//! Bedrock Edition batching, compression, encryption and packet codecs
+//! Bedrock Edition batching, compression and packet codecs
 //!
 //! Design: `docs/protocol-codecs.md`.

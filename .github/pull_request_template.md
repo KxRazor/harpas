@@ -4,7 +4,7 @@
 
 ## Related
 
-<!-- The issue it closes (`Closes #12`) or the roadmap task it belongs to (`M1: RakNet prototype`). -->
+<!-- The issue it closes (`Closes #12`) or the roadmap task it belongs to (`M1: NetherNet prototype`). -->
 
 ## Testing
 

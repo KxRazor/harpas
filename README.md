@@ -54,6 +54,6 @@ Harpas' design was inspired by these projects:
 - [PaperMC](https://github.com/PaperMC)
 - [PolyMc](https://github.com/TheEpicBlock/PolyMc)
 - [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data)
-- [gophertunnel](https://github.com/Sandertv/gophertunnel) and [go-raknet](https://github.com/Sandertv/go-raknet)
+- [gophertunnel](https://github.com/Sandertv/gophertunnel) and [go-nethernet](https://github.com/df-mc/go-nethernet)
 - [CloudburstMC/Protocol](https://github.com/CloudburstMC/Protocol)
 - [GeckoLib](https://github.com/bernie-g/geckolib)

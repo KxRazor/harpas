@@ -3,7 +3,7 @@
 Scope: how a Java Edition client connects to Harpas, from the first byte to play: connection states,
 authentication, encryption and compression, the configuration state, chat signing, and protection against
 abusive connections. Packet codecs are covered in [protocol-codecs.md](protocol-codecs.md); the Bedrock
-counterpart is [raknet.md](raknet.md).
+counterpart is [nethernet.md](nethernet.md).
 
 Status: design. Nothing here is implemented. Facts about the protocol cite their source in
 [References](#references); everything else is a design decision of this project.
@@ -103,7 +103,7 @@ disconnections they see on vanilla.
 
 ## Protection against abuse
 
-Active by default, with no configuration, like the Bedrock side ([raknet.md](raknet.md#robustness)):
+Active by default, with no configuration, like the Bedrock side ([nethernet.md](nethernet.md#robustness)):
 
 | Threat | Defense |
 |---|---|

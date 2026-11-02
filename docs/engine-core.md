@@ -63,7 +63,7 @@ Work that cannot change the result of the tick runs in parallel, off the logic t
 
 | Parallel work | Why it is unobservable |
 |---|---|
-| Networking: Java TCP and Bedrock RakNet I/O | Packets are handled at the tick's packet step, in order |
+| Networking: Java TCP and Bedrock NetherNet I/O | Packets are handled at the tick's packet step, in order |
 | Packet encoding, compression and encryption | Encodes state the tick has already produced |
 | Bedrock translation | Reads state after it is produced, like encoding |
 | Chunk loading, saving and generation | Generation is deterministic from the seed; chunks join the world at the point vanilla would load them |

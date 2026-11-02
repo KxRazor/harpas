@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Community Edition (`harpas-bench`).
 - Java 26.1 Handshaking, Status and Login packet codecs, generated from Harpas' own protocol schema
   (`harpas-protocol-java`), with a check of the schema against minecraft-data (`harpas-protocol-codegen`).
+- Java 26.1 Configuration packet codecs, with network NBT, tagged unions and enum values checked against
+  minecraft-data (`harpas-protocol-java`, `harpas-protocol-codegen`).
+- NBT values with Java Edition's network encoding (`harpas-core`).
 
 ### Changed
 

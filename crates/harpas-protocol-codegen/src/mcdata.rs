@@ -1,8 +1,11 @@
 //! Comparison of the schema with minecraft-data's `protocol.json`
 //!
 //! Field names and limits are Harpas' own, so the comparison covers what decides the bytes on the wire:
-//! which packets exist, their IDs, and the sequence of wire types in each one.
+//! which packets exist, their IDs, and the sequence of wire types in each one. Enums are compared by their
+//! values where minecraft-data has a mapper, and tagged unions against minecraft-data's switches on an
+//! earlier field of the same container.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde_json::Value;
@@ -70,7 +73,7 @@ fn check_direction(
                 packet.name, packet.id, found.id
             ));
         }
-        let ours = Wire::Seq(
+        let ours = Wire::seq(
             packet
                 .fields
                 .iter()
@@ -78,7 +81,7 @@ fn check_direction(
                 .collect(),
         );
         match resolver.resolve(&Value::String(found.type_name.clone())) {
-            Ok(theirs) if theirs == ours => {}
+            Ok(theirs) if ours.matches(&theirs) => {}
             Ok(theirs) => errors.push(format!(
                 "{context} {}: wire types are {ours}, minecraft-data has {theirs}",
                 packet.name
@@ -150,30 +153,83 @@ enum Wire {
     String,
     Bytes,
     Rest,
+    Nbt,
+    /// An integer from a known set of values: an enum in the schema, a mapper in minecraft-data.
+    Enum(Prim, BTreeSet<i64>),
     Option(Box<Wire>),
     Array(Box<Wire>),
     Seq(Vec<Wire>),
+    /// A tag, then the wire types its value selects.
+    Union(Prim, BTreeMap<i64, Wire>),
 }
 
 impl Wire {
     fn from_schema(state: &State, ty: &Type) -> Wire {
+        let fields = |fields: &[crate::schema::Field]| {
+            Wire::seq(
+                fields
+                    .iter()
+                    .map(|f| Wire::from_schema(state, &f.ty))
+                    .collect(),
+            )
+        };
         match ty {
             Type::Prim(prim) => Wire::Prim(*prim),
             Type::String { .. } => Wire::String,
             Type::Bytes { .. } => Wire::Bytes,
             Type::Rest { .. } => Wire::Rest,
+            Type::Nbt => Wire::Nbt,
             Type::Option(inner) => Wire::Option(Box::new(Wire::from_schema(state, inner))),
             Type::Array { item, .. } => Wire::Array(Box::new(Wire::from_schema(state, item))),
-            Type::Named(name) => match (state.enums.get(name), state.structs.get(name)) {
-                (Some(item), _) => Wire::Prim(item.repr),
-                (None, Some(item)) => Wire::Seq(
-                    item.fields
+            Type::Named(name) => {
+                if let Some(item) = state.enums.get(name) {
+                    Wire::Enum(item.repr, item.values.values().copied().collect())
+                } else if let Some(item) = state.structs.get(name) {
+                    fields(&item.fields)
+                } else if let Some(item) = state.unions.get(name) {
+                    let cases = item.variants.iter().map(|variant| {
+                        let items = variant.ty.iter().map(|ty| Wire::from_schema(state, ty));
+                        (variant.tag, Wire::seq(items.collect()))
+                    });
+                    Wire::Union(item.tag, cases.collect())
+                } else {
+                    unreachable!("the schema was validated")
+                }
+            }
+        }
+    }
+
+    /// A sequence, with nested sequences spliced in: both write the same bytes.
+    fn seq(items: Vec<Wire>) -> Wire {
+        let mut flat = Vec::with_capacity(items.len());
+        for item in items {
+            match item {
+                Wire::Seq(inner) => flat.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        Wire::Seq(flat)
+    }
+
+    /// Whether `self`, from the schema, sends the same bytes as `theirs`, from minecraft-data. An enum
+    /// matches a plain integer, since minecraft-data leaves many enums as integers.
+    fn matches(&self, theirs: &Wire) -> bool {
+        match (self, theirs) {
+            (Wire::Enum(ours, _), Wire::Prim(prim)) => ours == prim,
+            (Wire::Option(ours), Wire::Option(theirs))
+            | (Wire::Array(ours), Wire::Array(theirs)) => ours.matches(theirs),
+            (Wire::Seq(ours), Wire::Seq(theirs)) => {
+                ours.len() == theirs.len() && ours.iter().zip(theirs).all(|(a, b)| a.matches(b))
+            }
+            (Wire::Union(ours, our_cases), Wire::Union(prim, cases)) => {
+                ours == prim
+                    && our_cases.len() == cases.len()
+                    && our_cases
                         .iter()
-                        .map(|f| Wire::from_schema(state, &f.ty))
-                        .collect(),
-                ),
-                (None, None) => unreachable!("the schema was validated"),
-            },
+                        .zip(cases)
+                        .all(|((a, ours), (b, theirs))| a == b && ours.matches(theirs))
+            }
+            (ours, theirs) => ours == theirs,
         }
     }
 }
@@ -185,6 +241,19 @@ impl fmt::Display for Wire {
             Wire::String => f.write_str("string"),
             Wire::Bytes => f.write_str("bytes"),
             Wire::Rest => f.write_str("rest"),
+            Wire::Nbt => f.write_str("nbt"),
+            Wire::Enum(prim, values) => {
+                let values: Vec<_> = values.iter().map(i64::to_string).collect();
+                write!(f, "{prim}[{}]", values.join(", "), prim = prim.name())
+            }
+            Wire::Union(prim, cases) => {
+                write!(f, "switch {} {{", prim.name())?;
+                for (i, (tag, case)) in cases.iter().enumerate() {
+                    let sep = if i > 0 { "," } else { "" };
+                    write!(f, "{sep} {tag}: {case}")?;
+                }
+                f.write_str(" }")
+            }
             Wire::Option(inner) => write!(f, "option({inner})"),
             Wire::Array(item) => write!(f, "array({item})"),
             Wire::Seq(items) => {
@@ -248,13 +317,167 @@ impl Resolver<'_> {
                 varint_count()?;
                 Ok(Wire::Array(Box::new(self.resolve(&args["type"])?)))
             }
+            "mapper" => match self.resolve(&args["type"])? {
+                Wire::Prim(prim) => {
+                    let (_, values) = mapper_values(args)?;
+                    Ok(Wire::Enum(prim, values.into_values().collect()))
+                }
+                other => Err(format!("mapper over `{other}`, not an integer")),
+            },
             "container" => {
-                let fields = args.as_array().ok_or("container without fields")?;
-                let items = fields.iter().map(|field| self.resolve(&field["type"]));
-                Ok(Wire::Seq(items.collect::<Result<_, _>>()?))
+                self.resolve_container(args.as_array().ok_or("container without fields")?)
             }
+            "switch" => Err(format!(
+                "switch on `{}`, which is not an earlier field of the same container",
+                args["compareTo"].as_str().unwrap_or_default()
+            )),
             other => Err(format!("`{other}` has no equivalent in the schema yet")),
         }
+    }
+
+    /// Resolves a container. A field that later switches compare to becomes a union, together with every
+    /// field up to the last of those switches.
+    fn resolve_container(&self, fields: &[Value]) -> Result<Wire, String> {
+        let mut items = Vec::new();
+        let mut i = 0;
+        while i < fields.len() {
+            let name = fields[i]["name"].as_str();
+            let last = name.and_then(|name| {
+                fields
+                    .iter()
+                    .rposition(|field| switch_target(field) == Some(name))
+            });
+            match (name, last) {
+                (Some(name), Some(last)) if last > i => {
+                    items.push(self.resolve_union(
+                        name,
+                        &fields[i]["type"],
+                        &fields[i + 1..=last],
+                    )?);
+                    i = last + 1;
+                }
+                _ => {
+                    items.push(self.resolve(&fields[i]["type"])?);
+                    i += 1;
+                }
+            }
+        }
+        Ok(Wire::seq(items))
+    }
+
+    /// Resolves the union tagged by the field `name` of type `tag`, made of the fields that follow it.
+    fn resolve_union(&self, name: &str, tag: &Value, fields: &[Value]) -> Result<Wire, String> {
+        let (prim, names) = match self.expand(tag)? {
+            Value::Array(parts) if parts[0] == "mapper" => match self.resolve(&parts[1]["type"])? {
+                Wire::Prim(prim) => mapper_values(&parts[1]).map(|(names, _)| (prim, names))?,
+                other => return Err(format!("mapper over `{other}`, not an integer")),
+            },
+            _ => match self.resolve(tag)? {
+                Wire::Prim(Prim::Bool) => (
+                    Prim::Bool,
+                    BTreeMap::from([("false".to_owned(), 0), ("true".to_owned(), 1)]),
+                ),
+                Wire::Prim(prim) if prim.is_enum_repr() => (prim, BTreeMap::new()),
+                other => return Err(format!("switch on `{name}` of type `{other}`")),
+            },
+        };
+        let tag_value = |key: &str| {
+            names
+                .get(key)
+                .copied()
+                .or_else(|| parse_int(key))
+                .ok_or_else(|| format!("switch on `{name}` has an unknown case `{key}`"))
+        };
+        // Each field: its type per tag value when it switches on the tag, or its only type otherwise.
+        let mut columns = Vec::new();
+        let mut tags = BTreeSet::new();
+        for field in fields {
+            if switch_target(field) != Some(name) {
+                columns.push(Err(&field["type"]));
+                continue;
+            }
+            let args = &field["type"][1];
+            if args.get("default").is_some_and(|default| default != "void") {
+                return Err(format!(
+                    "switch on `{name}` with a default has no equivalent in the schema yet"
+                ));
+            }
+            let mut cases = BTreeMap::new();
+            for (key, ty) in args["fields"].as_object().ok_or("switch without fields")? {
+                let value = tag_value(key)?;
+                tags.insert(value);
+                cases.insert(value, ty);
+            }
+            columns.push(Ok(cases));
+        }
+        let mut cases = BTreeMap::new();
+        for tag in tags {
+            let mut items = Vec::new();
+            for column in &columns {
+                // A switch with no case for this tag sends nothing.
+                let ty = match column {
+                    Ok(by_tag) => by_tag.get(&tag).copied(),
+                    Err(ty) => Some(*ty),
+                };
+                if let Some(ty) = ty {
+                    items.push(self.resolve(ty)?);
+                }
+            }
+            cases.insert(tag, Wire::seq(items));
+        }
+        Ok(Wire::Union(prim, cases))
+    }
+
+    /// Follows type aliases to the definition they name; a compound type is returned as it is.
+    fn expand<'v>(&'v self, ty: &'v Value) -> Result<&'v Value, String> {
+        let mut ty = ty;
+        for _ in 0..32 {
+            let Value::String(name) = ty else {
+                return Ok(ty);
+            };
+            match self.local.get(name).or_else(|| self.global.get(name)) {
+                Some(Value::String(native)) if native == "native" => return Ok(ty),
+                Some(definition) => ty = definition,
+                None => return Err(format!("unknown type `{name}`")),
+            }
+        }
+        Err(format!("type `{ty}` refers to itself"))
+    }
+}
+
+/// The field a container field switches on, when its type is a switch.
+fn switch_target(field: &Value) -> Option<&str> {
+    match &field["type"] {
+        Value::Array(parts) if parts.first().is_some_and(|kind| kind == "switch") => {
+            parts.get(1)?["compareTo"].as_str()
+        }
+        _ => None,
+    }
+}
+
+/// The names of a mapper's values, and its values by name.
+type MapperValues = (BTreeMap<String, i64>, BTreeMap<String, i64>);
+
+/// Reads a mapper's `mappings`, from values to names, into both directions.
+fn mapper_values(args: &Value) -> Result<MapperValues, String> {
+    let mappings = args["mappings"]
+        .as_object()
+        .ok_or("mapper without mappings")?;
+    let mut by_name = BTreeMap::new();
+    let mut by_value = BTreeMap::new();
+    for (key, name) in mappings {
+        let value = parse_int(key).ok_or_else(|| format!("invalid mapper value `{key}`"))?;
+        let name = name.as_str().ok_or("mapper name is not a string")?;
+        by_name.insert(name.to_owned(), value);
+        by_value.insert(key.clone(), value);
+    }
+    Ok((by_name, by_value))
+}
+
+fn parse_int(text: &str) -> Option<i64> {
+    match text.strip_prefix("0x") {
+        Some(hex) => i64::from_str_radix(hex, 16).ok(),
+        None => text.parse().ok(),
     }
 }
 
@@ -262,6 +485,7 @@ fn native_type(name: &str) -> Result<Wire, String> {
     match name {
         "UUID" => Ok(Wire::Prim(Prim::Uuid)),
         "restBuffer" => Ok(Wire::Rest),
+        "anonymousNbt" => Ok(Wire::Nbt),
         "void" => Ok(Wire::Seq(Vec::new())),
         other => Prim::from_name(other)
             .filter(|prim| *prim != Prim::Uuid)

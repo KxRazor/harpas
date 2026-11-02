@@ -5,8 +5,8 @@ Bedrock packets (`harpas-protocol-bedrock`): the protocol schema they are genera
 hand-written exceptions, testing, and the constraints on the sources. Bedrock transport is covered in
 [nethernet.md](nethernet.md); translation and gameplay in [bedrock-interop.md](bedrock-interop.md).
 
-Status: prototype. The Java 26.1 Handshaking, Status and Login codecs are generated from the schema
-([Prototype results](#prototype-results)); Configuration, Play and Bedrock are design. Facts about sources cite
+Status: in progress. The Java 26.1 Handshaking, Status, Login and Configuration codecs are generated from the
+schema ([Prototype results](#prototype-results)); Play and Bedrock are design. Facts about sources cite
 them in [References](#references); everything else is a design decision of this project.
 
 ---
@@ -65,7 +65,7 @@ has:
 
 - `[[clientbound]]` and `[[serverbound]]` packets, each with its ID, Rust name, minecraft-data name, doc and
   fields;
-- `[structs.<Name>]` and `[enums.<Name>]` used by those packets;
+- `[structs.<Name>]`, `[enums.<Name>]` and `[unions.<Name>]` used by those packets;
 - `[[hand_written]]` entries for minecraft-data packets that are not generated, each with the reason.
 
 ```toml
@@ -82,10 +82,27 @@ fields = [
 ```
 
 Field types are short expressions: fixed-size types (`bool`, `u8` to `i64`, `f32`, `f64`, `varint`, `varlong`,
-`uuid`), `string(max)`, `bytes(max)`, `rest(max)`, `option(T)`, `array(max, T)`, and the names of structs and
-enums. Limits are vanilla's, taken from the protocol documentation [7]: a string limit counts UTF-16 code units,
+`uuid`), `string(max)`, `bytes(max)`, `rest(max)`, `option(T)`, `array(max, T)`, `nbt` (network NBT: a tag
+type and its payload, with no root name), and the names of structs, enums and unions. Limits are vanilla's, taken from the protocol documentation [7]: a string limit counts UTF-16 code units,
 as vanilla does, and a string without one gets vanilla's default of 32767. Byte arrays and arrays without a
 limit are bounded by the packet's own length.
+
+A union is a tag, an integer or a `bool`, followed by the value of the variant it selects; it covers
+minecraft-data's switches on an earlier field. It becomes a Rust enum with one variant per tag value:
+
+```toml
+[unions.ServerLinkLabel]
+doc = "Label of a server link: a built-in one, or any text."
+tag = "bool"
+variants = [
+    { name = "BuiltIn", tag = 1, type = "ServerLinkType" },
+    { name = "Custom", tag = 0, type = "nbt", doc = "Text component." },
+]
+```
+
+NBT values are `harpas_core::nbt::Nbt`, read with vanilla's nesting limit of 512 and with every length checked
+against the bytes left, like the other decoders. Text components are sent as NBT and decoded as plain NBT
+values; a typed text component is left for the Play state.
 
 Names are Harpas' own: Rust names follow the packet names of the community protocol documentation [7], and each
 packet keeps its minecraft-data name only to be compared with it.
@@ -102,7 +119,8 @@ packet keeps its minecraft-data name only to be compared with it.
   type, the `Encode` and `Decode` traits and `DecodeError`.
 - `cargo run -p harpas-protocol-codegen -- check <schema-version-dir> <protocol.json>` compares a schema with
   minecraft-data: the packets in each state and direction, their IDs, and the sequence of wire types in each
-  packet. Every minecraft-data packet must be generated or listed as hand-written. A test runs the same check
+  packet. Enums are also compared by value where minecraft-data has a mapper, and unions case by case against
+  its switches. Every minecraft-data packet must be generated or listed as hand-written. A test runs the same check
   against a committed subset of minecraft-data, so the schema cannot drift from its source unnoticed.
 - Generated encoders write into reusable buffers and keep no per-player state, so one encoded packet can be
   shared by every player who receives it.
@@ -128,10 +146,11 @@ Packets and types whose structure the schema cannot express cleanly are written 
 - the legacy server list ping, sent by pre-1.7 clients before any framing;
 - chunk data and light data;
 - item stacks and their data components;
-- text components, sent as NBT;
 - entity metadata;
-- registry data sent during the Configuration state;
 - the command tree.
+
+Text components and registry data, also listed here before, are generated: their NBT is a schema type, and
+building the registry entries is the server's job, not the codec's.
 
 Hand-written codecs go through the same tests as generated ones.
 
@@ -217,6 +236,7 @@ M1 prototype: the Java 26.1 Handshaking, Status and Login codecs, generated from
 | Generated code | 966 lines for the three states |
 | Build cost | 4.1 s for a clean build of `harpas-protocol-java` with the generator and its dependencies (`serde`, `toml`, `serde_json`), 12 threads; regeneration after a schema change is under 0.1 s |
 | Correctness | Byte-for-byte round trips against packets written by hand from the protocol documentation; the schema matches minecraft-data with no differences; a vanilla Java 26.1 client lists the example server with its MOTD, player count and latency, and joining it shows the Login Disconnect message with the player's name |
+| Configuration state (M2) | 30 packets generated, 20 clientbound and 10 serverbound, none hand-written; the format gained `nbt`, tagged unions and enum values checked against minecraft-data's mappers |
 | Coverage of the rest of Java 26.1 | 137 of the 240 Configuration and Play packets use only types the format already has; 195 once it gains enums from mappers, bit fields, switches, registry holders and `lpVec3`; the remaining 45 need hand-written types (NBT, entity metadata) that the schema refers to by name |
 
 ### Decision: our own format, checked against ProtoDef

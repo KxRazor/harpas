@@ -2,8 +2,8 @@
 
 `minecraft-data-26.1.json` is a subset of `data/pc/26.1/protocol.json` from
 [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data) (MIT), commit
-`bd8b5c6048e5af9694374b83f25f5b4aade619cc`: the native types, the types the Handshaking, Status and Login
-states use, and those three states unchanged. Configuration and Play are kept as empty objects.
+`bd8b5c6048e5af9694374b83f25f5b4aade619cc`: the native types, the types the Handshaking, Status, Login and
+Configuration states use, and those four states unchanged. Play is kept as an empty object.
 
 To check the schema against the full file instead:
 

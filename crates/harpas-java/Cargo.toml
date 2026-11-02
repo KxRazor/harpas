@@ -1,0 +1,13 @@
+[package]
+name = "harpas-java"
+description = "Java Edition connections: framing and connection states"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+harpas-protocol-java.workspace = true
+
+[lints]
+workspace = true

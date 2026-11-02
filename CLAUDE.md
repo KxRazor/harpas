@@ -12,6 +12,7 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 | `harpas-protocol-java` | Java Edition packet codecs, generated from `schema/` at build time |
 | `harpas-protocol-codegen` | Protocol schema loader, Rust code generator and minecraft-data check |
 | `harpas-protocol-bedrock` | Bedrock Edition batching, compression and packet codecs |
+| `harpas-java` | Java Edition connections: framing and connection states, without I/O |
 | `harpas-nethernet` | NetherNet transport for Bedrock connections: HTTP signaling and WebRTC data channels |
 | `harpas-bedrock` | Translation between the engine and Bedrock packets |
 | `harpas-jvm` | Embedded JVM bridge for Bukkit and Paper plugins |

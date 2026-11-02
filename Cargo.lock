@@ -838,6 +838,13 @@ name = "harpas-engine"
 version = "0.0.0"
 
 [[package]]
+name = "harpas-java"
+version = "0.0.0"
+dependencies = [
+ "harpas-protocol-java",
+]
+
+[[package]]
 name = "harpas-jvm"
 version = "0.0.0"
 
@@ -876,6 +883,10 @@ dependencies = [
 [[package]]
 name = "harpas-server"
 version = "0.0.0"
+dependencies = [
+ "base64",
+ "harpas-java",
+]
 
 [[package]]
 name = "hashbrown"

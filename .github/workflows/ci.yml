@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run for the previous one. Runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -42,7 +47,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - run: cargo build --workspace --all-targets --locked
+      # cargo test builds the libraries, binaries, tests and examples, so there is no separate build step.
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked
       - run: cargo run -p harpas-bench --example jvm-bridge --locked -- --self-test -- '-Xcheck:jni'

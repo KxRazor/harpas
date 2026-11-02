@@ -14,11 +14,11 @@ of this project.
 
 ## Why NetherNet
 
-Bedrock 26.60 (27 October 2026) stopped joining servers over RakNet, the UDP protocol Bedrock had always used;
-26.40 started the move and 26.50 made NetherNet the default of Mojang's dedicated server [1][2]. GeyserMC made
-NetherNet its default transport and removed its RakNet-only mode [3], and gophertunnel accepts the NetherNet
-server address that 26.60 clients send [4]. Every supported Bedrock client ([versions.md](versions.md#bedrock-window))
-joins over NetherNet *(verify for 26.40)*, so Harpas implements NetherNet and not RakNet.
+Since Bedrock 26.60 (27 October 2026), clients join servers only over NetherNet; 26.40 started the move and
+26.50 made NetherNet the default of Mojang's dedicated server [1][2]. GeyserMC made NetherNet its only transport
+for joins [3], and gophertunnel accepts the NetherNet server address that 26.60 clients send [4]. Every supported
+Bedrock client ([versions.md](versions.md#bedrock-window)) joins over NetherNet *(verify for 26.40)*, so it is the
+only transport Harpas implements for Bedrock.
 
 ---
 
@@ -34,7 +34,7 @@ In priority order. When two goals conflict, the higher one wins.
 
 ### Non-goals
 
-- RakNet. No supported client uses it.
+- Transports no supported client uses.
 - Signaling through Xbox Live (the WebSocket service friends' worlds and Realms use) *(verify whether servers
   ever need it)*.
 - WebRTC media (audio and video): NetherNet only uses data channels.
@@ -172,7 +172,7 @@ closed the channel.
 
 1. ConnectHosting, "NetherNet Error in Minecraft Bedrock" (26.40, 26.50 and 26.60 timeline). https://connecthosting.net/blog/minecraft-nethernet-error-bedrock
 2. Winternode, "How to Set Up Geyser for Java and Bedrock Cross-Play" (26.60 release date). https://winternode.com/help/games/minecraft-java/plugins/geyser
-3. GeyserMC/Geyser commits of 26 and 31 October 2026 ("change bedrock.transport config default to nethernet", "Remove RakNet-only transport", #6843). https://github.com/GeyserMC/Geyser/commits
+3. GeyserMC/Geyser commits of 26 and 31 October 2026 ("change bedrock.transport config default to nethernet", #6843). https://github.com/GeyserMC/Geyser/commits
 4. Sandertv/gophertunnel commits #541 ("Support for 1.26.60") and #544 ("Accept the NetherNet ServerAddress sent by 1.26.60 clients"). https://github.com/Sandertv/gophertunnel/commits
 5. df-mc/go-nethernet `endpoint/doc.go` (probe order, six-second limit, trust prompt). https://github.com/df-mc/go-nethernet/blob/master/endpoint/doc.go
 6. df-mc/go-nethernet `endpoint/handler.go` (`/v1/join` routes, no trickle ICE, answer content type) and `listener.go` (DTLS role of the answer). https://github.com/df-mc/go-nethernet/blob/master/endpoint/handler.go

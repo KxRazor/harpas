@@ -141,7 +141,7 @@ encoded once. Compression can be shared too, because of how a batch is built on 
 2. Once compression is enabled, a byte selects the algorithm (`0` zlib, `1` snappy, `0xff` none); batches
    below the negotiated threshold are sent uncompressed with `0xff`.
 3. The batch goes into the connection's NetherNet data channel, which DTLS encrypts. Minecraft's own packet
-   encryption (a SHA-256 checksum and AES-256-CTR) was used over RakNet and is not used over NetherNet
+   encryption (a SHA-256 checksum and AES-256-CTR) is not used over NetherNet
    ([nethernet.md](nethernet.md#webrtc-connection)).
 
 Compression depends only on the batch contents, the algorithm and the level. Encryption depends on the

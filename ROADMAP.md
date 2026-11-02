@@ -50,8 +50,7 @@ documents.
 - [x] Protocol codegen prototype: generate the Java 26.1 Status and Login codecs from a schema built from
       minecraft-data ([docs/protocol-codecs.md](docs/protocol-codecs.md)); decide on ProtoDef vs. our own format.
 - [x] NetherNet prototype: HTTP signaling and WebRTC data channels, with a Bedrock 26.60 client reaching the
-      login packet ([docs/nethernet.md](docs/nethernet.md)). Replaces the RakNet prototype: Bedrock 26.60 no longer
-      joins over RakNet.
+      login packet ([docs/nethernet.md](docs/nethernet.md)).
 - [x] Shared encoding prototype: encode and compress a chunk section once and serve it to many simulated
       connections, measuring cost per viewer.
 - [ ] Record results and update the affected documents; close or reopen design questions accordingly.

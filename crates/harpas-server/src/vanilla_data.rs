@@ -2,8 +2,8 @@
 //!
 //! World generation, recipes, loot tables, tags and structures are data files inside Mojang's server jar, which
 //! Harpas does not redistribute. On the first start the jar is downloaded from Mojang, verified, and only its
-//! `data/` files are extracted into `.harpas/vanilla-data/<version>/`; the jar is never run and is deleted
-//! afterwards. `harpas vanilla-data install --from <server.jar>` does the same with a jar the owner provides
+//! `data/` files are copied into `.harpas/vanilla-data/<version>.zip`, a pack laid out like a zipped datapack;
+//! the jar is never run and is deleted afterwards. `harpas vanilla-data install --from <server.jar>` does the same with a jar the owner provides
 //! (`docs/world.md#vanilla-game-data`).
 
 use std::fs::{self, File};
@@ -30,22 +30,25 @@ fn server_jar_url() -> String {
     format!("https://piston-data.mojang.com/v1/objects/{SERVER_JAR_SHA1}/server.jar")
 }
 
-/// The directory that holds the data of [`VERSION`] in the server folder `server`.
-pub fn dir(server: &Path) -> PathBuf {
-    server.join(".harpas").join("vanilla-data").join(VERSION)
+/// The zip that holds the data of [`VERSION`] in the server folder `server`.
+pub fn pack(server: &Path) -> PathBuf {
+    server
+        .join(".harpas")
+        .join("vanilla-data")
+        .join(format!("{VERSION}.zip"))
 }
 
-/// Returns the data directory, downloading and extracting the data first if it is not there.
+/// Returns the data pack, downloading the data first if it is not there.
 pub fn provision(server: &Path) -> io::Result<PathBuf> {
-    let dir = dir(server);
-    if dir.is_dir() {
-        return Ok(dir);
+    let pack = pack(server);
+    if pack.is_file() {
+        return Ok(pack);
     }
     info!("Downloading the Minecraft {VERSION} server jar from Mojang to extract its game data");
-    let parent = dir.parent().expect("the data directory has a parent");
+    let parent = pack.parent().expect("the data pack has a parent");
     fs::create_dir_all(parent)?;
     let jar = parent.join(format!(".{VERSION}-server.jar.partial"));
-    let result = download(&jar).and_then(|()| unpack(&jar, &dir));
+    let result = download(&jar).and_then(|()| unpack(&jar, &pack));
     let _ = fs::remove_file(&jar);
     result.map_err(|e| {
         io::Error::new(
@@ -58,7 +61,7 @@ pub fn provision(server: &Path) -> io::Result<PathBuf> {
             ),
         )
     })?;
-    Ok(dir)
+    Ok(pack)
 }
 
 /// Extracts the data from a server jar the owner provides, replacing any data already installed.
@@ -67,10 +70,10 @@ pub fn install_from(server: &Path, jar: &Path) -> io::Result<PathBuf> {
         File::open(jar).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", jar.display())))?;
     let (sha1, size) = hash(&mut file, &mut io::sink())?;
     check(&sha1, size)?;
-    let dir = dir(server);
-    fs::create_dir_all(dir.parent().expect("the data directory has a parent"))?;
-    unpack(jar, &dir)?;
-    Ok(dir)
+    let pack = pack(server);
+    fs::create_dir_all(pack.parent().expect("the data pack has a parent"))?;
+    unpack(jar, &pack)?;
+    Ok(pack)
 }
 
 /// Downloads the server jar into `to`, following Mojang's version manifest, and verifies it.
@@ -160,32 +163,26 @@ fn check(sha1: &str, size: u64) -> io::Result<()> {
     )))
 }
 
-/// Extracts the `data/` files and `version.json` of the game jar bundled in the server jar `jar` into `dir`.
-/// They are extracted next to it first and renamed into place, replacing data already there, so an interrupted
-/// extraction leaves nothing and keeps what was installed.
-fn unpack(jar: &Path, dir: &Path) -> io::Result<()> {
-    let partial = dir.with_file_name(format!(".{VERSION}.partial"));
-    if partial.exists() {
-        fs::remove_dir_all(&partial)?;
-    }
-    let result = extract(jar, &partial).and_then(|count| {
-        if dir.exists() {
-            fs::remove_dir_all(dir)?;
-        }
-        fs::rename(&partial, dir)?;
+/// Copies the `data/` files and `version.json` of the game jar bundled in the server jar `jar` into the zip
+/// `pack`. The zip is written next to it first and renamed into place, replacing data already there, so an
+/// interrupted extraction leaves nothing and keeps what was installed.
+fn unpack(jar: &Path, pack: &Path) -> io::Result<()> {
+    let partial = pack.with_file_name(format!(".{VERSION}.zip.partial"));
+    let result = copy_data(jar, &partial).and_then(|count| {
+        fs::rename(&partial, pack)?;
         info!(
             "Extracted {count} Minecraft {VERSION} data files into {}",
-            dir.display()
+            pack.display()
         );
         Ok(())
     });
     if result.is_err() {
-        let _ = fs::remove_dir_all(&partial);
+        let _ = fs::remove_file(&partial);
     }
     result
 }
 
-fn extract(jar: &Path, into: &Path) -> io::Result<usize> {
+fn copy_data(jar: &Path, to: &Path) -> io::Result<usize> {
     // Since 1.18 the server jar is a bundler: the game itself is a jar inside it, listed in
     // `META-INF/versions.list`.
     let mut bundler = zip::ZipArchive::new(File::open(jar)?).map_err(invalid)?;
@@ -195,10 +192,11 @@ fn extract(jar: &Path, into: &Path) -> io::Result<usize> {
         .map_err(invalid)?
         .read_to_end(&mut inner)?;
     let mut game = zip::ZipArchive::new(io::Cursor::new(inner)).map_err(invalid)?;
-    fs::create_dir_all(into)?;
+    let mut pack = zip::ZipWriter::new(File::create(to)?);
     let mut count = 0;
     for index in 0..game.len() {
-        let mut entry = game.by_index(index).map_err(invalid)?;
+        // Raw, so the files keep Mojang's compression instead of being inflated and deflated again.
+        let entry = game.by_index_raw(index).map_err(invalid)?;
         let Some(name) = entry.enclosed_name() else {
             continue;
         };
@@ -206,13 +204,10 @@ fn extract(jar: &Path, into: &Path) -> io::Result<usize> {
         if !wanted || entry.is_dir() {
             continue;
         }
-        let path = into.join(name);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        io::copy(&mut entry, &mut File::create(path)?)?;
+        pack.raw_copy_file(entry).map_err(invalid)?;
         count += 1;
     }
+    pack.finish().map_err(invalid)?.sync_all()?;
     Ok(count)
 }
 
@@ -295,33 +290,51 @@ mod tests {
                 ("../escape.json", b"{}"),
             ],
         );
-        let dir = dir(&folder.0);
-        unpack(&jar, &dir).unwrap();
+        let pack = pack(&folder.0);
+        fs::create_dir_all(pack.parent().unwrap()).unwrap();
+        unpack(&jar, &pack).unwrap();
+        let mut zip = zip::ZipArchive::new(File::open(&pack).unwrap()).unwrap();
+        let mut names: Vec<_> = zip
+            .file_names()
+            .map(|name| name.unwrap().into_owned())
+            .collect();
+        names.sort();
         assert_eq!(
-            fs::read(dir.join("data/minecraft/worldgen/noise/a.json")).unwrap(),
-            b"[1]"
+            names,
+            [
+                "data/minecraft/tags/block/b.json",
+                "data/minecraft/worldgen/noise/a.json",
+                "version.json"
+            ]
         );
-        assert_eq!(
-            fs::read(dir.join("data/minecraft/tags/block/b.json")).unwrap(),
-            b"[2]"
+        let mut noise = String::new();
+        zip.by_name("data/minecraft/worldgen/noise/a.json")
+            .unwrap()
+            .read_to_string(&mut noise)
+            .unwrap();
+        assert_eq!(noise, "[1]");
+        assert!(
+            !pack
+                .with_file_name(format!(".{VERSION}.zip.partial"))
+                .exists()
         );
-        assert!(dir.join("version.json").is_file());
-        assert!(!dir.join("net").exists());
-        assert!(!dir.join("assets").exists());
-        assert!(!dir.parent().unwrap().join("escape.json").exists());
-        assert!(!dir.with_file_name(format!(".{VERSION}.partial")).exists());
     }
 
     #[test]
-    fn a_failed_extraction_leaves_nothing() {
+    fn a_failed_extraction_keeps_what_was_installed() {
         let folder = Folder::new();
         let jar = folder.0.join("server.jar");
         fs::write(&jar, zip(&[("version.json", b"{}")])).unwrap();
-        let dir = dir(&folder.0);
-        fs::create_dir_all(dir.parent().unwrap()).unwrap();
-        assert!(unpack(&jar, &dir).is_err());
-        assert!(!dir.exists());
-        assert!(!dir.with_file_name(format!(".{VERSION}.partial")).exists());
+        let pack = pack(&folder.0);
+        fs::create_dir_all(pack.parent().unwrap()).unwrap();
+        fs::write(&pack, b"installed").unwrap();
+        assert!(unpack(&jar, &pack).is_err());
+        assert_eq!(fs::read(&pack).unwrap(), b"installed");
+        assert!(
+            !pack
+                .with_file_name(format!(".{VERSION}.zip.partial"))
+                .exists()
+        );
     }
 
     #[test]
@@ -331,7 +344,7 @@ mod tests {
         let error = install_from(&folder.0, &jar).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains(SERVER_JAR_SHA1));
-        assert!(!dir(&folder.0).exists());
+        assert!(!pack(&folder.0).exists());
         assert!(check(SERVER_JAR_SHA1, SERVER_JAR_SIZE).is_ok());
         assert!(check(SERVER_JAR_SHA1, SERVER_JAR_SIZE - 1).is_err());
     }

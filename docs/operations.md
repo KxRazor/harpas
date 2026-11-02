@@ -68,7 +68,7 @@ my-server/
     ├── runtime/<version>/    JVM, downloaded on demand (jvm.md)
     ├── bukkit-shim/          Bukkit shim, provisioned with the runtime (jvm.md)
     ├── aot-cache/            this server's JVM AOT cache (jvm.md)
-    ├── vanilla-data/<version>/  data extracted from Mojang's server jar (world.md)
+    ├── vanilla-data/<version>.zip  data extracted from Mojang's server jar (world.md)
     ├── modded/               Mojang's server and the loader, modded mode only (mod-support.md)
     ├── translation-cache/    translated mod content, modded mode only (mod-support.md)
     ├── pregen/               saved pregeneration progress (qol.md)

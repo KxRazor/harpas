@@ -7,8 +7,9 @@ counterpart is [nethernet.md](nethernet.md).
 
 Status: in progress. Every state is implemented in `harpas-java`: Handshaking, Status and the server list
 (legacy ping included), Login in online and offline mode with encryption and compression, Configuration with
-registry data, and Play up to a void world. The protection against abuse is design. Facts about the protocol cite their source in
-[References](#references); everything else is a design decision of this project.
+registry data, and Play with players in a void world. Signed chat and protection against abuse are design.
+Facts about the protocol cite their source in [References](#references); everything else is a design decision
+of this project.
 
 ---
 
@@ -39,8 +40,8 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 - **No I/O in the state machine.** `harpas_java::Connection` takes the bytes read from the socket and produces
   the bytes to send, like the NetherNet transport ([nethernet.md](nethernet.md)). The `harpas` binary drives
   it with one thread per connection for now; the network runtime that replaces those threads is chosen with
-  the protection against abuse (below). Connections queue entry and departure events for the logic thread's
-  packet phase; the resulting online count is used in server-list responses
+  the protection against abuse (below). Connections queue player events for the logic thread's packet phase
+  and send its updates to clients; the resulting online count is used in server-list responses
   ([engine-core.md](engine-core.md#1-vanilla-tick-order-on-one-logic-thread)).
 - **Framing:** a frame's VarInt length is at most 3 bytes and 2,097,151, as in vanilla; the length is checked
   before waiting for the frame, so a connection never buffers more than one frame.
@@ -60,10 +61,12 @@ Every connection starts in Handshaking and moves through the states vanilla defi
   In offline mode the player's UUID is vanilla's offline UUID, a version 3 UUID of `OfflinePlayer:<name>`, and
   the connection is not encrypted, as in vanilla.
 - **Configuration:** see [Configuration state](#configuration-state).
-- **Play:** until the engine exists, the player joins a void world: the Login packet, abilities for the
-  `gamemode` of `server.properties`, the player's own entry in the player list, the spawn point, the position
-  at (0.5, 65, 0.5), and empty overworld chunks over `view-distance`, sent as one chunk batch. Play packets the
-  schema does not have yet are ignored instead of closing the connection.
+- **Play:** players join the void world at (0.5, 65, 0.5), with abilities for the `gamemode` of
+  `server.properties`. The server maintains a shared player list and sends profiles, entities and accepted
+  movement to other players in range. Empty overworld chunks follow the player's position and effective view
+  distance. Java 26.1's player entity type is 155 in the project's pinned minecraft-data version [5]. Play
+  packets the schema does not have yet are ignored instead of closing the connection. The implemented
+  movement checks and their limits are described in [engine-core.md](engine-core.md#1-vanilla-tick-order-on-one-logic-thread).
 - **Keep Alive:** every 15 seconds in Configuration and Play; a client that does not answer within 15 seconds,
   or answers with another ID, is disconnected, as in vanilla.
 - **Tested with a client:** on 2026-11-01, a vanilla Java 26.1 client listed the server with its MOTD colors,
@@ -71,7 +74,8 @@ Every connection starts in Handshaking and moves through the states vanilla defi
   in the player list, with no error in the client's log. On 2026-11-01, in online mode and through a playit.gg
   tunnel, another player's premium Java 26.1 client on Windows joined: the session server verified the
   player, the connection was encrypted and compressed, and the player list and the third-person view showed
-  the player's skin.
+  the player's skin. On 2026-11-02, two Java 26.1 clients in offline creative mode appeared together in the
+  player list, saw each other's entities and synchronized movement, and the disconnect check was successful.
 
 ---
 
@@ -227,3 +231,5 @@ Limits are chosen so that no vanilla client behavior can hit them *(measure agai
    AES/CFB8). https://minecraft.wiki/w/Java_Edition_protocol/Encryption
 3. minecraft.wiki, "server.properties" (`network-compression-threshold`, `online-mode`). https://minecraft.wiki/w/Server.properties
 4. e-im/FreedomChat README (behavior of `enforce-secure-profile` with clients that have no signing key). https://github.com/e-im/FreedomChat
+5. PrismarineJS/minecraft-data, Java 26.1 entity types at the project's pinned revision.
+   https://github.com/PrismarineJS/minecraft-data/blob/bd8b5c6048e5af9694374b83f25f5b4aade619cc/data/pc/26.1/entities.json

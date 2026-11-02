@@ -1,0 +1,278 @@
+//! Players in the void world, movement checks, and what each player can see.
+
+use std::collections::HashSet;
+use std::sync::mpsc::Sender;
+
+/// A signed profile property, such as a Java player's skin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileProperty {
+    /// Property name.
+    pub name: String,
+    /// Property value.
+    pub value: String,
+    /// Signature provided by the identity service, if present.
+    pub signature: Option<String>,
+}
+
+/// A player's game mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameMode {
+    /// Survival mode.
+    Survival,
+    /// Creative mode.
+    Creative,
+    /// Adventure mode.
+    Adventure,
+    /// Spectator mode.
+    Spectator,
+}
+
+/// A player's identity and game mode. The identity is verified in online mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profile {
+    /// The player's persistent UUID.
+    pub uuid: u128,
+    /// The player's name.
+    pub name: String,
+    /// Signed identity properties.
+    pub properties: Vec<ProfileProperty>,
+    /// The game mode in the void world.
+    pub game_mode: GameMode,
+}
+
+/// The player's position, rotation, and ground state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Position {
+    /// East-west position, in blocks.
+    pub x: f64,
+    /// Height of the player's feet, in blocks.
+    pub y: f64,
+    /// North-south position, in blocks.
+    pub z: f64,
+    /// Horizontal rotation, in degrees.
+    pub yaw: f32,
+    /// Vertical rotation, in degrees.
+    pub pitch: f32,
+    /// Whether the client reports touching the ground.
+    pub on_ground: bool,
+}
+
+impl Default for Position {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 65.0,
+            z: 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: false,
+        }
+    }
+}
+
+/// A movement update received from a client.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Movement {
+    /// A new position, or none if only the rotation or ground state changed.
+    pub position: Option<[f64; 3]>,
+    /// New yaw and pitch, or none if the rotation did not change.
+    pub rotation: Option<[f32; 2]>,
+    /// Whether the client reports touching the ground.
+    pub on_ground: bool,
+}
+
+/// Input from one player's connection, applied during the packet phase.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Input {
+    /// The player moved or rotated.
+    Movement(Movement),
+    /// The client acknowledged a position synchronization.
+    ConfirmTeleport(i32),
+    /// The client started or stopped flying.
+    Flying(bool),
+    /// The client's requested view distance in chunks.
+    ViewDistance(u8),
+}
+
+/// A player as seen by another player.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Player {
+    /// Runtime entity ID, unique for this server process.
+    pub entity_id: i32,
+    /// Identity, including any signed skin properties.
+    pub profile: Profile,
+    /// Most recent accepted position.
+    pub position: Position,
+}
+
+/// A message for a player's connection to translate into edition-specific packets.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Output {
+    /// Add a profile to the player list before spawning its entity.
+    AddPlayer(Profile),
+    /// Remove a profile from the player list.
+    RemovePlayer(u128),
+    /// Spawn another player's entity.
+    Spawn(Player),
+    /// Stop tracking another player's entity.
+    RemoveEntity(i32),
+    /// Update a tracked entity's position and rotation.
+    MoveEntity {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Its accepted position.
+        position: Position,
+    },
+    /// The player's own accepted position changed; update the visible chunks if necessary.
+    OwnPosition(Position),
+    /// Correct the player's position and wait for the corresponding confirmation.
+    Teleport {
+        /// Teleport ID to be acknowledged by the client.
+        teleport_id: i32,
+        /// The last accepted position.
+        position: Position,
+    },
+    /// Disconnect this player with a reason.
+    Disconnect(&'static str),
+}
+
+pub(crate) struct PlayerState {
+    pub(crate) player: Player,
+    pub(crate) output: Sender<Output>,
+    pub(crate) view_distance: u8,
+    pub(crate) max_view_distance: u8,
+    pub(crate) allow_flight: bool,
+    pub(crate) client_floating: bool,
+    pub(crate) floating_ticks: u32,
+    pub(crate) tracked: HashSet<i32>,
+    pub(crate) awaiting_teleport: Option<i32>,
+    pub(crate) next_teleport: i32,
+    pub(crate) flying: bool,
+    pub(crate) tick_start: Position,
+    pub(crate) disconnecting: bool,
+}
+
+impl PlayerState {
+    pub(crate) fn new(
+        entity_id: i32,
+        profile: Profile,
+        view_distance: u8,
+        allow_flight: bool,
+        output: Sender<Output>,
+    ) -> Self {
+        let position = Position::default();
+        let flying = profile.game_mode == GameMode::Spectator;
+        Self {
+            player: Player {
+                entity_id,
+                profile,
+                position,
+            },
+            output,
+            view_distance: view_distance.clamp(2, 32),
+            max_view_distance: view_distance.clamp(2, 32),
+            allow_flight,
+            client_floating: false,
+            floating_ticks: 0,
+            tracked: HashSet::new(),
+            // The Play Login sequence sends teleport 1 before accepting movement.
+            awaiting_teleport: Some(1),
+            next_teleport: 2,
+            flying,
+            tick_start: position,
+            disconnecting: false,
+        }
+    }
+
+    pub(crate) fn send(&self, output: Output) {
+        // A dropped receiver means the connection has closed; its departure is queued separately.
+        let _ = self.output.send(output);
+    }
+
+    pub(crate) fn accepts(&mut self, movement: Movement) -> bool {
+        if self.disconnecting {
+            return false;
+        }
+        if movement
+            .position
+            .is_some_and(|p| p.iter().any(|n| !n.is_finite()))
+            || movement
+                .rotation
+                .is_some_and(|r| r.iter().any(|n| !n.is_finite()))
+        {
+            self.disconnecting = true;
+            self.send(Output::Disconnect("Invalid player movement"));
+            return false;
+        }
+        if self.awaiting_teleport.is_some() {
+            return false;
+        }
+
+        let mut next = self.player.position;
+        if let Some([x, y, z]) = movement.position {
+            next.x = x.clamp(-30_000_000.0, 30_000_000.0);
+            next.y = y.clamp(-20_000_000.0, 20_000_000.0);
+            next.z = z.clamp(-30_000_000.0, 30_000_000.0);
+            let dx = next.x - self.tick_start.x;
+            let dy = next.y - self.tick_start.y;
+            let dz = next.z - self.tick_start.z;
+            if dx * dx + dy * dy + dz * dz > 100.0 {
+                let teleport_id = self.next_teleport;
+                self.next_teleport = self.next_teleport.checked_add(1).unwrap_or(1);
+                self.awaiting_teleport = Some(teleport_id);
+                self.send(Output::Teleport {
+                    teleport_id,
+                    position: self.player.position,
+                });
+                return false;
+            }
+        }
+        if let Some([yaw, pitch]) = movement.rotation {
+            next.yaw = yaw;
+            next.pitch = pitch;
+        }
+        next.on_ground = movement.on_ground;
+        if movement.position.is_some() {
+            self.client_floating = !next.on_ground && next.y - self.player.position.y >= -0.03125;
+        } else if next.on_ground {
+            self.client_floating = false;
+        }
+        if next == self.player.position {
+            return false;
+        }
+        self.player.position = next;
+        self.send(Output::OwnPosition(next));
+        true
+    }
+
+    pub(crate) fn check_flight(&mut self) {
+        let may_fly = matches!(
+            self.player.profile.game_mode,
+            GameMode::Creative | GameMode::Spectator
+        );
+        if self.disconnecting || self.awaiting_teleport.is_some() {
+            return;
+        }
+        if self.allow_flight || may_fly || !self.client_floating {
+            self.floating_ticks = 0;
+            return;
+        }
+        self.floating_ticks += 1;
+        if self.floating_ticks > 80 {
+            self.disconnecting = true;
+            self.send(Output::Disconnect("Flying is not enabled on this server"));
+        }
+    }
+
+    pub(crate) fn can_see(&self, other: &Player) -> bool {
+        if other.profile.game_mode == GameMode::Spectator
+            && self.player.profile.game_mode != GameMode::Spectator
+        {
+            return false;
+        }
+        // A player is tracked within its observer's view distance, up to the player tracking range.
+        let range = (f64::from(self.view_distance) * 16.0).min(128.0);
+        (self.player.position.x - other.position.x).abs() <= range
+            && (self.player.position.z - other.position.z).abs() <= range
+    }
+}

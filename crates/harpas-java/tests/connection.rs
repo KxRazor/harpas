@@ -201,7 +201,10 @@ fn offline() -> ServerInfo {
 
 /// Logs Steve in offline mode and acknowledges Login Success.
 fn logged_in(info: &ServerInfo) -> Connection {
-    let mut connection = new_connection();
+    logged_in_with(info, new_connection())
+}
+
+fn logged_in_with(info: &ServerInfo, mut connection: Connection) -> Connection {
     let bytes = [
         handshake(775, handshaking::Intent::Login),
         login_start("Steve"),
@@ -223,6 +226,21 @@ fn logged_in(info: &ServerInfo) -> Connection {
         .receive(&frame(ack, |p, buf| p.encode(buf)), info)
         .unwrap();
     assert_eq!(connection.state(), State::Configuration);
+    connection
+}
+
+fn playing(info: &ServerInfo, connection: Connection) -> Connection {
+    let mut connection = logged_in_with(info, connection);
+    connection.take_output();
+    connection
+        .receive(&known_packs(&[("minecraft", "core", "26.1")]), info)
+        .unwrap();
+    connection.take_output();
+    let ack: configuration::serverbound::Packet =
+        configuration::serverbound::AcknowledgeFinishConfiguration.into();
+    connection
+        .receive(&frame(ack, |p, buf| p.encode(buf)), info)
+        .unwrap();
     connection
 }
 
@@ -317,6 +335,90 @@ fn offline_players_join_the_void_world() {
     // Play packets the schema does not have yet, such as Use Item (0x43), are ignored.
     connection.receive(&[0x02, 0x43, 0x00], &info).unwrap();
     assert_eq!(connection.state(), State::Play);
+}
+
+#[test]
+fn play_uses_the_assigned_entity_id_and_forwards_movement() {
+    let info = offline();
+    let mut connection = playing(
+        &info,
+        Connection::with_entity_id(Arc::new(ServerKey::generate()), 42),
+    );
+    let output = frames(&connection.take_output());
+    assert!(matches!(
+        play::clientbound::Packet::decode(&output[0]),
+        Ok(play::clientbound::Packet::Login(login)) if login.entity_id == 42
+    ));
+    let confirm: play::serverbound::Packet =
+        play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into();
+    let movement: play::serverbound::Packet = play::serverbound::SetPlayerPositionAndRotation {
+        x: 2.0,
+        y: 65.0,
+        z: -1.0,
+        yaw: 90.0,
+        pitch: 15.0,
+        flags: play::MovementFlags::default(),
+    }
+    .into();
+    let input = [
+        frame(confirm.clone(), |p, buf| p.encode(buf)),
+        frame(movement.clone(), |p, buf| p.encode(buf)),
+    ]
+    .concat();
+    connection.receive(&input, &info).unwrap();
+    assert_eq!(connection.take_play_input(), vec![confirm, movement]);
+    assert!(connection.take_play_input().is_empty());
+    let update: play::clientbound::Packet =
+        play::clientbound::PlayerInfoRemove { players: vec![5] }.into();
+    connection.send_play_packet(update.clone());
+    let output = frames(&connection.take_output());
+    assert_eq!(play::clientbound::Packet::decode(&output[0]), Ok(update));
+}
+
+#[test]
+fn moving_to_an_adjacent_chunk_updates_only_the_entering_and_leaving_columns() {
+    let info = offline();
+    let mut connection = playing(&info, new_connection());
+    connection.take_output();
+    connection.update_view(16.5, 0.5, None);
+    let packets: Vec<_> = frames(&connection.take_output())
+        .iter()
+        .map(|f| play::clientbound::Packet::decode(f).unwrap())
+        .collect();
+    assert_eq!(
+        packets.first(),
+        Some(&play::clientbound::SetCenterChunk { x: 1, z: 0 }.into())
+    );
+    let unloaded: Vec<_> = packets
+        .iter()
+        .filter_map(|p| match p {
+            play::clientbound::Packet::UnloadChunk(p) => Some((p.x, p.z)),
+            _ => None,
+        })
+        .collect();
+    let loaded: Vec<_> = packets
+        .iter()
+        .filter_map(|p| match p {
+            play::clientbound::Packet::ChunkDataAndUpdateLight(p) => Some((p.x, p.z)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(unloaded, (-2..=2).map(|z| (-2, z)).collect::<Vec<_>>());
+    assert_eq!(loaded, (-2..=2).map(|z| (3, z)).collect::<Vec<_>>());
+    assert_eq!(
+        packets.last(),
+        Some(&play::clientbound::ChunkBatchFinished { batch_size: 5 }.into())
+    );
+    connection.update_view(17.0, 0.5, None);
+    assert!(connection.take_output().is_empty());
+    connection.update_view(f64::NAN, 0.5, None);
+    assert!(connection.take_output().is_empty());
+    connection.update_view(f64::MAX, 0.5, None);
+    let packets = frames(&connection.take_output());
+    assert_eq!(
+        play::clientbound::Packet::decode(&packets[0]),
+        Ok(play::clientbound::SetCenterChunk { x: 1_875_000, z: 0 }.into())
+    );
 }
 
 #[test]

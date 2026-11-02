@@ -35,6 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`harpas-protocol-java`, `harpas-protocol-codegen`).
 - A single logic thread with a 20 TPS tick skeleton and connection events, with player counts in the server
   list updated when players enter and leave Play (`harpas-engine`, `harpas-server`).
+- Player entities in the void world: a shared player list, profile and skin properties, visibility within each
+  viewer's tracking range, synchronized movement, movement and `allow-flight` checks, and chunk updates as
+  players travel (`harpas-engine`, `harpas-java`, `harpas-server`).
 
 ### Changed
 

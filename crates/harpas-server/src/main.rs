@@ -7,6 +7,7 @@
 //!
 //! Design: `docs/operations.md`.
 
+mod player;
 mod properties;
 mod session;
 
@@ -27,8 +28,8 @@ use session::{SessionServer, format_uuid};
 
 /// Vanilla closes a connection that sends nothing for 30 seconds.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
-/// How often a connection's timed work runs, such as Keep Alive.
-const CONNECTION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Wake idle connections to send messages from the logic thread promptly.
+const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn main() {
     println!("harpas {}", env!("CARGO_PKG_VERSION"));
@@ -109,6 +110,7 @@ fn server_info(properties: &Properties) -> ServerInfo {
             .parsed("enforce-secure-profile", defaults.enforces_secure_chat),
         accepts_transfers: properties.parsed("accepts-transfers", defaults.accepts_transfers),
         online_mode: properties.parsed("online-mode", defaults.online_mode),
+        allow_flight: properties.parsed("allow-flight", defaults.allow_flight),
         view_distance: properties.parsed("view-distance", defaults.view_distance),
         simulation_distance: properties.parsed("simulation-distance", defaults.simulation_distance),
         game_mode: properties
@@ -161,7 +163,7 @@ fn serve(
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
 ) -> io::Result<()> {
-    // Reads wake up every second so that the connection can send its Keep Alive packets.
+    // Reads wake up to send the logic thread's output even when this player is idle.
     stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
     stream.set_nodelay(true)?;
     let result = drive(&mut stream, info, key, session, logic);
@@ -177,7 +179,10 @@ fn drive(
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
 ) -> io::Result<()> {
-    let mut connection = Connection::new(key);
+    let entity_id = logic
+        .next_entity_id()
+        .ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
+    let mut connection = Connection::with_entity_id(key, entity_id);
     let mut info = info.clone();
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
@@ -219,10 +224,29 @@ fn drive(
         }
         result.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         if player_session.is_none() && connection.state() == State::Play {
-            player_session = Some(logic.player_joined().map_err(io::Error::other)?);
-            if let Some(player) = connection.player() {
-                println!("{} joined the void world", player.name);
+            let player = connection
+                .player()
+                .ok_or_else(|| io::Error::other("Play without a player"))?;
+            let session = logic
+                .player_joined(
+                    entity_id,
+                    player::profile(player, info.game_mode),
+                    info.view_distance.clamp(2, 32) as u8,
+                    info.allow_flight,
+                )
+                .map_err(io::Error::other)?;
+            if let Some(distance) = connection.client_view_distance() {
+                session
+                    .send(harpas_engine::player::Input::ViewDistance(distance))
+                    .map_err(io::Error::other)?;
             }
+            println!("{} joined the void world", player.name);
+            player_session = Some(session);
+        }
+        if let Some(session) = &player_session {
+            player::receive(&mut connection, session)?;
+            player::send(&mut connection, session);
+            stream.write_all(&connection.take_output())?;
         }
     }
     stream.flush()?;
@@ -232,11 +256,11 @@ fn drive(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::mpsc::{self, Receiver};
+    use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 
     use super::*;
     use harpas_java::{FrameReader, write_frame};
-    use harpas_protocol_java::v26_1::{configuration, handshaking, login, status};
+    use harpas_protocol_java::v26_1::{configuration, handshaking, login, play, status};
 
     #[derive(Default)]
     struct Stream {
@@ -288,9 +312,9 @@ mod tests {
         frame(|buf| packet.encode(buf))
     }
 
-    fn login_packets() -> VecDeque<Vec<u8>> {
+    fn login_packets(name: &str) -> VecDeque<Vec<u8>> {
         let start: login::serverbound::Packet = login::serverbound::LoginStart {
-            username: "Steve".into(),
+            username: name.into(),
             player_uuid: 0,
         }
         .into();
@@ -369,7 +393,7 @@ mod tests {
                 (info.clone(), Arc::clone(&key), logic.clone());
             let connection = thread::spawn(move || {
                 let mut stream = Stream {
-                    input: login_packets(),
+                    input: login_packets("Steve"),
                     close: Some(receiver),
                     ..Stream::default()
                 };
@@ -382,6 +406,192 @@ mod tests {
             wait_for_count(&logic, 0);
             assert_eq!(status_count(&info, &key, &logic), 0);
         }
+        drop(logic);
+        logic_thread.join().unwrap();
+    }
+
+    #[test]
+    fn allow_flight_is_loaded_from_server_properties() {
+        assert!(!server_info(&Properties::default()).allow_flight);
+        assert!(server_info(&Properties::parse("allow-flight=true")).allow_flight);
+    }
+
+    struct ChannelStream {
+        input: Receiver<Vec<u8>>,
+        output: Sender<Vec<u8>>,
+    }
+
+    impl Read for ChannelStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.input.recv_timeout(Duration::from_millis(10)) {
+                Ok(bytes) => {
+                    assert!(bytes.len() <= buf.len());
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Err(RecvTimeoutError::Timeout) => Err(io::ErrorKind::WouldBlock.into()),
+                Err(RecvTimeoutError::Disconnected) => Ok(0),
+            }
+        }
+    }
+
+    impl Write for ChannelStream {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.output
+                .send(bytes.to_vec())
+                .map_err(|_| io::ErrorKind::BrokenPipe)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct TestClient {
+        input: Sender<Vec<u8>>,
+        output: Receiver<Vec<u8>>,
+        frames: FrameReader,
+        thread: thread::JoinHandle<io::Result<()>>,
+    }
+
+    impl TestClient {
+        fn start(
+            name: &str,
+            info: &ServerInfo,
+            key: &Arc<ServerKey>,
+            logic: &harpas_engine::Handle,
+        ) -> Self {
+            let (input, server_input) = mpsc::channel();
+            let (server_output, output) = mpsc::channel();
+            let (info, key, logic) = (info.clone(), Arc::clone(key), logic.clone());
+            let thread = thread::spawn(move || {
+                let mut stream = ChannelStream {
+                    input: server_input,
+                    output: server_output,
+                };
+                drive(&mut stream, &info, key, None, &logic)
+            });
+            for packet in login_packets(name) {
+                input.send(packet).unwrap();
+            }
+            Self {
+                input,
+                output,
+                frames: FrameReader::default(),
+                thread,
+            }
+        }
+
+        fn next_frame(&mut self) -> Vec<u8> {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(frame) = self.frames.next_frame().unwrap() {
+                    return frame;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let bytes = self
+                    .output
+                    .recv_timeout(remaining)
+                    .expect("server output timed out");
+                self.frames.push(&bytes);
+            }
+        }
+
+        fn join(&mut self) -> i32 {
+            assert!(matches!(
+                login::clientbound::Packet::decode(&self.next_frame()),
+                Ok(login::clientbound::Packet::LoginSuccess(_))
+            ));
+            for _ in 0..33 {
+                configuration::clientbound::Packet::decode(&self.next_frame()).unwrap();
+            }
+            let login = play::clientbound::Packet::decode(&self.next_frame()).unwrap();
+            let play::clientbound::Packet::Login(login) = login else {
+                panic!("expected Play Login");
+            };
+            loop {
+                if matches!(
+                    play::clientbound::Packet::decode(&self.next_frame()).unwrap(),
+                    play::clientbound::Packet::ChunkBatchFinished(_)
+                ) {
+                    return login.entity_id;
+                }
+            }
+        }
+
+        fn next_play(&mut self) -> play::clientbound::Packet {
+            play::clientbound::Packet::decode(&self.next_frame()).unwrap()
+        }
+
+        fn send(&self, packet: play::serverbound::Packet) {
+            self.input.send(frame(|buf| packet.encode(buf))).unwrap();
+        }
+
+        fn close(self) {
+            drop(self.input);
+            self.thread.join().unwrap().unwrap();
+        }
+    }
+
+    #[test]
+    fn two_clients_receive_player_lists_entities_movement_and_disconnects() {
+        let info = ServerInfo {
+            online_mode: false,
+            compression_threshold: -1,
+            view_distance: 2,
+            ..ServerInfo::default()
+        };
+        let key = Arc::new(ServerKey::generate());
+        let (logic, logic_thread) = harpas_engine::start().unwrap();
+        let mut steve = TestClient::start("Steve", &info, &key, &logic);
+        let steve_id = steve.join();
+        let mut alex = TestClient::start("Alex", &info, &key, &logic);
+        let alex_id = alex.join();
+        assert_ne!(steve_id, alex_id);
+
+        let steve_list = steve.next_play();
+        assert!(
+            matches!(steve_list, play::clientbound::Packet::PlayerInfoUpdate(p) if p.updates.entries[0].name == "Alex")
+        );
+        assert!(
+            matches!(steve.next_play(), play::clientbound::Packet::SpawnEntity(p) if p.entity_id == alex_id && p.entity_type == 155)
+        );
+        let alex_list = alex.next_play();
+        assert!(
+            matches!(alex_list, play::clientbound::Packet::PlayerInfoUpdate(p) if p.updates.entries[0].name == "Steve")
+        );
+        assert!(
+            matches!(alex.next_play(), play::clientbound::Packet::SpawnEntity(p) if p.entity_id == steve_id)
+        );
+
+        alex.send(play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into());
+        alex.send(
+            play::serverbound::SetPlayerPositionAndRotation {
+                x: 3.5,
+                y: 65.0,
+                z: 0.5,
+                yaw: 90.0,
+                pitch: 15.0,
+                flags: play::MovementFlags::default(),
+            }
+            .into(),
+        );
+        assert!(
+            matches!(steve.next_play(), play::clientbound::Packet::SetHeadRotation(p) if p.entity_id == alex_id)
+        );
+        assert!(
+            matches!(steve.next_play(), play::clientbound::Packet::EntityPositionSync(p) if p.entity_id == alex_id && p.x == 3.5 && p.yaw == 90.0)
+        );
+
+        alex.close();
+        assert!(
+            matches!(steve.next_play(), play::clientbound::Packet::RemoveEntities(p) if p.entity_ids == [alex_id])
+        );
+        assert!(
+            matches!(steve.next_play(), play::clientbound::Packet::PlayerInfoRemove(p) if p.players == [harpas_java::offline_uuid("Alex")])
+        );
+        steve.close();
         drop(logic);
         logic_thread.join().unwrap();
     }

@@ -18,8 +18,10 @@ this section is out of date.
 |---|---|
 | Apache License 2.0 | `ring 0.17.14` |
 | BSD 3-Clause "New" or "Revised" License | `subtle 2.6.1` |
+| Boost Software License 1.0 | `clipboard-win 5.4.3` `error-code 3.4.0` |
 | ISC License | `ring 0.17.14` `rustls-webpki 0.103.16` `untrusted 0.9.0` |
-| MIT License | `aes 0.9.3` `base64 0.23.1` `base64ct 1.8.3` `bitflags 2.13.2` `block-buffer 0.12.1` `bytes 1.12.1` `cfb8 0.9.1` `cfg-if 1.0.5` `cipher 0.5.2` `cmov 0.5.4` `const-oid 0.10.2` `core-foundation 0.10.1` `core-foundation-sys 0.8.7` `cpubits 0.1.1` `cpufeatures 0.3.1` `crypto-bigint 0.7.10` `crypto-common 0.2.2` `crypto-primes 0.7.2` `ctutils 0.4.7` `der 0.8.3` `digest 0.11.3` `equivalent 1.0.3` `flate2 1.1.10` `getrandom 0.2.17` `getrandom 0.4.3` `hashbrown 0.17.1` `http 1.5.0` `httparse 1.10.1` `hybrid-array 0.4.15` `indexmap 2.14.2` `inout 0.2.5` `itoa 1.0.18` `libc 0.2.191` `log 0.4.35` `md-5 0.11.0` `memchr 2.8.3` `num-traits 0.2.19` `once_cell 1.21.4` `openssl-probe 0.2.2` `pem-rfc7468 1.0.0` `percent-encoding 2.3.2` `pkcs1 0.8.0-rc.5` `pkcs8 0.11.0` `r-efi 6.0.0` `rand_core 0.10.1` `rsa 0.10.0-rc.19` `rustls 0.23.46` `rustls-native-certs 0.8.5` `rustls-pki-types 1.15.1` `schannel 0.1.30` `security-framework 3.7.0` `security-framework-sys 2.17.0` `serde_core 1.0.229` `serde_json 1.0.154` `sha1 0.11.0` `sha2 0.11.1` `signature 3.0.0` `spki 0.8.1` `typenum 1.20.1` `ureq 3.5.0` `ureq-proto 0.6.5` `utf8-zero 0.8.1` `wasi 0.11.1+wasi-snapshot-preview1` `windows-link 0.2.1` `windows-sys 0.52.0` `windows-sys 0.61.2` `windows-targets 0.52.6` `windows_aarch64_gnullvm 0.52.6` `windows_aarch64_msvc 0.52.6` `windows_i686_gnu 0.52.6` `windows_i686_gnullvm 0.52.6` `windows_i686_msvc 0.52.6` `windows_x86_64_gnu 0.52.6` `windows_x86_64_gnullvm 0.52.6` `windows_x86_64_msvc 0.52.6` `zeroize 1.9.1` `zmij 1.0.23` |
+| MIT License | `aes 0.9.3` `android_system_properties 0.1.6` `base64 0.23.1` `base64ct 1.8.3` `bitflags 2.13.2` `block-buffer 0.12.1` `bumpalo 3.20.3` `bytes 1.12.1` `cfb8 0.9.1` `cfg-if 1.0.5` `chrono 0.4.45` `cipher 0.5.2` `cmov 0.5.4` `const-oid 0.10.2` `core-foundation 0.10.1` `core-foundation-sys 0.8.7` `cpubits 0.1.1` `cpufeatures 0.3.1` `crypto-bigint 0.7.10` `crypto-common 0.2.2` `crypto-primes 0.7.2` `ctutils 0.4.7` `der 0.8.3` `digest 0.11.3` `equivalent 1.0.3` `flate2 1.1.10` `futures-core 0.3.34` `futures-task 0.3.34` `futures-util 0.3.34` `getrandom 0.2.17` `getrandom 0.4.3` `hashbrown 0.17.1` `http 1.5.0` `httparse 1.10.1` `hybrid-array 0.4.15` `iana-time-zone 0.1.65` `iana-time-zone-haiku 0.1.2` `indexmap 2.14.2` `inout 0.2.5` `itoa 1.0.18` `js-sys 0.3.107` `libc 0.2.191` `log 0.4.35` `md-5 0.11.0` `memchr 2.8.3` `nix 0.31.3` `num-traits 0.2.19` `once_cell 1.21.4` `openssl-probe 0.2.2` `pem-rfc7468 1.0.0` `percent-encoding 2.3.2` `pin-project-lite 0.2.17` `pkcs1 0.8.0-rc.5` `pkcs8 0.11.0` `proc-macro2 1.0.107` `quote 1.0.47` `r-efi 6.0.0` `rand_core 0.10.1` `rsa 0.10.0-rc.19` `rustls 0.23.46` `rustls-native-certs 0.8.5` `rustls-pki-types 1.15.1` `rustyline 19.0.0` `schannel 0.1.30` `security-framework 3.7.0` `security-framework-sys 2.17.0` `serde_core 1.0.229` `serde_json 1.0.154` `serde_spanned 1.1.2` `sha1 0.11.0` `sha2 0.11.1` `signature 3.0.0` `slab 0.4.12` `spki 0.8.1` `syn 2.0.119` `syn 3.0.9` `toml 1.1.8+spec-1.1.0` `toml_datetime 1.1.2+spec-1.1.0` `toml_parser 1.1.5+spec-1.1.0` `toml_writer 1.1.3+spec-1.1.0` `typenum 1.20.1` `unicode-ident 1.0.27` `unicode-segmentation 1.13.3` `unicode-width 0.2.3` `ureq 3.5.0` `ureq-proto 0.6.5` `utf8-zero 0.8.1` `utf8parse 0.2.2` `wasi 0.11.1+wasi-snapshot-preview1` `wasm-bindgen 0.2.130` `wasm-bindgen-macro 0.2.130` `wasm-bindgen-macro-support 0.2.130` `wasm-bindgen-shared 0.2.130` `windows-core 0.62.2` `windows-implement 0.60.2` `windows-interface 0.59.3` `windows-link 0.2.1` `windows-result 0.4.1` `windows-strings 0.5.1` `windows-sys 0.52.0` `windows-sys 0.61.2` `windows-targets 0.52.6` `windows_aarch64_gnullvm 0.52.6` `windows_aarch64_msvc 0.52.6` `windows_i686_gnu 0.52.6` `windows_i686_gnullvm 0.52.6` `windows_i686_msvc 0.52.6` `windows_x86_64_gnu 0.52.6` `windows_x86_64_gnullvm 0.52.6` `windows_x86_64_msvc 0.52.6` `winnow 1.0.4` `zeroize 1.9.1` `zmij 1.0.23` |
+| Unicode License v3 | `unicode-ident 1.0.27` |
 | zlib License | `zlib-rs 0.6.8` |
 
 ### Apache License 2.0
@@ -531,6 +533,37 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### Boost Software License 1.0
+
+- `clipboard-win 5.4.3`
+- `error-code 3.4.0`
+
+```text
+Boost Software License - Version 1.0 - August 17th, 2003
+
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of the software and accompanying documentation covered by
+this license (the "Software") to use, reproduce, display, distribute,
+execute, and transmit the Software, and to prepare derivative works of the
+Software, and to permit third-parties to whom the Software is furnished to
+do so, all subject to the following:
+
+The copyright notices in the Software and this entire statement, including
+the above license grant, this restriction and the following disclaimer,
+must be included in all copies of the Software, in whole or in part, and
+all derivative works of the Software, unless such copies or derivative
+works are solely in the form of machine-executable object code generated by
+a source language processor.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ```
 
 ### ISC License
@@ -1257,13 +1290,16 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ### MIT License
 
 - `aes 0.9.3`: Copyright (c) 2018-2024 The RustCrypto Project Developers; Copyright (c) 2018 Artyom Pavlov
+- `android_system_properties 0.1.6`: Copyright (c) 2013 Nicolas Silva
 - `base64 0.23.1`: Copyright (c) 2025 Alice Maz, Marshall Pierce
 - `base64ct 1.8.3`: Copyright (c) 2014 Steve "Sc00bz" Thomas (steve at tobtu dot com); Copyright (c) 2021-2025 The RustCrypto Project Developers
 - `bitflags 2.13.2`: Copyright (c) 2014 The Rust Project Developers
 - `block-buffer 0.12.1`: Copyright (c) 2018-2025 The RustCrypto Project Developers
+- `bumpalo 3.20.3`: Copyright (c) 2019 Nick Fitzgerald
 - `bytes 1.12.1`: Copyright (c) 2018 Carl Lerche
 - `cfb8 0.9.1`: Copyright (c) 2018-2022 RustCrypto Developers; Copyright (c) 2018 Artyom Pavlov
 - `cfg-if 1.0.5`: Copyright (c) 2014 Alex Crichton
+- `chrono 0.4.45`: Copyright (c) <year> <copyright holders>
 - `cipher 0.5.2`: Copyright (c) 2016-2025 RustCrypto Developers
 - `cmov 0.5.4`: Copyright (c) 2022-2026 The RustCrypto Project Developers
 - `const-oid 0.10.2`: Copyright (c) 2020-2026 The RustCrypto Project Developers
@@ -1278,47 +1314,79 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `digest 0.11.3`: Copyright (c) 2017-2025 RustCrypto Developers; Copyright (c) 2017 Artyom Pavlov
 - `equivalent 1.0.3`: Copyright (c) 2016--2023
 - `flate2 1.1.10`: Copyright (c) 2014-2026 Alex Crichton
+- `futures-core 0.3.34`: Copyright (c) 2016 Alex Crichton; Copyright (c) 2017 The Tokio Authors
+- `futures-task 0.3.34`: Copyright (c) 2016 Alex Crichton; Copyright (c) 2017 The Tokio Authors
+- `futures-util 0.3.34`: Copyright (c) 2016 Alex Crichton; Copyright (c) 2017 The Tokio Authors
 - `getrandom 0.2.17`: Copyright (c) 2018-2024 The rust-random Project Developers; Copyright (c) 2014 The Rust Project Developers
 - `getrandom 0.4.3`: Copyright (c) 2018-2026 The rust-random Project Developers; Copyright (c) 2014 The Rust Project Developers
 - `hashbrown 0.17.1`: Copyright (c) 2016 Amanieu d'Antras
 - `http 1.5.0`: Copyright (c) 2017 http-rs authors
 - `httparse 1.10.1`: Copyright (c) 2015-2025 Sean McArthur
 - `hybrid-array 0.4.15`: Copyright (c) 2022-2026 The RustCrypto Project Developers
+- `iana-time-zone 0.1.65`: Copyright (c) 2020 Andrew D. Straw
+- `iana-time-zone-haiku 0.1.2`: Copyright (c) 2020 Andrew D. Straw
 - `indexmap 2.14.2`: Copyright (c) 2016--2017
 - `inout 0.2.5`: Copyright (c) 2022-2025 The RustCrypto Project Developers; Copyright (c) 2022 Artyom Pavlov
 - `itoa 1.0.18`
+- `js-sys 0.3.107`: Copyright (c) 2014 Alex Crichton
 - `libc 0.2.191`: Copyright (c) The Rust Project Developers
 - `log 0.4.35`: Copyright (c) 2014 The Rust Project Developers
 - `md-5 0.11.0`: Copyright (c) 2016-2026 The RustCrypto Project Developers; Copyright (c) 2016 Artyom Pavlov; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2006-2009 Graydon Hoare
 - `memchr 2.8.3`: Copyright (c) 2015 Andrew Gallant
+- `nix 0.31.3`: Copyright (c) 2015 Carl Lerche + nix-rust Authors
 - `num-traits 0.2.19`: Copyright (c) 2014 The Rust Project Developers
 - `once_cell 1.21.4`
 - `openssl-probe 0.2.2`: Copyright (c) 2014 Alex Crichton
 - `pem-rfc7468 1.0.0`: Copyright (c) 2021-2025 The RustCrypto Project Developers
 - `percent-encoding 2.3.2`: Copyright (c) 2013-2025 The rust-url developers
+- `pin-project-lite 0.2.17`
 - `pkcs1 0.8.0-rc.5`: Copyright (c) 2021-2025 The RustCrypto Project Developers
 - `pkcs8 0.11.0`: Copyright (c) 2020-2026 The RustCrypto Project Developers
+- `proc-macro2 1.0.107`
+- `quote 1.0.47`
 - `r-efi 6.0.0`: Copyright (c) <year> <copyright holders>
 - `rand_core 0.10.1`: Copyright (c) 2018-2026 The Rand Project Developers
 - `rsa 0.10.0-rc.19`
 - `rustls 0.23.46`: Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 - `rustls-native-certs 0.8.5`: Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 - `rustls-pki-types 1.15.1`: Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
+- `rustyline 19.0.0`: Copyright (c) 2015 Katsu Kawakami & Rustyline authors
 - `schannel 0.1.30`: Copyright (c) 2015 steffengy
 - `security-framework 3.7.0`: Copyright (c) 2015 Steven Fackler
 - `security-framework-sys 2.17.0`: Copyright (c) 2015 Steven Fackler
 - `serde_core 1.0.229`
 - `serde_json 1.0.154`
+- `serde_spanned 1.1.2`: Copyright (c) Individual contributors
 - `sha1 0.11.0`: Copyright (c) 2016-2026 The RustCrypto Project Developers; Copyright (c) 2016 Artyom Pavlov; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2006-2009 Graydon Hoare
 - `sha2 0.11.1`: Copyright (c) 2016-2026 The RustCrypto Project Developers; Copyright (c) 2016 Artyom Pavlov; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2006-2009 Graydon Hoare
 - `signature 3.0.0`: Copyright (c) 2018-2026 RustCrypto Developers
+- `slab 0.4.12`: Copyright (c) 2019 Carl Lerche
 - `spki 0.8.1`: Copyright (c) 2021-2026 The RustCrypto Project Developers
+- `syn 2.0.119`
+- `syn 3.0.9`
+- `toml 1.1.8+spec-1.1.0`: Copyright (c) Individual contributors
+- `toml_datetime 1.1.2+spec-1.1.0`: Copyright (c) Individual contributors
+- `toml_parser 1.1.5+spec-1.1.0`: Copyright (c) Individual contributors
+- `toml_writer 1.1.3+spec-1.1.0`: Copyright (c) Individual contributors
 - `typenum 1.20.1`: Copyright (c) 2014 Paho Lurie-Gregg
+- `unicode-ident 1.0.27`
+- `unicode-segmentation 1.13.3`: Copyright (c) 2015 The Rust Project Developers
+- `unicode-width 0.2.3`: Copyright (c) 2015 The Rust Project Developers
 - `ureq 3.5.0`: Copyright (c) 2019 Martin Algesten
 - `ureq-proto 0.6.5`: Copyright 2022 Martin Algesten
 - `utf8-zero 0.8.1`
+- `utf8parse 0.2.2`: Copyright (c) 2016 Joe Wilm
 - `wasi 0.11.1+wasi-snapshot-preview1`
+- `wasm-bindgen 0.2.130`: Copyright (c) 2014 Alex Crichton
+- `wasm-bindgen-macro 0.2.130`: Copyright (c) 2014 Alex Crichton
+- `wasm-bindgen-macro-support 0.2.130`: Copyright (c) 2014 Alex Crichton
+- `wasm-bindgen-shared 0.2.130`: Copyright (c) 2014 Alex Crichton
+- `windows-core 0.62.2`: Copyright (c) <year> <copyright holders>
+- `windows-implement 0.60.2`: Copyright (c) <year> <copyright holders>
+- `windows-interface 0.59.3`: Copyright (c) <year> <copyright holders>
 - `windows-link 0.2.1`: Copyright (c) <year> <copyright holders>
+- `windows-result 0.4.1`: Copyright (c) <year> <copyright holders>
+- `windows-strings 0.5.1`: Copyright (c) <year> <copyright holders>
 - `windows-sys 0.52.0`: Copyright (c) <year> <copyright holders>
 - `windows-sys 0.61.2`: Copyright (c) <year> <copyright holders>
 - `windows-targets 0.52.6`: Copyright (c) <year> <copyright holders>
@@ -1330,6 +1398,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `windows_x86_64_gnu 0.52.6`: Copyright (c) <year> <copyright holders>
 - `windows_x86_64_gnullvm 0.52.6`: Copyright (c) <year> <copyright holders>
 - `windows_x86_64_msvc 0.52.6`: Copyright (c) <year> <copyright holders>
+- `winnow 1.0.4`
 - `zeroize 1.9.1`: Copyright (c) 2018-2026 The RustCrypto Project Developers
 - `zmij 1.0.23`
 
@@ -1369,6 +1438,50 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+### Unicode License v3
+
+- `unicode-ident 1.0.27`: Copyright © 1991-2023 Unicode, Inc.
+
+```text
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
 ```
 
 ### zlib License

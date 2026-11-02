@@ -41,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Java 26.1 player chat: unsigned messages in offline mode and verified signing sessions, message signatures
   and acknowledgements in online mode. Session and message fan-out includes the sender and late joiners;
   real-client validation of signed chat remains pending (`harpas-engine`, `harpas-java`, `harpas-server`).
+- `server.properties` with every Java 26.1 key: completed with vanilla's defaults and written back on startup
+  as vanilla does, with `HARPAS_*` environment variables overriding single keys. `harpas.toml` is checked, and
+  settings it cannot use are reported (`harpas-server`).
+- Server log in vanilla's format on the console and in `logs/latest.log`, archived into dated `.log.gz` files
+  at startup and when the day changes, with vanilla's UUID, join and lost connection messages. An interactive
+  console with history and completion runs `help`, `list` and `stop`; Ctrl-C stops the server
+  (`harpas-engine`, `harpas-server`).
 
 ### Changed
 

@@ -62,6 +62,15 @@ impl Handle {
     pub fn online_players(&self) -> u32 {
         self.online_players.load(Ordering::Relaxed)
     }
+
+    /// The names of the players in Play, in join order, as of the next packet phase.
+    pub fn player_names(&self) -> Result<Vec<String>, LogicStopped> {
+        let (sender, receiver) = mpsc::channel();
+        self.events
+            .send(Event::ListPlayers(sender))
+            .map_err(|_| LogicStopped)?;
+        receiver.recv().map_err(|_| LogicStopped)
+    }
 }
 
 /// A connection in Play; dropping it tells the logic thread that the connection has ended.
@@ -137,6 +146,7 @@ enum Event {
         input: player::Input,
     },
     Left(i32),
+    ListPlayers(Sender<Vec<String>>),
 }
 
 /// The next tick's target time. Short delays are caught up; a delay over two seconds resets the target.
@@ -207,6 +217,15 @@ impl TickWork for Game {
                     tracking_changed = true;
                 }
                 Event::Left(entity_id) => self.leave(entity_id),
+                Event::ListPlayers(reply) => {
+                    let names = self
+                        .players
+                        .iter()
+                        .filter(|p| !p.disconnecting)
+                        .map(|p| p.player.profile.name.clone())
+                        .collect();
+                    let _ = reply.send(names);
+                }
                 Event::Input { entity_id, input } => {
                     match input {
                         player::Input::ChatSession(session) => {
@@ -905,7 +924,9 @@ mod tests {
             )
             .unwrap();
         wait_for_count(&handle, 2);
+        assert_eq!(handle.player_names().unwrap(), ["Steve", "Alex"]);
         drop(first);
+        assert_eq!(handle.player_names().unwrap(), ["Alex"]);
         wait_for_count(&handle, 1);
         drop(second);
         wait_for_count(&handle, 0);

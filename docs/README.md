@@ -11,9 +11,9 @@ it will be validated, with sources for every external claim. The build order is 
 | [java-connection.md](java-connection.md) | Java connections: states, authentication, encryption, chat signing, abuse protection | Design |
 | [identity.md](identity.md) | Player identity: UUIDs and names for both editions, Floodgate compatibility | Design |
 | [commands.md](commands.md) | Commands and permissions: one Brigadier tree, Bukkit-style nodes, Bedrock command list | Design |
-| [jvm.md](jvm.md) | Embedded JVM for Bukkit/Paper plugins: bridge design, threading, JVM tuning | Design |
+| [jvm.md](jvm.md) | Embedded JVM for Bukkit/Paper plugins: bridge design, threading, JVM tuning | Design, measured in M1 |
 | [bedrock-interop.md](bedrock-interop.md) | Java ↔ Bedrock interoperability: shared encoding, blob cache, authentication, skins, hard problems | Design |
-| [nethernet.md](nethernet.md) | NetherNet transport for Bedrock: HTTP signaling, WebRTC data channels, robustness, performance | Design |
+| [nethernet.md](nethernet.md) | NetherNet transport for Bedrock: HTTP signaling, WebRTC data channels, robustness, performance | Prototype |
 | [protocol-codecs.md](protocol-codecs.md) | Java and Bedrock packet codecs generated from our own schema; currently supported client versions | Prototype |
 | [networks.md](networks.md) | Server networks: Velocity/BungeeCord forwarding, Bedrock transfers, Harpas networks without a proxy | Design |
 | [plugin-api.md](plugin-api.md) | Native plugin API: WIT definition, WASM and JVM hosts, languages, sandbox | Design |

@@ -119,12 +119,12 @@ step; joining by address does not need it.
 
 - **One UDP socket, many connections.** WebRTC connections are demultiplexed by address in user space; the
   WebRTC stack does no I/O itself, so receive and send stay batched (`recvmmsg`/`sendmmsg` on Linux)
-  *(measure)*.
+  *(measure in M6)*.
 - **Integration with shared batches.** A batch compressed once for many players
   ([bedrock-interop.md](bedrock-interop.md#5-encode-and-compress-once-per-audience)) is only encrypted per
-  connection, now by DTLS *(measure)*.
+  connection, now by DTLS *(measure in M6)*.
 - **Congestion control** is SCTP's own; its defaults are tuned against real clients on lossy and high-latency
-  links *(measure)*.
+  links *(measure in M6)*.
 
 ---
 
@@ -161,7 +161,8 @@ closed the channel.
 ## Open questions
 
 1. WebRTC stack: str0m worked for the prototype [12]; whether to keep it depends on its CPU and memory per
-   connection *(measure)*.
+   connection *(measure in M6, with the load test under [Testing](#testing))*. The M1 prototype answered
+   feasibility, not cost.
 2. HTTPS for signaling: how operators get a certificate the client trusts, and whether plain HTTP with the
    trust prompt is an acceptable default.
 3. Whether servers need Xbox Live signaling or LAN discovery for anything players expect.

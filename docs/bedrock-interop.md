@@ -155,7 +155,8 @@ Trade-off: a shared batch cannot be merged with that player's own packets, so th
 tick. Measured on one chunk column, sharing wins from the second viewer: 104 µs per viewer for two viewers
 instead of 203 µs, and 3.8 µs with 200 viewers, where the per-connection encryption is all that is left
 ([protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). That measurement used the old checksum and
-AES-CTR pass; DTLS replaces it *(measure)*, as does the cost of the extra batches.
+AES-CTR pass; DTLS replaces it, so the per-viewer cost and the cost of the extra batches are measured again
+over NetherNet in M6 *(measure)*.
 
 ### 6. Native authentication
 
@@ -262,7 +263,7 @@ hand-written exceptions, testing and the licensing constraints are described in
 |---|---|---|
 | Protocol reference | Mojang/bedrock-protocol-docs [13] | Official, for server partners. Read only; its files never enter the repository or the build (see [protocol-codecs.md](protocol-codecs.md)). Microsoft states the protocol is not a supported API and has no backward-compatibility guarantee [14] |
 | Block, item and entity mappings | GeyserMC/mappings [15] | MIT licensed (copyright GeyserMC), actively maintained. Contains block, item, biome, particle, sound and collision data. Reuse requires keeping the copyright and license notice in `THIRD_PARTY_NOTICES.md` |
-| NetherNet transport | Our own signaling and segment framing, on a WebRTC stack (open question) | See [nethernet.md](nethernet.md) |
+| NetherNet transport | Our own signaling and segment framing, on str0m, which the M1 prototype used; keeping it depends on its cost per connection | See [nethernet.md](nethernet.md#open-questions) |
 | Bedrock protocol codecs | Generated from our own schema | See [protocol-codecs.md](protocol-codecs.md) |
 | Skin signing | External signing service | Required for Java viewers (see [Skins](#skins)) |
 

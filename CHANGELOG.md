@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Java 26.1 Play packet codecs for joining, moving, seeing other players and chatting, with fixed byte arrays,
   bit flags, bit fields, registry holders, low-precision vectors and hand-written types in the schema
   (`harpas-protocol-java`, `harpas-protocol-codegen`).
+- A single logic thread with a 20 TPS tick skeleton and connection events, with player counts in the server
+  list updated when players enter and leave Play (`harpas-engine`, `harpas-server`).
 
 ### Changed
 

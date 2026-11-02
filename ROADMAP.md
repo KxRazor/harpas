@@ -71,7 +71,7 @@ and chats.
 - [x] Encryption and compression following `server.properties`.
 - [x] Configuration state with registry data for 26.1.
 - [ ] Abuse protection: connection limits, packet size limits, decompression limits, timeouts.
-- [ ] Logic thread with the vanilla tick loop skeleton ([docs/engine-core.md](docs/engine-core.md)).
+- [x] Logic thread with the vanilla tick loop skeleton ([docs/engine-core.md](docs/engine-core.md)).
 - [ ] Player entity, movement validation, player list, entity tracking between players.
 - [ ] Chat with signing, as in vanilla.
 - [ ] `server.properties` and `harpas.toml` loading; console and `logs/latest.log`

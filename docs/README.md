@@ -5,7 +5,7 @@ it will be validated, with sources for every external claim. The build order is 
 
 | Document | Scope | Status |
 |---|---|---|
-| [engine-core.md](engine-core.md) | Engine core: vanilla tick order on one logic thread, unobservable parallel work, vanilla-shaped storage | Design |
+| [engine-core.md](engine-core.md) | Engine core: vanilla tick order on one logic thread, unobservable parallel work, vanilla-shaped storage | In progress |
 | [versions.md](versions.md) | Version support: 26.x focus for every combination, server vs. client versions, translation | Design |
 | [world.md](world.md) | World: Anvil save format, vanilla data provisioning, generation, parity strategy | Design |
 | [java-connection.md](java-connection.md) | Java connections: states, authentication, encryption, chat signing, abuse protection | Design |

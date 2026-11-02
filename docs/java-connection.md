@@ -39,7 +39,9 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 - **No I/O in the state machine.** `harpas_java::Connection` takes the bytes read from the socket and produces
   the bytes to send, like the NetherNet transport ([nethernet.md](nethernet.md)). The `harpas` binary drives
   it with one thread per connection for now; the network runtime that replaces those threads is chosen with
-  the protection against abuse (below).
+  the protection against abuse (below). Connections queue entry and departure events for the logic thread's
+  packet phase; the resulting online count is used in server-list responses
+  ([engine-core.md](engine-core.md#1-vanilla-tick-order-on-one-logic-thread)).
 - **Framing:** a frame's VarInt length is at most 3 bytes and 2,097,151, as in vanilla; the length is checked
   before waiting for the frame, so a connection never buffers more than one frame.
 - **Handshake:** a Login or Transfer handshake with another protocol version gets vanilla's Login Disconnect,

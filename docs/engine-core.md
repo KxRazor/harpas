@@ -4,8 +4,9 @@ Scope: how the Rust engine runs the game in normal mode: the tick loop and its o
 parallel, how threads are laid out, how the world and entities are stored, and how plugins are called from
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
-Status: design. Nothing here is implemented. Facts about vanilla cite their source in
-[References](#references); everything else is a design decision of this project.
+Status: in progress. The logic thread and its tick skeleton are implemented; world and entity logic are still
+design. Facts about vanilla cite their source in [References](#references); everything else is a design
+decision of this project.
 
 ---
 
@@ -51,6 +52,17 @@ extra ticks [1]. Each server tick runs [1]:
 4. Autosave every 6,000 ticks.
 
 This order is observable (redstone timing, farms, entity interactions), so Harpas keeps it exactly.
+
+**Implemented skeleton:** the server starts one logic thread with a 50 ms tick target. It catches up after
+short delays and resets the target after a delay over two seconds. The tick has phases for functions,
+dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. All but
+connection bookkeeping are placeholders: there are no worlds, entities or saves yet.
+
+Connection threads queue a player's entry to Play and departure for the connection phase. The logic thread
+publishes the resulting player count for server-list responses; a connection's departure is queued even when
+it ends with an I/O or protocol error. The queue currently carries only these lifecycle events, not Play
+packets. Authentication and Keep Alive remain on the connection threads, and player entities, movement and
+chat are later tasks.
 
 ### 2. Parallel only where it cannot be observed
 

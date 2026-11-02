@@ -21,3 +21,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Removed
 
 ### Security
+
+- Generate fresh operating-system random session keys for the shared-encoding benchmark instead of fixed
+  byte patterns (`harpas-bench`).

@@ -87,7 +87,7 @@ and chats.
 vanilla for the same seed.
 
 - [x] Mojang EULA acceptance flow ([docs/world.md](docs/world.md#mojang-eula)).
-- [ ] Vanilla data provisioning from Mojang's server jar ([docs/world.md](docs/world.md#vanilla-game-data)).
+- [x] Vanilla data provisioning from Mojang's server jar ([docs/world.md](docs/world.md#vanilla-game-data)).
 - [ ] Paletted chunk sections with version counters ([docs/engine-core.md](docs/engine-core.md#6-chunks)).
 - [ ] Anvil reading and writing, including `.mcc` files; `level.dat` and player data.
 - [ ] Chunk loading, saving and sending on worker threads; non-blocking autosave.

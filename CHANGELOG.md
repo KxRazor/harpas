@@ -51,6 +51,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Graceful shutdown on `stop`, SIGINT, SIGTERM and SIGHUP: new connections are closed, players are disconnected
   with "Server closed", the logic thread stops, connections get five seconds to close and the terminal is
   restored before exiting (`harpas-engine`, `harpas-server`).
+- Protection against abusive Java connections: limits on connections not yet in Play (256 in total, 8 per
+  address), on new connections (20 per address per 10 seconds) and on login attempts (5 per address per
+  10 seconds, refused with "Connection throttled!"), a maximum packet size per state, and 30 seconds to log in
+  with vanilla's `slow_login` message. Loopback connections skip the per-address limits (`harpas-java`,
+  `harpas-server`).
 
 ### Changed
 

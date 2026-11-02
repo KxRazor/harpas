@@ -70,7 +70,7 @@ and chats.
 - [x] Online-mode authentication with Mojang's session server; offline mode.
 - [x] Encryption and compression following `server.properties`.
 - [x] Configuration state with registry data for 26.1.
-- [ ] Abuse protection: connection limits, packet size limits, decompression limits, timeouts.
+- [x] Abuse protection: connection limits, packet size limits, decompression limits, timeouts.
 - [x] Logic thread with the vanilla tick loop skeleton ([docs/engine-core.md](docs/engine-core.md)).
 - [x] Player entity, movement validation, player list, entity tracking between players in the void world;
       collision and vehicle movement follow with worlds and gameplay.

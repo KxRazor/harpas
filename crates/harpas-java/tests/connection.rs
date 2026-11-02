@@ -566,3 +566,147 @@ fn invalid_bytes_close_the_connection() {
         Err(ConnectionError::Frame(_))
     ));
 }
+
+/// The length prefix of a frame of `len` bytes, without the bytes.
+fn frame_header(len: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    harpas_protocol_java::codec::write_varint(&mut out, len as i32);
+    out
+}
+
+#[test]
+fn each_state_limits_its_packet_size_before_buffering() {
+    let info = offline();
+    let too_large = |len, limit| {
+        Err(ConnectionError::Frame(harpas_java::FrameError::TooLarge {
+            len,
+            limit,
+        }))
+    };
+
+    let mut connection = new_connection();
+    assert_eq!(
+        connection.receive(&frame_header(2000), &info),
+        too_large(2000, 1024)
+    );
+    assert!(connection.is_closed());
+
+    let mut connection = new_connection();
+    let bytes = [
+        handshake(775, handshaking::Intent::Status),
+        frame_header(300),
+    ]
+    .concat();
+    assert_eq!(connection.receive(&bytes, &info), too_large(300, 256));
+
+    let mut connection = new_connection();
+    let bytes = [
+        handshake(775, handshaking::Intent::Login),
+        frame_header(40_000),
+    ]
+    .concat();
+    assert_eq!(
+        connection.receive(&bytes, &info),
+        too_large(40_000, 32 * 1024)
+    );
+
+    let mut connection = logged_in(&info);
+    connection.take_output();
+    assert_eq!(
+        connection.receive(&frame_header(70_000), &info),
+        too_large(70_000, 64 * 1024)
+    );
+
+    // Play keeps vanilla's limit.
+    let mut connection = playing(&info, new_connection());
+    assert_eq!(connection.receive(&frame_header(70_000), &info), Ok(()));
+    assert!(!connection.is_closed());
+}
+
+#[test]
+fn connections_have_30_seconds_to_log_in() {
+    let info = offline();
+    let start = Instant::now();
+
+    // Vanilla's message in Login.
+    let mut connection = new_connection();
+    connection.tick(start).unwrap();
+    connection
+        .receive(&handshake(775, handshaking::Intent::Login), &info)
+        .unwrap();
+    connection.tick(start + Duration::from_secs(29)).unwrap();
+    assert_eq!(
+        connection.tick(start + Duration::from_secs(30)),
+        Err(ConnectionError::TimedOut)
+    );
+    assert!(connection.is_closed());
+    assert_eq!(
+        login_disconnect_reason(&connection.take_output()),
+        r#"{"translate":"multiplayer.disconnect.slow_login"}"#
+    );
+
+    // A handshake sent a byte at a time is closed all the same.
+    let mut connection = new_connection();
+    connection.tick(start).unwrap();
+    for byte in handshake(775, handshaking::Intent::Status).iter().take(3) {
+        connection.receive(&[*byte], &info).unwrap();
+    }
+    assert_eq!(
+        connection.tick(start + Duration::from_secs(30)),
+        Err(ConnectionError::TimedOut)
+    );
+    assert!(connection.take_output().is_empty());
+
+    // Players who logged in are left to Keep Alive.
+    let mut connection = new_connection();
+    connection.tick(start).unwrap();
+    let mut connection = logged_in_with(&info, connection);
+    connection.take_output();
+    assert_eq!(connection.tick(start + Duration::from_secs(31)), Ok(()));
+    assert!(!connection.is_closed());
+}
+
+#[test]
+fn logins_wait_for_admission_when_required() {
+    let info = offline();
+    let bytes = [
+        handshake(775, handshaking::Intent::Login),
+        login_start("Steve"),
+    ]
+    .concat();
+
+    let mut connection = new_connection();
+    connection.require_admission();
+    connection.receive(&bytes, &info).unwrap();
+    assert!(connection.awaits_admission());
+    assert_eq!(connection.state(), State::Login);
+    assert!(connection.take_output().is_empty());
+    connection.admit(&info).unwrap();
+    assert!(!connection.awaits_admission());
+    assert!(matches!(
+        login::clientbound::Packet::decode(&frames(&connection.take_output())[0]),
+        Ok(login::clientbound::Packet::LoginSuccess(_))
+    ));
+
+    let mut connection = new_connection();
+    connection.require_admission();
+    connection.receive(&bytes, &info).unwrap();
+    connection.refuse("Connection throttled! Please wait before reconnecting.");
+    assert!(connection.is_closed());
+    assert_eq!(
+        login_disconnect_reason(&connection.take_output()),
+        r#"{"text":"Connection throttled! Please wait before reconnecting."}"#
+    );
+
+    // Status pings are never held.
+    let mut connection = new_connection();
+    connection.require_admission();
+    let bytes = [
+        handshake(775, handshaking::Intent::Status),
+        status_request(),
+    ]
+    .concat();
+    connection.receive(&bytes, &info).unwrap();
+    assert!(!connection.awaits_admission());
+    assert!(!connection.take_output().is_empty());
+}

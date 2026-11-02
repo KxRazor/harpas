@@ -13,19 +13,21 @@ pub const MAX_FRAME_LEN: usize = (1 << 21) - 1;
 pub enum FrameError {
     /// The length prefix was longer than 3 bytes.
     LengthTooLong,
-    /// The frame was longer than [`MAX_FRAME_LEN`].
-    TooLarge(usize),
+    /// The frame was longer than the limit of the connection's state, at most [`MAX_FRAME_LEN`].
+    TooLarge {
+        /// Declared length.
+        len: usize,
+        /// The limit it is over.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for FrameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FrameError::LengthTooLong => f.write_str("frame length is wider than 21 bits"),
-            FrameError::TooLarge(len) => {
-                write!(
-                    f,
-                    "frame of {len} bytes is over the limit of {MAX_FRAME_LEN}"
-                )
+            FrameError::TooLarge { len, limit } => {
+                write!(f, "frame of {len} bytes is over the limit of {limit}")
             }
         }
     }
@@ -65,6 +67,11 @@ impl FrameReader {
 
     /// Takes the next complete frame, without its length prefix, or none until more bytes arrive.
     pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, FrameError> {
+        self.next_frame_within(MAX_FRAME_LEN)
+    }
+
+    /// Takes the next complete frame, refusing one longer than `limit` before its bytes arrive.
+    pub fn next_frame_within(&mut self, limit: usize) -> Result<Option<Vec<u8>>, FrameError> {
         let pending = self.pending();
         let mut len = 0usize;
         let mut prefix = 0;
@@ -81,8 +88,11 @@ impl FrameReader {
                 return Err(FrameError::LengthTooLong);
             }
         }
-        if len > MAX_FRAME_LEN {
-            return Err(FrameError::TooLarge(len));
+        if len > limit.min(MAX_FRAME_LEN) {
+            return Err(FrameError::TooLarge {
+                len,
+                limit: limit.min(MAX_FRAME_LEN),
+            });
         }
         if pending.len() < prefix + len {
             return Ok(None);
@@ -140,5 +150,14 @@ mod tests {
         let mut reader = FrameReader::default();
         reader.push(&[0xff, 0xff, 0x7f]);
         assert_eq!(reader.next_frame(), Ok(None));
+
+        // A state's limit applies to the length alone, before any of the frame arrives.
+        assert_eq!(
+            reader.next_frame_within(1024),
+            Err(FrameError::TooLarge {
+                len: MAX_FRAME_LEN,
+                limit: 1024
+            })
+        );
     }
 }

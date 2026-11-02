@@ -20,6 +20,9 @@ use crate::{legacy, registries, void_world};
 const OUTDATED_CLIENT_BELOW: i32 = 754;
 /// How often the server sends Keep Alive, and how long the client has to answer it, as in vanilla.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+/// Time a connection has to reach Configuration, as vanilla's 600-tick login timeout. It also ends status pings
+/// and handshakes sent a byte at a time.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// The data pack whose registry data the client must have: Harpas sends registry entries without their data.
 const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", v26_1::MINECRAFT_VERSION);
 /// Where players appear in the void world: above the middle of chunk (0, 0).
@@ -50,6 +53,22 @@ pub enum State {
     Closed,
 }
 
+/// Largest packet accepted in `state`, before and after decompression; the frame and decompression limits
+/// still cap it. Each is well above what a vanilla client sends in that state.
+fn packet_limit(state: State) -> usize {
+    match state {
+        // A handshake's address is at most 255 characters.
+        State::Handshaking => 1024,
+        State::Status => 256,
+        // Login Plugin and Cookie Responses, as from proxies, are the largest.
+        State::Login => 32 * 1024,
+        // Plugin messages are at most 32,767 bytes in vanilla.
+        State::Configuration => 64 * 1024,
+        State::Play => usize::MAX,
+        State::Closed => 0,
+    }
+}
+
 /// Why a connection was closed without a message to the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionError {
@@ -71,7 +90,7 @@ pub enum ConnectionError {
     },
     /// A player name with characters vanilla does not allow.
     InvalidUsername(String),
-    /// The client did not answer a Keep Alive in time, or answered with another ID.
+    /// The client did not answer a Keep Alive in time, answered with another ID, or did not log in in time.
     TimedOut,
     /// A compressed frame was invalid.
     Compression(CompressionError),
@@ -175,6 +194,9 @@ pub struct Connection {
     encryption: Option<Encryption>,
     compression: Option<Compression>,
     received_any: bool,
+    opened: Option<Instant>,
+    requires_admission: bool,
+    awaiting_admission: bool,
     status_sent: bool,
     login: LoginStep,
     auth_request: Option<AuthRequest>,
@@ -209,6 +231,9 @@ impl Connection {
             encryption: None,
             compression: None,
             received_any: false,
+            opened: None,
+            requires_admission: false,
+            awaiting_admission: false,
             status_sent: false,
             login: LoginStep::Start,
             auth_request: None,
@@ -398,6 +423,38 @@ impl Connection {
         self.update_view(f64::from(x) * 16.0, f64::from(z) * 16.0, Some(distance));
     }
 
+    /// Makes a handshake that asks to log in wait for [`admit`](Self::admit) or [`refuse`](Self::refuse), so that
+    /// the caller can limit login attempts before Login Start is read.
+    pub fn require_admission(&mut self) {
+        self.requires_admission = true;
+    }
+
+    /// Whether the connection waits for [`admit`](Self::admit) or [`refuse`](Self::refuse).
+    pub fn awaits_admission(&self) -> bool {
+        self.awaiting_admission
+    }
+
+    /// Lets a connection waiting for admission log in, handling the bytes it already sent.
+    pub fn admit(&mut self, info: &ServerInfo) -> Result<(), ConnectionError> {
+        if !self.awaiting_admission {
+            return Ok(());
+        }
+        self.awaiting_admission = false;
+        let result = self.handle_frames(info);
+        if result.is_err() {
+            self.state = State::Closed;
+        }
+        result
+    }
+
+    /// Refuses a connection waiting for admission with Login Disconnect and `text`, and closes it.
+    pub fn refuse(&mut self, text: &str) {
+        if self.awaiting_admission {
+            self.awaiting_admission = false;
+            self.disconnect_login(&format!(r#"{{"text":{}}}"#, json_string(text)));
+        }
+    }
+
     /// Handles bytes read from the socket. `info` is the server's current settings and list entry.
     pub fn receive(&mut self, bytes: &[u8], info: &ServerInfo) -> Result<(), ConnectionError> {
         if self.is_closed() {
@@ -427,9 +484,25 @@ impl Connection {
         result
     }
 
-    /// Does the connection's timed work: in Configuration and Play, sends Keep Alive every 15 seconds and
+    /// Does the connection's timed work. Until Configuration, the connection fails 30 seconds after the first
+    /// call, with vanilla's message in Login. In Configuration and Play, it sends Keep Alive every 15 seconds and
     /// fails if the client takes longer than that to answer.
     pub fn tick(&mut self, now: Instant) -> Result<(), ConnectionError> {
+        let opened = *self.opened.get_or_insert(now);
+        if matches!(
+            self.state,
+            State::Handshaking | State::Status | State::Login
+        ) {
+            if now.duration_since(opened) < LOGIN_TIMEOUT {
+                return Ok(());
+            }
+            if self.state == State::Login {
+                self.awaiting_admission = false;
+                self.disconnect_login(&translate("multiplayer.disconnect.slow_login", &[]));
+            }
+            self.state = State::Closed;
+            return Err(ConnectionError::TimedOut);
+        }
         if !matches!(self.state, State::Configuration | State::Play) {
             return Ok(());
         }
@@ -467,13 +540,18 @@ impl Connection {
     }
 
     fn handle_frames(&mut self, info: &ServerInfo) -> Result<(), ConnectionError> {
-        while !self.is_closed() {
-            let Some(frame) = self.frames.next_frame().map_err(ConnectionError::Frame)? else {
+        while !self.is_closed() && !self.awaiting_admission {
+            let limit = packet_limit(self.state);
+            let Some(frame) = self
+                .frames
+                .next_frame_within(limit)
+                .map_err(ConnectionError::Frame)?
+            else {
                 break;
             };
             let frame = match &mut self.compression {
                 Some(compression) => compression
-                    .decompress(&frame)
+                    .decompress(&frame, limit)
                     .map_err(ConnectionError::Compression)?,
                 None => frame,
             };
@@ -530,6 +608,8 @@ impl Connection {
                         "multiplayer.disconnect.incompatible"
                     };
                     self.disconnect_login(&translate(key, &[v26_1::MINECRAFT_VERSION]));
+                } else if self.requires_admission {
+                    self.awaiting_admission = true;
                 }
             }
         }

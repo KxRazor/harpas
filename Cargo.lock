@@ -936,6 +936,7 @@ name = "harpas-server"
 version = "0.0.0"
 dependencies = [
  "base64",
+ "harpas-engine",
  "harpas-java",
  "harpas-protocol-java",
  "rustls",

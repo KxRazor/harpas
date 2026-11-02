@@ -6,6 +6,8 @@
 //!
 //! Design: `docs/world.md#save-format-anvil`.
 
+mod chunk;
 mod region;
 
+pub use chunk::{Chunk, ChunkSection};
 pub use region::{Region, region_of};

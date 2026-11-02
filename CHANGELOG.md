@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Region files: chunks read from and written to `r.x.z.mca` files, with external `c.x.z.mcc` files for large
   chunks, zlib writing, gzip and uncompressed reading, and atomic saves (`harpas-anvil`). NBT with a root name,
   as files store it (`harpas-core`).
+- Chunk NBT read into sections and written back, keeping every other field, with vanilla's fallbacks for
+  damaged sections (`harpas-anvil`), and the block state registry of Java 26.1 from minecraft-data
+  (`harpas-core`).
 
 ### Changed
 

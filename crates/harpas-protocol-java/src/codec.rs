@@ -8,6 +8,9 @@
 use std::error::Error;
 use std::fmt;
 
+pub use harpas_core::nbt::Nbt;
+use harpas_core::nbt::NbtError;
+
 /// A type that can be appended to a packet.
 pub trait Encode {
     /// Appends `self` to `buf`.
@@ -51,6 +54,8 @@ pub enum DecodeError {
     UnknownPacket(i32),
     /// Bytes were left after the last field of the packet.
     TrailingBytes(usize),
+    /// Network NBT was invalid.
+    Nbt(NbtError),
 }
 
 impl fmt::Display for DecodeError {
@@ -69,11 +74,18 @@ impl fmt::Display for DecodeError {
             }
             DecodeError::UnknownPacket(id) => write!(f, "unknown packet ID {id:#04x}"),
             DecodeError::TrailingBytes(len) => write!(f, "{len} bytes left after the packet"),
+            DecodeError::Nbt(e) => e.fmt(f),
         }
     }
 }
 
 impl Error for DecodeError {}
+
+impl From<NbtError> for DecodeError {
+    fn from(e: NbtError) -> Self {
+        DecodeError::Nbt(e)
+    }
+}
 
 /// Fails unless every byte of `input` was read.
 pub fn expect_end(input: &[u8]) -> Result<(), DecodeError> {
@@ -241,6 +253,16 @@ pub fn read_rest(input: &mut &[u8], max: usize) -> Result<Vec<u8>, DecodeError> 
 /// Writes bytes with no length; they run to the end of the packet.
 pub fn write_rest(buf: &mut Vec<u8>, value: &[u8]) {
     buf.extend_from_slice(value);
+}
+
+/// Reads network NBT: a tag type and its payload, with no root name. The root cannot be `TAG_End`.
+pub fn read_nbt(input: &mut &[u8]) -> Result<Nbt, DecodeError> {
+    Ok(Nbt::read_network(input)?)
+}
+
+/// Writes network NBT.
+pub fn write_nbt(buf: &mut Vec<u8>, value: &Nbt) {
+    value.write_network(buf);
 }
 
 /// Reads a `bool`, then a value with `read` when it is true.

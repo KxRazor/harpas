@@ -43,6 +43,9 @@ pub struct State {
     /// Enumerations used by the packets of this state.
     #[serde(default)]
     pub enums: BTreeMap<String, Enum>,
+    /// Tagged unions used by the packets of this state.
+    #[serde(default)]
+    pub unions: BTreeMap<String, Union>,
     /// minecraft-data packets that are written by hand instead of generated.
     #[serde(default)]
     pub hand_written: Vec<HandWritten>,
@@ -127,6 +130,34 @@ impl Enum {
         variants.sort_by_key(|(_, value)| *value);
         variants
     }
+}
+
+/// A tagged union: an integer or `bool` tag, then the fields of the variant it selects.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Union {
+    /// Documentation of the generated type.
+    pub doc: String,
+    /// Type of the tag on the wire.
+    #[serde(deserialize_with = "deserialize_prim")]
+    pub tag: Prim,
+    /// Variants, in the order they are declared.
+    pub variants: Vec<Variant>,
+}
+
+/// A variant of a tagged union.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Variant {
+    /// Rust variant name.
+    pub name: String,
+    /// Tag value that selects the variant; `0` and `1` for a `bool` tag.
+    pub tag: i64,
+    /// Value that follows the tag; none for a variant with nothing after it.
+    #[serde(default, rename = "type", deserialize_with = "deserialize_option_type")]
+    pub ty: Option<Type>,
+    /// Documentation of the generated variant.
+    pub doc: Option<String>,
 }
 
 /// A packet left out of generation.
@@ -278,7 +309,9 @@ pub enum Type {
         /// Element type.
         item: Box<Type>,
     },
-    /// A structure or enumeration of the same state.
+    /// `nbt`: network NBT, a tag type and its payload with no root name.
+    Nbt,
+    /// A structure, enumeration or union of the same state.
     Named(String),
 }
 
@@ -309,6 +342,7 @@ impl fmt::Display for Type {
                 item,
             } => write!(f, "array({max}, {item})"),
             Type::Array { max: None, item } => write!(f, "array({item})"),
+            Type::Nbt => f.write_str("nbt"),
             Type::Named(name) => f.write_str(name),
         }
     }
@@ -354,6 +388,7 @@ impl<'a> TypeParser<'a> {
             ("bytes", [Arg::Number(max)]) => Type::Bytes { max: Some(*max) },
             ("rest", []) => Type::Rest { max: None },
             ("rest", [Arg::Number(max)]) => Type::Rest { max: Some(*max) },
+            ("nbt", []) => Type::Nbt,
             ("option", [Arg::Type(inner)]) => Type::Option(Box::new(inner.clone())),
             ("array", [Arg::Type(item)]) => Type::Array {
                 max: None,
@@ -409,6 +444,12 @@ enum Arg {
 fn deserialize_type<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Type, D::Error> {
     let text = String::deserialize(deserializer)?;
     Type::parse(&text).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_option_type<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Type>, D::Error> {
+    deserialize_type(deserializer).map(Some)
 }
 
 fn deserialize_prim<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Prim, D::Error> {
@@ -491,6 +532,13 @@ impl State {
                 check_type_name(variant)?;
             }
         }
+        for (name, item) in &self.unions {
+            check_type_name(name)?;
+            if !type_names.insert(name.as_str()) {
+                return Err(format!("`{name}` is already a struct or an enum"));
+            }
+            check_union(self, name, item)?;
+        }
         for direction in [Direction::Clientbound, Direction::Serverbound] {
             let mut ids = BTreeSet::new();
             let mut names = BTreeSet::new();
@@ -526,6 +574,46 @@ impl State {
     pub fn is_enum(&self, name: &str) -> bool {
         self.enums.contains_key(name)
     }
+
+    /// Whether `name` is a structure, enumeration or union of this state.
+    pub fn defines(&self, name: &str) -> bool {
+        self.structs.contains_key(name)
+            || self.enums.contains_key(name)
+            || self.unions.contains_key(name)
+    }
+}
+
+fn check_union(state: &State, name: &str, item: &Union) -> Result<(), String> {
+    if item.tag != Prim::Bool && !item.tag.is_enum_repr() {
+        return Err(format!(
+            "union `{name}` cannot be tagged with `{}`",
+            item.tag.name()
+        ));
+    }
+    if item.variants.is_empty() {
+        return Err(format!("union `{name}` has no variants"));
+    }
+    let mut names = BTreeSet::new();
+    let mut tags = BTreeSet::new();
+    for variant in &item.variants {
+        check_type_name(&variant.name)?;
+        if !names.insert(variant.name.as_str()) {
+            return Err(format!("variant `{name}::{}` is repeated", variant.name));
+        }
+        if !tags.insert(variant.tag) {
+            return Err(format!("union `{name}` repeats tag {}", variant.tag));
+        }
+        if item.tag == Prim::Bool && !matches!(variant.tag, 0 | 1) {
+            return Err(format!(
+                "variant `{name}::{}` has tag {}, but a `bool` tag is 0 or 1",
+                variant.name, variant.tag
+            ));
+        }
+        if let Some(ty) = &variant.ty {
+            check_type_refs(state, name, ty)?;
+        }
+    }
+    Ok(())
 }
 
 fn check_fields(state: &State, owner: &str, fields: &[Field]) -> Result<(), String> {
@@ -550,13 +638,9 @@ fn check_fields(state: &State, owner: &str, fields: &[Field]) -> Result<(), Stri
 fn check_type_refs(state: &State, owner: &str, ty: &Type) -> Result<(), String> {
     match ty {
         Type::Named(name) if name == owner => Err(format!("`{owner}` contains itself")),
-        Type::Named(name)
-            if !state.structs.contains_key(name) && !state.enums.contains_key(name) =>
-        {
-            Err(format!(
-                "`{owner}` uses `{name}`, which is not defined in this state"
-            ))
-        }
+        Type::Named(name) if !state.defines(name) => Err(format!(
+            "`{owner}` uses `{name}`, which is not defined in this state"
+        )),
         Type::Option(inner) | Type::Array { item: inner, .. } => {
             check_type_refs(state, owner, inner)
         }
@@ -599,6 +683,10 @@ mod tests {
         assert_eq!(Type::parse("bytes").unwrap(), Type::Bytes { max: None });
         assert_eq!(Type::parse("varint").unwrap(), Type::Prim(Prim::VarInt));
         assert_eq!(
+            Type::parse("option(nbt)").unwrap().to_string(),
+            "option(nbt)"
+        );
+        assert_eq!(
             Type::parse("Property").unwrap(),
             Type::Named("Property".into())
         );
@@ -616,6 +704,7 @@ mod tests {
             "array(16)",
             "u16 u8",
             "varint(1)",
+            "nbt(1)",
         ] {
             assert!(Type::parse(text).is_err(), "`{text}` was accepted");
         }
@@ -630,5 +719,45 @@ mod tests {
         let repeated = "[[serverbound]]\nid = 0\nname = \"A\"\nmcdata = \"a\"\ndoc = \"A.\"\n\n[[serverbound]]\nid = 0\nname = \"B\"\nmcdata = \"b\"\ndoc = \"B.\"\n";
         let state: State = toml::from_str(repeated).unwrap();
         assert!(state.validate().unwrap_err().contains("repeated"));
+    }
+
+    #[test]
+    fn rejects_invalid_unions() {
+        let union = |tag: &str, variants: &str| {
+            let text =
+                format!("[unions.U]\ndoc = \"U.\"\ntag = \"{tag}\"\nvariants = [{variants}]\n");
+            let state: State = toml::from_str(&text).unwrap();
+            state.validate()
+        };
+        assert!(
+            union(
+                "bool",
+                "{ name = \"A\", tag = 1, type = \"nbt\" }, { name = \"B\", tag = 0 }"
+            )
+            .is_ok()
+        );
+        assert!(
+            union("bool", "{ name = \"A\", tag = 2 }")
+                .unwrap_err()
+                .contains("0 or 1")
+        );
+        assert!(
+            union(
+                "varint",
+                "{ name = \"A\", tag = 0 }, { name = \"B\", tag = 0 }"
+            )
+            .unwrap_err()
+            .contains("repeats")
+        );
+        assert!(
+            union("varint", "{ name = \"A\", tag = 0, type = \"Missing\" }")
+                .unwrap_err()
+                .contains("Missing")
+        );
+        assert!(
+            union("f32", "{ name = \"A\", tag = 0 }")
+                .unwrap_err()
+                .contains("cannot be tagged")
+        );
     }
 }

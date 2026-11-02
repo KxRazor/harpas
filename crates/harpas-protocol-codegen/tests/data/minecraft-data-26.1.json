@@ -44,12 +44,114 @@
         "countType": "varint"
       }
     ],
+    "tags": [
+      "array",
+      {
+        "countType": "varint",
+        "type": [
+          "container",
+          [
+            {
+              "name": "tagName",
+              "type": "string"
+            },
+            {
+              "name": "entries",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "varint"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    ],
+    "packet_common_settings": [
+      "container",
+      [
+        {
+          "name": "locale",
+          "type": "string"
+        },
+        {
+          "name": "viewDistance",
+          "type": "i8"
+        },
+        {
+          "name": "chatFlags",
+          "type": "varint"
+        },
+        {
+          "name": "chatColors",
+          "type": "bool"
+        },
+        {
+          "name": "skinParts",
+          "type": "u8"
+        },
+        {
+          "name": "mainHand",
+          "type": "varint"
+        },
+        {
+          "name": "enableTextFiltering",
+          "type": "bool"
+        },
+        {
+          "name": "enableServerListing",
+          "type": "bool"
+        },
+        {
+          "name": "particleStatus",
+          "type": [
+            "mapper",
+            {
+              "type": "varint",
+              "mappings": {
+                "0": "all",
+                "1": "decreased",
+                "2": "minimal"
+              }
+            }
+          ]
+        }
+      ]
+    ],
     "packet_common_cookie_request": [
       "container",
       [
         {
           "name": "cookie",
           "type": "string"
+        }
+      ]
+    ],
+    "packet_common_store_cookie": [
+      "container",
+      [
+        {
+          "name": "key",
+          "type": "string"
+        },
+        {
+          "name": "value",
+          "type": "ByteArray"
+        }
+      ]
+    ],
+    "packet_common_transfer": [
+      "container",
+      [
+        {
+          "name": "host",
+          "type": "string"
+        },
+        {
+          "name": "port",
+          "type": "varint"
         }
       ]
     ],
@@ -65,6 +167,193 @@
           "type": [
             "option",
             "ByteArray"
+          ]
+        }
+      ]
+    ],
+    "packet_common_select_known_packs": [
+      "container",
+      [
+        {
+          "name": "packs",
+          "type": [
+            "array",
+            {
+              "countType": "varint",
+              "type": [
+                "container",
+                [
+                  {
+                    "name": "namespace",
+                    "type": "string"
+                  },
+                  {
+                    "name": "id",
+                    "type": "string"
+                  },
+                  {
+                    "name": "version",
+                    "type": "string"
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    ],
+    "packet_common_custom_report_details": [
+      "container",
+      [
+        {
+          "name": "details",
+          "type": [
+            "array",
+            {
+              "countType": "varint",
+              "type": [
+                "container",
+                [
+                  {
+                    "name": "key",
+                    "type": "string"
+                  },
+                  {
+                    "name": "value",
+                    "type": "string"
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    ],
+    "packet_common_remove_resource_pack": [
+      "container",
+      [
+        {
+          "name": "uuid",
+          "type": [
+            "option",
+            "UUID"
+          ]
+        }
+      ]
+    ],
+    "packet_common_add_resource_pack": [
+      "container",
+      [
+        {
+          "name": "uuid",
+          "type": "UUID"
+        },
+        {
+          "name": "url",
+          "type": "string"
+        },
+        {
+          "name": "hash",
+          "type": "string"
+        },
+        {
+          "name": "forced",
+          "type": "bool"
+        },
+        {
+          "name": "promptMessage",
+          "type": [
+            "option",
+            "anonymousNbt"
+          ]
+        }
+      ]
+    ],
+    "ServerLinkType": [
+      "mapper",
+      {
+        "type": "varint",
+        "mappings": {
+          "0": "bug_report",
+          "1": "community_guidelines",
+          "2": "support",
+          "3": "status",
+          "4": "feedback",
+          "5": "community",
+          "6": "website",
+          "7": "forums",
+          "8": "news",
+          "9": "announcements"
+        }
+      }
+    ],
+    "packet_common_server_links": [
+      "container",
+      [
+        {
+          "name": "links",
+          "type": [
+            "array",
+            {
+              "countType": "varint",
+              "type": [
+                "container",
+                [
+                  {
+                    "name": "hasKnownType",
+                    "type": "bool"
+                  },
+                  {
+                    "name": "knownType",
+                    "type": [
+                      "switch",
+                      {
+                        "compareTo": "hasKnownType",
+                        "fields": {
+                          "true": "ServerLinkType"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "name": "unknownType",
+                    "type": [
+                      "switch",
+                      {
+                        "compareTo": "hasKnownType",
+                        "fields": {
+                          "false": "anonymousNbt"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "name": "link",
+                    "type": "string"
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    ],
+    "packet_common_clear_dialog": [
+      "container",
+      []
+    ],
+    "packet_common_custom_click_action": [
+      "container",
+      [
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "nbt",
+          "type": [
+            "option",
+            "anonymousNbt"
           ]
         }
       ]
@@ -519,6 +808,323 @@
       }
     }
   },
-  "configuration": {},
+  "configuration": {
+    "toClient": {
+      "types": {
+        "packet_code_of_conduct": [
+          "container",
+          [
+            {
+              "name": "contents",
+              "type": "string"
+            }
+          ]
+        ],
+        "packet_custom_payload": [
+          "container",
+          [
+            {
+              "name": "channel",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "restBuffer"
+            }
+          ]
+        ],
+        "packet_disconnect": [
+          "container",
+          [
+            {
+              "name": "reason",
+              "type": "anonymousNbt"
+            }
+          ]
+        ],
+        "packet_finish_configuration": [
+          "container",
+          []
+        ],
+        "packet_keep_alive": [
+          "container",
+          [
+            {
+              "name": "keepAliveId",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet_ping": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "i32"
+            }
+          ]
+        ],
+        "packet_reset_chat": [
+          "container",
+          []
+        ],
+        "packet_registry_data": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "string"
+            },
+            {
+              "name": "entries",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "key",
+                        "type": "string"
+                      },
+                      {
+                        "name": "value",
+                        "type": [
+                          "option",
+                          "anonymousNbt"
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_feature_flags": [
+          "container",
+          [
+            {
+              "name": "features",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_tags": [
+          "container",
+          [
+            {
+              "name": "tags",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "tagType",
+                        "type": "string"
+                      },
+                      {
+                        "name": "tags",
+                        "type": "tags"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_show_dialog": [
+          "container",
+          [
+            {
+              "name": "dialog",
+              "type": "anonymousNbt"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "cookie_request",
+                    "0x01": "custom_payload",
+                    "0x02": "disconnect",
+                    "0x03": "finish_configuration",
+                    "0x04": "keep_alive",
+                    "0x05": "ping",
+                    "0x06": "reset_chat",
+                    "0x07": "registry_data",
+                    "0x08": "remove_resource_pack",
+                    "0x09": "add_resource_pack",
+                    "0x0a": "store_cookie",
+                    "0x0b": "transfer",
+                    "0x0c": "feature_flags",
+                    "0x0d": "tags",
+                    "0x0e": "select_known_packs",
+                    "0x0f": "custom_report_details",
+                    "0x10": "server_links",
+                    "0x11": "clear_dialog",
+                    "0x12": "show_dialog",
+                    "0x13": "code_of_conduct"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "cookie_request": "packet_common_cookie_request",
+                    "custom_payload": "packet_custom_payload",
+                    "disconnect": "packet_disconnect",
+                    "finish_configuration": "packet_finish_configuration",
+                    "keep_alive": "packet_keep_alive",
+                    "ping": "packet_ping",
+                    "reset_chat": "packet_reset_chat",
+                    "registry_data": "packet_registry_data",
+                    "remove_resource_pack": "packet_common_remove_resource_pack",
+                    "add_resource_pack": "packet_common_add_resource_pack",
+                    "store_cookie": "packet_common_store_cookie",
+                    "transfer": "packet_common_transfer",
+                    "feature_flags": "packet_feature_flags",
+                    "tags": "packet_tags",
+                    "select_known_packs": "packet_common_select_known_packs",
+                    "custom_report_details": "packet_common_custom_report_details",
+                    "server_links": "packet_common_server_links",
+                    "clear_dialog": "packet_common_clear_dialog",
+                    "show_dialog": "packet_show_dialog",
+                    "code_of_conduct": "packet_code_of_conduct"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "toServer": {
+      "types": {
+        "packet_accept_code_of_conduct": [
+          "container",
+          []
+        ],
+        "packet_custom_payload": [
+          "container",
+          [
+            {
+              "name": "channel",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "restBuffer"
+            }
+          ]
+        ],
+        "packet_finish_configuration": [
+          "container",
+          []
+        ],
+        "packet_keep_alive": [
+          "container",
+          [
+            {
+              "name": "keepAliveId",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet_pong": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "i32"
+            }
+          ]
+        ],
+        "packet_resource_pack_receive": [
+          "container",
+          [
+            {
+              "name": "uuid",
+              "type": "UUID"
+            },
+            {
+              "name": "result",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "settings",
+                    "0x01": "cookie_response",
+                    "0x02": "custom_payload",
+                    "0x03": "finish_configuration",
+                    "0x04": "keep_alive",
+                    "0x05": "pong",
+                    "0x06": "resource_pack_receive",
+                    "0x07": "select_known_packs",
+                    "0x08": "custom_click_action",
+                    "0x09": "accept_code_of_conduct"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "settings": "packet_common_settings",
+                    "cookie_response": "packet_common_cookie_response",
+                    "custom_payload": "packet_custom_payload",
+                    "finish_configuration": "packet_finish_configuration",
+                    "keep_alive": "packet_keep_alive",
+                    "pong": "packet_pong",
+                    "resource_pack_receive": "packet_resource_pack_receive",
+                    "select_known_packs": "packet_common_select_known_packs",
+                    "custom_click_action": "packet_common_custom_click_action",
+                    "accept_code_of_conduct": "packet_accept_code_of_conduct"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
   "play": {}
 }

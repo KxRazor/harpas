@@ -1,0 +1,354 @@
+# Configuration state: registries, tags, resource packs and client settings, between Login and Play.
+#
+# Limits follow minecraft.wiki's "Java Edition protocol/Packets". Text components are network NBT.
+
+[[clientbound]]
+id = 0x00
+name = "CookieRequest"
+mcdata = "cookie_request"
+doc = "Asks for a cookie stored by an earlier server."
+fields = [
+    { name = "key", type = "string(32767)", doc = "Identifier of the cookie." },
+]
+
+[[clientbound]]
+id = 0x01
+name = "PluginMessage"
+mcdata = "custom_payload"
+doc = "Data on a custom channel, such as `minecraft:brand`."
+fields = [
+    { name = "channel", type = "string(32767)", doc = "Identifier of the channel." },
+    { name = "data", type = "rest(1048576)" },
+]
+
+[[clientbound]]
+id = 0x02
+name = "Disconnect"
+mcdata = "disconnect"
+doc = "Closes the connection, with a reason shown to the player."
+fields = [
+    { name = "reason", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x03
+name = "FinishConfiguration"
+mcdata = "finish_configuration"
+doc = "Ends configuration; the client answers with Acknowledge Finish Configuration."
+
+[[clientbound]]
+id = 0x04
+name = "KeepAlive"
+mcdata = "keep_alive"
+doc = "Checks that the client is still there; it must answer with the same ID."
+fields = [
+    { name = "id", type = "i64" },
+]
+
+[[clientbound]]
+id = 0x05
+name = "Ping"
+mcdata = "ping"
+doc = "Asks the client for a Pong with the same ID."
+fields = [
+    { name = "id", type = "i32" },
+]
+
+[[clientbound]]
+id = 0x06
+name = "ResetChat"
+mcdata = "reset_chat"
+doc = "Clears the client's chat session state, as after a transfer."
+
+[[clientbound]]
+id = 0x07
+name = "RegistryData"
+mcdata = "registry_data"
+doc = "The entries of one synchronized registry."
+fields = [
+    { name = "registry", type = "string(32767)", doc = "Identifier of the registry, such as `minecraft:dimension_type`." },
+    { name = "entries", type = "array(RegistryEntry)" },
+]
+
+[[clientbound]]
+id = 0x08
+name = "RemoveResourcePack"
+mcdata = "remove_resource_pack"
+doc = "Removes one server resource pack, or all of them."
+fields = [
+    { name = "uuid", type = "option(uuid)", doc = "Pack to remove; none removes every pack." },
+]
+
+[[clientbound]]
+id = 0x09
+name = "AddResourcePack"
+mcdata = "add_resource_pack"
+doc = "Asks the client to download and apply a resource pack."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "url", type = "string(32767)" },
+    { name = "hash", type = "string(40)", doc = "SHA-1 of the pack as 40 hexadecimal digits, or empty." },
+    { name = "forced", type = "bool", doc = "Whether declining disconnects the player." },
+    { name = "prompt", type = "option(nbt)", doc = "Text component shown in the prompt." },
+]
+
+[[clientbound]]
+id = 0x0a
+name = "StoreCookie"
+mcdata = "store_cookie"
+doc = "Stores a cookie on the client, for later servers after a transfer."
+fields = [
+    { name = "key", type = "string(32767)", doc = "Identifier of the cookie." },
+    { name = "payload", type = "bytes(5120)" },
+]
+
+[[clientbound]]
+id = 0x0b
+name = "Transfer"
+mcdata = "transfer"
+doc = "Sends the client to another server."
+fields = [
+    { name = "host", type = "string(32767)" },
+    { name = "port", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x0c
+name = "FeatureFlags"
+mcdata = "feature_flags"
+doc = "Enabled feature flags, such as `minecraft:vanilla`."
+fields = [
+    { name = "features", type = "array(string(32767))", doc = "Identifiers of the flags." },
+]
+
+[[clientbound]]
+id = 0x0d
+name = "UpdateTags"
+mcdata = "tags"
+doc = "Tags of the synchronized registries."
+fields = [
+    { name = "registries", type = "array(RegistryTags)" },
+]
+
+[[clientbound]]
+id = 0x0e
+name = "SelectKnownPacks"
+mcdata = "select_known_packs"
+doc = "Data packs the server knows; the client answers with the ones it has, so their data need not be sent."
+fields = [
+    { name = "packs", type = "array(KnownPack)" },
+]
+
+[[clientbound]]
+id = 0x0f
+name = "CustomReportDetails"
+mcdata = "custom_report_details"
+doc = "Details added to crash reports and disconnect screens."
+fields = [
+    { name = "details", type = "array(32, ReportDetail)" },
+]
+
+[[clientbound]]
+id = 0x10
+name = "ServerLinks"
+mcdata = "server_links"
+doc = "Links shown in the pause menu."
+fields = [
+    { name = "links", type = "array(ServerLink)" },
+]
+
+[[clientbound]]
+id = 0x11
+name = "ClearDialog"
+mcdata = "clear_dialog"
+doc = "Closes the dialog the client is showing."
+
+[[clientbound]]
+id = 0x12
+name = "ShowDialog"
+mcdata = "show_dialog"
+doc = "Shows a dialog."
+fields = [
+    { name = "dialog", type = "nbt", doc = "The dialog, inline." },
+]
+
+[[clientbound]]
+id = 0x13
+name = "CodeOfConduct"
+mcdata = "code_of_conduct"
+doc = "Shows the server's code of conduct; the client answers with Accept Code of Conduct."
+fields = [
+    { name = "contents", type = "string(32767)" },
+]
+
+[[serverbound]]
+id = 0x00
+name = "ClientInformation"
+mcdata = "settings"
+doc = "The client's settings: language, view distance, chat and skin."
+fields = [
+    { name = "locale", type = "string(16)", doc = "Language, such as `en_us`." },
+    { name = "view_distance", type = "i8", doc = "View distance in chunks." },
+    { name = "chat_mode", type = "ChatMode" },
+    { name = "chat_colors", type = "bool" },
+    { name = "displayed_skin_parts", type = "u8", doc = "Bit mask of the visible skin layers." },
+    { name = "main_hand", type = "MainHand" },
+    { name = "enable_text_filtering", type = "bool" },
+    { name = "allow_server_listings", type = "bool", doc = "Whether the player may appear in the server list's player sample." },
+    { name = "particle_status", type = "ParticleStatus" },
+]
+
+[[serverbound]]
+id = 0x01
+name = "CookieResponse"
+mcdata = "cookie_response"
+doc = "Answer to a Cookie Request."
+fields = [
+    { name = "key", type = "string(32767)" },
+    { name = "payload", type = "option(bytes(5120))", doc = "None when the client has no such cookie." },
+]
+
+[[serverbound]]
+id = 0x02
+name = "PluginMessage"
+mcdata = "custom_payload"
+doc = "Data on a custom channel, such as `minecraft:brand`."
+fields = [
+    { name = "channel", type = "string(32767)", doc = "Identifier of the channel." },
+    { name = "data", type = "rest(32767)" },
+]
+
+[[serverbound]]
+id = 0x03
+name = "AcknowledgeFinishConfiguration"
+mcdata = "finish_configuration"
+doc = "Confirms Finish Configuration; the connection moves to the Play state."
+
+[[serverbound]]
+id = 0x04
+name = "KeepAlive"
+mcdata = "keep_alive"
+doc = "Answer to a Keep Alive, with its ID."
+fields = [
+    { name = "id", type = "i64" },
+]
+
+[[serverbound]]
+id = 0x05
+name = "Pong"
+mcdata = "pong"
+doc = "Answer to a Ping, with its ID."
+fields = [
+    { name = "id", type = "i32" },
+]
+
+[[serverbound]]
+id = 0x06
+name = "ResourcePackResponse"
+mcdata = "resource_pack_receive"
+doc = "Progress of a resource pack sent with Add Resource Pack."
+fields = [
+    { name = "uuid", type = "uuid" },
+    { name = "result", type = "ResourcePackResult" },
+]
+
+[[serverbound]]
+id = 0x07
+name = "SelectKnownPacks"
+mcdata = "select_known_packs"
+doc = "The known packs the client also has."
+fields = [
+    { name = "packs", type = "array(64, KnownPack)" },
+]
+
+[[serverbound]]
+id = 0x08
+name = "CustomClickAction"
+mcdata = "custom_click_action"
+doc = "A `custom` click event from a text component or dialog."
+fields = [
+    { name = "id", type = "string(32767)", doc = "Identifier of the action." },
+    { name = "payload", type = "option(nbt)" },
+]
+
+[[serverbound]]
+id = 0x09
+name = "AcceptCodeOfConduct"
+mcdata = "accept_code_of_conduct"
+doc = "The player accepted the code of conduct."
+
+[structs.RegistryEntry]
+doc = "An entry of a synchronized registry."
+fields = [
+    { name = "id", type = "string(32767)", doc = "Identifier of the entry." },
+    { name = "data", type = "option(nbt)", doc = "None when the client has the entry from a known pack." },
+]
+
+[structs.RegistryTags]
+doc = "The tags of one registry."
+fields = [
+    { name = "registry", type = "string(32767)", doc = "Identifier of the registry." },
+    { name = "tags", type = "array(Tag)" },
+]
+
+[structs.Tag]
+doc = "A tag and the registry entries in it."
+fields = [
+    { name = "name", type = "string(32767)", doc = "Identifier of the tag." },
+    { name = "entries", type = "array(varint)", doc = "Numeric IDs of the entries, in the order of Registry Data." },
+]
+
+[structs.KnownPack]
+doc = "A data pack, identified the same way on the server and the client."
+fields = [
+    { name = "namespace", type = "string(32767)" },
+    { name = "id", type = "string(32767)" },
+    { name = "version", type = "string(32767)" },
+]
+
+[structs.ReportDetail]
+doc = "A titled detail of a crash report."
+fields = [
+    { name = "title", type = "string(128)" },
+    { name = "description", type = "string(4096)" },
+]
+
+[structs.ServerLink]
+doc = "A link shown in the pause menu."
+fields = [
+    { name = "label", type = "ServerLinkLabel" },
+    { name = "url", type = "string(32767)" },
+]
+
+[unions.ServerLinkLabel]
+doc = "Label of a server link: a built-in one, or any text."
+tag = "bool"
+variants = [
+    { name = "BuiltIn", tag = 1, type = "ServerLinkType" },
+    { name = "Custom", tag = 0, type = "nbt", doc = "Text component." },
+]
+
+[enums.ServerLinkType]
+doc = "Built-in labels of server links, translated by the client."
+repr = "varint"
+values = { BugReport = 0, CommunityGuidelines = 1, Support = 2, Status = 3, Feedback = 4, Community = 5, Website = 6, Forums = 7, News = 8, Announcements = 9 }
+
+[enums.ChatMode]
+doc = "Which chat messages the client shows."
+repr = "varint"
+values = { Enabled = 0, CommandsOnly = 1, Hidden = 2 }
+
+[enums.MainHand]
+doc = "The player's main hand."
+repr = "varint"
+values = { Left = 0, Right = 1 }
+
+[enums.ParticleStatus]
+doc = "How many particles the client shows."
+repr = "varint"
+values = { All = 0, Decreased = 1, Minimal = 2 }
+
+[enums.ResourcePackResult]
+doc = "Progress of a resource pack download."
+repr = "varint"
+values = { SuccessfullyLoaded = 0, Declined = 1, FailedDownload = 2, Accepted = 3, Downloaded = 4, InvalidUrl = 5, FailedReload = 6, Discarded = 7 }

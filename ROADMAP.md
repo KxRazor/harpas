@@ -61,6 +61,8 @@ documents.
 and chats.
 
 - [ ] Generated Java 26.1 codecs for all states ([docs/protocol-codecs.md](docs/protocol-codecs.md)).
+  - [x] Configuration, with network NBT and tagged unions in the schema format.
+  - [ ] Play.
 - [ ] Connection states, status ping and server list ([docs/java-connection.md](docs/java-connection.md)).
 - [ ] Online-mode authentication with Mojang's session server; offline mode.
 - [ ] Encryption and compression following `server.properties`.

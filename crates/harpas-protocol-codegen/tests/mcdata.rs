@@ -21,7 +21,7 @@ fn minecraft_data() -> Value {
 fn java_26_1_matches_minecraft_data() {
     let report = mcdata::check(&java_schema(), &minecraft_data());
     assert_eq!(report.errors, Vec::<String>::new());
-    assert_eq!(report.missing_states, ["configuration", "play"]);
+    assert_eq!(report.missing_states, ["play"]);
 }
 
 #[test]
@@ -38,6 +38,22 @@ fn differences_are_reported() {
     login
         .serverbound
         .retain(|packet| packet.mcdata != "cookie_response");
+    let configuration = version
+        .states
+        .iter_mut()
+        .find(|state| state.name == "configuration")
+        .unwrap();
+    configuration
+        .enums
+        .get_mut("ServerLinkType")
+        .unwrap()
+        .values
+        .remove("Announcements");
+    let label = configuration.unions.get_mut("ServerLinkLabel").unwrap();
+    label.variants.swap(0, 1);
+    for (variant, tag) in label.variants.iter_mut().zip([1, 0]) {
+        variant.tag = tag;
+    }
 
     let report = mcdata::check(&version, &minecraft_data());
     assert_eq!(
@@ -47,6 +63,8 @@ fn differences_are_reported() {
             "login serverbound LoginStart: ID 0x09, minecraft-data has 0x00",
             "login serverbound EncryptionResponse: wire types are (bytes), minecraft-data has (bytes, bytes)",
             "login serverbound: minecraft-data packet `cookie_response` (0x04) is not in the schema",
+            "configuration clientbound ServerLinks: wire types are (array((switch bool { 0: (varint[0, 1, 2, 3, 4, 5, 6, 7, 8]), 1: (nbt) }, string))), \
+             minecraft-data has (array((switch bool { 0: (nbt), 1: (varint[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) }, string)))",
         ]
     );
 }

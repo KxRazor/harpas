@@ -5,7 +5,7 @@
 
 use std::fmt::Write;
 
-use crate::schema::{Direction, Enum, Field, Packet, State, Type, Version};
+use crate::schema::{Direction, Enum, Field, Packet, Prim, State, Type, Union, Version};
 
 /// Rust keywords that need a raw identifier when used as field names.
 const KEYWORDS: [&str; 38] = [
@@ -53,6 +53,9 @@ fn state_module(out: &mut Out, version: &Version, state: &State) {
     out.line("use crate::codec::{self, Decode, DecodeError, Encode};");
     for (name, item) in &state.enums {
         enum_type(out, name, item);
+    }
+    for (name, item) in &state.unions {
+        union_type(out, name, item);
     }
     for (name, item) in &state.structs {
         struct_type(out, name, &item.doc, &item.fields);
@@ -223,6 +226,82 @@ fn enum_type(out: &mut Out, name: &str, item: &Enum) {
     out.close();
 }
 
+fn union_type(out: &mut Out, name: &str, item: &Union) {
+    let tag = |value: i64| match item.tag {
+        Prim::Bool => (value != 0).to_string(),
+        _ => value.to_string(),
+    };
+    out.line("");
+    doc(out, &item.doc);
+    out.line("#[derive(Debug, Clone, PartialEq)]");
+    out.open(&format!("pub enum {name}"));
+    for variant in &item.variants {
+        if let Some(text) = &variant.doc {
+            doc(out, text);
+            out.line("///");
+        }
+        out.line(&format!("/// Sent with tag `{}`.", tag(variant.tag)));
+        match &variant.ty {
+            Some(ty) => out.line(&format!("{}({}),", variant.name, rust_type(ty))),
+            None => out.line(&format!("{},", variant.name)),
+        }
+    }
+    out.close();
+
+    out.line("");
+    out.open(&format!("impl Encode for {name}"));
+    out.open("fn encode(&self, buf: &mut Vec<u8>)");
+    out.open("match self");
+    for variant in &item.variants {
+        let write_tag = format!(
+            "codec::write_{}(buf, {});",
+            item.tag.name(),
+            tag(variant.tag)
+        );
+        match &variant.ty {
+            Some(ty) => {
+                out.open(&format!("Self::{}(value) =>", variant.name));
+                out.line(&write_tag);
+                out.line(&format!("{};", encode(ty, "value", true)));
+                out.close();
+            }
+            None => out.line(&format!("Self::{} => {write_tag}", variant.name)),
+        }
+    }
+    out.close();
+    out.close();
+    out.close();
+
+    out.line("");
+    out.open(&format!("impl Decode for {name}"));
+    out.open("fn decode(input: &mut &[u8]) -> Result<Self, DecodeError>");
+    out.open(&format!("match codec::read_{}(input)?", item.tag.name()));
+    for variant in &item.variants {
+        match &variant.ty {
+            Some(ty) => out.line(&format!(
+                "{} => Ok(Self::{}({}?)),",
+                tag(variant.tag),
+                variant.name,
+                decode(ty)
+            )),
+            None => out.line(&format!(
+                "{} => Ok(Self::{}),",
+                tag(variant.tag),
+                variant.name
+            )),
+        }
+    }
+    // Both values of a `bool` tag can be covered, and then there is nothing left to reject.
+    if item.tag != Prim::Bool || item.variants.len() < 2 {
+        out.line(&format!(
+            "value => Err(DecodeError::UnknownEnumValue {{ name: {name:?}, value: i64::from(value) }}),"
+        ));
+    }
+    out.close();
+    out.close();
+    out.close();
+}
+
 fn struct_type(out: &mut Out, name: &str, text: &str, fields: &[Field]) {
     out.line("");
     doc(out, text);
@@ -282,6 +361,7 @@ fn rust_type(ty: &Type) -> String {
         Type::Bytes { .. } | Type::Rest { .. } => "Vec<u8>".to_owned(),
         Type::Option(inner) => format!("Option<{}>", rust_type(inner)),
         Type::Array { item, .. } => format!("Vec<{}>", rust_type(item)),
+        Type::Nbt => "codec::Nbt".to_owned(),
         Type::Named(name) => name.clone(),
     }
 }
@@ -300,6 +380,7 @@ fn decode(ty: &Type) -> String {
             max(limit),
             decoder(item)
         ),
+        Type::Nbt => "codec::read_nbt(input)".to_owned(),
         Type::Named(name) => format!("{name}::decode(input)"),
     }
 }
@@ -308,6 +389,7 @@ fn decode(ty: &Type) -> String {
 fn decoder(ty: &Type) -> String {
     match ty {
         Type::Prim(prim) => format!("codec::read_{}", prim.name()),
+        Type::Nbt => "codec::read_nbt".to_owned(),
         Type::Named(name) => format!("{name}::decode"),
         other => format!("|input| {}", decode(other)),
     }
@@ -333,19 +415,23 @@ fn encode(ty: &Type, value: &str, by_ref: bool) -> String {
         Type::String { .. } => format!("codec::write_string(buf, {borrowed})"),
         Type::Bytes { .. } => format!("codec::write_bytes(buf, {borrowed})"),
         Type::Rest { .. } => format!("codec::write_rest(buf, {borrowed})"),
+        Type::Nbt => format!("codec::write_nbt(buf, {borrowed})"),
         Type::Option(inner) => {
-            format!(
-                "codec::write_option(buf, {borrowed}, |buf, value| {})",
-                encode(inner, "value", true)
-            )
+            format!("codec::write_option(buf, {borrowed}, {})", encoder(inner))
         }
         Type::Array { item, .. } => {
-            format!(
-                "codec::write_array(buf, {borrowed}, |buf, value| {})",
-                encode(item, "value", true)
-            )
+            format!("codec::write_array(buf, {borrowed}, {})", encoder(item))
         }
         Type::Named(_) => format!("{value}.encode(buf)"),
+    }
+}
+
+/// A function or closure that takes `buf: &mut Vec<u8>` and `value: &T` and writes the value.
+fn encoder(ty: &Type) -> String {
+    match ty {
+        // The only writer that takes exactly `&T`; the others take `&str`, `&[u8]` or `T`.
+        Type::Nbt => "codec::write_nbt".to_owned(),
+        other => format!("|buf, value| {}", encode(other, "value", true)),
     }
 }
 
@@ -408,7 +494,6 @@ impl Out {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::Prim;
 
     #[test]
     fn nested_types_read_and_write_through_closures() {

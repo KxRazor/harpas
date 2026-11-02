@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Java 26.1 Configuration packet codecs, with network NBT, tagged unions and enum values checked against
   minecraft-data (`harpas-protocol-java`, `harpas-protocol-codegen`).
 - NBT values with Java Edition's network encoding (`harpas-core`).
+- Java 26.1 Play packet codecs for joining, moving, seeing other players and chatting, with fixed byte arrays,
+  bit flags, bit fields, registry holders, low-precision vectors and hand-written types in the schema
+  (`harpas-protocol-java`, `harpas-protocol-codegen`).
 
 ### Changed
 

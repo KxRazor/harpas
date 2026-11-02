@@ -44,6 +44,89 @@
         "countType": "varint"
       }
     ],
+    "RespawnData": [
+      "container",
+      [
+        {
+          "name": "globalPos",
+          "type": "GlobalPos"
+        },
+        {
+          "name": "yaw",
+          "type": "f32"
+        },
+        {
+          "name": "pitch",
+          "type": "f32"
+        }
+      ]
+    ],
+    "GlobalPos": [
+      "container",
+      [
+        {
+          "name": "dimensionName",
+          "type": "string"
+        },
+        {
+          "name": "location",
+          "type": "position"
+        }
+      ]
+    ],
+    "position": [
+      "bitfield",
+      [
+        {
+          "name": "x",
+          "size": 26,
+          "signed": true
+        },
+        {
+          "name": "z",
+          "size": 26,
+          "signed": true
+        },
+        {
+          "name": "y",
+          "size": 12,
+          "signed": true
+        }
+      ]
+    ],
+    "previousMessages": [
+      "array",
+      {
+        "countType": "varint",
+        "type": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "varint"
+            },
+            {
+              "name": "signature",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "id",
+                  "fields": {
+                    "0": [
+                      "buffer",
+                      {
+                        "count": 256
+                      }
+                    ]
+                  },
+                  "default": "void"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    ],
     "tags": [
       "array",
       {
@@ -68,6 +151,122 @@
           ]
         ]
       }
+    ],
+    "chunkBlockEntity": [
+      "container",
+      [
+        {
+          "anon": true,
+          "type": [
+            "bitfield",
+            [
+              {
+                "name": "x",
+                "size": 4,
+                "signed": false
+              },
+              {
+                "name": "z",
+                "size": 4,
+                "signed": false
+              }
+            ]
+          ]
+        },
+        {
+          "name": "y",
+          "type": "i16"
+        },
+        {
+          "name": "type",
+          "type": "varint"
+        },
+        {
+          "name": "nbtData",
+          "type": "anonOptionalNbt"
+        }
+      ]
+    ],
+    "chat_session": [
+      "option",
+      [
+        "container",
+        [
+          {
+            "name": "uuid",
+            "type": "UUID"
+          },
+          {
+            "name": "publicKey",
+            "type": [
+              "container",
+              [
+                {
+                  "name": "expireTime",
+                  "type": "i64"
+                },
+                {
+                  "name": "keyBytes",
+                  "type": [
+                    "buffer",
+                    {
+                      "countType": "varint"
+                    }
+                  ]
+                },
+                {
+                  "name": "keySignature",
+                  "type": [
+                    "buffer",
+                    {
+                      "countType": "varint"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    ],
+    "game_profile_name_prop": [
+      "container",
+      [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "properties",
+          "type": [
+            "array",
+            {
+              "countType": "varint",
+              "type": "GameProfileProperty"
+            }
+          ]
+        }
+      ]
+    ],
+    "GameProfileProperty": [
+      "container",
+      [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "value",
+          "type": "string"
+        },
+        {
+          "name": "signature",
+          "type": [
+            "option",
+            "string"
+          ]
+        }
+      ]
     ],
     "packet_common_settings": [
       "container",
@@ -1126,5 +1325,2167 @@
       }
     }
   },
-  "play": {}
+  "play": {
+    "toClient": {
+      "types": {
+        "SpawnInfo": [
+          "container",
+          [
+            {
+              "name": "dimension",
+              "type": "varint"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "hashedSeed",
+              "type": "i64"
+            },
+            {
+              "name": "gamemode",
+              "type": [
+                "mapper",
+                {
+                  "type": "i8",
+                  "mappings": {
+                    "0": "survival",
+                    "1": "creative",
+                    "2": "adventure",
+                    "3": "spectator"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "previousGamemode",
+              "type": "u8"
+            },
+            {
+              "name": "isDebug",
+              "type": "bool"
+            },
+            {
+              "name": "isFlat",
+              "type": "bool"
+            },
+            {
+              "name": "death",
+              "type": [
+                "option",
+                "GlobalPos"
+              ]
+            },
+            {
+              "name": "portalCooldown",
+              "type": "varint"
+            },
+            {
+              "name": "seaLevel",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_spawn_entity": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "objectUUID",
+              "type": "UUID"
+            },
+            {
+              "name": "type",
+              "type": "varint"
+            },
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "velocity",
+              "type": "lpVec3"
+            },
+            {
+              "name": "pitch",
+              "type": "i8"
+            },
+            {
+              "name": "yaw",
+              "type": "i8"
+            },
+            {
+              "name": "headPitch",
+              "type": "i8"
+            },
+            {
+              "name": "objectData",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_animation": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "animation",
+              "type": "u8"
+            }
+          ]
+        ],
+        "packet_chunk_batch_finished": [
+          "container",
+          [
+            {
+              "name": "batchSize",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_chunk_batch_start": [
+          "container",
+          []
+        ],
+        "packet_custom_payload": [
+          "container",
+          [
+            {
+              "name": "channel",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "restBuffer"
+            }
+          ]
+        ],
+        "packet_hide_message": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "varint"
+            },
+            {
+              "name": "signature",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "id",
+                  "fields": {
+                    "0": [
+                      "buffer",
+                      {
+                        "count": 256
+                      }
+                    ]
+                  },
+                  "default": "void"
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_kick_disconnect": [
+          "container",
+          [
+            {
+              "name": "reason",
+              "type": "anonymousNbt"
+            }
+          ]
+        ],
+        "ChatTypeParameterType": [
+          "mapper",
+          {
+            "type": "varint",
+            "mappings": {
+              "0": "content",
+              "1": "sender",
+              "2": "target"
+            }
+          }
+        ],
+        "ChatType": [
+          "container",
+          [
+            {
+              "name": "translationKey",
+              "type": "string"
+            },
+            {
+              "name": "parameters",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "ChatTypeParameterType"
+                }
+              ]
+            },
+            {
+              "name": "style",
+              "type": "anonymousNbt"
+            }
+          ]
+        ],
+        "ChatTypes": [
+          "container",
+          [
+            {
+              "name": "chat",
+              "type": "ChatType"
+            },
+            {
+              "name": "narration",
+              "type": "ChatType"
+            }
+          ]
+        ],
+        "ChatTypesHolder": [
+          "registryEntryHolder",
+          {
+            "baseName": "chatType",
+            "otherwise": {
+              "name": "data",
+              "type": "ChatTypes"
+            }
+          }
+        ],
+        "packet_profileless_chat": [
+          "container",
+          [
+            {
+              "name": "message",
+              "type": "anonymousNbt"
+            },
+            {
+              "name": "type",
+              "type": "ChatTypesHolder"
+            },
+            {
+              "name": "name",
+              "type": "anonymousNbt"
+            },
+            {
+              "name": "target",
+              "type": [
+                "option",
+                "anonymousNbt"
+              ]
+            }
+          ]
+        ],
+        "packet_sync_entity_position": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "dx",
+              "type": "f64"
+            },
+            {
+              "name": "dy",
+              "type": "f64"
+            },
+            {
+              "name": "dz",
+              "type": "f64"
+            },
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            },
+            {
+              "name": "onGround",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_unload_chunk": [
+          "container",
+          [
+            {
+              "name": "chunkZ",
+              "type": "i32"
+            },
+            {
+              "name": "chunkX",
+              "type": "i32"
+            }
+          ]
+        ],
+        "packet_game_state_change": [
+          "container",
+          [
+            {
+              "name": "reason",
+              "type": [
+                "mapper",
+                {
+                  "type": "u8",
+                  "mappings": {
+                    "0": "no_respawn_block_available",
+                    "1": "start_raining",
+                    "2": "stop_raining",
+                    "3": "change_game_mode",
+                    "4": "win_game",
+                    "5": "demo_event",
+                    "6": "play_arrow_hit_sound",
+                    "7": "rain_level_change",
+                    "8": "thunder_level_change",
+                    "9": "puffer_fish_sting",
+                    "10": "guardian_elder_effect",
+                    "11": "immediate_respawn",
+                    "12": "limited_crafting",
+                    "13": "level_chunks_load_start"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "gameMode",
+              "type": "f32"
+            }
+          ]
+        ],
+        "packet_keep_alive": [
+          "container",
+          [
+            {
+              "name": "keepAliveId",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet_map_chunk": [
+          "container",
+          [
+            {
+              "name": "x",
+              "type": "i32"
+            },
+            {
+              "name": "z",
+              "type": "i32"
+            },
+            {
+              "name": "heightmaps",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "type",
+                        "type": [
+                          "mapper",
+                          {
+                            "type": "varint",
+                            "mappings": {
+                              "0": "world_surface_wg",
+                              "1": "world_surface",
+                              "2": "ocean_floor_wg",
+                              "3": "ocean_floor",
+                              "4": "motion_blocking",
+                              "5": "motion_blocking_no_leaves"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "name": "data",
+                        "type": [
+                          "array",
+                          {
+                            "countType": "varint",
+                            "type": "i64"
+                          }
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "chunkData",
+              "type": "ByteArray"
+            },
+            {
+              "name": "blockEntities",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "chunkBlockEntity"
+                }
+              ]
+            },
+            {
+              "name": "skyLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "blockLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "emptySkyLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "emptyBlockLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "skyLight",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "array",
+                    {
+                      "countType": "varint",
+                      "type": "u8"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "blockLight",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "array",
+                    {
+                      "countType": "varint",
+                      "type": "u8"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_update_light": [
+          "container",
+          [
+            {
+              "name": "chunkX",
+              "type": "varint"
+            },
+            {
+              "name": "chunkZ",
+              "type": "varint"
+            },
+            {
+              "name": "skyLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "blockLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "emptySkyLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "emptyBlockLightMask",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "i64"
+                }
+              ]
+            },
+            {
+              "name": "skyLight",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "array",
+                    {
+                      "countType": "varint",
+                      "type": "u8"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "blockLight",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "array",
+                    {
+                      "countType": "varint",
+                      "type": "u8"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_login": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "i32"
+            },
+            {
+              "name": "isHardcore",
+              "type": "bool"
+            },
+            {
+              "name": "worldNames",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "name": "maxPlayers",
+              "type": "varint"
+            },
+            {
+              "name": "viewDistance",
+              "type": "varint"
+            },
+            {
+              "name": "simulationDistance",
+              "type": "varint"
+            },
+            {
+              "name": "reducedDebugInfo",
+              "type": "bool"
+            },
+            {
+              "name": "enableRespawnScreen",
+              "type": "bool"
+            },
+            {
+              "name": "doLimitedCrafting",
+              "type": "bool"
+            },
+            {
+              "name": "worldState",
+              "type": "SpawnInfo"
+            },
+            {
+              "name": "enforcesSecureChat",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_rel_entity_move": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "dX",
+              "type": "i16"
+            },
+            {
+              "name": "dY",
+              "type": "i16"
+            },
+            {
+              "name": "dZ",
+              "type": "i16"
+            },
+            {
+              "name": "onGround",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_entity_move_look": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "dX",
+              "type": "i16"
+            },
+            {
+              "name": "dY",
+              "type": "i16"
+            },
+            {
+              "name": "dZ",
+              "type": "i16"
+            },
+            {
+              "name": "yaw",
+              "type": "i8"
+            },
+            {
+              "name": "pitch",
+              "type": "i8"
+            },
+            {
+              "name": "onGround",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_entity_look": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "yaw",
+              "type": "i8"
+            },
+            {
+              "name": "pitch",
+              "type": "i8"
+            },
+            {
+              "name": "onGround",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_ping": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "i32"
+            }
+          ]
+        ],
+        "packet_ping_response": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet_abilities": [
+          "container",
+          [
+            {
+              "name": "flags",
+              "type": "i8"
+            },
+            {
+              "name": "flyingSpeed",
+              "type": "f32"
+            },
+            {
+              "name": "walkingSpeed",
+              "type": "f32"
+            }
+          ]
+        ],
+        "packet_player_chat": [
+          "container",
+          [
+            {
+              "name": "globalIndex",
+              "type": "varint"
+            },
+            {
+              "name": "senderUuid",
+              "type": "UUID"
+            },
+            {
+              "name": "index",
+              "type": "varint"
+            },
+            {
+              "name": "signature",
+              "type": [
+                "option",
+                [
+                  "buffer",
+                  {
+                    "count": 256
+                  }
+                ]
+              ]
+            },
+            {
+              "name": "plainMessage",
+              "type": "string"
+            },
+            {
+              "name": "timestamp",
+              "type": "i64"
+            },
+            {
+              "name": "salt",
+              "type": "i64"
+            },
+            {
+              "name": "previousMessages",
+              "type": "previousMessages"
+            },
+            {
+              "name": "unsignedChatContent",
+              "type": [
+                "option",
+                "anonymousNbt"
+              ]
+            },
+            {
+              "name": "filterType",
+              "type": "varint"
+            },
+            {
+              "name": "filterTypeMask",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "filterType",
+                  "fields": {
+                    "2": [
+                      "array",
+                      {
+                        "countType": "varint",
+                        "type": "i64"
+                      }
+                    ]
+                  },
+                  "default": "void"
+                }
+              ]
+            },
+            {
+              "name": "type",
+              "type": "ChatTypesHolder"
+            },
+            {
+              "name": "networkName",
+              "type": "anonymousNbt"
+            },
+            {
+              "name": "networkTargetName",
+              "type": [
+                "option",
+                "anonymousNbt"
+              ]
+            }
+          ]
+        ],
+        "packet_player_remove": [
+          "container",
+          [
+            {
+              "name": "players",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "UUID"
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_player_info": [
+          "container",
+          [
+            {
+              "name": "action",
+              "type": [
+                "bitflags",
+                {
+                  "type": "u8",
+                  "flags": [
+                    "add_player",
+                    "initialize_chat",
+                    "update_game_mode",
+                    "update_listed",
+                    "update_latency",
+                    "update_display_name",
+                    "update_hat",
+                    "update_list_order"
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "data",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "uuid",
+                        "type": "UUID"
+                      },
+                      {
+                        "name": "player",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/add_player",
+                            "fields": {
+                              "true": "game_profile_name_prop"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "chatSession",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/initialize_chat",
+                            "fields": {
+                              "true": "chat_session"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "gamemode",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/update_game_mode",
+                            "fields": {
+                              "true": "varint"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "listed",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/update_listed",
+                            "fields": {
+                              "true": "varint"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "latency",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/update_latency",
+                            "fields": {
+                              "true": "varint"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "displayName",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/update_display_name",
+                            "fields": {
+                              "true": [
+                                "option",
+                                "anonymousNbt"
+                              ]
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "listPriority",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/update_list_order",
+                            "fields": {
+                              "true": "varint"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "showHat",
+                        "type": [
+                          "switch",
+                          {
+                            "compareTo": "../action/update_hat",
+                            "fields": {
+                              "true": "bool"
+                            },
+                            "default": "void"
+                          }
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "PositionUpdateRelatives": [
+          "bitflags",
+          {
+            "type": "u32",
+            "flags": [
+              "x",
+              "y",
+              "z",
+              "yaw",
+              "pitch",
+              "dx",
+              "dy",
+              "dz",
+              "yawDelta"
+            ]
+          }
+        ],
+        "packet_position": [
+          "container",
+          [
+            {
+              "name": "teleportId",
+              "type": "varint"
+            },
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "dx",
+              "type": "f64"
+            },
+            {
+              "name": "dy",
+              "type": "f64"
+            },
+            {
+              "name": "dz",
+              "type": "f64"
+            },
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            },
+            {
+              "name": "flags",
+              "type": "PositionUpdateRelatives"
+            }
+          ]
+        ],
+        "packet_player_rotation": [
+          "container",
+          [
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "relativeYaw",
+              "type": "bool"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            },
+            {
+              "name": "relativePitch",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_entity_destroy": [
+          "container",
+          [
+            {
+              "name": "entityIds",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": "varint"
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_entity_head_rotation": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "headYaw",
+              "type": "i8"
+            }
+          ]
+        ],
+        "packet_server_data": [
+          "container",
+          [
+            {
+              "name": "motd",
+              "type": "anonymousNbt"
+            },
+            {
+              "name": "iconBytes",
+              "type": [
+                "option",
+                "ByteArray"
+              ]
+            }
+          ]
+        ],
+        "packet_update_view_position": [
+          "container",
+          [
+            {
+              "name": "chunkX",
+              "type": "varint"
+            },
+            {
+              "name": "chunkZ",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_update_view_distance": [
+          "container",
+          [
+            {
+              "name": "viewDistance",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_spawn_position": "RespawnData",
+        "packet_simulation_distance": [
+          "container",
+          [
+            {
+              "name": "distance",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_update_time": [
+          "container",
+          [
+            {
+              "name": "age",
+              "type": "i64"
+            },
+            {
+              "name": "clockUpdates",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "id",
+                        "type": "varint"
+                      },
+                      {
+                        "name": "totalTicks",
+                        "type": "varlong"
+                      },
+                      {
+                        "name": "partialTick",
+                        "type": "f32"
+                      },
+                      {
+                        "name": "rate",
+                        "type": "f32"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_start_configuration": [
+          "container",
+          []
+        ],
+        "packet_system_chat": [
+          "container",
+          [
+            {
+              "name": "content",
+              "type": "anonymousNbt"
+            },
+            {
+              "name": "isActionBar",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet_entity_teleport": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "dx",
+              "type": "f64"
+            },
+            {
+              "name": "dy",
+              "type": "f64"
+            },
+            {
+              "name": "dz",
+              "type": "f64"
+            },
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            },
+            {
+              "name": "flags",
+              "type": "PositionUpdateRelatives"
+            },
+            {
+              "name": "onGround",
+              "type": "bool"
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "bundle_delimiter",
+                    "0x01": "spawn_entity",
+                    "0x02": "animation",
+                    "0x03": "statistics",
+                    "0x04": "acknowledge_player_digging",
+                    "0x05": "block_break_animation",
+                    "0x06": "tile_entity_data",
+                    "0x07": "block_action",
+                    "0x08": "block_change",
+                    "0x09": "boss_bar",
+                    "0x0a": "difficulty",
+                    "0x0b": "chunk_batch_finished",
+                    "0x0c": "chunk_batch_start",
+                    "0x0d": "chunk_biomes",
+                    "0x0e": "clear_titles",
+                    "0x0f": "tab_complete",
+                    "0x10": "declare_commands",
+                    "0x11": "close_window",
+                    "0x12": "window_items",
+                    "0x13": "craft_progress_bar",
+                    "0x14": "set_slot",
+                    "0x15": "cookie_request",
+                    "0x16": "set_cooldown",
+                    "0x17": "chat_suggestions",
+                    "0x18": "custom_payload",
+                    "0x19": "damage_event",
+                    "0x1a": "debug_block_value",
+                    "0x1b": "debug_chunk_value",
+                    "0x1c": "debug_entity_value",
+                    "0x1d": "debug_event",
+                    "0x1e": "debug_sample",
+                    "0x1f": "hide_message",
+                    "0x20": "kick_disconnect",
+                    "0x21": "profileless_chat",
+                    "0x22": "entity_status",
+                    "0x23": "sync_entity_position",
+                    "0x24": "explosion",
+                    "0x25": "unload_chunk",
+                    "0x26": "game_state_change",
+                    "0x27": "game_rule_values",
+                    "0x28": "game_test_highlight_pos",
+                    "0x29": "open_horse_window",
+                    "0x2a": "hurt_animation",
+                    "0x2b": "initialize_world_border",
+                    "0x2c": "keep_alive",
+                    "0x2d": "map_chunk",
+                    "0x2e": "world_event",
+                    "0x2f": "world_particles",
+                    "0x30": "update_light",
+                    "0x31": "login",
+                    "0x32": "low_disk_space_warning",
+                    "0x33": "map",
+                    "0x34": "trade_list",
+                    "0x35": "rel_entity_move",
+                    "0x36": "entity_move_look",
+                    "0x37": "move_minecart",
+                    "0x38": "entity_look",
+                    "0x39": "vehicle_move",
+                    "0x3a": "open_book",
+                    "0x3b": "open_window",
+                    "0x3c": "open_sign_entity",
+                    "0x3d": "ping",
+                    "0x3e": "ping_response",
+                    "0x3f": "craft_recipe_response",
+                    "0x40": "abilities",
+                    "0x41": "player_chat",
+                    "0x42": "end_combat_event",
+                    "0x43": "enter_combat_event",
+                    "0x44": "death_combat_event",
+                    "0x45": "player_remove",
+                    "0x46": "player_info",
+                    "0x47": "face_player",
+                    "0x48": "position",
+                    "0x49": "player_rotation",
+                    "0x4a": "recipe_book_add",
+                    "0x4b": "recipe_book_remove",
+                    "0x4c": "recipe_book_settings",
+                    "0x4d": "entity_destroy",
+                    "0x4e": "remove_entity_effect",
+                    "0x4f": "reset_score",
+                    "0x50": "remove_resource_pack",
+                    "0x51": "add_resource_pack",
+                    "0x52": "respawn",
+                    "0x53": "entity_head_rotation",
+                    "0x54": "multi_block_change",
+                    "0x55": "select_advancement_tab",
+                    "0x56": "server_data",
+                    "0x57": "action_bar",
+                    "0x58": "world_border_center",
+                    "0x59": "world_border_lerp_size",
+                    "0x5a": "world_border_size",
+                    "0x5b": "world_border_warning_delay",
+                    "0x5c": "world_border_warning_reach",
+                    "0x5d": "camera",
+                    "0x5e": "update_view_position",
+                    "0x5f": "update_view_distance",
+                    "0x60": "set_cursor_item",
+                    "0x61": "spawn_position",
+                    "0x62": "scoreboard_display_objective",
+                    "0x63": "entity_metadata",
+                    "0x64": "attach_entity",
+                    "0x65": "entity_velocity",
+                    "0x66": "entity_equipment",
+                    "0x67": "experience",
+                    "0x68": "update_health",
+                    "0x69": "held_item_slot",
+                    "0x6a": "scoreboard_objective",
+                    "0x6b": "set_passengers",
+                    "0x6c": "set_player_inventory",
+                    "0x6d": "teams",
+                    "0x6e": "scoreboard_score",
+                    "0x6f": "simulation_distance",
+                    "0x70": "set_title_subtitle",
+                    "0x71": "update_time",
+                    "0x72": "set_title_text",
+                    "0x73": "set_title_time",
+                    "0x74": "entity_sound_effect",
+                    "0x75": "sound_effect",
+                    "0x76": "start_configuration",
+                    "0x77": "stop_sound",
+                    "0x78": "store_cookie",
+                    "0x79": "system_chat",
+                    "0x7a": "playerlist_header",
+                    "0x7b": "nbt_query_response",
+                    "0x7c": "collect",
+                    "0x7d": "entity_teleport",
+                    "0x7e": "test_instance_block_status",
+                    "0x7f": "set_ticking_state",
+                    "0x80": "step_tick",
+                    "0x81": "transfer",
+                    "0x82": "advancements",
+                    "0x83": "entity_update_attributes",
+                    "0x84": "entity_effect",
+                    "0x85": "declare_recipes",
+                    "0x86": "tags",
+                    "0x87": "set_projectile_power",
+                    "0x88": "custom_report_details",
+                    "0x89": "server_links",
+                    "0x8a": "tracked_waypoint",
+                    "0x8b": "clear_dialog",
+                    "0x8c": "show_dialog"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "bundle_delimiter": "void",
+                    "spawn_entity": "packet_spawn_entity",
+                    "animation": "packet_animation",
+                    "statistics": "packet_statistics",
+                    "acknowledge_player_digging": "packet_acknowledge_player_digging",
+                    "block_break_animation": "packet_block_break_animation",
+                    "tile_entity_data": "packet_tile_entity_data",
+                    "block_action": "packet_block_action",
+                    "block_change": "packet_block_change",
+                    "boss_bar": "packet_boss_bar",
+                    "difficulty": "packet_difficulty",
+                    "chunk_batch_finished": "packet_chunk_batch_finished",
+                    "chunk_batch_start": "packet_chunk_batch_start",
+                    "chunk_biomes": "packet_chunk_biomes",
+                    "clear_titles": "packet_clear_titles",
+                    "tab_complete": "packet_tab_complete",
+                    "declare_commands": "packet_declare_commands",
+                    "close_window": "packet_close_window",
+                    "window_items": "packet_window_items",
+                    "craft_progress_bar": "packet_craft_progress_bar",
+                    "set_slot": "packet_set_slot",
+                    "cookie_request": "packet_common_cookie_request",
+                    "set_cooldown": "packet_set_cooldown",
+                    "chat_suggestions": "packet_chat_suggestions",
+                    "custom_payload": "packet_custom_payload",
+                    "damage_event": "packet_damage_event",
+                    "debug_block_value": "packet_debug_block_value",
+                    "debug_chunk_value": "packet_debug_chunk_value",
+                    "debug_entity_value": "packet_debug_entity_value",
+                    "debug_event": "packet_debug_event",
+                    "debug_sample": "packet_debug_sample",
+                    "hide_message": "packet_hide_message",
+                    "kick_disconnect": "packet_kick_disconnect",
+                    "profileless_chat": "packet_profileless_chat",
+                    "entity_status": "packet_entity_status",
+                    "sync_entity_position": "packet_sync_entity_position",
+                    "explosion": "packet_explosion",
+                    "unload_chunk": "packet_unload_chunk",
+                    "game_state_change": "packet_game_state_change",
+                    "game_rule_values": "packet_game_rule_values",
+                    "game_test_highlight_pos": "packet_game_test_highlight_pos",
+                    "open_horse_window": "packet_open_horse_window",
+                    "hurt_animation": "packet_hurt_animation",
+                    "initialize_world_border": "packet_initialize_world_border",
+                    "keep_alive": "packet_keep_alive",
+                    "map_chunk": "packet_map_chunk",
+                    "world_event": "packet_world_event",
+                    "world_particles": "packet_world_particles",
+                    "update_light": "packet_update_light",
+                    "login": "packet_login",
+                    "low_disk_space_warning": "packet_low_disk_space_warning",
+                    "map": "packet_map",
+                    "trade_list": "packet_trade_list",
+                    "rel_entity_move": "packet_rel_entity_move",
+                    "entity_move_look": "packet_entity_move_look",
+                    "move_minecart": "packet_move_minecart",
+                    "entity_look": "packet_entity_look",
+                    "vehicle_move": "packet_vehicle_move",
+                    "open_book": "packet_open_book",
+                    "open_window": "packet_open_window",
+                    "open_sign_entity": "packet_open_sign_entity",
+                    "ping": "packet_ping",
+                    "ping_response": "packet_ping_response",
+                    "craft_recipe_response": "packet_craft_recipe_response",
+                    "abilities": "packet_abilities",
+                    "player_chat": "packet_player_chat",
+                    "end_combat_event": "packet_end_combat_event",
+                    "enter_combat_event": "packet_enter_combat_event",
+                    "death_combat_event": "packet_death_combat_event",
+                    "player_remove": "packet_player_remove",
+                    "player_info": "packet_player_info",
+                    "face_player": "packet_face_player",
+                    "position": "packet_position",
+                    "player_rotation": "packet_player_rotation",
+                    "recipe_book_add": "packet_recipe_book_add",
+                    "recipe_book_remove": "packet_recipe_book_remove",
+                    "recipe_book_settings": "packet_recipe_book_settings",
+                    "entity_destroy": "packet_entity_destroy",
+                    "remove_entity_effect": "packet_remove_entity_effect",
+                    "reset_score": "packet_reset_score",
+                    "remove_resource_pack": "packet_common_remove_resource_pack",
+                    "add_resource_pack": "packet_common_add_resource_pack",
+                    "respawn": "packet_respawn",
+                    "entity_head_rotation": "packet_entity_head_rotation",
+                    "multi_block_change": "packet_multi_block_change",
+                    "select_advancement_tab": "packet_select_advancement_tab",
+                    "server_data": "packet_server_data",
+                    "action_bar": "packet_action_bar",
+                    "world_border_center": "packet_world_border_center",
+                    "world_border_lerp_size": "packet_world_border_lerp_size",
+                    "world_border_size": "packet_world_border_size",
+                    "world_border_warning_delay": "packet_world_border_warning_delay",
+                    "world_border_warning_reach": "packet_world_border_warning_reach",
+                    "camera": "packet_camera",
+                    "update_view_position": "packet_update_view_position",
+                    "update_view_distance": "packet_update_view_distance",
+                    "set_cursor_item": "packet_set_cursor_item",
+                    "held_item_slot": "packet_held_item_slot",
+                    "spawn_position": "packet_spawn_position",
+                    "scoreboard_display_objective": "packet_scoreboard_display_objective",
+                    "entity_metadata": "packet_entity_metadata",
+                    "attach_entity": "packet_attach_entity",
+                    "entity_velocity": "packet_entity_velocity",
+                    "entity_equipment": "packet_entity_equipment",
+                    "experience": "packet_experience",
+                    "update_health": "packet_update_health",
+                    "scoreboard_objective": "packet_scoreboard_objective",
+                    "set_passengers": "packet_set_passengers",
+                    "set_player_inventory": "packet_set_player_inventory",
+                    "teams": "packet_teams",
+                    "scoreboard_score": "packet_scoreboard_score",
+                    "simulation_distance": "packet_simulation_distance",
+                    "set_title_subtitle": "packet_set_title_subtitle",
+                    "update_time": "packet_update_time",
+                    "set_title_text": "packet_set_title_text",
+                    "set_title_time": "packet_set_title_time",
+                    "entity_sound_effect": "packet_entity_sound_effect",
+                    "sound_effect": "packet_sound_effect",
+                    "start_configuration": "packet_start_configuration",
+                    "stop_sound": "packet_stop_sound",
+                    "store_cookie": "packet_common_store_cookie",
+                    "system_chat": "packet_system_chat",
+                    "playerlist_header": "packet_playerlist_header",
+                    "nbt_query_response": "packet_nbt_query_response",
+                    "collect": "packet_collect",
+                    "entity_teleport": "packet_entity_teleport",
+                    "test_instance_block_status": "packet_test_instance_block_status",
+                    "set_ticking_state": "packet_set_ticking_state",
+                    "step_tick": "packet_step_tick",
+                    "transfer": "packet_common_transfer",
+                    "advancements": "packet_advancements",
+                    "entity_update_attributes": "packet_entity_update_attributes",
+                    "entity_effect": "packet_entity_effect",
+                    "declare_recipes": "packet_declare_recipes",
+                    "tags": "packet_tags",
+                    "set_projectile_power": "packet_set_projectile_power",
+                    "custom_report_details": "packet_common_custom_report_details",
+                    "server_links": "packet_common_server_links",
+                    "tracked_waypoint": "packet_tracked_waypoint",
+                    "clear_dialog": "packet_common_clear_dialog",
+                    "show_dialog": "packet_show_dialog"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "toServer": {
+      "types": {
+        "packet_teleport_confirm": [
+          "container",
+          [
+            {
+              "name": "teleportId",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_message_acknowledgement": [
+          "container",
+          [
+            {
+              "name": "count",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_chat_command": [
+          "container",
+          [
+            {
+              "name": "command",
+              "type": "string"
+            }
+          ]
+        ],
+        "packet_chat_command_signed": [
+          "container",
+          [
+            {
+              "name": "command",
+              "type": "string"
+            },
+            {
+              "name": "timestamp",
+              "type": "i64"
+            },
+            {
+              "name": "salt",
+              "type": "i64"
+            },
+            {
+              "name": "argumentSignatures",
+              "type": [
+                "array",
+                {
+                  "countType": "varint",
+                  "type": [
+                    "container",
+                    [
+                      {
+                        "name": "argumentName",
+                        "type": "string"
+                      },
+                      {
+                        "name": "signature",
+                        "type": [
+                          "buffer",
+                          {
+                            "count": 256
+                          }
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "messageCount",
+              "type": "varint"
+            },
+            {
+              "name": "acknowledged",
+              "type": [
+                "buffer",
+                {
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "name": "checksum",
+              "type": "u8"
+            }
+          ]
+        ],
+        "packet_chat_message": [
+          "container",
+          [
+            {
+              "name": "message",
+              "type": "string"
+            },
+            {
+              "name": "timestamp",
+              "type": "i64"
+            },
+            {
+              "name": "salt",
+              "type": "i64"
+            },
+            {
+              "name": "signature",
+              "type": [
+                "option",
+                [
+                  "buffer",
+                  {
+                    "count": 256
+                  }
+                ]
+              ]
+            },
+            {
+              "name": "offset",
+              "type": "varint"
+            },
+            {
+              "name": "acknowledged",
+              "type": [
+                "buffer",
+                {
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "name": "checksum",
+              "type": "u8"
+            }
+          ]
+        ],
+        "packet_chat_session_update": [
+          "container",
+          [
+            {
+              "name": "sessionUUID",
+              "type": "UUID"
+            },
+            {
+              "name": "expireTime",
+              "type": "i64"
+            },
+            {
+              "name": "publicKey",
+              "type": "ByteArray"
+            },
+            {
+              "name": "signature",
+              "type": "ByteArray"
+            }
+          ]
+        ],
+        "packet_chunk_batch_received": [
+          "container",
+          [
+            {
+              "name": "chunksPerTick",
+              "type": "f32"
+            }
+          ]
+        ],
+        "packet_client_command": [
+          "container",
+          [
+            {
+              "name": "actionId",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0": "perform_respawn",
+                    "1": "request_stats",
+                    "2": "request_gamerule_values"
+                  }
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_tick_end": [
+          "container",
+          []
+        ],
+        "packet_configuration_acknowledged": [
+          "container",
+          []
+        ],
+        "packet_custom_payload": [
+          "container",
+          [
+            {
+              "name": "channel",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "restBuffer"
+            }
+          ]
+        ],
+        "packet_keep_alive": [
+          "container",
+          [
+            {
+              "name": "keepAliveId",
+              "type": "i64"
+            }
+          ]
+        ],
+        "MovementFlags": [
+          "bitflags",
+          {
+            "type": "u8",
+            "flags": [
+              "onGround",
+              "hasHorizontalCollision"
+            ]
+          }
+        ],
+        "packet_position": [
+          "container",
+          [
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "flags",
+              "type": "MovementFlags"
+            }
+          ]
+        ],
+        "packet_position_look": [
+          "container",
+          [
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            },
+            {
+              "name": "flags",
+              "type": "MovementFlags"
+            }
+          ]
+        ],
+        "packet_look": [
+          "container",
+          [
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            },
+            {
+              "name": "flags",
+              "type": "MovementFlags"
+            }
+          ]
+        ],
+        "packet_flying": [
+          "container",
+          [
+            {
+              "name": "flags",
+              "type": "MovementFlags"
+            }
+          ]
+        ],
+        "packet_ping_request": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "i64"
+            }
+          ]
+        ],
+        "packet_abilities": [
+          "container",
+          [
+            {
+              "name": "flags",
+              "type": "i8"
+            }
+          ]
+        ],
+        "packet_entity_action": [
+          "container",
+          [
+            {
+              "name": "entityId",
+              "type": "varint"
+            },
+            {
+              "name": "actionId",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0": "stop_sleeping",
+                    "1": "start_sprinting",
+                    "2": "stop_sprinting",
+                    "3": "start_riding_jump",
+                    "4": "stop_riding_jump",
+                    "5": "open_inventory",
+                    "6": "start_fall_flying"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "jumpBoost",
+              "type": "varint"
+            }
+          ]
+        ],
+        "packet_player_input": [
+          "container",
+          [
+            {
+              "name": "inputs",
+              "type": [
+                "bitflags",
+                {
+                  "type": "u8",
+                  "flags": [
+                    "forward",
+                    "backward",
+                    "left",
+                    "right",
+                    "jump",
+                    "shift",
+                    "sprint"
+                  ]
+                }
+              ]
+            }
+          ]
+        ],
+        "packet_player_loaded": [
+          "container",
+          []
+        ],
+        "packet_pong": [
+          "container",
+          [
+            {
+              "name": "id",
+              "type": "i32"
+            }
+          ]
+        ],
+        "packet_arm_animation": [
+          "container",
+          [
+            {
+              "name": "hand",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0": "main_hand",
+                    "1": "off_hand"
+                  }
+                }
+              ]
+            }
+          ]
+        ],
+        "packet": [
+          "container",
+          [
+            {
+              "name": "name",
+              "type": [
+                "mapper",
+                {
+                  "type": "varint",
+                  "mappings": {
+                    "0x00": "teleport_confirm",
+                    "0x01": "attack",
+                    "0x02": "query_block_nbt",
+                    "0x03": "select_bundle_item",
+                    "0x04": "set_difficulty",
+                    "0x05": "change_gamemode",
+                    "0x06": "message_acknowledgement",
+                    "0x07": "chat_command",
+                    "0x08": "chat_command_signed",
+                    "0x09": "chat_message",
+                    "0x0a": "chat_session_update",
+                    "0x0b": "chunk_batch_received",
+                    "0x0c": "client_command",
+                    "0x0d": "tick_end",
+                    "0x0e": "settings",
+                    "0x0f": "tab_complete",
+                    "0x10": "configuration_acknowledged",
+                    "0x11": "enchant_item",
+                    "0x12": "window_click",
+                    "0x13": "close_window",
+                    "0x14": "set_slot_state",
+                    "0x15": "cookie_response",
+                    "0x16": "custom_payload",
+                    "0x17": "debug_subscription_request",
+                    "0x18": "edit_book",
+                    "0x19": "query_entity_nbt",
+                    "0x1a": "use_entity",
+                    "0x1b": "generate_structure",
+                    "0x1c": "keep_alive",
+                    "0x1d": "lock_difficulty",
+                    "0x1e": "position",
+                    "0x1f": "position_look",
+                    "0x20": "look",
+                    "0x21": "flying",
+                    "0x22": "vehicle_move",
+                    "0x23": "steer_boat",
+                    "0x24": "pick_item_from_block",
+                    "0x25": "pick_item_from_entity",
+                    "0x26": "ping_request",
+                    "0x27": "craft_recipe_request",
+                    "0x28": "abilities",
+                    "0x29": "block_dig",
+                    "0x2a": "entity_action",
+                    "0x2b": "player_input",
+                    "0x2c": "player_loaded",
+                    "0x2d": "pong",
+                    "0x2e": "recipe_book",
+                    "0x2f": "displayed_recipe",
+                    "0x30": "name_item",
+                    "0x31": "resource_pack_receive",
+                    "0x32": "advancement_tab",
+                    "0x33": "select_trade",
+                    "0x34": "set_beacon_effect",
+                    "0x35": "held_item_slot",
+                    "0x36": "update_command_block",
+                    "0x37": "update_command_block_minecart",
+                    "0x38": "set_creative_slot",
+                    "0x39": "set_game_rule",
+                    "0x3a": "update_jigsaw_block",
+                    "0x3b": "update_structure_block",
+                    "0x3c": "set_test_block",
+                    "0x3d": "update_sign",
+                    "0x3e": "spectate_entity",
+                    "0x3f": "arm_animation",
+                    "0x40": "spectate",
+                    "0x41": "test_instance_block_action",
+                    "0x42": "block_place",
+                    "0x43": "use_item",
+                    "0x44": "custom_click_action"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "params",
+              "type": [
+                "switch",
+                {
+                  "compareTo": "name",
+                  "fields": {
+                    "teleport_confirm": "packet_teleport_confirm",
+                    "attack": "packet_attack",
+                    "query_block_nbt": "packet_query_block_nbt",
+                    "select_bundle_item": "packet_select_bundle_item",
+                    "set_difficulty": "packet_set_difficulty",
+                    "change_gamemode": "packet_change_gamemode",
+                    "message_acknowledgement": "packet_message_acknowledgement",
+                    "chat_command": "packet_chat_command",
+                    "chat_command_signed": "packet_chat_command_signed",
+                    "chat_message": "packet_chat_message",
+                    "chat_session_update": "packet_chat_session_update",
+                    "chunk_batch_received": "packet_chunk_batch_received",
+                    "client_command": "packet_client_command",
+                    "tick_end": "packet_tick_end",
+                    "settings": "packet_common_settings",
+                    "tab_complete": "packet_tab_complete",
+                    "configuration_acknowledged": "packet_configuration_acknowledged",
+                    "enchant_item": "packet_enchant_item",
+                    "window_click": "packet_window_click",
+                    "close_window": "packet_close_window",
+                    "set_slot_state": "packet_set_slot_state",
+                    "cookie_response": "packet_common_cookie_response",
+                    "custom_payload": "packet_custom_payload",
+                    "debug_subscription_request": "packet_debug_subscription_request",
+                    "edit_book": "packet_edit_book",
+                    "query_entity_nbt": "packet_query_entity_nbt",
+                    "use_entity": "packet_use_entity",
+                    "generate_structure": "packet_generate_structure",
+                    "keep_alive": "packet_keep_alive",
+                    "lock_difficulty": "packet_lock_difficulty",
+                    "position": "packet_position",
+                    "position_look": "packet_position_look",
+                    "look": "packet_look",
+                    "flying": "packet_flying",
+                    "vehicle_move": "packet_vehicle_move",
+                    "steer_boat": "packet_steer_boat",
+                    "pick_item_from_block": "packet_pick_item_from_block",
+                    "pick_item_from_entity": "packet_pick_item_from_entity",
+                    "ping_request": "packet_ping_request",
+                    "craft_recipe_request": "packet_craft_recipe_request",
+                    "abilities": "packet_abilities",
+                    "block_dig": "packet_block_dig",
+                    "entity_action": "packet_entity_action",
+                    "player_input": "packet_player_input",
+                    "player_loaded": "packet_player_loaded",
+                    "pong": "packet_pong",
+                    "recipe_book": "packet_recipe_book",
+                    "displayed_recipe": "packet_displayed_recipe",
+                    "name_item": "packet_name_item",
+                    "resource_pack_receive": "packet_resource_pack_receive",
+                    "advancement_tab": "packet_advancement_tab",
+                    "select_trade": "packet_select_trade",
+                    "set_beacon_effect": "packet_set_beacon_effect",
+                    "held_item_slot": "packet_held_item_slot",
+                    "update_command_block": "packet_update_command_block",
+                    "update_command_block_minecart": "packet_update_command_block_minecart",
+                    "set_creative_slot": "packet_set_creative_slot",
+                    "set_game_rule": "packet_set_game_rule",
+                    "update_jigsaw_block": "packet_update_jigsaw_block",
+                    "update_structure_block": "packet_update_structure_block",
+                    "set_test_block": "packet_set_test_block",
+                    "update_sign": "packet_update_sign",
+                    "spectate_entity": "packet_spectate_entity",
+                    "arm_animation": "packet_arm_animation",
+                    "spectate": "packet_spectate",
+                    "test_instance_block_action": "packet_test_instance_block_action",
+                    "block_place": "packet_block_place",
+                    "use_item": "packet_use_item",
+                    "custom_click_action": "packet_common_custom_click_action"
+                  }
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  }
 }

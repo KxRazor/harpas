@@ -1,0 +1,888 @@
+# Play state: the game itself.
+#
+# Partial: the packets a player needs to join a void world, move, see other players and chat. The other
+# minecraft-data packets are pending. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles
+# sent as one byte are 1/256 of a turn. Text components are network NBT.
+
+partial = true
+
+[[clientbound]]
+id = 0x00
+name = "BundleDelimiter"
+mcdata = "bundle_delimiter"
+doc = "Starts or ends a bundle: the client applies the packets between two delimiters in the same tick."
+
+[[clientbound]]
+id = 0x01
+name = "SpawnEntity"
+mcdata = "spawn_entity"
+doc = "Adds an entity, players included, to the client's world."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "uuid", type = "uuid" },
+    { name = "entity_type", type = "varint", doc = "Numeric ID in the `minecraft:entity_type` registry." },
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "velocity", type = "lp_vec3", doc = "Blocks per tick." },
+    { name = "pitch", type = "i8" },
+    { name = "yaw", type = "i8" },
+    { name = "head_yaw", type = "i8" },
+    { name = "data", type = "varint", doc = "Meaning depends on the entity type." },
+]
+
+[[clientbound]]
+id = 0x02
+name = "EntityAnimation"
+mcdata = "animation"
+doc = "Plays an animation on an entity, such as an arm swing."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "animation", type = "Animation" },
+]
+
+[[clientbound]]
+id = 0x0b
+name = "ChunkBatchFinished"
+mcdata = "chunk_batch_finished"
+doc = "Ends a batch of chunks; the client answers with Chunk Batch Received."
+fields = [
+    { name = "batch_size", type = "varint", doc = "Number of chunks in the batch." },
+]
+
+[[clientbound]]
+id = 0x0c
+name = "ChunkBatchStart"
+mcdata = "chunk_batch_start"
+doc = "Starts a batch of chunks."
+
+[[clientbound]]
+id = 0x18
+name = "PluginMessage"
+mcdata = "custom_payload"
+doc = "Data on a custom channel, such as `minecraft:brand`."
+fields = [
+    { name = "channel", type = "string(32767)", doc = "Identifier of the channel." },
+    { name = "data", type = "rest(1048576)" },
+]
+
+[[clientbound]]
+id = 0x1f
+name = "DeleteMessage"
+mcdata = "hide_message"
+doc = "Removes a signed chat message from the client's chat."
+fields = [
+    { name = "signature", type = "PackedSignature" },
+]
+
+[[clientbound]]
+id = 0x20
+name = "Disconnect"
+mcdata = "kick_disconnect"
+doc = "Closes the connection, with a reason shown to the player."
+fields = [
+    { name = "reason", type = "nbt", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x21
+name = "DisguisedChatMessage"
+mcdata = "profileless_chat"
+doc = "A chat message with no signature and no sender profile, such as one from the console."
+fields = [
+    { name = "message", type = "nbt", doc = "Text component." },
+    { name = "chat_type", type = "holder(ChatTypeData)" },
+    { name = "sender_name", type = "nbt", doc = "Text component." },
+    { name = "target_name", type = "option(nbt)", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x23
+name = "EntityPositionSync"
+mcdata = "sync_entity_position"
+doc = "Sets an entity's position, velocity and rotation exactly, correcting drift from relative moves."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "velocity_x", type = "f64" },
+    { name = "velocity_y", type = "f64" },
+    { name = "velocity_z", type = "f64" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "on_ground", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x25
+name = "UnloadChunk"
+mcdata = "unload_chunk"
+doc = "Removes a chunk from the client."
+fields = [
+    { name = "z", type = "i32" },
+    { name = "x", type = "i32" },
+]
+
+[[clientbound]]
+id = 0x26
+name = "GameEvent"
+mcdata = "game_state_change"
+doc = "A change in the game's state, such as the game mode or the weather."
+fields = [
+    { name = "event", type = "GameEventKind" },
+    { name = "value", type = "f32", doc = "Meaning depends on the event." },
+]
+
+[[clientbound]]
+id = 0x2c
+name = "KeepAlive"
+mcdata = "keep_alive"
+doc = "Checks that the client is still there; it must answer with the same ID."
+fields = [
+    { name = "id", type = "i64" },
+]
+
+[[clientbound]]
+id = 0x2d
+name = "ChunkDataAndUpdateLight"
+mcdata = "map_chunk"
+doc = "A chunk column: its sections, heightmaps, block entities and light."
+fields = [
+    { name = "x", type = "i32" },
+    { name = "z", type = "i32" },
+    { name = "heightmaps", type = "array(Heightmap)" },
+    { name = "data", type = "bytes(2097152)", doc = "The chunk sections, encoded by the server's chunk encoder." },
+    { name = "block_entities", type = "array(ChunkBlockEntity)" },
+    { name = "light", type = "LightData" },
+]
+
+[[clientbound]]
+id = 0x30
+name = "UpdateLight"
+mcdata = "update_light"
+doc = "New light for a chunk column the client has."
+fields = [
+    { name = "chunk_x", type = "varint" },
+    { name = "chunk_z", type = "varint" },
+    { name = "light", type = "LightData" },
+]
+
+[[clientbound]]
+id = 0x31
+name = "Login"
+mcdata = "login"
+doc = "Starts play: the player's entity, the dimensions and the world they spawn in."
+fields = [
+    { name = "entity_id", type = "i32" },
+    { name = "is_hardcore", type = "bool" },
+    { name = "dimensions", type = "array(string(32767))", doc = "Identifiers of every dimension on the server." },
+    { name = "max_players", type = "varint", doc = "Unused by the client." },
+    { name = "view_distance", type = "varint" },
+    { name = "simulation_distance", type = "varint" },
+    { name = "reduced_debug_info", type = "bool" },
+    { name = "enable_respawn_screen", type = "bool" },
+    { name = "do_limited_crafting", type = "bool" },
+    { name = "spawn", type = "SpawnInfo" },
+    { name = "enforces_secure_chat", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x35
+name = "UpdateEntityPosition"
+mcdata = "rel_entity_move"
+doc = "Moves an entity by less than 8 blocks on each axis."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "delta_x", type = "i16", doc = "Change in 1/4096 of a block." },
+    { name = "delta_y", type = "i16" },
+    { name = "delta_z", type = "i16" },
+    { name = "on_ground", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x36
+name = "UpdateEntityPositionAndRotation"
+mcdata = "entity_move_look"
+doc = "Moves and rotates an entity, moving it by less than 8 blocks on each axis."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "delta_x", type = "i16", doc = "Change in 1/4096 of a block." },
+    { name = "delta_y", type = "i16" },
+    { name = "delta_z", type = "i16" },
+    { name = "yaw", type = "i8" },
+    { name = "pitch", type = "i8" },
+    { name = "on_ground", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x38
+name = "UpdateEntityRotation"
+mcdata = "entity_look"
+doc = "Rotates an entity."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "yaw", type = "i8" },
+    { name = "pitch", type = "i8" },
+    { name = "on_ground", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x3d
+name = "Ping"
+mcdata = "ping"
+doc = "Asks the client for a Pong with the same ID."
+fields = [
+    { name = "id", type = "i32" },
+]
+
+[[clientbound]]
+id = 0x3e
+name = "PingResponse"
+mcdata = "ping_response"
+doc = "Answer to a Ping Request, echoing its ID."
+fields = [
+    { name = "id", type = "i64" },
+]
+
+[[clientbound]]
+id = 0x40
+name = "PlayerAbilities"
+mcdata = "abilities"
+doc = "The player's abilities, flying speed and field of view."
+fields = [
+    { name = "flags", type = "AbilityFlags" },
+    { name = "flying_speed", type = "f32" },
+    { name = "field_of_view_modifier", type = "f32" },
+]
+
+[[clientbound]]
+id = 0x41
+name = "PlayerChatMessage"
+mcdata = "player_chat"
+doc = "A chat message from a player, signed when secure chat is on."
+fields = [
+    { name = "global_index", type = "varint", doc = "Index of the message among every message sent to this client." },
+    { name = "sender", type = "uuid" },
+    { name = "index", type = "varint", doc = "Index of the message in the sender's chain." },
+    { name = "signature", type = "option(fixed(256))" },
+    { name = "message", type = "string(256)" },
+    { name = "timestamp", type = "i64", doc = "Milliseconds since the Unix epoch." },
+    { name = "salt", type = "i64" },
+    { name = "last_seen", type = "array(20, PackedSignature)", doc = "Signatures of the messages the sender had seen." },
+    { name = "unsigned_content", type = "option(nbt)", doc = "Text component shown instead of the message." },
+    { name = "filter_mask", type = "FilterMask" },
+    { name = "chat_type", type = "holder(ChatTypeData)" },
+    { name = "sender_name", type = "nbt", doc = "Text component." },
+    { name = "target_name", type = "option(nbt)", doc = "Text component." },
+]
+
+[[clientbound]]
+id = 0x45
+name = "PlayerInfoRemove"
+mcdata = "player_remove"
+doc = "Removes players from the player list."
+fields = [
+    { name = "players", type = "array(uuid)" },
+]
+
+[[clientbound]]
+id = 0x46
+name = "PlayerInfoUpdate"
+mcdata = "player_info"
+doc = "Adds players to the player list, or updates their entries."
+fields = [
+    { name = "updates", type = "PlayerInfoUpdates" },
+]
+
+[[clientbound]]
+id = 0x48
+name = "SynchronizePlayerPosition"
+mcdata = "position"
+doc = "Teleports the player; the client answers with Confirm Teleportation."
+fields = [
+    { name = "teleport_id", type = "varint" },
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "velocity_x", type = "f64" },
+    { name = "velocity_y", type = "f64" },
+    { name = "velocity_z", type = "f64" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "relatives", type = "TeleportFlags", doc = "Which values are added to the current ones." },
+]
+
+[[clientbound]]
+id = 0x49
+name = "PlayerRotation"
+mcdata = "player_rotation"
+doc = "Rotates the player without moving them."
+fields = [
+    { name = "yaw", type = "f32" },
+    { name = "relative_yaw", type = "bool" },
+    { name = "pitch", type = "f32" },
+    { name = "relative_pitch", type = "bool" },
+]
+
+[[clientbound]]
+id = 0x4d
+name = "RemoveEntities"
+mcdata = "entity_destroy"
+doc = "Removes entities from the client's world."
+fields = [
+    { name = "entity_ids", type = "array(varint)" },
+]
+
+[[clientbound]]
+id = 0x53
+name = "SetHeadRotation"
+mcdata = "entity_head_rotation"
+doc = "Turns an entity's head."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "head_yaw", type = "i8" },
+]
+
+[[clientbound]]
+id = 0x56
+name = "ServerData"
+mcdata = "server_data"
+doc = "The server's MOTD and icon, shown in the server list after the player leaves."
+fields = [
+    { name = "motd", type = "nbt", doc = "Text component." },
+    { name = "icon", type = "option(bytes)", doc = "PNG image." },
+]
+
+[[clientbound]]
+id = 0x5e
+name = "SetCenterChunk"
+mcdata = "update_view_position"
+doc = "The chunk the client's view distance is centered on."
+fields = [
+    { name = "x", type = "varint" },
+    { name = "z", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x5f
+name = "SetRenderDistance"
+mcdata = "update_view_distance"
+doc = "The server's view distance."
+fields = [
+    { name = "view_distance", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x61
+name = "SetDefaultSpawnPosition"
+mcdata = "spawn_position"
+doc = "Where compasses point and where the player respawns without a bed."
+fields = [
+    { name = "position", type = "GlobalPos" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+]
+
+[[clientbound]]
+id = 0x6f
+name = "SetSimulationDistance"
+mcdata = "simulation_distance"
+doc = "The server's simulation distance."
+fields = [
+    { name = "simulation_distance", type = "varint" },
+]
+
+[[clientbound]]
+id = 0x71
+name = "UpdateTime"
+mcdata = "update_time"
+doc = "The world's age and the state of its clocks."
+fields = [
+    { name = "world_age", type = "i64", doc = "Ticks since the world was created." },
+    { name = "clocks", type = "array(ClockUpdate)" },
+]
+
+[[clientbound]]
+id = 0x76
+name = "StartConfiguration"
+mcdata = "start_configuration"
+doc = "Moves the connection back to the Configuration state; the client answers with Acknowledge Configuration."
+
+[[clientbound]]
+id = 0x79
+name = "SystemChatMessage"
+mcdata = "system_chat"
+doc = "A message from the server, in the chat or above the hotbar."
+fields = [
+    { name = "content", type = "nbt", doc = "Text component." },
+    { name = "overlay", type = "bool", doc = "Whether it is shown above the hotbar instead of in the chat." },
+]
+
+[[clientbound]]
+id = 0x7d
+name = "TeleportEntity"
+mcdata = "entity_teleport"
+doc = "Moves an entity to a position, or by an amount, of any size."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "velocity_x", type = "f64" },
+    { name = "velocity_y", type = "f64" },
+    { name = "velocity_z", type = "f64" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "relatives", type = "TeleportFlags", doc = "Which values are added to the current ones." },
+    { name = "on_ground", type = "bool" },
+]
+
+[[serverbound]]
+id = 0x00
+name = "ConfirmTeleportation"
+mcdata = "teleport_confirm"
+doc = "Confirms a Synchronize Player Position."
+fields = [
+    { name = "teleport_id", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x06
+name = "MessageAcknowledgment"
+mcdata = "message_acknowledgement"
+doc = "Acknowledges the chat messages the client has seen since its last message."
+fields = [
+    { name = "offset", type = "varint", doc = "Number of messages seen." },
+]
+
+[[serverbound]]
+id = 0x07
+name = "ChatCommand"
+mcdata = "chat_command"
+doc = "A command typed in the chat, with no signed arguments."
+fields = [
+    { name = "command", type = "string(32767)", doc = "The command, without the leading `/`." },
+]
+
+[[serverbound]]
+id = 0x08
+name = "SignedChatCommand"
+mcdata = "chat_command_signed"
+doc = "A command typed in the chat, with its message arguments signed."
+fields = [
+    { name = "command", type = "string(32767)", doc = "The command, without the leading `/`." },
+    { name = "timestamp", type = "i64", doc = "Milliseconds since the Unix epoch." },
+    { name = "salt", type = "i64" },
+    { name = "argument_signatures", type = "array(8, ArgumentSignature)" },
+    { name = "offset", type = "varint", doc = "Number of messages seen since the last acknowledgment." },
+    { name = "acknowledged", type = "fixed(3)", doc = "Bit set of the last 20 messages the client has seen." },
+    { name = "checksum", type = "u8", doc = "Checksum of the last seen messages." },
+]
+
+[[serverbound]]
+id = 0x09
+name = "ChatMessage"
+mcdata = "chat_message"
+doc = "A chat message, signed when the client has a chat session."
+fields = [
+    { name = "message", type = "string(256)" },
+    { name = "timestamp", type = "i64", doc = "Milliseconds since the Unix epoch." },
+    { name = "salt", type = "i64" },
+    { name = "signature", type = "option(fixed(256))" },
+    { name = "offset", type = "varint", doc = "Number of messages seen since the last acknowledgment." },
+    { name = "acknowledged", type = "fixed(3)", doc = "Bit set of the last 20 messages the client has seen." },
+    { name = "checksum", type = "u8", doc = "Checksum of the last seen messages." },
+]
+
+[[serverbound]]
+id = 0x0a
+name = "PlayerSession"
+mcdata = "chat_session_update"
+doc = "The client's chat session, with the public key it signs messages with."
+fields = [
+    { name = "session_id", type = "uuid" },
+    { name = "public_key", type = "PublicKeyData" },
+]
+
+[[serverbound]]
+id = 0x0b
+name = "ChunkBatchReceived"
+mcdata = "chunk_batch_received"
+doc = "Answer to Chunk Batch Finished, with the rate the client wants chunks at."
+fields = [
+    { name = "chunks_per_tick", type = "f32" },
+]
+
+[[serverbound]]
+id = 0x0c
+name = "ClientStatus"
+mcdata = "client_command"
+doc = "Asks to respawn, or for statistics or game rules."
+fields = [
+    { name = "action", type = "ClientStatusAction" },
+]
+
+[[serverbound]]
+id = 0x0d
+name = "ClientTickEnd"
+mcdata = "tick_end"
+doc = "Sent at the end of every client tick."
+
+[[serverbound]]
+id = 0x0e
+name = "ClientInformation"
+mcdata = "settings"
+doc = "The client's settings: language, view distance, chat and skin."
+fields = [
+    { name = "locale", type = "string(16)", doc = "Language, such as `en_us`." },
+    { name = "view_distance", type = "i8", doc = "View distance in chunks." },
+    { name = "chat_mode", type = "ChatMode" },
+    { name = "chat_colors", type = "bool" },
+    { name = "displayed_skin_parts", type = "u8", doc = "Bit mask of the visible skin layers." },
+    { name = "main_hand", type = "MainHand" },
+    { name = "enable_text_filtering", type = "bool" },
+    { name = "allow_server_listings", type = "bool", doc = "Whether the player may appear in the server list's player sample." },
+    { name = "particle_status", type = "ParticleStatus" },
+]
+
+[[serverbound]]
+id = 0x10
+name = "AcknowledgeConfiguration"
+mcdata = "configuration_acknowledged"
+doc = "Confirms Start Configuration; the connection moves to the Configuration state."
+
+[[serverbound]]
+id = 0x16
+name = "PluginMessage"
+mcdata = "custom_payload"
+doc = "Data on a custom channel, such as `minecraft:brand`."
+fields = [
+    { name = "channel", type = "string(32767)", doc = "Identifier of the channel." },
+    { name = "data", type = "rest(32767)" },
+]
+
+[[serverbound]]
+id = 0x1c
+name = "KeepAlive"
+mcdata = "keep_alive"
+doc = "Answer to a Keep Alive, with its ID."
+fields = [
+    { name = "id", type = "i64" },
+]
+
+[[serverbound]]
+id = 0x1e
+name = "SetPlayerPosition"
+mcdata = "position"
+doc = "The player's position, at the feet."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "flags", type = "MovementFlags" },
+]
+
+[[serverbound]]
+id = 0x1f
+name = "SetPlayerPositionAndRotation"
+mcdata = "position_look"
+doc = "The player's position and rotation."
+fields = [
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "flags", type = "MovementFlags" },
+]
+
+[[serverbound]]
+id = 0x20
+name = "SetPlayerRotation"
+mcdata = "look"
+doc = "The player's rotation."
+fields = [
+    { name = "yaw", type = "f32" },
+    { name = "pitch", type = "f32" },
+    { name = "flags", type = "MovementFlags" },
+]
+
+[[serverbound]]
+id = 0x21
+name = "SetPlayerMovementFlags"
+mcdata = "flying"
+doc = "Whether the player is on the ground or against a wall, when nothing else changed."
+fields = [
+    { name = "flags", type = "MovementFlags" },
+]
+
+[[serverbound]]
+id = 0x26
+name = "PingRequest"
+mcdata = "ping_request"
+doc = "Measures latency; the server answers with a Ping Response."
+fields = [
+    { name = "id", type = "i64" },
+]
+
+[[serverbound]]
+id = 0x28
+name = "PlayerAbilities"
+mcdata = "abilities"
+doc = "The player started or stopped flying; only the `flying` flag is read."
+fields = [
+    { name = "flags", type = "AbilityFlags" },
+]
+
+[[serverbound]]
+id = 0x2a
+name = "PlayerCommand"
+mcdata = "entity_action"
+doc = "An action of the player, such as sprinting or leaving a bed."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "action", type = "PlayerCommandAction" },
+    { name = "data", type = "varint", doc = "Jump boost from 0 to 100 for a horse jump, 0 otherwise." },
+]
+
+[[serverbound]]
+id = 0x2b
+name = "PlayerInput"
+mcdata = "player_input"
+doc = "The movement keys the player is pressing."
+fields = [
+    { name = "inputs", type = "PlayerInputs" },
+]
+
+[[serverbound]]
+id = 0x2c
+name = "PlayerLoaded"
+mcdata = "player_loaded"
+doc = "The client has loaded the world around the player and left the loading screen."
+
+[[serverbound]]
+id = 0x2d
+name = "Pong"
+mcdata = "pong"
+doc = "Answer to a Ping, with its ID."
+fields = [
+    { name = "id", type = "i32" },
+]
+
+[[serverbound]]
+id = 0x3f
+name = "SwingArm"
+mcdata = "arm_animation"
+doc = "The player swung an arm."
+fields = [
+    { name = "hand", type = "Hand" },
+]
+
+[structs.SpawnInfo]
+doc = "The dimension a player is in, sent on login and respawn."
+fields = [
+    { name = "dimension_type", type = "varint", doc = "Numeric ID in the `minecraft:dimension_type` registry." },
+    { name = "dimension", type = "string(32767)", doc = "Identifier of the dimension." },
+    { name = "hashed_seed", type = "i64", doc = "First 8 bytes of the SHA-256 of the world seed, for biome noise." },
+    { name = "game_mode", type = "GameMode" },
+    { name = "previous_game_mode", type = "i8", doc = "-1 for none." },
+    { name = "is_debug", type = "bool" },
+    { name = "is_flat", type = "bool" },
+    { name = "death_location", type = "option(GlobalPos)" },
+    { name = "portal_cooldown", type = "varint" },
+    { name = "sea_level", type = "varint" },
+]
+
+[structs.GlobalPos]
+doc = "A block position in a dimension."
+fields = [
+    { name = "dimension", type = "string(32767)", doc = "Identifier of the dimension." },
+    { name = "position", type = "BlockPos" },
+]
+
+[structs.Heightmap]
+doc = "A heightmap of a chunk column."
+fields = [
+    { name = "kind", type = "HeightmapType" },
+    { name = "data", type = "array(i64)", doc = "Heights packed in longs, 9 bits each for a 384-block world." },
+]
+
+[structs.ChunkBlockEntity]
+doc = "A block entity in a chunk column."
+fields = [
+    { name = "position", type = "PackedXZ" },
+    { name = "y", type = "i16" },
+    { name = "kind", type = "varint", doc = "Numeric ID in the `minecraft:block_entity_type` registry." },
+    { name = "data", type = "optional_nbt" },
+]
+
+[structs.LightData]
+doc = "Sky and block light of a chunk column, one section of 4096 half-bytes per bit set in the masks."
+fields = [
+    { name = "sky_light_mask", type = "array(i64)", doc = "Sections with sky light, from one below the world." },
+    { name = "block_light_mask", type = "array(i64)" },
+    { name = "empty_sky_light_mask", type = "array(i64)", doc = "Sections whose sky light is all zero." },
+    { name = "empty_block_light_mask", type = "array(i64)" },
+    { name = "sky_light", type = "array(bytes(2048))" },
+    { name = "block_light", type = "array(bytes(2048))" },
+]
+
+[structs.ClockUpdate]
+doc = "The state of one world clock."
+fields = [
+    { name = "clock", type = "varint", doc = "Numeric ID in the clock registry." },
+    { name = "total_ticks", type = "varlong" },
+    { name = "partial_tick", type = "f32" },
+    { name = "rate", type = "f32" },
+]
+
+[structs.ChatTypeData]
+doc = "A chat type sent inline: how a message is shown and narrated."
+fields = [
+    { name = "chat", type = "ChatDecoration" },
+    { name = "narration", type = "ChatDecoration" },
+]
+
+[structs.ChatDecoration]
+doc = "A translation key and the parts of a message that fill it."
+fields = [
+    { name = "translation_key", type = "string(32767)" },
+    { name = "parameters", type = "array(ChatDecorationParameter)" },
+    { name = "style", type = "nbt" },
+]
+
+[structs.ArgumentSignature]
+doc = "The signature of a message argument of a command."
+fields = [
+    { name = "name", type = "string(16)" },
+    { name = "signature", type = "fixed(256)" },
+]
+
+[structs.PublicKeyData]
+doc = "A player's chat signing key, signed by Mojang."
+fields = [
+    { name = "expires_at", type = "i64", doc = "Milliseconds since the Unix epoch." },
+    { name = "key", type = "bytes(512)", doc = "RSA public key, DER encoded." },
+    { name = "key_signature", type = "bytes(4096)" },
+]
+
+[structs.ProfileProperty]
+doc = "Signed profile property, such as the skin."
+fields = [
+    { name = "name", type = "string(64)" },
+    { name = "value", type = "string(32767)" },
+    { name = "signature", type = "option(string(1024))" },
+]
+
+[unions.PackedSignature]
+doc = "A message signature, sent in full or as its index in the client's cache."
+tag = "varint"
+variants = [
+    { name = "Full", tag = 0, type = "fixed(256)" },
+    { name = "Cached", default = true, doc = "Index of the signature in the cache, plus one." },
+]
+
+[unions.FilterMask]
+doc = "Which characters of a chat message the server filtered."
+tag = "varint"
+variants = [
+    { name = "PassThrough", tag = 0 },
+    { name = "FullyFiltered", tag = 1 },
+    { name = "PartiallyFiltered", tag = 2, type = "array(i64)", doc = "Bit set of the filtered characters." },
+]
+
+[flags.AbilityFlags]
+doc = "The player's abilities."
+repr = "i8"
+bits = { invulnerable = 0, flying = 1, may_fly = 2, instant_build = 3 }
+
+[flags.TeleportFlags]
+doc = "Which values of a teleport are relative to the current ones."
+repr = "u32"
+bits = { x = 0, y = 1, z = 2, yaw = 3, pitch = 4, velocity_x = 5, velocity_y = 6, velocity_z = 7, rotate_velocity = 8 }
+
+[flags.MovementFlags]
+doc = "Whether the player touches the ground or a wall."
+repr = "u8"
+bits = { on_ground = 0, horizontal_collision = 1 }
+
+[flags.PlayerInputs]
+doc = "The movement keys the player is pressing."
+repr = "u8"
+bits = { forward = 0, backward = 1, left = 2, right = 3, jump = 4, sneak = 5, sprint = 6 }
+
+[bitfields.BlockPos]
+doc = "A block position packed in a long."
+repr = "i64"
+fields = [
+    { name = "x", bits = 26, signed = true },
+    { name = "z", bits = 26, signed = true },
+    { name = "y", bits = 12, signed = true },
+]
+
+[bitfields.PackedXZ]
+doc = "A block's position within its chunk column, without the height."
+repr = "u8"
+fields = [
+    { name = "x", bits = 4 },
+    { name = "z", bits = 4 },
+]
+
+[externs.PlayerInfoUpdates]
+reason = "The actions are a bit set, and each entry has the fields of the actions that are set."
+
+[enums.Animation]
+doc = "An entity animation."
+repr = "u8"
+values = { SwingMainArm = 0, WakeUp = 2, SwingOffHand = 3, CriticalHit = 4, MagicCriticalHit = 5 }
+
+[enums.GameEventKind]
+doc = "A change in the game's state."
+repr = "u8"
+values = { NoRespawnBlockAvailable = 0, BeginRaining = 1, EndRaining = 2, ChangeGameMode = 3, WinGame = 4, DemoEvent = 5, ArrowHitPlayer = 6, RainLevelChange = 7, ThunderLevelChange = 8, PufferfishSting = 9, ElderGuardianAppearance = 10, EnableRespawnScreen = 11, LimitedCrafting = 12, StartWaitingForChunks = 13 }
+
+[enums.GameMode]
+doc = "A game mode."
+repr = "i8"
+values = { Survival = 0, Creative = 1, Adventure = 2, Spectator = 3 }
+
+[enums.HeightmapType]
+doc = "A kind of heightmap."
+repr = "varint"
+values = { WorldSurfaceWg = 0, WorldSurface = 1, OceanFloorWg = 2, OceanFloor = 3, MotionBlocking = 4, MotionBlockingNoLeaves = 5 }
+
+[enums.ChatDecorationParameter]
+doc = "A part of a chat message that fills a translation."
+repr = "varint"
+values = { Content = 0, Sender = 1, Target = 2 }
+
+[enums.ClientStatusAction]
+doc = "What the client asks for in Client Status."
+repr = "varint"
+values = { PerformRespawn = 0, RequestStats = 1, RequestGameRuleValues = 2 }
+
+[enums.PlayerCommandAction]
+doc = "An action in Player Command."
+repr = "varint"
+values = { LeaveBed = 0, StartSprinting = 1, StopSprinting = 2, StartJumpWithHorse = 3, StopJumpWithHorse = 4, OpenVehicleInventory = 5, StartFlyingWithElytra = 6 }
+
+[enums.Hand]
+doc = "A hand."
+repr = "varint"
+values = { MainHand = 0, OffHand = 1 }
+
+[enums.ChatMode]
+doc = "Which chat messages the client shows."
+repr = "varint"
+values = { Enabled = 0, CommandsOnly = 1, Hidden = 2 }
+
+[enums.MainHand]
+doc = "The player's main hand."
+repr = "varint"
+values = { Left = 0, Right = 1 }
+
+[enums.ParticleStatus]
+doc = "How many particles the client shows."
+repr = "varint"
+values = { All = 0, Decreased = 1, Minimal = 2 }

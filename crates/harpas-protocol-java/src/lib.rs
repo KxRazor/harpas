@@ -7,9 +7,12 @@
 //! Design: `docs/protocol-codecs.md`.
 
 pub mod codec;
+mod hand_written;
 
-// Field docs are optional in the schema; the generator requires them for packets and types.
-#[allow(missing_docs)]
+// Field docs are optional in the schema; the generator requires them for packets and types. Packet enums
+// hold their packets inline, signatures included: a packet is decoded or built once and then moved, so
+// boxing the large ones would cost an allocation for nothing.
+#[allow(missing_docs, clippy::large_enum_variant)]
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/codecs.rs"));
 }

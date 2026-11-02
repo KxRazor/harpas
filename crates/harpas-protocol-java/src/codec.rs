@@ -56,6 +56,8 @@ pub enum DecodeError {
     TrailingBytes(usize),
     /// Network NBT was invalid.
     Nbt(NbtError),
+    /// A registry holder had a negative ID.
+    InvalidRegistryId(i32),
 }
 
 impl fmt::Display for DecodeError {
@@ -75,6 +77,7 @@ impl fmt::Display for DecodeError {
             DecodeError::UnknownPacket(id) => write!(f, "unknown packet ID {id:#04x}"),
             DecodeError::TrailingBytes(len) => write!(f, "{len} bytes left after the packet"),
             DecodeError::Nbt(e) => e.fmt(f),
+            DecodeError::InvalidRegistryId(id) => write!(f, "invalid registry ID {id}"),
         }
     }
 }
@@ -265,6 +268,156 @@ pub fn write_nbt(buf: &mut Vec<u8>, value: &Nbt) {
     value.write_network(buf);
 }
 
+/// Reads optional network NBT, where `TAG_End` alone means no value.
+pub fn read_optional_nbt(input: &mut &[u8]) -> Result<Option<Nbt>, DecodeError> {
+    Ok(Nbt::read_network_optional(input)?)
+}
+
+/// Writes optional network NBT.
+pub fn write_optional_nbt(buf: &mut Vec<u8>, value: &Option<Nbt>) {
+    Nbt::write_network_optional(value.as_ref(), buf);
+}
+
+/// Reads exactly `N` bytes, with no length prefix.
+pub fn read_fixed<const N: usize>(input: &mut &[u8]) -> Result<[u8; N], DecodeError> {
+    take_array(input)
+}
+
+/// Writes `N` bytes, with no length prefix.
+pub fn write_fixed<const N: usize>(buf: &mut Vec<u8>, value: &[u8; N]) {
+    buf.extend_from_slice(value);
+}
+
+/// A registry entry: a reference to an entry the client has, or a value sent inline.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Holder<T> {
+    /// Numeric ID of the entry in its registry, in the order of Registry Data.
+    Reference(i32),
+    /// A value sent inline.
+    Direct(T),
+}
+
+/// Reads a registry holder: a VarInt, 0 for a value read with `read` or the registry ID plus one.
+pub fn read_holder<T>(
+    input: &mut &[u8],
+    read: impl FnOnce(&mut &[u8]) -> Result<T, DecodeError>,
+) -> Result<Holder<T>, DecodeError> {
+    match read_varint(input)? {
+        0 => read(input).map(Holder::Direct),
+        id if id > 0 => Ok(Holder::Reference(id - 1)),
+        id => Err(DecodeError::InvalidRegistryId(id)),
+    }
+}
+
+/// Writes a registry holder, with `write` for a value sent inline.
+pub fn write_holder<T>(buf: &mut Vec<u8>, value: &Holder<T>, write: impl FnOnce(&mut Vec<u8>, &T)) {
+    match value {
+        Holder::Reference(id) => {
+            write_varint(
+                buf,
+                id.checked_add(1).expect("registry ID fits in a VarInt"),
+            );
+        }
+        Holder::Direct(value) => {
+            write_varint(buf, 0);
+            write(buf, value);
+        }
+    }
+}
+
+/// A vector of three doubles in low precision, used for entity velocities: each axis is 15 bits of a shared
+/// scale, which is the largest absolute value rounded up to an integer.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LpVec3 {
+    /// X component.
+    pub x: f64,
+    /// Y component.
+    pub y: f64,
+    /// Z component.
+    pub z: f64,
+}
+
+impl LpVec3 {
+    /// Largest absolute value sent; larger ones are clamped.
+    pub const ABS_MAX: f64 = 1.7179869183E10;
+    /// Smallest absolute value sent; a vector whose components are all smaller is sent as zero.
+    pub const ABS_MIN: f64 = 3.051944088384301E-5;
+    const MAX_QUANTIZED: f64 = 32766.0;
+    const CONTINUATION: u64 = 4;
+
+    fn pack(value: f64) -> u64 {
+        // Java's `Math.round`, on values from 0 to 32766.
+        ((value * 0.5 + 0.5) * Self::MAX_QUANTIZED + 0.5).floor() as u64
+    }
+
+    fn unpack(value: u64) -> f64 {
+        ((value & 0x7fff) as f64).min(Self::MAX_QUANTIZED) * 2.0 / Self::MAX_QUANTIZED - 1.0
+    }
+
+    fn sanitize(value: f64) -> f64 {
+        if value.is_nan() {
+            0.0
+        } else {
+            value.clamp(-Self::ABS_MAX, Self::ABS_MAX)
+        }
+    }
+}
+
+impl Encode for LpVec3 {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        let (x, y, z) = (
+            Self::sanitize(self.x),
+            Self::sanitize(self.y),
+            Self::sanitize(self.z),
+        );
+        let largest = x.abs().max(y.abs()).max(z.abs());
+        if largest < Self::ABS_MIN {
+            buf.push(0);
+            return;
+        }
+        let scale = largest.ceil() as u64;
+        let partial = scale & 3 != scale;
+        let markers = if partial {
+            scale & 3 | Self::CONTINUATION
+        } else {
+            scale
+        };
+        let scale_f = scale as f64;
+        let packed = markers
+            | Self::pack(x / scale_f) << 3
+            | Self::pack(y / scale_f) << 18
+            | Self::pack(z / scale_f) << 33;
+        buf.push(packed as u8);
+        buf.push((packed >> 8) as u8);
+        write_u32(buf, (packed >> 16) as u32);
+        if partial {
+            write_varint(buf, (scale >> 2) as u32 as i32);
+        }
+    }
+}
+
+impl Decode for LpVec3 {
+    fn decode(input: &mut &[u8]) -> Result<Self, DecodeError> {
+        let lowest = read_u8(input)?;
+        if lowest == 0 {
+            return Ok(Self::default());
+        }
+        let middle = read_u8(input)?;
+        let highest = read_u32(input)?;
+        let packed = u64::from(highest) << 16 | u64::from(middle) << 8 | u64::from(lowest);
+        let mut scale = u64::from(lowest) & 3;
+        if u64::from(lowest) & Self::CONTINUATION != 0 {
+            scale |= u64::from(read_varint(input)? as u32) << 2;
+        }
+        let scale = scale as f64;
+        Ok(Self {
+            x: Self::unpack(packed >> 3) * scale,
+            y: Self::unpack(packed >> 18) * scale,
+            z: Self::unpack(packed >> 33) * scale,
+        })
+    }
+}
+
 /// Reads a `bool`, then a value with `read` when it is true.
 pub fn read_option<T>(
     input: &mut &[u8],
@@ -369,6 +522,45 @@ mod tests {
             read_string(&mut &buf[..], 3),
             Err(DecodeError::TooLong { len: 4, max: 3 })
         );
+    }
+
+    #[test]
+    fn holders_are_offset_by_one() {
+        let mut buf = Vec::new();
+        write_holder(&mut buf, &Holder::Reference(4), |buf, v: &u8| buf.push(*v));
+        write_holder(&mut buf, &Holder::Direct(9u8), |buf, v| buf.push(*v));
+        assert_eq!(buf, [0x05, 0x00, 0x09]);
+        let mut input = &buf[..];
+        assert_eq!(read_holder(&mut input, read_u8), Ok(Holder::Reference(4)));
+        assert_eq!(read_holder(&mut input, read_u8), Ok(Holder::Direct(9)));
+        assert_eq!(
+            read_holder(&mut &[0xff, 0xff, 0xff, 0xff, 0x0f][..], read_u8),
+            Err(DecodeError::InvalidRegistryId(-1))
+        );
+    }
+
+    #[test]
+    fn lp_vec3_matches_vanilla_packing() {
+        let encode = |x, y, z| {
+            let mut buf = Vec::new();
+            LpVec3 { x, y, z }.encode(&mut buf);
+            buf
+        };
+        // Below the smallest value, the vector is a single zero byte.
+        assert_eq!(encode(0.0, 1e-6, 0.0), [0x00]);
+        // Scale 1; x = -1 packs to 0, y = 0 to 16383 and z = 1 to 32766.
+        let packed: u64 = 1 | 16383 << 18 | 32766 << 33;
+        let mut expected = vec![packed as u8, (packed >> 8) as u8];
+        expected.extend_from_slice(&((packed >> 16) as u32).to_be_bytes());
+        assert_eq!(encode(-1.0, 0.0, 1.0), expected);
+        // Scale 5 does not fit in two bits: 1 and the continuation flag, then the rest (1) as a VarInt.
+        let buf = encode(4.5, 0.0, 0.0);
+        assert_eq!(buf[0] & 7, 0b101);
+        assert_eq!(buf[6..], [0x01]);
+        let decoded = LpVec3::decode(&mut &buf[..]).unwrap();
+        assert!((decoded.x - 4.5).abs() < 5.0 / 16383.0, "{decoded:?}");
+        assert!(decoded.y.abs() < 5.0 / 16383.0, "{decoded:?}");
+        assert_eq!(encode(decoded.x, decoded.y, decoded.z), buf);
     }
 
     #[test]

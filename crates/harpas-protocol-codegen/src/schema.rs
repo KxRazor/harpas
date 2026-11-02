@@ -46,9 +46,23 @@ pub struct State {
     /// Tagged unions used by the packets of this state.
     #[serde(default)]
     pub unions: BTreeMap<String, Union>,
+    /// Sets of bit flags used by the packets of this state.
+    #[serde(default)]
+    pub flags: BTreeMap<String, Flags>,
+    /// Integers split into bit fields, used by the packets of this state.
+    #[serde(default)]
+    pub bitfields: BTreeMap<String, Bitfield>,
+    /// Types written by hand in `crate::hand_written::<version>::<state>`, used by the packets of this state.
+    /// Everything in that module is re-exported with the state's generated types.
+    #[serde(default)]
+    pub externs: BTreeMap<String, Extern>,
     /// minecraft-data packets that are written by hand instead of generated.
     #[serde(default)]
     pub hand_written: Vec<HandWritten>,
+    /// Whether the state is still being written: minecraft-data packets missing from it are pending, not
+    /// errors.
+    #[serde(default)]
+    pub partial: bool,
 }
 
 /// Direction a packet travels in.
@@ -151,13 +165,91 @@ pub struct Union {
 pub struct Variant {
     /// Rust variant name.
     pub name: String,
-    /// Tag value that selects the variant; `0` and `1` for a `bool` tag.
-    pub tag: i64,
+    /// Tag value that selects the variant; `0` and `1` for a `bool` tag. None for the default variant.
+    pub tag: Option<i64>,
+    /// Whether this variant takes every tag value the others do not. It keeps the tag value and has nothing
+    /// after it.
+    #[serde(default)]
+    pub default: bool,
     /// Value that follows the tag; none for a variant with nothing after it.
     #[serde(default, rename = "type", deserialize_with = "deserialize_option_type")]
     pub ty: Option<Type>,
     /// Documentation of the generated variant.
     pub doc: Option<String>,
+}
+
+/// A set of bit flags packed in an integer.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Flags {
+    /// Documentation of the generated type.
+    pub doc: String,
+    /// Integer type on the wire.
+    #[serde(deserialize_with = "deserialize_prim")]
+    pub repr: Prim,
+    /// Rust field names and their bit, counted from the least significant.
+    pub bits: BTreeMap<String, u32>,
+}
+
+impl Flags {
+    /// Flags ordered by bit.
+    pub fn ordered(&self) -> Vec<(&str, u32)> {
+        let mut bits: Vec<_> = self
+            .bits
+            .iter()
+            .map(|(name, bit)| (name.as_str(), *bit))
+            .collect();
+        bits.sort_by_key(|(_, bit)| *bit);
+        bits
+    }
+}
+
+/// An integer split into bit fields.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bitfield {
+    /// Documentation of the generated type.
+    pub doc: String,
+    /// Integer type on the wire.
+    #[serde(deserialize_with = "deserialize_prim")]
+    pub repr: Prim,
+    /// Fields, from the most significant bits to the least.
+    pub fields: Vec<BitfieldField>,
+}
+
+/// A field of a bit field.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BitfieldField {
+    /// Rust field name.
+    pub name: String,
+    /// Number of bits.
+    pub bits: u32,
+    /// Whether the value is sign-extended.
+    #[serde(default)]
+    pub signed: bool,
+    /// Documentation of the generated field.
+    pub doc: Option<String>,
+}
+
+impl BitfieldField {
+    /// Rust type of the field: the smallest of 32 and 64 bits that holds it.
+    pub fn rust_type(&self) -> &'static str {
+        match (self.signed, self.bits <= 32) {
+            (true, true) => "i32",
+            (true, false) => "i64",
+            (false, true) => "u32",
+            (false, false) => "u64",
+        }
+    }
+}
+
+/// A type written by hand, which implements `Encode` and `Decode`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Extern {
+    /// Why it is written by hand.
+    pub reason: String,
 }
 
 /// A packet left out of generation.
@@ -216,6 +308,19 @@ pub enum Prim {
     VarLong,
     /// `uuid`: 16 bytes, big endian.
     Uuid,
+}
+
+impl Prim {
+    /// Size in bytes of a fixed-size integer; none for VarInts, floats, `bool` and `uuid`.
+    pub fn int_size(self) -> Option<u32> {
+        match self {
+            Prim::U8 | Prim::I8 => Some(1),
+            Prim::U16 | Prim::I16 => Some(2),
+            Prim::U32 | Prim::I32 => Some(4),
+            Prim::U64 | Prim::I64 => Some(8),
+            _ => None,
+        }
+    }
 }
 
 impl Prim {
@@ -311,6 +416,14 @@ pub enum Type {
     },
     /// `nbt`: network NBT, a tag type and its payload with no root name.
     Nbt,
+    /// `optional_nbt`: network NBT where `TAG_End` alone means no value.
+    OptionalNbt,
+    /// `fixed(len)`: exactly `len` bytes, with no length prefix.
+    Fixed(usize),
+    /// `holder(T)`: a registry entry, as a VarInt registry ID plus one, or 0 and the value inline.
+    Holder(Box<Type>),
+    /// `lp_vec3`: a low-precision vector of three doubles, used for velocities.
+    LpVec3,
     /// A structure, enumeration or union of the same state.
     Named(String),
 }
@@ -343,6 +456,10 @@ impl fmt::Display for Type {
             } => write!(f, "array({max}, {item})"),
             Type::Array { max: None, item } => write!(f, "array({item})"),
             Type::Nbt => f.write_str("nbt"),
+            Type::OptionalNbt => f.write_str("optional_nbt"),
+            Type::Fixed(len) => write!(f, "fixed({len})"),
+            Type::Holder(inner) => write!(f, "holder({inner})"),
+            Type::LpVec3 => f.write_str("lp_vec3"),
             Type::Named(name) => f.write_str(name),
         }
     }
@@ -389,6 +506,10 @@ impl<'a> TypeParser<'a> {
             ("rest", []) => Type::Rest { max: None },
             ("rest", [Arg::Number(max)]) => Type::Rest { max: Some(*max) },
             ("nbt", []) => Type::Nbt,
+            ("optional_nbt", []) => Type::OptionalNbt,
+            ("fixed", [Arg::Number(len)]) => Type::Fixed(*len),
+            ("holder", [Arg::Type(inner)]) => Type::Holder(Box::new(inner.clone())),
+            ("lp_vec3", []) => Type::LpVec3,
             ("option", [Arg::Type(inner)]) => Type::Option(Box::new(inner.clone())),
             ("array", [Arg::Type(item)]) => Type::Array {
                 max: None,
@@ -535,9 +656,29 @@ impl State {
         for (name, item) in &self.unions {
             check_type_name(name)?;
             if !type_names.insert(name.as_str()) {
-                return Err(format!("`{name}` is already a struct or an enum"));
+                return Err(format!("`{name}` is defined twice"));
             }
             check_union(self, name, item)?;
+        }
+        for (name, item) in &self.flags {
+            check_type_name(name)?;
+            if !type_names.insert(name.as_str()) {
+                return Err(format!("`{name}` is defined twice"));
+            }
+            check_flags(name, item)?;
+        }
+        for (name, item) in &self.bitfields {
+            check_type_name(name)?;
+            if !type_names.insert(name.as_str()) {
+                return Err(format!("`{name}` is defined twice"));
+            }
+            check_bitfield(name, item)?;
+        }
+        for name in self.externs.keys() {
+            check_type_name(name)?;
+            if !type_names.insert(name.as_str()) {
+                return Err(format!("`{name}` is defined twice"));
+            }
         }
         for direction in [Direction::Clientbound, Direction::Serverbound] {
             let mut ids = BTreeSet::new();
@@ -575,11 +716,14 @@ impl State {
         self.enums.contains_key(name)
     }
 
-    /// Whether `name` is a structure, enumeration or union of this state.
+    /// Whether `name` is a type defined by this state.
     pub fn defines(&self, name: &str) -> bool {
         self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.unions.contains_key(name)
+            || self.flags.contains_key(name)
+            || self.bitfields.contains_key(name)
+            || self.externs.contains_key(name)
     }
 }
 
@@ -595,38 +739,115 @@ fn check_union(state: &State, name: &str, item: &Union) -> Result<(), String> {
     }
     let mut names = BTreeSet::new();
     let mut tags = BTreeSet::new();
+    let mut defaults = 0;
     for variant in &item.variants {
         check_type_name(&variant.name)?;
         if !names.insert(variant.name.as_str()) {
             return Err(format!("variant `{name}::{}` is repeated", variant.name));
         }
-        if !tags.insert(variant.tag) {
-            return Err(format!("union `{name}` repeats tag {}", variant.tag));
+        let tag = match (variant.tag, variant.default) {
+            (Some(tag), false) => tag,
+            (None, true) if variant.ty.is_none() && item.tag != Prim::Bool => {
+                defaults += 1;
+                continue;
+            }
+            (None, true) => {
+                return Err(format!(
+                    "default variant `{name}::{}` cannot have a type or a `bool` tag",
+                    variant.name
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "variant `{name}::{}` needs either a tag or `default = true`",
+                    variant.name
+                ));
+            }
+        };
+        if !tags.insert(tag) {
+            return Err(format!("union `{name}` repeats tag {tag}"));
         }
-        if item.tag == Prim::Bool && !matches!(variant.tag, 0 | 1) {
+        if item.tag == Prim::Bool && !matches!(tag, 0 | 1) {
             return Err(format!(
-                "variant `{name}::{}` has tag {}, but a `bool` tag is 0 or 1",
-                variant.name, variant.tag
+                "variant `{name}::{}` has tag {tag}, but a `bool` tag is 0 or 1",
+                variant.name
             ));
         }
         if let Some(ty) = &variant.ty {
             check_type_refs(state, name, ty)?;
         }
     }
+    if defaults > 1 {
+        return Err(format!("union `{name}` has more than one default variant"));
+    }
     Ok(())
+}
+
+fn check_flags(name: &str, item: &Flags) -> Result<(), String> {
+    let width = item
+        .repr
+        .int_size()
+        .ok_or_else(|| format!("flags `{name}` cannot be sent as `{}`", item.repr.name()))?
+        * 8;
+    let mut bits = BTreeSet::new();
+    for (flag, bit) in &item.bits {
+        check_snake_case(name, flag)?;
+        if *bit >= width || !bits.insert(*bit) {
+            return Err(format!(
+                "flag `{name}.{flag}` uses bit {bit}, which is repeated or outside the type"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_bitfield(name: &str, item: &Bitfield) -> Result<(), String> {
+    let width = item.repr.int_size().ok_or_else(|| {
+        format!(
+            "bit field `{name}` cannot be sent as `{}`",
+            item.repr.name()
+        )
+    })? * 8;
+    let mut names = BTreeSet::new();
+    let mut total = 0;
+    for field in &item.fields {
+        check_snake_case(name, &field.name)?;
+        if !names.insert(field.name.as_str()) {
+            return Err(format!("field `{name}.{}` is repeated", field.name));
+        }
+        if field.bits == 0 || field.bits > 64 {
+            return Err(format!(
+                "field `{name}.{}` has {} bits",
+                field.name, field.bits
+            ));
+        }
+        total += field.bits;
+    }
+    if total != width {
+        return Err(format!(
+            "bit field `{name}` has {total} bits of fields in a {width}-bit `{}`",
+            item.repr.name()
+        ));
+    }
+    Ok(())
+}
+
+fn check_snake_case(owner: &str, name: &str) -> Result<(), String> {
+    let valid = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("field `{owner}.{name}` is not snake_case"))
+    }
 }
 
 fn check_fields(state: &State, owner: &str, fields: &[Field]) -> Result<(), String> {
     let mut names = BTreeSet::new();
     for field in fields {
-        let valid = field.name.starts_with(|c: char| c.is_ascii_lowercase())
-            && field
-                .name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-        if !valid {
-            return Err(format!("field `{owner}.{}` is not snake_case", field.name));
-        }
+        check_snake_case(owner, &field.name)?;
         if !names.insert(field.name.as_str()) {
             return Err(format!("field `{owner}.{}` is repeated", field.name));
         }
@@ -641,7 +862,7 @@ fn check_type_refs(state: &State, owner: &str, ty: &Type) -> Result<(), String> 
         Type::Named(name) if !state.defines(name) => Err(format!(
             "`{owner}` uses `{name}`, which is not defined in this state"
         )),
-        Type::Option(inner) | Type::Array { item: inner, .. } => {
+        Type::Option(inner) | Type::Array { item: inner, .. } | Type::Holder(inner) => {
             check_type_refs(state, owner, inner)
         }
         _ => Ok(()),
@@ -705,6 +926,8 @@ mod tests {
             "u16 u8",
             "varint(1)",
             "nbt(1)",
+            "fixed",
+            "holder(1)",
         ] {
             assert!(Type::parse(text).is_err(), "`{text}` was accepted");
         }
@@ -759,5 +982,40 @@ mod tests {
                 .unwrap_err()
                 .contains("cannot be tagged")
         );
+        assert!(
+            union(
+                "varint",
+                "{ name = \"A\", tag = 0 }, { name = \"B\", default = true }"
+            )
+            .is_ok()
+        );
+        assert!(
+            union("bool", "{ name = \"B\", default = true }")
+                .unwrap_err()
+                .contains("default")
+        );
+        assert!(
+            union("varint", "{ name = \"A\" }")
+                .unwrap_err()
+                .contains("needs either")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_flags_and_bitfields() {
+        let state = |text: &str| toml::from_str::<State>(text).unwrap().validate();
+        assert!(state("[flags.F]\ndoc = \"F.\"\nrepr = \"u8\"\nbits = { a = 0, b = 7 }\n").is_ok());
+        assert!(
+            state("[flags.F]\ndoc = \"F.\"\nrepr = \"u8\"\nbits = { a = 8 }\n")
+                .unwrap_err()
+                .contains("bit 8")
+        );
+        assert!(
+            state("[flags.F]\ndoc = \"F.\"\nrepr = \"varint\"\nbits = { a = 0 }\n")
+                .unwrap_err()
+                .contains("cannot be sent")
+        );
+        let bitfield = "[bitfields.B]\ndoc = \"B.\"\nrepr = \"u8\"\nfields = [{ name = \"x\", bits = 4 }, { name = \"z\", bits = 3 }]\n";
+        assert!(state(bitfield).unwrap_err().contains("7 bits"));
     }
 }

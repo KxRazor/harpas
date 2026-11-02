@@ -4,7 +4,8 @@ Scope: how Harpas stores worlds, where it gets vanilla's game data (world genera
 tags, structures), how it generates and saves chunks, and how it reaches and checks parity with vanilla. The
 tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
-Status: design. Nothing here is implemented. Facts about vanilla cite their source in
+Status: design. Only the [Mojang EULA](#mojang-eula) acceptance is implemented; it is required on every start,
+since every start needs the vanilla game data. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---

@@ -86,7 +86,7 @@ and chats.
 **Done when:** a vanilla 26.1 world opens, plays and saves, and a new world generates the same terrain as
 vanilla for the same seed.
 
-- [ ] Mojang EULA acceptance flow ([docs/world.md](docs/world.md#mojang-eula)).
+- [x] Mojang EULA acceptance flow ([docs/world.md](docs/world.md#mojang-eula)).
 - [ ] Vanilla data provisioning from Mojang's server jar ([docs/world.md](docs/world.md#vanilla-game-data)).
 - [ ] Paletted chunk sections with version counters ([docs/engine-core.md](docs/engine-core.md#6-chunks)).
 - [ ] Anvil reading and writing, including `.mcc` files; `level.dat` and player data.

@@ -27,6 +27,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   with the player's abilities, player list entry, spawn, position, empty chunks and Keep Alive. `gamemode`,
   `view-distance`, `simulation-distance` and `online-mode` are read from `server.properties` (`harpas-java`,
   `harpas-server`).
+- Online mode: Mojang authentication through the session server, AES/CFB8 encryption with a 1024-bit RSA key
+  generated at startup, and zlib compression following `network-compression-threshold`, with vanilla's limits
+  on compressed packets (`harpas-java`, `harpas-server`).
 - Java 26.1 Play packet codecs for joining, moving, seeing other players and chatting, with fixed byte arrays,
   bit flags, bit fields, registry holders, low-precision vectors and hand-written types in the schema
   (`harpas-protocol-java`, `harpas-protocol-codegen`).

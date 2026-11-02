@@ -1,12 +1,14 @@
 //! The Harpas server binary.
 //!
 //! Listens for Java Edition connections on `server-ip` and `server-port` from `server.properties`, answers the
-//! server list, and brings offline-mode players into a void world. One thread per connection for now; the
-//! network runtime comes with the protection against abusive connections (`docs/java-connection.md`).
+//! server list, logs players in (online mode through Mojang's session server, or offline mode) and brings them
+//! into a void world. One thread per connection for now; the network runtime comes with the protection
+//! against abusive connections (`docs/java-connection.md`).
 //!
 //! Design: `docs/operations.md`.
 
 mod properties;
+mod session;
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -17,10 +19,11 @@ use std::{fs, thread};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use harpas_java::{Connection, ServerInfo, State};
+use harpas_java::{AuthOutcome, Connection, ServerInfo, ServerKey, State};
 use harpas_protocol_java::v26_1::play::GameMode;
 
 use properties::Properties;
+use session::{SessionServer, format_uuid};
 
 /// Vanilla closes a connection that sends nothing for 30 seconds.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -38,6 +41,15 @@ fn main() {
 fn run() -> io::Result<()> {
     let properties = Properties::load(Path::new("server.properties"))?;
     let info = Arc::new(server_info(&properties));
+    println!("Generating keypair");
+    let key = Arc::new(ServerKey::generate());
+    let session = if info.online_mode {
+        Some(Arc::new(SessionServer::new().map_err(io::Error::other)?))
+    } else {
+        println!("**** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!");
+        println!("The server will make no attempt to authenticate usernames. Beware.");
+        None
+    };
     let ip = properties.string("server-ip", "");
     let port: u16 = properties.parsed("server-port", 25565);
     // An empty `server-ip` listens on every address, as in vanilla.
@@ -66,11 +78,13 @@ fn run() -> io::Result<()> {
             }
         };
         let info = Arc::clone(&info);
+        let key = Arc::clone(&key);
+        let session = session.clone();
         thread::spawn(move || {
             let peer = stream
                 .peer_addr()
                 .map_or_else(|_| "unknown".to_owned(), |a| a.to_string());
-            if let Err(e) = serve(stream, &info) {
+            if let Err(e) = serve(stream, &info, key, session.as_deref()) {
                 println!("{peer} disconnected: {e}");
             }
         });
@@ -96,6 +110,10 @@ fn server_info(properties: &Properties) -> ServerInfo {
             .get("gamemode")
             .and_then(parse_game_mode)
             .unwrap_or(defaults.game_mode),
+        compression_threshold: properties.parsed(
+            "network-compression-threshold",
+            defaults.compression_threshold,
+        ),
     }
 }
 
@@ -131,11 +149,16 @@ fn load_icon(path: &Path) -> Option<String> {
 }
 
 /// Runs one connection until it is closed.
-fn serve(mut stream: TcpStream, info: &ServerInfo) -> io::Result<()> {
+fn serve(
+    mut stream: TcpStream,
+    info: &ServerInfo,
+    key: Arc<ServerKey>,
+    session: Option<&SessionServer>,
+) -> io::Result<()> {
     // Reads wake up every second so that the connection can send its Keep Alive packets.
     stream.set_read_timeout(Some(TICK))?;
     stream.set_nodelay(true)?;
-    let mut connection = Connection::new();
+    let mut connection = Connection::new(key);
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
     let mut player_logged = false;
@@ -161,6 +184,18 @@ fn serve(mut stream: TcpStream, info: &ServerInfo) -> io::Result<()> {
         };
         let result = result.and_then(|()| connection.tick(Instant::now()));
         stream.write_all(&connection.take_output())?;
+        if let Some(request) = connection.take_auth_request() {
+            let outcome = session.map_or(AuthOutcome::Unavailable, |s| s.has_joined(&request));
+            if let AuthOutcome::Verified(player) = &outcome {
+                println!(
+                    "UUID of player {} is {}",
+                    player.name,
+                    format_uuid(player.uuid)
+                );
+            }
+            connection.authenticated(outcome, info);
+            stream.write_all(&connection.take_output())?;
+        }
         result.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         if !player_logged && connection.state() == State::Play {
             player_logged = true;

@@ -5,9 +5,9 @@ authentication, encryption and compression, the configuration state, chat signin
 abusive connections. Packet codecs are covered in [protocol-codecs.md](protocol-codecs.md); the Bedrock
 counterpart is [nethernet.md](nethernet.md).
 
-Status: in progress. Every state is implemented in `harpas-java` for offline mode: Handshaking, Status and the
-server list (legacy ping included), Login, Configuration with registry data, and Play up to a void world.
-Online mode, encryption, compression and the protection against abuse are design. Facts about the protocol cite their source in
+Status: in progress. Every state is implemented in `harpas-java`: Handshaking, Status and the server list
+(legacy ping included), Login in online and offline mode with encryption and compression, Configuration with
+registry data, and Play up to a void world. The protection against abuse is design. Facts about the protocol cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -53,10 +53,10 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 - **Legacy ping:** a connection whose first byte is `0xFE` gets the pre-1.7 answer vanilla gives: the beta
   format for `0xFE` alone, the 1.4 format with protocol 127 otherwise.
 - **Timeout:** a connection that sends nothing for 30 seconds is closed, as in vanilla.
-- **Login:** offline mode only for now. The player's UUID is vanilla's offline UUID, a version 3 UUID of
-  `OfflinePlayer:<name>`; names with spaces, control characters or non-ASCII characters are refused, as in
-  vanilla. With `online-mode=true`, Login Start is answered with a message asking for `online-mode=false` until
-  authentication exists.
+- **Login:** names with spaces, control characters or non-ASCII characters are refused, as in vanilla. In
+  online mode, see [Authentication](#authentication) and [Encryption and compression](#encryption-and-compression).
+  In offline mode the player's UUID is vanilla's offline UUID, a version 3 UUID of `OfflinePlayer:<name>`, and
+  the connection is not encrypted, as in vanilla.
 - **Configuration:** see [Configuration state](#configuration-state).
 - **Play:** until the engine exists, the player joins a void world: the Login packet, abilities for the
   `gamemode` of `server.properties`, the player's own entry in the player list, the spawn point, the position
@@ -66,7 +66,10 @@ Every connection starts in Handshaking and moves through the states vanilla defi
   or answers with another ID, is disconnected, as in vanilla.
 - **Tested with a client:** on 2026-11-01, a vanilla Java 26.1 client listed the server with its MOTD colors,
   icon, player counts and latency; it then joined the void world in creative mode, flew around, and saw itself
-  in the player list, with no error in the client's log.
+  in the player list, with no error in the client's log. On 2026-11-01, in online mode and through a playit.gg
+  tunnel, another player's premium Java 26.1 client on Windows joined: the session server verified the
+  player, the connection was encrypted and compressed, and the player list and the third-person view showed
+  the player's skin.
 
 ---
 
@@ -87,6 +90,25 @@ With `online-mode=true` in `server.properties`, as in vanilla [2]:
   ([networks.md](networks.md#behind-a-java-proxy)).
 - Identity rules for both editions, including Bedrock players, are in [identity.md](identity.md).
 
+Implementation:
+
+- The key pair is generated when the server starts and shared by every connection; the verify token is 4 random
+  bytes per login.
+- The connection itself does no I/O: once it has the shared secret, it hands the caller an `AuthRequest` with
+  the name and the login hash (SHA-1 of the empty server ID, the secret and the public key, printed as a signed
+  hexadecimal number as Java's `BigInteger` does), and the caller answers with the session server's result. The
+  `harpas` binary makes the request on the connection's thread with `ureq`, rustls and the system's root
+  certificates, with a 10-second limit.
+- An unknown join gets vanilla's `multiplayer.disconnect.unverified_username`; an unreachable session server
+  gets `multiplayer.disconnect.authservers_down`.
+- `prevent-proxy-connections`, which adds the player's address to the request, is not read yet.
+
+**RSA decryption.** The `rsa` crate's PKCS#1 v1.5 decryption leaks timing (RUSTSEC-2023-0071, the Marvin
+attack), and no fixed release exists. Harpas uses only its raw RSA operation, with random blinding, and removes
+the padding itself in constant time. A bad padding is not an error: it gives pseudo-random bytes derived from
+the ciphertext (implicit rejection, as TLS stacks do), so a bad padding and a wrong verify token fail in the
+same way. The advisory is ignored in `deny.toml` with this reason, until `rsa` ships a fix.
+
 ---
 
 ## Encryption and compression
@@ -96,6 +118,17 @@ With `online-mode=true` in `server.properties`, as in vanilla [2]:
 - **Compression:** zlib per packet above `network-compression-threshold` from `server.properties`, vanilla's
   default being 256 bytes [3].
 - Both follow vanilla's settings; Harpas adds no settings of its own here.
+
+Implementation:
+
+- **Order:** encryption starts as soon as the Encryption Response is accepted, in both directions; any bytes
+  the client sent after it are decrypted in place. Set Compression is sent, uncompressed, just before Login
+  Success, and compression applies to every frame after it in both directions.
+- **Compression limits:** a compressed packet must declare at least the threshold and at most 8 MiB, as in
+  vanilla, and must inflate to exactly the declared length; output never grows past it, so a decompression
+  bomb is stopped at the declared size. A negative threshold turns compression off.
+- **Libraries:** zlib-rs at level 6 through `flate2`, and the RustCrypto `aes` and `cfb8` crates, as measured
+  in [protocol-codecs.md](protocol-codecs.md#shared-encoding-results).
 
 ---
 

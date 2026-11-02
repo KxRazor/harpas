@@ -58,6 +58,11 @@ impl FrameReader {
         &self.buf[self.start..]
     }
 
+    /// Bytes received and not yet returned in a frame, to decrypt them in place when encryption starts.
+    pub(crate) fn pending_mut(&mut self) -> &mut [u8] {
+        &mut self.buf[self.start..]
+    }
+
     /// Takes the next complete frame, without its length prefix, or none until more bytes arrive.
     pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, FrameError> {
         let pending = self.pending();

@@ -2,12 +2,15 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use harpas_protocol_java::codec::{self, DecodeError, Nbt};
 use harpas_protocol_java::v26_1::{self, configuration, handshaking, login, play, status};
 use md5::{Digest, Md5};
 
+use crate::compression::{Compression, CompressionError};
+use crate::crypto::{Encryption, ServerKey, ct_equal, server_hash};
 use crate::frame::{FrameError, FrameReader, write_frame};
 use crate::status::{ServerInfo, json_string};
 use crate::{legacy, registries, void_world};
@@ -63,6 +66,10 @@ pub enum ConnectionError {
     InvalidUsername(String),
     /// The client did not answer a Keep Alive in time, or answered with another ID.
     TimedOut,
+    /// A compressed frame was invalid.
+    Compression(CompressionError),
+    /// The Encryption Response did not decrypt to a shared secret and the verify token the server sent.
+    EncryptionFailed,
 }
 
 impl fmt::Display for ConnectionError {
@@ -75,19 +82,59 @@ impl fmt::Display for ConnectionError {
             }
             ConnectionError::InvalidUsername(name) => write!(f, "invalid player name {name:?}"),
             ConnectionError::TimedOut => f.write_str("timed out"),
+            ConnectionError::Compression(e) => e.fmt(f),
+            ConnectionError::EncryptionFailed => f.write_str("invalid encryption response"),
         }
     }
 }
 
 impl Error for ConnectionError {}
 
-/// The player of a connection, once Login Start names them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The player of a connection, once Login succeeds.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Player {
     /// The player's name.
     pub name: String,
-    /// The player's UUID: in offline mode, derived from the name as vanilla does.
+    /// The player's UUID: Mojang's in online mode, derived from the name as vanilla does in offline mode.
     pub uuid: u128,
+    /// Signed profile properties, such as the skin; none in offline mode.
+    pub properties: Vec<login::ProfileProperty>,
+}
+
+/// A request to Mojang's session server that the caller makes for the connection, off the logic thread:
+/// `GET https://sessionserver.mojang.com/session/minecraft/hasJoined?username=<username>&serverId=<server_hash>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthRequest {
+    /// The name the client logged in with.
+    pub username: String,
+    /// The login hash, which the client also sent to the session server when it joined.
+    pub server_hash: String,
+}
+
+/// The answer to an [`AuthRequest`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthOutcome {
+    /// The session server knows the join: the player's profile.
+    Verified(Player),
+    /// The session server answered that the player did not join through it.
+    NotVerified,
+    /// The session server could not be reached or gave no usable answer.
+    Unavailable,
+}
+
+/// Where a connection is in the Login state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LoginStep {
+    /// Waiting for Login Start.
+    Start,
+    /// Encryption Request sent; waiting for the response.
+    Encryption { username: String, token: [u8; 4] },
+    /// Waiting for the caller to authenticate the player with Mojang.
+    Authenticating,
+    /// Login Success sent; waiting for Login Acknowledged.
+    Success,
+    /// Login Acknowledged; the connection is past Login.
+    Done,
 }
 
 /// A Keep Alive the client has not answered yet.
@@ -106,34 +153,37 @@ struct PendingKeepAlive {
 #[derive(Debug)]
 pub struct Connection {
     state: State,
+    key: Arc<ServerKey>,
     frames: FrameReader,
     out: Vec<u8>,
+    encryption: Option<Encryption>,
+    compression: Option<Compression>,
     received_any: bool,
     status_sent: bool,
+    login: LoginStep,
+    auth_request: Option<AuthRequest>,
     player: Option<Player>,
-    login_acknowledged: bool,
     next_keepalive: Option<Instant>,
     pending_keepalive: Option<PendingKeepAlive>,
     keepalive_counter: i64,
 }
 
-impl Default for Connection {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Connection {
-    /// A connection that has received nothing yet.
-    pub fn new() -> Self {
+    /// A connection that has received nothing yet. `key` is the server's RSA key, shared by every
+    /// connection.
+    pub fn new(key: Arc<ServerKey>) -> Self {
         Self {
             state: State::Handshaking,
+            key,
             frames: FrameReader::default(),
             out: Vec::new(),
+            encryption: None,
+            compression: None,
             received_any: false,
             status_sent: false,
+            login: LoginStep::Start,
+            auth_request: None,
             player: None,
-            login_acknowledged: false,
             next_keepalive: None,
             pending_keepalive: None,
             keepalive_counter: 0,
@@ -150,9 +200,37 @@ impl Connection {
         self.state == State::Closed
     }
 
-    /// The player, once Login Start names them.
+    /// The player, once Login succeeds.
     pub fn player(&self) -> Option<&Player> {
         self.player.as_ref()
+    }
+
+    /// Whether the connection is encrypted.
+    pub fn is_encrypted(&self) -> bool {
+        self.encryption.is_some()
+    }
+
+    /// The session server request the connection is waiting for, in online mode. The caller makes it and
+    /// passes the answer to [`authenticated`](Self::authenticated).
+    pub fn take_auth_request(&mut self) -> Option<AuthRequest> {
+        self.auth_request.take()
+    }
+
+    /// Finishes Login with the session server's answer to the [`AuthRequest`].
+    pub fn authenticated(&mut self, outcome: AuthOutcome, info: &ServerInfo) {
+        if self.login != LoginStep::Authenticating || self.is_closed() {
+            return;
+        }
+        match outcome {
+            AuthOutcome::Verified(player) => self.finish_login(player, info),
+            AuthOutcome::NotVerified => self.disconnect_login(&translate(
+                "multiplayer.disconnect.unverified_username",
+                &[],
+            )),
+            AuthOutcome::Unavailable => {
+                self.disconnect_login(&translate("multiplayer.disconnect.authservers_down", &[]))
+            }
+        }
     }
 
     /// Bytes to send to the client, in order. Taking them empties the output.
@@ -165,7 +243,14 @@ impl Connection {
         if self.is_closed() {
             return Ok(());
         }
-        self.frames.push(bytes);
+        match &mut self.encryption {
+            Some(encryption) => {
+                let mut bytes = bytes.to_vec();
+                encryption.decrypt(&mut bytes);
+                self.frames.push(&bytes);
+            }
+            None => self.frames.push(bytes),
+        }
         if !self.received_any && !bytes.is_empty() {
             self.received_any = true;
             // The legacy ping can only be the first thing a connection sends, and comes in one read.
@@ -225,6 +310,12 @@ impl Connection {
         while !self.is_closed() {
             let Some(frame) = self.frames.next_frame().map_err(ConnectionError::Frame)? else {
                 break;
+            };
+            let frame = match &mut self.compression {
+                Some(compression) => compression
+                    .decompress(&frame)
+                    .map_err(ConnectionError::Compression)?,
+                None => frame,
             };
             let decode_error = |state, error| ConnectionError::Decode { state, error };
             match self.state {
@@ -303,14 +394,14 @@ impl Connection {
                     json: info.status_json(),
                 }
                 .into();
-                write_frame(&mut self.out, |buf| response.encode(buf));
+                self.send(|buf| response.encode(buf));
             }
             status::serverbound::Packet::PingRequest(ping) => {
                 let pong: status::clientbound::Packet = status::clientbound::PongResponse {
                     timestamp: ping.timestamp,
                 }
                 .into();
-                write_frame(&mut self.out, |buf| pong.encode(buf));
+                self.send(|buf| pong.encode(buf));
                 self.state = State::Closed;
             }
         }
@@ -326,42 +417,91 @@ impl Connection {
             state: State::Login,
             packet: packet.name(),
         };
-        match packet {
-            login::serverbound::Packet::LoginStart(start) if self.player.is_none() => {
+        match (packet, &self.login) {
+            (login::serverbound::Packet::LoginStart(start), LoginStep::Start) => {
                 if !valid_player_name(&start.username) {
                     return Err(ConnectionError::InvalidUsername(start.username));
                 }
-                if info.online_mode {
-                    // Authentication with Mojang comes with encryption, in a later task.
-                    let text = "Harpas does not support online mode yet: set online-mode=false in \
-                                server.properties.";
-                    self.disconnect_login(&format!(r#"{{"text":{}}}"#, json_string(text)));
+                if !info.online_mode {
+                    let player = Player {
+                        uuid: offline_uuid(&start.username),
+                        name: start.username,
+                        properties: Vec::new(),
+                    };
+                    self.finish_login(player, info);
                     return Ok(());
                 }
-                let player = Player {
-                    uuid: offline_uuid(&start.username),
-                    name: start.username,
-                };
-                let success: login::clientbound::Packet = login::clientbound::LoginSuccess {
-                    uuid: player.uuid,
-                    username: player.name.clone(),
-                    properties: Vec::new(),
+                let mut token = [0; 4];
+                getrandom::fill(&mut token).expect("the system random number generator works");
+                let request: login::clientbound::Packet = login::clientbound::EncryptionRequest {
+                    server_id: String::new(),
+                    public_key: self.key.public_der().to_vec(),
+                    verify_token: token.to_vec(),
+                    should_authenticate: true,
                 }
                 .into();
-                write_frame(&mut self.out, |buf| success.encode(buf));
-                self.player = Some(player);
+                self.send(|buf| request.encode(buf));
+                self.login = LoginStep::Encryption {
+                    username: start.username,
+                    token,
+                };
                 Ok(())
             }
-            login::serverbound::Packet::LoginAcknowledged(_)
-                if self.player.is_some() && !self.login_acknowledged =>
-            {
-                self.login_acknowledged = true;
+            (
+                login::serverbound::Packet::EncryptionResponse(response),
+                LoginStep::Encryption { username, token },
+            ) => {
+                // Both are always decrypted, and a bad padding gives random bytes, so that every invalid
+                // response fails here in the same way.
+                let secret = self.key.decrypt::<16>(&response.shared_secret);
+                let echoed = self.key.decrypt::<4>(&response.verify_token);
+                let (Some(secret), Some(echoed)) = (secret, echoed) else {
+                    return Err(ConnectionError::EncryptionFailed);
+                };
+                if !ct_equal(&echoed, token) {
+                    return Err(ConnectionError::EncryptionFailed);
+                }
+                let username = username.clone();
+                let mut encryption = Encryption::new(&secret);
+                // Bytes the client sent after the response are already encrypted.
+                encryption.decrypt(self.frames.pending_mut());
+                self.encryption = Some(encryption);
+                self.auth_request = Some(AuthRequest {
+                    username,
+                    server_hash: server_hash("", &secret, self.key.public_der()),
+                });
+                self.login = LoginStep::Authenticating;
+                Ok(())
+            }
+            (login::serverbound::Packet::LoginAcknowledged(_), LoginStep::Success) => {
+                self.login = LoginStep::Done;
                 self.state = State::Configuration;
                 self.start_configuration();
                 Ok(())
             }
-            other => Err(unexpected(&other)),
+            (other, _) => Err(unexpected(&other)),
         }
+    }
+
+    /// Sends Set Compression when compression is on, then Login Success.
+    fn finish_login(&mut self, player: Player, info: &ServerInfo) {
+        if let Ok(threshold) = usize::try_from(info.compression_threshold) {
+            let packet: login::clientbound::Packet = login::clientbound::SetCompression {
+                threshold: info.compression_threshold,
+            }
+            .into();
+            self.send(|buf| packet.encode(buf));
+            self.compression = Some(Compression::new(threshold));
+        }
+        let success: login::clientbound::Packet = login::clientbound::LoginSuccess {
+            uuid: player.uuid,
+            username: player.name.clone(),
+            properties: player.properties.clone(),
+        }
+        .into();
+        self.send(|buf| success.encode(buf));
+        self.player = Some(player);
+        self.login = LoginStep::Success;
     }
 
     /// What vanilla sends when Configuration starts: the server's brand, the enabled features and the data
@@ -472,6 +612,7 @@ impl Connection {
     /// Brings the player into the void world.
     fn join(&mut self, info: &ServerInfo) {
         let player = self.player.clone().expect("Login set the player");
+        debug_assert_eq!(self.login, LoginStep::Done);
         let dimension_type =
             registries::entry_id("minecraft:dimension_type", "minecraft:overworld")
                 .expect("the overworld dimension type is synchronized");
@@ -530,6 +671,15 @@ impl Connection {
                     entries: vec![play::PlayerInfoEntry {
                         uuid: player.uuid,
                         name: player.name,
+                        properties: player
+                            .properties
+                            .into_iter()
+                            .map(|p| play::ProfileProperty {
+                                name: p.name,
+                                value: p.value,
+                                signature: p.signature,
+                            })
+                            .collect(),
                         game_mode: game_mode_id(info.game_mode),
                         listed: true,
                         // With list order 2 before the hat, a client reading the two in the other order
@@ -596,12 +746,30 @@ impl Connection {
         Ok(())
     }
 
+    /// Frames the packet `encode` writes, compressing and encrypting it when they are on, and queues it.
+    fn send(&mut self, encode: impl FnOnce(&mut Vec<u8>)) {
+        let mut frame = Vec::new();
+        match &mut self.compression {
+            Some(compression) => {
+                let mut packet = Vec::new();
+                encode(&mut packet);
+                let body = compression.compress(&packet);
+                write_frame(&mut frame, |buf| buf.extend_from_slice(&body));
+            }
+            None => write_frame(&mut frame, encode),
+        }
+        if let Some(encryption) = &mut self.encryption {
+            encryption.encrypt(&mut frame);
+        }
+        self.out.extend_from_slice(&frame);
+    }
+
     fn send_configuration(&mut self, packet: configuration::clientbound::Packet) {
-        write_frame(&mut self.out, |buf| packet.encode(buf));
+        self.send(|buf| packet.encode(buf));
     }
 
     fn send_play(&mut self, packet: play::clientbound::Packet) {
-        write_frame(&mut self.out, |buf| packet.encode(buf));
+        self.send(|buf| packet.encode(buf));
     }
 
     /// Sends Login Disconnect with `reason`, a text component as JSON, and closes the connection.
@@ -610,7 +778,7 @@ impl Connection {
             reason: reason.to_owned(),
         }
         .into();
-        write_frame(&mut self.out, |buf| packet.encode(buf));
+        self.send(|buf| packet.encode(buf));
         self.state = State::Closed;
     }
 

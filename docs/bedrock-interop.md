@@ -170,8 +170,9 @@ Bedrock settings live in `harpas.toml`:
 
 ```toml
 [bedrock]
-enabled = true   # default
-port = 19132     # TCP for signaling and UDP for WebRTC, Bedrock's default
+enabled = true       # default
+port = 19132         # TCP, signaling; Bedrock's default, the port players type
+webrtc_port = 19133  # UDP, WebRTC connections
 ```
 
 With `enabled = false`:

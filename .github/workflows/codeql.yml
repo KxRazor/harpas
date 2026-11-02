@@ -1,9 +1,9 @@
 name: CodeQL
 
 # Code scanning for Rust, the GitHub Actions workflows and the Java bridge example. This replaces GitHub's
-# default setup, which analyzes every language on every pull request; the Rust analysis alone takes several
-# minutes. Pull requests analyze only the languages whose files they change. Pushes to main and the weekly
-# run analyze everything.
+# default setup, which analyzes every language on every pull request. The Rust analysis takes about four
+# minutes and does not block merging, so it runs only on pushes to main, the weekly run and manual runs.
+# Pull requests analyze Actions and Java when they change those files.
 
 on:
   push:
@@ -41,7 +41,6 @@ jobs:
           fi
           files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
           languages=()
-          grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^schema/' <<< "$files" && languages+=('"rust"')
           grep -qE '^\.github/' <<< "$files" && languages+=('"actions"')
           grep -qE '\.(java|kt)$' <<< "$files" && languages+=('"java-kotlin"')
           echo "languages=[$(IFS=,; echo "${languages[*]}")]" >> "$GITHUB_OUTPUT"

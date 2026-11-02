@@ -56,6 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   10 seconds, refused with "Connection throttled!"), a maximum packet size per state, and 30 seconds to log in
   with vanilla's `slow_login` message. Loopback connections skip the per-address limits (`harpas-java`,
   `harpas-server`).
+- Logins are refused with vanilla's "The server is full!" when `max-players` players are in Play
+  (`harpas-java`).
 
 ### Changed
 

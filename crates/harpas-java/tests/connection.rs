@@ -710,3 +710,33 @@ fn logins_wait_for_admission_when_required() {
     assert!(!connection.awaits_admission());
     assert!(!connection.take_output().is_empty());
 }
+
+#[test]
+fn a_full_server_refuses_logins_as_vanilla() {
+    let bytes = [
+        handshake(775, handshaking::Intent::Login),
+        login_start("Steve"),
+    ]
+    .concat();
+    let full = ServerInfo {
+        max_players: 1,
+        online_players: 1,
+        ..offline()
+    };
+    let mut connection = new_connection();
+    connection.receive(&bytes, &full).unwrap();
+    assert!(connection.is_closed());
+    assert!(connection.player().is_none());
+    assert_eq!(
+        login_disconnect_reason(&connection.take_output()),
+        r#"{"translate":"multiplayer.disconnect.server_full"}"#
+    );
+
+    let one_free = ServerInfo {
+        online_players: 0,
+        ..full
+    };
+    let mut connection = new_connection();
+    connection.receive(&bytes, &one_free).unwrap();
+    assert!(connection.player().is_some());
+}

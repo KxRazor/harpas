@@ -725,6 +725,11 @@ impl Connection {
 
     /// Sends Set Compression when compression is on, then Login Success.
     fn finish_login(&mut self, player: Player, info: &ServerInfo) {
+        // Vanilla counts the players in Play, after authentication and before compression starts.
+        if info.online_players >= info.max_players {
+            self.disconnect_login(&translate("multiplayer.disconnect.server_full", &[]));
+            return;
+        }
         if let Ok(threshold) = usize::try_from(info.compression_threshold) {
             let packet: login::clientbound::Packet = login::clientbound::SetCompression {
                 threshold: info.compression_threshold,

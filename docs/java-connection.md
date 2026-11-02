@@ -60,7 +60,10 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 - **Login:** names with spaces, control characters or non-ASCII characters are refused, as in vanilla. In
   online mode, see [Authentication](#authentication) and [Encryption and compression](#encryption-and-compression).
   In offline mode the player's UUID is vanilla's offline UUID, a version 3 UUID of `OfflinePlayer:<name>`, and
-  the connection is not encrypted, as in vanilla.
+  the connection is not encrypted, as in vanilla. Once authenticated, a player is refused with
+  `multiplayer.disconnect.server_full` when `max-players` players are in Play, before Login Success and
+  compression, as in vanilla; players still in Configuration are not counted, as in vanilla. The whitelist,
+  bans and operators who bypass the limit come with commands (M4).
 - **Configuration:** see [Configuration state](#configuration-state).
 - **Play:** players join the void world at (0.5, 65, 0.5), with abilities for the `gamemode` of
   `server.properties`. The server maintains a shared player list and sends profiles, entities and accepted

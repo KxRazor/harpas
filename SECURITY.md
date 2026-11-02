@@ -6,8 +6,7 @@ release. Thank you for reporting them privately.
 ## Supported versions
 
 While Harpas is on `0.x`, only the latest stable release receives fixes, including security fixes
-([docs/releases.md](docs/releases.md#support-policy)). Until the first release, reports apply to the `main`
-branch.
+([docs/releases.md](docs/releases.md#support-policy)). Reports about the `main` branch are welcome too.
 
 ## Reporting a vulnerability
 

@@ -41,7 +41,69 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Wake idle connections to send messages from the logic thread promptly.
 const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Revision of PrismarineJS/minecraft-data the Java codecs were built from, as in
+/// `crates/harpas-protocol-java/schema/26.1/version.toml`.
+const MINECRAFT_DATA_REVISION: &str = "bd8b5c6048e5af9694374b83f25f5b4aade619cc";
+
+/// What the command line asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Run,
+    Version { verbose: bool },
+}
+
+fn parse_args(args: &[String]) -> Result<Command, String> {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        // Vanilla's `nogui` closes its window; Harpas has none, and panels pass it anyway.
+        [] | ["nogui" | "--nogui"] => Ok(Command::Run),
+        ["--version" | "-V"] => Ok(Command::Version { verbose: false }),
+        ["--version" | "-V", "--verbose"] | ["--verbose", "--version" | "-V"] => {
+            Ok(Command::Version { verbose: true })
+        }
+        _ => Err("usage: harpas [nogui] | harpas --version [--verbose]".to_owned()),
+    }
+}
+
+/// The Harpas version with the Minecraft versions it supports as build metadata (`docs/releases.md`).
+fn version() -> String {
+    format!(
+        "{}+{}",
+        env!("CARGO_PKG_VERSION"),
+        harpas_protocol_java::v26_1::MINECRAFT_VERSION
+    )
+}
+
+/// What `--version --verbose` declares, as the release notes do (`docs/releases.md`).
+fn verbose_version() -> String {
+    use harpas_protocol_java::v26_1::{MINECRAFT_VERSION, PROTOCOL};
+    format!(
+        "harpas {}\n\
+         Server version: Java {MINECRAFT_VERSION}\n\
+         Java clients: {MINECRAFT_VERSION} (protocol {PROTOCOL})\n\
+         Bedrock clients: not supported yet\n\
+         Native plugin API: not supported yet\n\
+         Protocol data: PrismarineJS/minecraft-data {MINECRAFT_DATA_REVISION}",
+        version()
+    )
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match parse_args(&args) {
+        Ok(Command::Run) => {}
+        // Before the log opens, so that asking for the version leaves no files behind.
+        Ok(Command::Version { verbose: false }) => return println!("harpas {}", version()),
+        Ok(Command::Version { verbose: true }) => return println!("{}", verbose_version()),
+        Err(usage) => {
+            eprintln!("{usage}");
+            std::process::exit(2);
+        }
+    }
     if let Err(e) = logging::init(Path::new("logs")) {
         eprintln!("Could not open logs/latest.log: {e}");
         std::process::exit(1);
@@ -57,7 +119,7 @@ fn run() -> io::Result<()> {
     let started = Instant::now();
     info!(
         "Starting Harpas {} for Minecraft {}",
-        env!("CARGO_PKG_VERSION"),
+        version(),
         harpas_protocol_java::v26_1::MINECRAFT_VERSION
     );
     info!("Loading properties");
@@ -555,6 +617,30 @@ mod tests {
         }
         drop(logic);
         logic_thread.join().unwrap();
+    }
+
+    #[test]
+    fn the_command_line_asks_for_the_server_or_its_version() {
+        let args =
+            |list: &[&str]| parse_args(&list.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        assert_eq!(args(&[]), Ok(Command::Run));
+        assert_eq!(
+            args(&["--version"]),
+            Ok(Command::Version { verbose: false })
+        );
+        assert_eq!(
+            args(&["-V", "--verbose"]),
+            Ok(Command::Version { verbose: true })
+        );
+        assert_eq!(
+            args(&["--verbose", "--version"]),
+            Ok(Command::Version { verbose: true })
+        );
+        assert!(args(&["--verbose"]).is_err());
+        assert_eq!(args(&["nogui"]), Ok(Command::Run));
+        assert!(args(&["--port", "25566"]).is_err());
+        assert_eq!(version(), format!("{}+26.1", env!("CARGO_PKG_VERSION")));
+        assert!(verbose_version().contains("Java clients: 26.1 (protocol 775)"));
     }
 
     #[test]

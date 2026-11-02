@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Mojang EULA acceptance: the server starts once `eula = true` is in `harpas.toml`, `HARPAS_EULA=true` is
+  set or a vanilla `eula.txt` accepts it; an interactive console asks once and saves the answer
+  (`harpas-server`).
+
 ### Changed
 
 ### Fixed

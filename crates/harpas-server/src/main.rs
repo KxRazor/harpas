@@ -5,11 +5,12 @@
 //! into a void world. The engine runs on one logic thread; there is one thread per connection for now. The
 //! network runtime comes with the protection against abusive connections (`docs/java-connection.md`). Settings
 //! come from `server.properties`, `harpas.toml` and `HARPAS_*` environment variables; the log goes to the
-//! console and `logs/latest.log`.
+//! console and `logs/latest.log`. The server starts only once the owner has accepted Mojang's EULA.
 //!
 //! Design: `docs/operations.md`.
 
 mod console;
+mod eula;
 mod harpas_toml;
 mod limits;
 mod logging;
@@ -124,9 +125,12 @@ fn run() -> io::Result<()> {
     );
     info!("Loading properties");
     let properties = load_properties(Path::new("server.properties"))?;
-    for warning in harpas_toml::check(Path::new("harpas.toml"))? {
+    let settings = harpas_toml::load(Path::new("harpas.toml"))?;
+    for warning in harpas_toml::check(&settings) {
         warn!("{warning}");
     }
+    // Every start needs Minecraft's game data, downloaded from Mojang (`docs/world.md`).
+    eula::require(Path::new(""), &settings)?;
     let info = Arc::new(server_info(&properties));
     info!("Default game type: {:?}", info.game_mode);
     info!("Generating keypair");

@@ -1,8 +1,8 @@
 //! `harpas.toml`, Harpas' own settings
 //!
-//! Every setting in it belongs to a feature, and arrives with that feature; this version has none yet. The file
-//! is still read, so that a broken file stops the server instead of being ignored, and so that settings this
-//! version does not know, or that belong in `server.properties`, are reported (`docs/operations.md`).
+//! Every setting in it belongs to a feature, and arrives with that feature; this version reads only `eula`
+//! (`crate::eula`). A broken file stops the server instead of being ignored, and settings this version does not
+//! know, or that belong in `server.properties`, are reported (`docs/operations.md`).
 
 use std::fs;
 use std::io;
@@ -11,24 +11,28 @@ use std::path::Path;
 use crate::properties;
 
 /// Harpas settings this version reads, as dotted paths.
-const KNOWN: &[&str] = &[];
+const KNOWN: &[&str] = &["eula"];
 
-/// Reads `path` and returns a warning for every setting that is ignored. A missing file has no settings.
-pub fn check(path: &Path) -> io::Result<Vec<String>> {
+/// Reads `path`. A missing file has no settings.
+pub fn load(path: &Path) -> io::Result<toml::Table> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(toml::Table::new()),
         Err(e) => return Err(e),
     };
-    let table: toml::Table = text.parse().map_err(|e| {
+    text.parse().map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{} is not valid TOML: {e}", path.display()),
         )
-    })?;
+    })
+}
+
+/// A warning for every setting in `table` that is ignored.
+pub fn check(table: &toml::Table) -> Vec<String> {
     let mut warnings = Vec::new();
-    unknown(&table, "", &mut warnings);
-    Ok(warnings)
+    unknown(table, "", &mut warnings);
+    warnings
 }
 
 fn unknown(table: &toml::Table, prefix: &str, warnings: &mut Vec<String>) {
@@ -57,7 +61,7 @@ mod tests {
 
     use super::*;
 
-    fn check_text(text: &str) -> io::Result<Vec<String>> {
+    fn load_text(text: &str) -> io::Result<toml::Table> {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "harpas-toml-{}-{}",
@@ -67,7 +71,7 @@ mod tests {
         fs::create_dir_all(&dir)?;
         let path = dir.join("harpas.toml");
         fs::write(&path, text)?;
-        let result = check(&path);
+        let result = load(&path);
         let _ = fs::remove_dir_all(&dir);
         result
     }
@@ -75,7 +79,7 @@ mod tests {
     #[test]
     fn a_missing_file_has_no_settings() {
         assert!(
-            check(Path::new("does-not-exist/harpas.toml"))
+            load(Path::new("does-not-exist/harpas.toml"))
                 .unwrap()
                 .is_empty()
         );
@@ -83,7 +87,8 @@ mod tests {
 
     #[test]
     fn reports_ignored_settings() {
-        let warnings = check_text("max-players = 5\n[bedrock]\nport = 19132\n").unwrap();
+        let table = load_text("eula = true\nmax-players = 5\n[bedrock]\nport = 19132\n").unwrap();
+        let warnings = check(&table);
         assert_eq!(warnings.len(), 2);
         assert!(warnings[0].contains("`bedrock`"));
         assert!(warnings[1].contains("`max-players`, which belongs in server.properties"));
@@ -91,7 +96,7 @@ mod tests {
 
     #[test]
     fn invalid_toml_is_an_error() {
-        let error = check_text("eula = \n").unwrap_err();
+        let error = load_text("eula = \n").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 }

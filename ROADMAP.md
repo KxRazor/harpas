@@ -46,7 +46,7 @@ documents.
 
 - [x] JVM bridge benchmark ([docs/jvm.md](docs/jvm.md#validation)): synchronous event dispatch, FFM vs. JNI,
       shared-memory reads, 200 simulated players.
-- [ ] Temurin vs. GraalVM Community Edition comparison on the same benchmark.
+- [x] Temurin vs. GraalVM Community Edition comparison on the same benchmark.
 - [x] Protocol codegen prototype: generate the Java 26.1 Status and Login codecs from a schema built from
       minecraft-data ([docs/protocol-codecs.md](docs/protocol-codecs.md)); decide on ProtoDef vs. our own format.
 - [x] NetherNet prototype: HTTP signaling and WebRTC data channels, with a Bedrock 26.60 client reaching the

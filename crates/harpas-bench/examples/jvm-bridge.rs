@@ -143,7 +143,8 @@ fn tick(shared: *mut Shared, mut dispatch: impl FnMut() -> i64, verify: bool) {
     }
 }
 
-fn paced_ticks(ticks: usize, mut run: impl FnMut()) {
+/// Runs `ticks` ticks at 20 TPS; returns µs per tick (excluding sleep) and the deadline overruns.
+fn paced(ticks: usize, mut run: impl FnMut()) -> (Vec<f64>, usize) {
     let mut samples = Vec::with_capacity(ticks);
     let start = Instant::now();
     let mut overruns = 0;
@@ -158,6 +159,11 @@ fn paced_ticks(ticks: usize, mut run: impl FnMut()) {
             overruns += 1;
         }
     }
+    (samples, overruns)
+}
+
+fn paced_ticks(ticks: usize, run: impl FnMut()) {
+    let (mut samples, overruns) = paced(ticks, run);
     let mean = samples.iter().sum::<f64>() / ticks as f64;
     samples.sort_by(f64::total_cmp);
     println!(
@@ -176,6 +182,43 @@ fn rss() {
             println!("{line}");
         }
     }
+}
+
+fn cpu() {
+    // Linux only. Compiler threads are "C1/C2 CompilerThread" or "JVMCI-native CompilerThread" (truncated
+    // to 15 bytes); their CPU time is lost if they exit, so compare with -XX:-UseDynamicNumberOfCompilerThreads.
+    let Ok(stat) = std::fs::read_to_string("/proc/self/stat") else {
+        return;
+    };
+    // utime and stime are fields 14 and 15, in USER_HZ (100 on Linux), and include exited threads.
+    let fields: Vec<&str> = stat[stat.rfind(')').unwrap_or(0) + 2..]
+        .split(' ')
+        .collect();
+    let process =
+        (fields[11].parse::<u64>().unwrap_or(0) + fields[12].parse::<u64>().unwrap_or(0)) * 10;
+    let (mut compiler, mut threads) = (0u64, 0);
+    for task in std::fs::read_dir("/proc/self/task")
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let path = task.path();
+        let name = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
+        if name.contains("Compiler") || name.starts_with("JVMCI") {
+            // The first schedstat field is the time spent on CPU, in nanoseconds.
+            let schedstat = std::fs::read_to_string(path.join("schedstat")).unwrap_or_default();
+            compiler += schedstat
+                .split(' ')
+                .next()
+                .and_then(|ns| ns.parse().ok())
+                .unwrap_or(0);
+            threads += 1;
+        }
+    }
+    println!(
+        "CPU: process {process} ms; {threads} live compiler threads {} ms",
+        compiler / 1_000_000
+    );
 }
 
 fn fixture() -> Result<PathBuf> {
@@ -236,6 +279,7 @@ fn fixture() -> Result<PathBuf> {
 fn main() -> Result<()> {
     let mut ticks = 200usize;
     let mut warmup_ms = 2000u64;
+    let mut cold_ticks = 0usize;
     let mut self_test = false;
     let mut options = Vec::new();
     let mut args = std::env::args().skip(1);
@@ -243,6 +287,9 @@ fn main() -> Result<()> {
         match arg.as_str() {
             "--ticks" => ticks = args.next().ok_or("--ticks needs a value")?.parse()?,
             "--warmup-ms" => warmup_ms = args.next().ok_or("--warmup-ms needs a value")?.parse()?,
+            "--cold-ticks" => {
+                cold_ticks = args.next().ok_or("--cold-ticks needs a value")?.parse()?;
+            }
             "--self-test" => self_test = true,
             "--" => {
                 options.extend(args);
@@ -306,7 +353,9 @@ fn main() -> Result<()> {
         "JVM creation: {:.1} ms; extra options: {options:?}",
         start.elapsed().as_secs_f64() * 1000.0
     );
-    vm.attach_current_thread(|env| benchmark(env, shared, self_test, ticks, warmup_ms))?;
+    vm.attach_current_thread(|env| {
+        benchmark(env, shared, self_test, ticks, warmup_ms, cold_ticks)
+    })?;
     vm.detach_current_thread()?;
     // SAFETY: the attachment closure and all its JNI references are gone; this fixture never spawns
     // native workers or attaches daemon threads. No native code will call the VM after destruction.
@@ -321,6 +370,7 @@ fn benchmark(
     self_test: bool,
     ticks: usize,
     warmup_ms: u64,
+    cold_ticks: usize,
 ) -> Result<()> {
     let class = env.load_class(jni_str!("Bridge"))?;
     // SAFETY: the two functions match the fixture's static native declarations exactly.
@@ -388,6 +438,24 @@ fn benchmark(
         return Ok(());
     }
     call(env, &class, control, 3)?;
+    if cold_ticks > 0 {
+        // Time to steady state: paced FFM ticks before any other warmup, reported per second.
+        reset(shared);
+        // SAFETY: live stub, same attached thread; dispatch catches all listener exceptions.
+        let (samples, overruns) = paced(cold_ticks, || {
+            tick(shared, || unsafe { ffm_dispatch(0) }, false)
+        });
+        println!("\n| Cold FFM ticks, second | mean µs/tick | max µs/tick |\n|---|---:|---:|");
+        for (second, window) in samples.chunks(20).enumerate() {
+            println!(
+                "| {} | {:.2} | {:.2} |",
+                second + 1,
+                window.iter().sum::<f64>() / window.len() as f64,
+                window.iter().copied().fold(0.0, f64::max)
+            );
+        }
+        println!("Cold deadline overruns: {overruns}");
+    }
     println!(
         "\nWarmup: {warmup_ms} ms per case; {ticks} measured ticks per dispatch path, 200 players at 20 TPS."
     );
@@ -460,5 +528,6 @@ fn benchmark(
     }
     call(env, &class, control, 4)?;
     rss();
+    cpu();
     Ok(())
 }

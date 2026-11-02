@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Embedded JDK 25 bridge benchmark with JNI/FFM calls, shared player views, synchronous events for 200
   simulated players, and behavioral checks for both dispatch paths (`harpas-bench`).
+- Cold-start ticks and JIT compiler CPU time in the JVM bridge benchmark, to compare Temurin with GraalVM
+  Community Edition (`harpas-bench`).
 - Java 26.1 Handshaking, Status and Login packet codecs, generated from Harpas' own protocol schema
   (`harpas-protocol-java`), with a check of the schema against minecraft-data (`harpas-protocol-codegen`).
 

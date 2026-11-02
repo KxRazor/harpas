@@ -25,8 +25,14 @@ pub enum CompressionError {
         /// The connection's threshold.
         threshold: usize,
     },
-    /// A compressed packet declared more than [`MAX_UNCOMPRESSED_LEN`] bytes.
-    TooLarge(usize),
+    /// A compressed packet declared more than the limit of the connection's state, at most
+    /// [`MAX_UNCOMPRESSED_LEN`].
+    TooLarge {
+        /// Declared uncompressed length.
+        len: usize,
+        /// The limit it is over.
+        limit: usize,
+    },
     /// The zlib data was invalid, or did not inflate to the declared length.
     Invalid,
 }
@@ -39,9 +45,9 @@ impl fmt::Display for CompressionError {
                 f,
                 "compressed packet of {len} bytes is below the threshold of {threshold}"
             ),
-            CompressionError::TooLarge(len) => write!(
+            CompressionError::TooLarge { len, limit } => write!(
                 f,
-                "compressed packet declares {len} bytes, over the limit of {MAX_UNCOMPRESSED_LEN}"
+                "compressed packet declares {len} bytes, over the limit of {limit}"
             ),
             CompressionError::Invalid => f.write_str("invalid compressed packet"),
         }
@@ -103,8 +109,12 @@ impl Compression {
         body
     }
 
-    /// The packet in the body of a frame from the client.
-    pub(crate) fn decompress(&mut self, body: &[u8]) -> Result<Vec<u8>, CompressionError> {
+    /// The packet in the body of a frame from the client, which may be at most `limit` bytes uncompressed.
+    pub(crate) fn decompress(
+        &mut self,
+        body: &[u8],
+        limit: usize,
+    ) -> Result<Vec<u8>, CompressionError> {
         let mut input = body;
         let len = codec::read_varint(&mut input).map_err(|_| CompressionError::MissingLength)?;
         let len = usize::try_from(len).map_err(|_| CompressionError::Invalid)?;
@@ -117,8 +127,9 @@ impl Compression {
                 threshold: self.threshold,
             });
         }
-        if len > MAX_UNCOMPRESSED_LEN {
-            return Err(CompressionError::TooLarge(len));
+        let limit = limit.min(MAX_UNCOMPRESSED_LEN);
+        if len > limit {
+            return Err(CompressionError::TooLarge { len, limit });
         }
         // The output never grows past the declared length, so a small frame cannot inflate into more.
         let mut packet = Vec::with_capacity(len);
@@ -144,7 +155,10 @@ mod tests {
         let mut compression = Compression::new(256);
         let body = compression.compress(&[1, 2, 3]);
         assert_eq!(body, [0, 1, 2, 3]);
-        assert_eq!(compression.decompress(&body), Ok(vec![1, 2, 3]));
+        assert_eq!(
+            compression.decompress(&body, MAX_UNCOMPRESSED_LEN),
+            Ok(vec![1, 2, 3])
+        );
     }
 
     #[test]
@@ -154,11 +168,17 @@ mod tests {
         let body = compression.compress(&packet);
         assert!(body.len() < 200, "{} bytes", body.len());
         assert_eq!(body[..2], [0x90, 0x4e]);
-        assert_eq!(compression.decompress(&body), Ok(packet.clone()));
+        assert_eq!(
+            compression.decompress(&body, MAX_UNCOMPRESSED_LEN),
+            Ok(packet.clone())
+        );
         // The compressor is reused between packets.
         let again = compression.compress(&packet);
         assert_eq!(again, body);
-        assert_eq!(compression.decompress(&again), Ok(packet));
+        assert_eq!(
+            compression.decompress(&again, MAX_UNCOMPRESSED_LEN),
+            Ok(packet)
+        );
     }
 
     #[test]
@@ -166,7 +186,7 @@ mod tests {
         let mut compression = Compression::new(256);
         // A compressed packet declaring 100 bytes, below the threshold.
         assert_eq!(
-            compression.decompress(&[100, 0x78, 0x9c]),
+            compression.decompress(&[100, 0x78, 0x9c], MAX_UNCOMPRESSED_LEN),
             Err(CompressionError::BelowThreshold {
                 len: 100,
                 threshold: 256
@@ -176,8 +196,21 @@ mod tests {
         let mut body = Vec::new();
         codec::write_varint(&mut body, MAX_UNCOMPRESSED_LEN as i32 + 1);
         assert_eq!(
-            compression.decompress(&body),
-            Err(CompressionError::TooLarge(MAX_UNCOMPRESSED_LEN + 1))
+            compression.decompress(&body, MAX_UNCOMPRESSED_LEN),
+            Err(CompressionError::TooLarge {
+                len: MAX_UNCOMPRESSED_LEN + 1,
+                limit: MAX_UNCOMPRESSED_LEN
+            })
+        );
+        // A state's lower limit applies before inflating.
+        let mut body = Vec::new();
+        codec::write_varint(&mut body, 70_000);
+        assert_eq!(
+            compression.decompress(&body, 65_536),
+            Err(CompressionError::TooLarge {
+                len: 70_000,
+                limit: 65_536
+            })
         );
         // A bomb: 1 MiB of zeros declared as 300 bytes stops at 300 and is refused.
         let mut big = Compression::new(0);
@@ -188,7 +221,7 @@ mod tests {
         codec::read_varint(&mut rest).unwrap();
         lying.extend_from_slice(rest);
         assert_eq!(
-            compression.decompress(&lying),
+            compression.decompress(&lying, MAX_UNCOMPRESSED_LEN),
             Err(CompressionError::Invalid)
         );
         // Not zlib at all.
@@ -196,7 +229,7 @@ mod tests {
         codec::write_varint(&mut garbage, 300);
         garbage.extend_from_slice(&[0xff; 20]);
         assert_eq!(
-            compression.decompress(&garbage),
+            compression.decompress(&garbage, MAX_UNCOMPRESSED_LEN),
             Err(CompressionError::Invalid)
         );
     }

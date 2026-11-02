@@ -11,6 +11,7 @@
 
 mod console;
 mod harpas_toml;
+mod limits;
 mod logging;
 mod player;
 mod properties;
@@ -30,6 +31,7 @@ use harpas_java::{AuthOutcome, Connection, ServerInfo, ServerKey, State};
 use harpas_protocol_java::v26_1::play::GameMode;
 use log::{error, info, warn};
 
+use limits::{Limits, Permit};
 use properties::Properties;
 use session::{SessionServer, format_uuid};
 use shutdown::Shutdown;
@@ -105,6 +107,7 @@ fn run() -> io::Result<()> {
         "Done ({:.3}s)! For help, type \"help\"",
         started.elapsed().as_secs_f64()
     );
+    let limits = Arc::new(Limits::default());
     for stream in listener.incoming() {
         // Once stopping, new connections are closed until the process exits.
         if shutdown.is_stopping() {
@@ -120,22 +123,30 @@ fn run() -> io::Result<()> {
                 continue;
             }
         };
+        let Ok(peer) = stream.peer_addr() else {
+            continue;
+        };
+        // Over a limit, the connection is closed before it costs a thread.
+        let Some(mut permit) = limits.connect(peer.ip(), Instant::now()) else {
+            continue;
+        };
         let info = Arc::clone(&info);
         let key = Arc::clone(&key);
         let session = session.clone();
         let logic = logic.clone();
         let guard = shutdown.connection();
-        let peer = stream
-            .peer_addr()
-            .map_or_else(|_| "unknown".to_owned(), |a| a.to_string());
-        thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name(format!("Connection {peer}"))
             .spawn(move || {
-                if let Err(e) = serve(stream, &info, key, session.as_deref(), &logic) {
+                let session = session.as_deref();
+                if let Err(e) = serve(stream, &info, key, session, &logic, &mut permit) {
                     info!("{peer} disconnected: {e}");
                 }
                 drop(guard);
-            })?;
+            });
+        if let Err(e) = spawned {
+            warn!("Could not start a thread for {peer}: {e}");
+        }
     }
     Ok(())
 }
@@ -220,26 +231,29 @@ fn serve(
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+    permit: &mut Permit,
 ) -> io::Result<()> {
     // Reads wake up to send the logic thread's output even when this player is idle.
     stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
     stream.set_nodelay(true)?;
-    let result = drive(&mut stream, info, key, session, logic);
+    let result = drive(&mut stream, info, key, session, logic, Some(permit));
     let _ = stream.shutdown(net::Shutdown::Both);
     result
 }
 
 /// Drives the I/O-free connection state machine over a stream. Once the player has joined, the end of the
-/// connection is logged as vanilla logs it, errors included; errors before that are returned.
+/// connection is logged as vanilla logs it, errors included; errors before that are returned. With a `permit`,
+/// login attempts count against the connection limits.
 fn drive(
     stream: &mut (impl Read + Write),
     info: &ServerInfo,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+    permit: Option<&mut Permit>,
 ) -> io::Result<()> {
     let mut departure = Departure::default();
-    let result = play(stream, info, key, session, logic, &mut departure);
+    let result = play(stream, info, key, session, logic, permit, &mut departure);
     let Some(name) = departure.name else {
         return result;
     };
@@ -274,12 +288,16 @@ fn play(
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+    mut permit: Option<&mut Permit>,
     departure: &mut Departure,
 ) -> io::Result<()> {
     let entity_id = logic
         .next_entity_id()
         .ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
     let mut connection = Connection::with_entity_id(key, entity_id);
+    if permit.is_some() {
+        connection.require_admission();
+    }
     if let Some(session) = session {
         connection.set_chat_authority(session.chat_authority());
     }
@@ -310,6 +328,16 @@ fn play(
             Err(e) => return Err(e),
         };
         let result = result.and_then(|()| connection.tick(Instant::now()));
+        let result = result.and_then(|()| {
+            if !connection.awaits_admission() {
+                return Ok(());
+            }
+            if permit.as_ref().is_some_and(|p| !p.login(Instant::now())) {
+                connection.refuse(limits::THROTTLED);
+                return Ok(());
+            }
+            connection.admit(&info)
+        });
         stream.write_all(&connection.take_output())?;
         if let Some(request) = connection.take_auth_request() {
             let outcome = session.map_or(AuthOutcome::Unavailable, |s| s.has_joined(&request));
@@ -345,6 +373,9 @@ fn play(
             }
             info!("{} joined the game", player.name);
             departure.name = Some(player.name.clone());
+            if let Some(permit) = permit.as_deref_mut() {
+                permit.entered_play();
+            }
             player_session = Some(session);
         }
         if let Some(session) = &player_session {
@@ -459,7 +490,7 @@ mod tests {
             ]),
             ..Stream::default()
         };
-        drive(&mut stream, info, Arc::clone(key), None, logic).unwrap();
+        drive(&mut stream, info, Arc::clone(key), None, logic, None).unwrap();
         let mut frames = FrameReader::default();
         frames.push(&stream.output);
         let packet =
@@ -505,7 +536,14 @@ mod tests {
                     close: Some(receiver),
                     ..Stream::default()
                 };
-                drive(&mut stream, &client_info, client_key, None, &client_logic)
+                drive(
+                    &mut stream,
+                    &client_info,
+                    client_key,
+                    None,
+                    &client_logic,
+                    None,
+                )
             });
             wait_for_count(&logic, 1);
             assert_eq!(status_count(&info, &key, &logic), 1);
@@ -587,7 +625,7 @@ mod tests {
                     output: server_output,
                 };
                 let mut departure = Departure::default();
-                let result = play(&mut stream, &info, key, None, &logic, &mut departure);
+                let result = play(&mut stream, &info, key, None, &logic, None, &mut departure);
                 (result, departure)
             })
         };
@@ -638,7 +676,7 @@ mod tests {
                     output: server_output,
                 };
                 let mut departure = Departure::default();
-                let result = play(&mut stream, &info, key, None, &logic, &mut departure);
+                let result = play(&mut stream, &info, key, None, &logic, None, &mut departure);
                 (result, departure)
             })
         };
@@ -715,7 +753,7 @@ mod tests {
                     input: server_input,
                     output: server_output,
                 };
-                drive(&mut stream, &info, key, None, &logic)
+                drive(&mut stream, &info, key, None, &logic, None)
             });
             for packet in login_packets(name) {
                 input.send(packet).unwrap();

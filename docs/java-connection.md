@@ -8,7 +8,7 @@ counterpart is [nethernet.md](nethernet.md).
 Status: in progress. Every state is implemented in `harpas-java`: Handshaking, Status and the server list
 (legacy ping included), Login in online and offline mode with encryption and compression, Configuration with
 registry data, and Play with players in a void world. Java player chat and signature verification are
-implemented; real-client validation of signed chat and protection against abuse remain open.
+implemented, as is the protection against abuse; real-client validation of signed chat remains open.
 Facts about the protocol cite their source in [References](#references); everything else is a design decision
 of this project.
 
@@ -40,8 +40,8 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 
 - **No I/O in the state machine.** `harpas_java::Connection` takes the bytes read from the socket and produces
   the bytes to send, like the NetherNet transport ([nethernet.md](nethernet.md)). The `harpas` binary drives
-  it with one thread per connection for now; the network runtime that replaces those threads is chosen with
-  the protection against abuse (below). Connections queue player events for the logic thread's packet phase
+  it with one thread per connection, which the connection limits below keep bounded; a network runtime that
+  replaces those threads is chosen when the number of connections calls for it (open question 2). Connections queue player events for the logic thread's packet phase
   and send its updates to clients; the resulting online count is used in server-list responses
   ([engine-core.md](engine-core.md#1-vanilla-tick-order-on-one-logic-thread)).
 - **Framing:** a frame's VarInt length is at most 3 bytes and 2,097,151, as in vanilla; the length is checked
@@ -224,19 +224,33 @@ Active by default, with no configuration, like the Bedrock side ([nethernet.md](
 
 | Threat | Defense |
 |---|---|
-| Connection floods | Per-address limits on new connections and on login attempts |
+| Connection floods | Limits on connections that are not in Play yet, total and per address, and on new connections and login attempts per address |
 | Oversized packets | A maximum packet size per state; larger packets close the connection |
 | Decompression bombs | A limit on the uncompressed size a compressed packet may declare, checked before inflating |
 | Slow or idle connections | Timeouts in Handshaking, Status, Login and Configuration |
 | Malformed packets | Decoders validate lengths before allocating and are fuzzed ([protocol-codecs.md](protocol-codecs.md#testing)); a decoding error closes the connection, never panics |
 
-Limits are chosen so that no vanilla client behavior can hit them *(measure against real clients)*.
+Limits are chosen so that no vanilla client behavior can hit them *(measure against real clients)*:
+
+| Limit | Value | Notes |
+|---|---|---|
+| Connections not in Play | 256 in total, 8 per address | A connection stops counting when it reaches Play, so players behind one address are limited only while they connect |
+| New connections | 20 per address per 10 seconds | A server list refresh and a join take two |
+| Login attempts | 5 per address per 10 seconds | Refused with Bukkit's "Connection throttled! Please wait before reconnecting." |
+| Packet size | Handshaking 1 KiB, Status 256 bytes, Login 32 KiB, Configuration 64 KiB, Play vanilla's 2 MiB frames and 8 MiB uncompressed | Checked on the declared length, before the bytes are buffered or inflated |
+| Time to log in | 30 seconds from the connection to Configuration | Vanilla's login timeout; Login gets `multiplayer.disconnect.slow_login`. Configuration and Play rely on Keep Alive |
+
+Loopback connections, such as a proxy on the same machine, skip the per-address limits. Connections over a
+limit are closed as soon as they are accepted, before a thread is started for them.
 
 ---
 
 ## Open questions
 
-1. Default values of the per-address limits.
+1. Default values of the per-address limits: the values above are a first choice, to be measured against real
+   clients and networks behind one address.
+2. Network runtime: an async runtime or an event loop over the I/O-free connection, when thread-per-connection
+   stops scaling.
 
 ---
 

@@ -3,7 +3,9 @@
 //! When standard input is not a terminal, as under hosting panels and service managers, commands are read line by
 //! line instead. Command output goes to the log, as in vanilla (`docs/operations.md`).
 
-use std::io::{self, BufRead, IsTerminal};
+use std::io::{self, BufRead, IsTerminal, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
 use log::info;
@@ -16,6 +18,7 @@ use rustyline::validate::Validator;
 use rustyline::{Config, Context, Editor, Helper};
 
 use crate::logging;
+use crate::shutdown::Shutdown;
 
 /// The console commands, in the order `help` lists them.
 const COMMANDS: &[&str] = &["help", "list", "stop"];
@@ -26,6 +29,35 @@ pub struct Server {
     pub logic: harpas_engine::Handle,
     /// `max-players`, for the player list.
     pub max_players: u32,
+    /// For `stop`.
+    pub shutdown: Arc<Shutdown>,
+}
+
+/// Whether the console is waiting for a line, with the terminal in raw mode.
+static READING: AtomicBool = AtomicBool::new(false);
+
+/// The terminal's settings before the console changed them.
+#[cfg(unix)]
+static SAVED_TERMINAL: std::sync::Mutex<Option<nix::sys::termios::Termios>> =
+    std::sync::Mutex::new(None);
+
+/// Puts the terminal back as it was if the process exits while the console is reading, as on SIGTERM; the
+/// console itself does this only when a line ends.
+pub fn restore_terminal() {
+    if !READING.load(Ordering::SeqCst) {
+        return;
+    }
+    #[cfg(unix)]
+    if let Some(saved) = SAVED_TERMINAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        let _ =
+            nix::sys::termios::tcsetattr(io::stdin(), nix::sys::termios::SetArg::TCSANOW, saved);
+    }
+    // Leave the prompt's line, so that the shell's prompt starts on its own.
+    let _ = io::stdout().write_all(b"\n");
 }
 
 /// Starts the console thread.
@@ -45,6 +77,10 @@ pub fn start(server: Server) -> io::Result<JoinHandle<()>> {
 }
 
 fn interactive(server: &Server) {
+    #[cfg(unix)]
+    if let Ok(terminal) = nix::sys::termios::tcgetattr(io::stdin()) {
+        *SAVED_TERMINAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(terminal);
+    }
     let config = Config::builder().auto_add_history(true).build();
     let mut editor = match Editor::<CommandHelper, DefaultHistory>::with_config(config) {
         Ok(editor) => editor,
@@ -58,7 +94,10 @@ fn interactive(server: &Server) {
         logging::set_printer(Box::new(printer));
     }
     loop {
-        match editor.readline("> ") {
+        READING.store(true, Ordering::SeqCst);
+        let line = editor.readline("> ");
+        READING.store(false, Ordering::SeqCst);
+        match line {
             Ok(line) => run(server, &line),
             // Ctrl-C stops the server, as it does without an interactive console.
             Err(ReadlineError::Interrupted) => run(server, "stop"),
@@ -88,12 +127,7 @@ fn run(server: &Server, line: &str) {
             ),
             Err(e) => log::error!("Could not list the players: {e}"),
         },
-        Some("stop") => {
-            info!("Stopping the server");
-            // Saving worlds and closing connections arrive with graceful shutdown (ROADMAP.md, M2).
-            log::logger().flush();
-            std::process::exit(0);
-        }
+        Some("stop") => server.shutdown.stop(),
         Some(_) => {
             info!("Unknown or incomplete command. See below for error");
             info!("{command}<--[HERE]");

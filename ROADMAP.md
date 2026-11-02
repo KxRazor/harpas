@@ -77,7 +77,7 @@ and chats.
 - [x] Chat with signing, as in vanilla.
 - [x] `server.properties` and `harpas.toml` loading; console and `logs/latest.log`
       ([docs/operations.md](docs/operations.md)).
-- [ ] Graceful shutdown on SIGTERM/SIGINT.
+- [x] Graceful shutdown on SIGTERM/SIGINT.
 
 ## M3 — Worlds (0.2.0)
 

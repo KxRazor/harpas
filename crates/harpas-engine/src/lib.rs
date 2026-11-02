@@ -71,6 +71,13 @@ impl Handle {
             .map_err(|_| LogicStopped)?;
         receiver.recv().map_err(|_| LogicStopped)
     }
+
+    /// Stops the logic thread at the next connection phase, disconnecting every player with `reason`.
+    pub fn shutdown(&self, reason: &'static str) -> Result<(), LogicStopped> {
+        self.events
+            .send(Event::Shutdown(reason))
+            .map_err(|_| LogicStopped)
+    }
 }
 
 /// A connection in Play; dropping it tells the logic thread that the connection has ended.
@@ -117,7 +124,8 @@ impl fmt::Display for LogicStopped {
 
 impl std::error::Error for LogicStopped {}
 
-/// Starts the single logic thread. It stops once all handles and player sessions have been dropped.
+/// Starts the single logic thread. It stops on [`Handle::shutdown`], or once all handles and player sessions
+/// have been dropped.
 pub fn start() -> io::Result<(Handle, JoinHandle<()>)> {
     let (sender, receiver) = mpsc::channel();
     let online_players = Arc::new(AtomicU32::new(0));
@@ -147,6 +155,7 @@ enum Event {
     },
     Left(i32),
     ListPlayers(Sender<Vec<String>>),
+    Shutdown(&'static str),
 }
 
 /// The next tick's target time. Short delays are caught up; a delay over two seconds resets the target.
@@ -195,6 +204,7 @@ struct Game {
     pending: Vec<Event>,
     players: Vec<player::PlayerState>,
     online_players: Arc<AtomicU32>,
+    stopped: bool,
 }
 
 impl TickWork for Game {
@@ -225,6 +235,15 @@ impl TickWork for Game {
                         .map(|p| p.player.profile.name.clone())
                         .collect();
                     let _ = reply.send(names);
+                }
+                Event::Shutdown(reason) => {
+                    for state in &mut self.players {
+                        if !state.disconnecting {
+                            state.disconnecting = true;
+                            state.send(player::Output::Disconnect(reason));
+                        }
+                    }
+                    self.stopped = true;
                 }
                 Event::Input { entity_id, input } => {
                     match input {
@@ -401,6 +420,7 @@ fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>) {
         pending: Vec::new(),
         players: Vec::new(),
         online_players,
+        stopped: false,
     };
     let mut schedule = Schedule::new(Instant::now());
     let mut number = 0;
@@ -409,6 +429,9 @@ fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>) {
         if schedule.take_due(now) {
             number += 1;
             tick(&mut game, number);
+            if game.stopped {
+                return;
+            }
         } else {
             // Wake for incoming events, but apply them only at the tick's connection phase. Check the
             // deadline after each event so a busy network cannot prevent ticks from running.
@@ -440,6 +463,7 @@ mod tests {
             pending: Vec::new(),
             players: Vec::new(),
             online_players: Arc::new(AtomicU32::new(0)),
+            stopped: false,
         }
     }
 
@@ -892,6 +916,25 @@ mod tests {
         tick(&mut game, 3);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
         assert!(new.try_recv().is_err());
+    }
+
+    #[test]
+    fn shutdown_disconnects_every_player_and_stops_the_logic_thread() {
+        let (handle, logic) = start().unwrap();
+        let session = handle
+            .player_joined(
+                handle.next_entity_id().unwrap(),
+                profile("Steve", 1),
+                10,
+                false,
+            )
+            .unwrap();
+        handle.shutdown("Server closed").unwrap();
+        // The thread stops even though a handle and a session are still alive.
+        logic.join().unwrap();
+        let mut outputs = std::iter::from_fn(|| session.try_recv());
+        assert!(outputs.any(|output| output == Output::Disconnect("Server closed")));
+        assert!(handle.shutdown("Server closed").is_err());
     }
 
     #[test]

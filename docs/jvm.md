@@ -429,8 +429,8 @@ configurations. The broader validation plan is:
 6. **Provisioning:** download size and time per platform, and first-start time including verification.
 
 The M1 synthetic results below answer the crossing-cost and synchronous-event questions. Real plugin
-compatibility and allocation workloads, the separate Temurin/GraalVM comparison, automatic heap/GC sizing,
-reentrant events and provisioning remain to be validated; they cannot be decided by this small fixture.
+compatibility and allocation workloads, the Temurin/GraalVM comparison with real plugins, automatic heap/GC
+sizing, reentrant events and provisioning remain to be validated; they cannot be decided by this small fixture.
 
 ### M1 bridge results — 1 November 2026
 
@@ -497,7 +497,65 @@ Serial used the least RSS in this small workload; the concurrent collectors trad
 pauses. Compact headers alone did not produce a clear RSS reduction relative to the default's 159.9–173.0
 MiB range. AOT reuse worked with changed native addresses in a new process, but this run does not establish
 faster plugin startup or time to steady state. Keep the production GC, heap, compact-header compatibility
-and AOT policy subject to real plugin measurements. The Temurin/GraalVM task remains open.
+and AOT policy subject to real plugin measurements.
+
+### M1 Temurin vs. GraalVM Community Edition — 1 November 2026
+
+The same benchmark ran on Eclipse Temurin **25.0.5+8-LTS** (C2) and GraalVM Community Edition **25.4.4.1.1**
+(OpenJDK 25.0.4.1.1, Graal JIT through JVMCI as libgraal), both with default G1, on the host above (Linux
+7.2 x86_64, Rust 1.99.0). The two JDKs differ in patch level, because the latest GraalVM CE build is based on
+25.0.4. Each JVM ran in three fresh processes, alternating Temurin and GraalVM, with
+`--cold-ticks 600 --ticks 200`, the default two-second warmups, `-XX:-UseDynamicNumberOfCompilerThreads` and
+GC logging. Desktop applications were still running (1-minute load average 2–8 during the runs, and 22 at
+the start of the first Temurin run). Every run passed the behavioral checks, and no run missed a tick
+deadline. Figures are medians of the three processes, with their range.
+
+| Measure | Temurin (C2) | GraalVM CE (Graal) |
+|---|---:|---:|
+| Shared-memory `x` read, ns/op | 1.86 (1.82–1.95) | 1.89 (1.89–1.95) |
+| Shared-memory `getLocation()`, ns/op | 4.97 (4.87–7.58) | 2.30 (2.30–2.31) |
+| Java → Rust `x` read, JNI, ns/op | 5.48 (5.17–6.65) | 5.34 (5.22–5.46) |
+| Java → Rust `x` read, plain FFM, ns/op | 8.40 (8.10–8.76) | 5.44 (5.38–5.47) |
+| Java → Rust `x` read, critical FFM, ns/op | 7.82 (7.61–8.08) | 3.96 (3.94–4.20) |
+| Rust → Java ping, cached JNI, ns/call | 84.11 (82.27–99.65) | 85.97 (84.01–92.00) |
+| Rust → Java ping, FFM upcall, ns/call | 20.69 (20.46–21.25) | 22.10 (21.76–24.01) |
+| Warm ticks, cached JNI, mean / p99 µs | 35.73 / 57.60 | 34.47 / 58.05 |
+| Warm ticks, FFM upcall, mean / p99 µs | 19.61 / 35.81 | 14.32 / 27.84 |
+| Young GC pauses over the run | 269 (221–294) | 91 (86–94) |
+| Largest logged GC pause, ms | 1.56 (1.46–2.36) | 1.66 (1.58–2.24) |
+| Compilation time (MXBean), ms | 216 (211–252) | 719 (709–734) |
+| CPU of the compiler threads, ms | 232 (227–270) | 739 (732–758) |
+| Process CPU over the run, s | 21.01 | 21.53 |
+| RSS at the end / peak RSS, MiB | 164.5 / 164.5 | 126.8 / 152.9 |
+| VM creation, ms | 23.1 (20.8–49.9) | 44.5 (42.9–45.3) |
+
+Cold FFM ticks run straight after VM creation and the self-test, before any other warmup. The table shows the
+median, across processes, of each second's mean and maximum:
+
+| Second after the self-test | Temurin mean / max µs | GraalVM mean / max µs |
+|---|---:|---:|
+| 1 | 444 / 1,273 | 472 / 1,449 |
+| 2 | 65 / 250 | 263 / 1,127 |
+| 3 | 17 / 37 | 88 / 206 |
+| 4 | 15 / 28 | 24 / 107 |
+| 5–30 (range of means) | 14–22 | 12–20 |
+
+**Reading:** after warmup, Graal runs this fixture's code faster where it can inline across the FFM boundary
+or remove allocations. Critical FFM reads take half the time, `getLocation()` no longer allocates its
+`Location` record, and the full FFM tick is about 27% faster. The young collection count drops to about a
+third, which suggests escape analysis removes allocations of this synthetic workload. Calls where the JIT
+does not change the boundary (JNI, upcall entry) cost the same. In return, Graal reaches steady state about
+two seconds later (40 ticks at 20 TPS), spends about three times as much CPU compiling, and doubles VM
+creation time. Neither JVM missed a deadline, even when cold; the slowest cold tick (1.4 ms) is 3% of the
+budget.
+
+**JVM decision:** keep **Temurin as the default**. The steady-state gain is real but measured on an
+allocation-light synthetic listener of about 15 µs per tick, which is 0.03% of a tick on either JVM; it
+cannot outweigh the open compatibility question, slower warmup, extra compiler CPU and GraalVM's
+monthly-release cadence. GraalVM CE remains the benchmark candidate. The decision is revisited with real
+plugins in the M5 compatibility suite, which measures per-tick plugin time, warmup and behavioral
+differences as described in [validation](#validation) step 5. Because both JDKs share HotSpot's runtime and
+GC, the bridge design does not depend on the outcome.
 
 ---
 

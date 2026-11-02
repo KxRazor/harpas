@@ -26,6 +26,15 @@ public final class Bridge {
     private static native double readX(long address);
     private static native void teleport(long address, double x, double y, double z);
 
+    private static boolean jvmciCompiler() {
+        try {
+            return ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class)
+                .getVMOption("UseJVMCICompiler").getValue().equals("true");
+        } catch (IllegalArgumentException missing) {
+            return false; // A HotSpot build without JVMCI.
+        }
+    }
+
     private static MemorySegment address(String name) {
         return MemorySegment.ofAddress(Long.parseLong(System.getProperty("harpas.bench." + name)));
     }
@@ -157,7 +166,8 @@ public final class Bridge {
             }
             case 3 -> {
                 System.out.println(System.getProperty("java.vm.vendor") + " " + System.getProperty("java.runtime.version")
-                    + "; " + System.getProperty("os.name") + " " + System.getProperty("os.arch"));
+                    + "; " + System.getProperty("os.name") + " " + System.getProperty("os.arch")
+                    + "; top-tier JIT: " + (jvmciCompiler() ? "Graal (JVMCI)" : "C2"));
                 System.out.println("VM arguments: " + ManagementFactory.getRuntimeMXBean().getInputArguments()
                     .stream().filter(arg -> !arg.startsWith("-Dharpas.bench.")).toList());
                 System.out.println("Collectors: " + ManagementFactory.getGarbageCollectorMXBeans().stream()

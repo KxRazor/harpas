@@ -14,7 +14,9 @@ and AOT training/production. Delete `target/jvm-bridge/bridge.jar` to force reco
 sequentially: they share these build artifacts.
 
 The default run takes about 45 seconds. `--ticks N` changes the measured ticks per dispatch path (default
-200), and `--warmup-ms N` changes the unpaced warmup per case (default 2000). `--self-test` runs only the
+200), and `--warmup-ms N` changes the unpaced warmup per case (default 2000). `--cold-ticks N` first runs N
+paced FFM ticks before any other warmup and reports their mean and maximum per second, to compare time to
+steady state between JVMs. `--self-test` runs only the
 correctness checks, as CI does on Linux, Windows and macOS:
 
 ```sh
@@ -44,6 +46,9 @@ the end so GC logs and AOT training are flushed.
 - Whole-run JVM collection counts/time, heap usage and compiler time from MXBeans. Linux also reports
   current and peak process RSS from `/proc/self/status`; use an external tool on other platforms. GC
   collection time is **not** a pause percentile. Enable unified logging below for actual pauses.
+- Linux also reports process CPU time and the CPU time of the live JIT compiler threads (C1/C2, or the
+  JVMCI threads that run the Graal JIT). Exited threads are not counted, so disable dynamic compiler threads
+  when comparing JVMs, as below.
 
 The views use native-endian C layouts: 200 records of three doubles (24 bytes each), followed by a 32-byte
 event slot (`int player`, `int cancelled`, three doubles). Rust owns process-lifetime storage in `UnsafeCell`;
@@ -87,6 +92,16 @@ cargo run --release -p harpas-bench --example jvm-bridge -- --ticks 200 -- \
   -XX:+UseCompactObjectHeaders -XX:AOTCacheOutput=target/jvm-bridge/bridge.aot
 cargo run --release -p harpas-bench --example jvm-bridge -- --ticks 200 -- \
   -XX:+UseCompactObjectHeaders -XX:AOTCache=target/jvm-bridge/bridge.aot -Xlog:aot=info
+```
+
+### Temurin vs. GraalVM Community Edition
+
+Point `JAVA_HOME` at each JDK 25 in turn; the benchmark prints the vendor, version and top-tier JIT (C2 or
+Graal through JVMCI). Alternate the two in fresh processes on an idle host:
+
+```sh
+JAVA_HOME=/path/to/jdk cargo run --release -p harpas-bench --example jvm-bridge -- --cold-ticks 600 -- \
+  -XX:-UseDynamicNumberOfCompilerThreads '-Xlog:gc*:file=target/jvm-bridge/gc.log:uptimemillis'
 ```
 
 Use fresh cache/log filenames for each JDK or fixture revision. Record the embedded runtime version printed

@@ -45,7 +45,7 @@ jobs:
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked
-      - run: cargo run -p harpas-bench --example jvm-bridge --locked -- --self-test -- -Xcheck:jni
+      - run: cargo run -p harpas-bench --example jvm-bridge --locked -- --self-test -- '-Xcheck:jni'
 
   licenses:
     name: dependency licenses

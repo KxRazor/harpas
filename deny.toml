@@ -4,6 +4,13 @@
 [graph]
 all-features = true
 
+[advisories]
+ignore = [
+    # crypto-bigint 0.5 comes from str0m 0.24 through dimpl and p256/p384 0.13, and has no patched 0.5.x.
+    # Remove once str0m moves to elliptic-curve 0.14.
+    { id = "RUSTSEC-2026-0387", reason = "no patched crypto-bigint reachable until str0m updates RustCrypto" },
+]
+
 [licenses]
 allow = [
     "MIT",

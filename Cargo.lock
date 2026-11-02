@@ -962,6 +962,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "harpas-anvil"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "harpas-core",
+]
+
+[[package]]
 name = "harpas-bedrock"
 version = "0.1.0"
 

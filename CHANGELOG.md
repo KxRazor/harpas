@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`harpas-server`).
 - Chunk sections with block states and biomes in paletted containers stored as vanilla stores them in memory,
   vanilla's compacted Anvil form, and a version that changes with every change (`harpas-core`).
+- Region files: chunks read from and written to `r.x.z.mca` files, with external `c.x.z.mcc` files for large
+  chunks, zlib writing, gzip and uncompressed reading, and atomic saves (`harpas-anvil`). NBT with a root name,
+  as files store it (`harpas-core`).
 
 ### Changed
 

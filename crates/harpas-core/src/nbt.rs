@@ -1,7 +1,8 @@
 //! NBT values and their Java Edition binary form
 //!
-//! Java Edition writes NBT big endian, with strings in Java's modified UTF-8. Network NBT, used in packets
-//! since Java 1.20.2, is a tag type and its payload with no root name. Lists are stored by element type, so a
+//! Java Edition writes NBT big endian, with strings in Java's modified UTF-8. Files, such as chunks in region
+//! files and `level.dat`, store a tag type, the root's name and its payload. Network NBT, used in packets since
+//! Java 1.20.2, is a tag type and its payload with no root name. Lists are stored by element type, so a
 //! value can never hold a list that mixes types, which the format cannot express.
 //!
 //! Readers take untrusted input: every length is checked against the bytes left before allocating, and
@@ -223,6 +224,26 @@ impl Nbt {
             END => Err(NbtError::EndRoot),
             id => read_payload(input, id, 0),
         }
+    }
+
+    /// Reads NBT as files store it: a tag type, the root's name, then its payload. Returns the name and the value.
+    pub fn read_named(input: &mut &[u8]) -> Result<(String, Nbt), NbtError> {
+        match read_u8(input)? {
+            END => Err(NbtError::EndRoot),
+            id => {
+                let name = read_string(input)?;
+                Ok((name, read_payload(input, id, 0)?))
+            }
+        }
+    }
+
+    /// Writes NBT as files store it, with `name` as the root's name; vanilla names the root of its files `""`.
+    ///
+    /// Panics in the same cases as [`Nbt::write_network`].
+    pub fn write_named(&self, name: &str, buf: &mut Vec<u8>) {
+        buf.push(self.tag_id());
+        write_string(buf, name);
+        self.write_payload(buf);
     }
 
     /// Reads optional network NBT, where `TAG_End` alone means no value.
@@ -570,6 +591,27 @@ mod tests {
         expected.extend_from_slice(b"Bananrama");
         expected.push(0x00);
         assert_eq!(round_trip(&value), expected);
+    }
+
+    #[test]
+    fn file_nbt_has_a_root_name() {
+        // The same example with the root name "hello world" that the page gives it.
+        let value = Nbt::Compound([("name", "Bananrama")].into_iter().collect());
+        let mut buf = Vec::new();
+        value.write_named("hello world", &mut buf);
+        let mut expected = vec![0x0a, 0x00, 0x0b];
+        expected.extend_from_slice(b"hello world");
+        expected.extend_from_slice(&[0x08, 0x00, 0x04]);
+        expected.extend_from_slice(b"name");
+        expected.extend_from_slice(&[0x00, 0x09]);
+        expected.extend_from_slice(b"Bananrama");
+        expected.push(0x00);
+        assert_eq!(buf, expected);
+        assert_eq!(
+            Nbt::read_named(&mut &buf[..]),
+            Ok(("hello world".to_owned(), value))
+        );
+        assert_eq!(Nbt::read_named(&mut &[0u8][..]), Err(NbtError::EndRoot));
     }
 
     #[test]

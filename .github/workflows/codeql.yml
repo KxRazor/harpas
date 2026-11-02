@@ -1,0 +1,69 @@
+name: CodeQL
+
+# Code scanning for Rust, the GitHub Actions workflows and the Java bridge example. This replaces GitHub's
+# default setup, which analyzes every language on every pull request; the Rust analysis alone takes several
+# minutes. Pull requests analyze only the languages whose files they change. Pushes to main and the weekly
+# run analyze everything.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  languages:
+    name: select languages
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      languages: ${{ steps.select.outputs.languages }}
+    steps:
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo 'languages=["rust","actions","java-kotlin"]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+          languages=()
+          grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^schema/' <<< "$files" && languages+=('"rust"')
+          grep -qE '^\.github/' <<< "$files" && languages+=('"actions"')
+          grep -qE '\.(java|kt)$' <<< "$files" && languages+=('"java-kotlin"')
+          echo "languages=[$(IFS=,; echo "${languages[*]}")]" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: languages
+    if: needs.languages.outputs.languages != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.languages.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

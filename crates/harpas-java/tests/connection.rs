@@ -1,12 +1,22 @@
 //! Whole connections, from the client's first byte, against what vanilla answers.
 
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use harpas_java::{
-    Connection, ConnectionError, FrameReader, ServerInfo, State, offline_uuid, write_frame,
+    Connection, ConnectionError, FrameReader, ServerInfo, ServerKey, State, offline_uuid,
+    write_frame,
 };
 use harpas_protocol_java::codec::DecodeError;
 use harpas_protocol_java::v26_1::{configuration, handshaking, login, play, status};
+
+/// A connection with a key shared by every test, since generating one takes a while.
+fn new_connection() -> Connection {
+    static KEY: OnceLock<Arc<ServerKey>> = OnceLock::new();
+    Connection::new(Arc::clone(
+        KEY.get_or_init(|| Arc::new(ServerKey::generate())),
+    ))
+}
 
 fn handshake(protocol: i32, intent: handshaking::Intent) -> Vec<u8> {
     let packet: handshaking::serverbound::Packet = handshaking::serverbound::Handshake {
@@ -70,7 +80,7 @@ fn login_disconnect_reason(output: &[u8]) -> String {
 #[test]
 fn server_list_ping() {
     let info = ServerInfo::default();
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     let bytes = [
         handshake(775, handshaking::Intent::Status),
         status_request(),
@@ -102,7 +112,7 @@ fn server_list_ping() {
 #[test]
 fn status_is_answered_once() {
     let info = ServerInfo::default();
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     let bytes = [
         handshake(775, handshaking::Intent::Status),
         status_request(),
@@ -124,7 +134,7 @@ fn status_is_answered_once() {
 #[test]
 fn other_protocol_versions_are_refused_at_login() {
     let info = ServerInfo::default();
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     connection
         .receive(&handshake(777, handshaking::Intent::Login), &info)
         .unwrap();
@@ -134,7 +144,7 @@ fn other_protocol_versions_are_refused_at_login() {
         r#"{"translate":"multiplayer.disconnect.incompatible","with":["26.1"]}"#
     );
 
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     connection
         .receive(&handshake(47, handshaking::Intent::Login), &info)
         .unwrap();
@@ -144,7 +154,7 @@ fn other_protocol_versions_are_refused_at_login() {
     );
 
     // The server list still answers, and shows the server's version.
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     let bytes = [
         handshake(777, handshaking::Intent::Status),
         status_request(),
@@ -156,7 +166,7 @@ fn other_protocol_versions_are_refused_at_login() {
 
 #[test]
 fn transfers_follow_accepts_transfers() {
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     connection
         .receive(
             &handshake(775, handshaking::Intent::Transfer),
@@ -172,33 +182,18 @@ fn transfers_follow_accepts_transfers() {
         accepts_transfers: true,
         ..ServerInfo::default()
     };
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     connection
         .receive(&handshake(775, handshaking::Intent::Transfer), &info)
         .unwrap();
     assert_eq!(connection.state(), State::Login);
 }
 
-#[test]
-fn online_mode_is_refused_until_it_is_supported() {
-    let info = ServerInfo::default();
-    let mut connection = Connection::new();
-    let bytes = [
-        handshake(775, handshaking::Intent::Login),
-        login_start("Steve"),
-    ]
-    .concat();
-    connection.receive(&bytes, &info).unwrap();
-    assert!(connection.is_closed());
-    assert_eq!(
-        login_disconnect_reason(&connection.take_output()),
-        r#"{"text":"Harpas does not support online mode yet: set online-mode=false in server.properties."}"#
-    );
-}
-
+/// Offline mode without compression, so that the output is plain frames; `tests/online.rs` covers both.
 fn offline() -> ServerInfo {
     ServerInfo {
         online_mode: false,
+        compression_threshold: -1,
         view_distance: 2,
         ..ServerInfo::default()
     }
@@ -206,7 +201,7 @@ fn offline() -> ServerInfo {
 
 /// Logs Steve in offline mode and acknowledges Login Success.
 fn logged_in(info: &ServerInfo) -> Connection {
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     let bytes = [
         handshake(775, handshaking::Intent::Login),
         login_start("Steve"),
@@ -371,7 +366,7 @@ fn keep_alive_every_15_seconds() {
 #[test]
 fn invalid_player_names_are_refused() {
     let info = offline();
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     let bytes = [
         handshake(775, handshaking::Intent::Login),
         login_start("two words"),
@@ -386,7 +381,7 @@ fn invalid_player_names_are_refused() {
 #[test]
 fn legacy_ping_is_answered_and_closed() {
     let info = ServerInfo::default();
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     connection.receive(&[0xfe, 0x01], &info).unwrap();
     assert!(connection.is_closed());
     let output = connection.take_output();
@@ -399,7 +394,7 @@ fn legacy_ping_is_answered_and_closed() {
 #[test]
 fn invalid_bytes_close_the_connection() {
     let info = ServerInfo::default();
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     // A Handshake with intent 4.
     let mut bytes = handshake(775, handshaking::Intent::Status);
     *bytes.last_mut().unwrap() = 0x04;
@@ -416,7 +411,7 @@ fn invalid_bytes_close_the_connection() {
     assert!(connection.is_closed());
     assert!(connection.take_output().is_empty());
 
-    let mut connection = Connection::new();
+    let mut connection = new_connection();
     assert!(matches!(
         connection.receive(&[0xff, 0xff, 0xff, 0x7f], &info),
         Err(ConnectionError::Frame(_))

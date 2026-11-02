@@ -28,6 +28,9 @@ pub struct ServerInfo {
     pub simulation_distance: u32,
     /// Game mode of new players, from `gamemode`.
     pub game_mode: GameMode,
+    /// Smallest packet that is compressed, from `network-compression-threshold`; negative turns compression
+    /// off.
+    pub compression_threshold: i32,
 }
 
 impl Default for ServerInfo {
@@ -44,6 +47,7 @@ impl Default for ServerInfo {
             view_distance: 10,
             simulation_distance: 10,
             game_mode: GameMode::Survival,
+            compression_threshold: 256,
         }
     }
 }

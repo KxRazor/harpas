@@ -53,7 +53,7 @@ documents.
       login packet ([docs/nethernet.md](docs/nethernet.md)).
 - [x] Shared encoding prototype: encode and compress a chunk section once and serve it to many simulated
       connections, measuring cost per viewer.
-- [ ] Record results and update the affected documents; close or reopen design questions accordingly.
+- [x] Record results and update the affected documents; close or reopen design questions accordingly.
 
 ## M2 — First Java connection (0.1.0)
 

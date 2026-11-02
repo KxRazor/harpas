@@ -8,7 +8,7 @@
 //! A region is read whole and saved whole: the new file is written under a temporary name and renamed over the
 //! old one, so a crash never leaves a half-written region (`docs/world.md#saving`).
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +17,8 @@ use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::ZlibEncoder;
 use harpas_core::nbt::{Compound, Nbt};
+
+use crate::file::write_atomically;
 
 const SECTOR: usize = 4096;
 const CHUNKS: usize = 1024;
@@ -284,18 +286,6 @@ fn custom_name(data: &[u8]) -> String {
     data.get(2..2 + length)
         .map(|name| String::from_utf8_lossy(name).into_owned())
         .unwrap_or_else(|| "unnamed".to_owned())
-}
-
-/// Writes `path` under a temporary name and renames it into place.
-fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-    let mut file = File::create(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&temporary, path)
 }
 
 fn be_u32(bytes: &[u8], at: usize) -> u32 {

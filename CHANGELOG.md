@@ -24,6 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chunk NBT read into sections and written back, keeping every other field, with vanilla's fallbacks for
   damaged sections (`harpas-anvil`), and the block state registry of Java 26.1 from minecraft-data
   (`harpas-core`).
+- `level.dat` and player data read and written as gzip NBT with vanilla's `_old` backups, and the 26.1 world
+  folder layout with dimensions under `dimensions/` and players under `players/data/` (`harpas-anvil`).
 
 ### Changed
 

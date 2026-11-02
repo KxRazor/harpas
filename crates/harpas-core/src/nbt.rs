@@ -225,6 +225,22 @@ impl Nbt {
         }
     }
 
+    /// Reads optional network NBT, where `TAG_End` alone means no value.
+    pub fn read_network_optional(input: &mut &[u8]) -> Result<Option<Nbt>, NbtError> {
+        match read_u8(input)? {
+            END => Ok(None),
+            id => read_payload(input, id, 0).map(Some),
+        }
+    }
+
+    /// Writes optional network NBT: the value, or `TAG_End` alone for none.
+    pub fn write_network_optional(value: Option<&Nbt>, buf: &mut Vec<u8>) {
+        match value {
+            Some(value) => value.write_network(buf),
+            None => buf.push(END),
+        }
+    }
+
     /// Writes network NBT.
     ///
     /// Panics if a string is longer than 65,535 bytes in modified UTF-8, or a list or array has more than
@@ -627,6 +643,21 @@ mod tests {
         }
         deep.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(read(&deep), Err(NbtError::TooDeep));
+    }
+
+    #[test]
+    fn optional_network_nbt_uses_tag_end_for_none() {
+        let mut buf = Vec::new();
+        Nbt::write_network_optional(None, &mut buf);
+        Nbt::write_network_optional(Some(&Nbt::Byte(5)), &mut buf);
+        assert_eq!(buf, [0x00, 0x01, 0x05]);
+        let mut input = &buf[..];
+        assert_eq!(Nbt::read_network_optional(&mut input), Ok(None));
+        assert_eq!(
+            Nbt::read_network_optional(&mut input),
+            Ok(Some(Nbt::Byte(5)))
+        );
+        assert!(input.is_empty());
     }
 
     #[test]

@@ -41,6 +41,15 @@ fn check(schema: &Path, protocol: &Path) -> Result<(), String> {
     for state in &report.missing_states {
         println!("note: the schema has no {state} state yet");
     }
+    if !report.pending.is_empty() {
+        println!(
+            "note: {} minecraft-data packets are pending in partial states",
+            report.pending.len()
+        );
+    }
+    for packet in &report.unchecked {
+        println!("note: {packet} uses hand-written types and is compared by ID only");
+    }
     for error in &report.errors {
         println!("error: {error}");
     }

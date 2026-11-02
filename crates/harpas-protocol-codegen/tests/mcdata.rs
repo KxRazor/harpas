@@ -21,7 +21,54 @@ fn minecraft_data() -> Value {
 fn java_26_1_matches_minecraft_data() {
     let report = mcdata::check(&java_schema(), &minecraft_data());
     assert_eq!(report.errors, Vec::<String>::new());
-    assert_eq!(report.missing_states, ["play"]);
+    assert_eq!(report.missing_states, Vec::<String>::new());
+    assert_eq!(report.pending.len(), 148);
+    assert_eq!(report.unchecked, ["play clientbound PlayerInfoUpdate"]);
+}
+
+#[test]
+fn play_differences_are_reported() {
+    let mut version = java_schema();
+    let play = version
+        .states
+        .iter_mut()
+        .find(|state| state.name == "play")
+        .unwrap();
+    play.bitfields.get_mut("BlockPos").unwrap().fields[2].signed = false;
+    play.flags
+        .get_mut("TeleportFlags")
+        .unwrap()
+        .bits
+        .remove("rotate_velocity");
+    play.unions
+        .get_mut("FilterMask")
+        .unwrap()
+        .variants
+        .retain(|variant| variant.name != "PartiallyFiltered");
+    play.partial = false;
+
+    let report = mcdata::check(&version, &minecraft_data());
+    // A state that is no longer partial reports its missing packets as errors.
+    let (missing, wire): (Vec<_>, Vec<_>) = report
+        .errors
+        .iter()
+        .partition(|error| error.ends_with("is not in the schema"));
+    assert_eq!(missing.len(), 148);
+    assert!(report.pending.is_empty());
+    let packets: Vec<_> = wire
+        .iter()
+        .map(|error| error.split(':').next().unwrap())
+        .collect();
+    assert_eq!(
+        packets,
+        [
+            "play clientbound Login",
+            "play clientbound PlayerChatMessage",
+            "play clientbound SynchronizePlayerPosition",
+            "play clientbound SetDefaultSpawnPosition",
+            "play clientbound TeleportEntity",
+        ]
+    );
 }
 
 #[test]
@@ -52,7 +99,7 @@ fn differences_are_reported() {
     let label = configuration.unions.get_mut("ServerLinkLabel").unwrap();
     label.variants.swap(0, 1);
     for (variant, tag) in label.variants.iter_mut().zip([1, 0]) {
-        variant.tag = tag;
+        variant.tag = Some(tag);
     }
 
     let report = mcdata::check(&version, &minecraft_data());

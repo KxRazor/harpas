@@ -5,7 +5,9 @@
 
 use std::fmt::Write;
 
-use crate::schema::{Direction, Enum, Field, Packet, Prim, State, Type, Union, Version};
+use crate::schema::{
+    Bitfield, Direction, Enum, Field, Flags, Packet, Prim, State, Type, Union, Version,
+};
 
 /// Rust keywords that need a raw identifier when used as field names.
 const KEYWORDS: [&str; 38] = [
@@ -51,8 +53,22 @@ fn state_module(out: &mut Out, version: &Version, state: &State) {
     out.open(&format!("pub mod {}", state.name));
     out.line("#[allow(unused_imports)]");
     out.line("use crate::codec::{self, Decode, DecodeError, Encode};");
+    if !state.externs.is_empty() {
+        // The whole module, so that the types the externs are made of can be named too.
+        out.line(&format!(
+            "pub use crate::hand_written::{}::{}::*;",
+            version.module_name(),
+            state.name
+        ));
+    }
     for (name, item) in &state.enums {
         enum_type(out, name, item);
+    }
+    for (name, item) in &state.flags {
+        flags_type(out, name, item);
+    }
+    for (name, item) in &state.bitfields {
+        bitfield_type(out, name, item);
     }
     for (name, item) in &state.unions {
         union_type(out, name, item);
@@ -240,10 +256,18 @@ fn union_type(out: &mut Out, name: &str, item: &Union) {
             doc(out, text);
             out.line("///");
         }
-        out.line(&format!("/// Sent with tag `{}`.", tag(variant.tag)));
-        match &variant.ty {
-            Some(ty) => out.line(&format!("{}({}),", variant.name, rust_type(ty))),
-            None => out.line(&format!("{},", variant.name)),
+        match (variant.tag, &variant.ty) {
+            (None, _) => {
+                out.line("/// Sent with any other tag, which it holds.");
+                out.line(&format!("{}({}),", variant.name, item.tag.rust_type()));
+            }
+            (Some(value), ty) => {
+                out.line(&format!("/// Sent with tag `{}`.", tag(value)));
+                match ty {
+                    Some(ty) => out.line(&format!("{}({}),", variant.name, rust_type(ty))),
+                    None => out.line(&format!("{},", variant.name)),
+                }
+            }
         }
     }
     out.close();
@@ -253,19 +277,26 @@ fn union_type(out: &mut Out, name: &str, item: &Union) {
     out.open("fn encode(&self, buf: &mut Vec<u8>)");
     out.open("match self");
     for variant in &item.variants {
-        let write_tag = format!(
-            "codec::write_{}(buf, {});",
-            item.tag.name(),
-            tag(variant.tag)
-        );
-        match &variant.ty {
-            Some(ty) => {
+        let write = |value: &str| format!("codec::write_{}(buf, {value})", item.tag.name());
+        match (variant.tag, &variant.ty) {
+            (None, _) => out.line(&format!(
+                "Self::{}(tag) => {},",
+                variant.name,
+                write("*tag")
+            )),
+            (Some(value), Some(ty)) => {
                 out.open(&format!("Self::{}(value) =>", variant.name));
-                out.line(&write_tag);
+                out.line(&format!("{};", write(&tag(value))));
                 out.line(&format!("{};", encode(ty, "value", true)));
                 out.close();
             }
-            None => out.line(&format!("Self::{} => {write_tag}", variant.name)),
+            (Some(value), None) => {
+                out.line(&format!(
+                    "Self::{} => {},",
+                    variant.name,
+                    write(&tag(value))
+                ));
+            }
         }
     }
     out.close();
@@ -277,27 +308,203 @@ fn union_type(out: &mut Out, name: &str, item: &Union) {
     out.open("fn decode(input: &mut &[u8]) -> Result<Self, DecodeError>");
     out.open(&format!("match codec::read_{}(input)?", item.tag.name()));
     for variant in &item.variants {
-        match &variant.ty {
-            Some(ty) => out.line(&format!(
+        match (variant.tag, &variant.ty) {
+            (None, _) => {}
+            (Some(value), Some(ty)) => out.line(&format!(
                 "{} => Ok(Self::{}({}?)),",
-                tag(variant.tag),
+                tag(value),
                 variant.name,
                 decode(ty)
             )),
-            None => out.line(&format!(
-                "{} => Ok(Self::{}),",
-                tag(variant.tag),
-                variant.name
-            )),
+            (Some(value), None) => {
+                out.line(&format!("{} => Ok(Self::{}),", tag(value), variant.name));
+            }
         }
     }
-    // Both values of a `bool` tag can be covered, and then there is nothing left to reject.
-    if item.tag != Prim::Bool || item.variants.len() < 2 {
-        out.line(&format!(
+    match item.variants.iter().find(|variant| variant.default) {
+        Some(variant) => out.line(&format!("tag => Ok(Self::{}(tag)),", variant.name)),
+        // Both values of a `bool` tag can be covered, and then there is nothing left to reject.
+        None if item.tag == Prim::Bool && item.variants.len() == 2 => {}
+        None => out.line(&format!(
             "value => Err(DecodeError::UnknownEnumValue {{ name: {name:?}, value: i64::from(value) }}),"
+        )),
+    }
+    out.close();
+    out.close();
+    out.close();
+}
+
+/// `value as u64`, without a cast when it already is one.
+fn as_u64(value: &str, prim: Prim) -> String {
+    if prim == Prim::U64 {
+        value.to_owned()
+    } else {
+        format!("{value} as u64")
+    }
+}
+
+/// `bits as <prim>` from a `u64`, without a cast when it already is one.
+fn from_u64(bits: &str, prim: Prim) -> String {
+    if prim == Prim::U64 {
+        bits.to_owned()
+    } else {
+        format!("{bits} as {}", prim.rust_type())
+    }
+}
+
+fn flags_type(out: &mut Out, name: &str, item: &Flags) {
+    let bits = item.ordered();
+    out.line("");
+    doc(out, &item.doc);
+    out.line("#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]");
+    out.open(&format!("pub struct {name}"));
+    for (flag, bit) in &bits {
+        out.line(&format!("/// Bit {bit}."));
+        out.line(&format!("pub {}: bool,", ident(flag)));
+    }
+    out.close();
+
+    out.line("");
+    out.open(&format!("impl Encode for {name}"));
+    out.open("fn encode(&self, buf: &mut Vec<u8>)");
+    out.line("let mut bits = 0u64;");
+    for (flag, bit) in &bits {
+        out.line(&format!(
+            "if self.{} {{ bits |= {:#x}; }}",
+            ident(flag),
+            1u64 << bit
+        ));
+    }
+    out.line(&format!(
+        "codec::write_{}(buf, {});",
+        item.repr.name(),
+        from_u64("bits", item.repr)
+    ));
+    out.close();
+    out.close();
+
+    out.line("");
+    out.open(&format!("impl Decode for {name}"));
+    out.line("/// Bits without a flag are ignored, as vanilla does.");
+    out.open("fn decode(input: &mut &[u8]) -> Result<Self, DecodeError>");
+    out.line(&format!(
+        "let bits = {};",
+        as_u64(
+            &format!("codec::read_{}(input)?", item.repr.name()),
+            item.repr
+        )
+    ));
+    out.open("Ok(Self");
+    for (flag, bit) in &bits {
+        out.line(&format!("{}: bits & {:#x} != 0,", ident(flag), 1u64 << bit));
+    }
+    out.close_with("})");
+    out.close();
+    out.close();
+}
+
+fn bitfield_type(out: &mut Out, name: &str, item: &Bitfield) {
+    out.line("");
+    doc(out, &item.doc);
+    out.line("#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]");
+    out.open(&format!("pub struct {name}"));
+    let mut low = item.repr.int_size().expect("validated") * 8;
+    let mut layout = Vec::new();
+    for field in &item.fields {
+        low -= field.bits;
+        layout.push((field, low));
+        if let Some(text) = &field.doc {
+            doc(out, text);
+        }
+        out.line(&format!(
+            "pub {}: {},",
+            ident(&field.name),
+            field.rust_type()
         ));
     }
     out.close();
+
+    let mask = |bits: u32| {
+        if bits == 64 {
+            u64::MAX
+        } else {
+            (1u64 << bits) - 1
+        }
+    };
+    out.line("");
+    out.open(&format!("impl Encode for {name}"));
+    out.open("fn encode(&self, buf: &mut Vec<u8>)");
+    out.line("let mut bits = 0u64;");
+    for (field, low) in &layout {
+        let value = if field.rust_type() == "u64" {
+            format!("self.{}", ident(&field.name))
+        } else {
+            format!("self.{} as u64", ident(&field.name))
+        };
+        let shift = if *low == 0 {
+            String::new()
+        } else {
+            format!(" << {low}")
+        };
+        let masked = format!("{value} & {:#x}", mask(field.bits));
+        if shift.is_empty() {
+            out.line(&format!("bits |= {masked};"));
+        } else {
+            out.line(&format!("bits |= ({masked}){shift};"));
+        }
+    }
+    out.line(&format!(
+        "codec::write_{}(buf, {});",
+        item.repr.name(),
+        from_u64("bits", item.repr)
+    ));
+    out.close();
+    out.close();
+
+    out.line("");
+    out.open(&format!("impl Decode for {name}"));
+    out.open("fn decode(input: &mut &[u8]) -> Result<Self, DecodeError>");
+    out.line(&format!(
+        "let bits = {};",
+        as_u64(
+            &format!("codec::read_{}(input)?", item.repr.name()),
+            item.repr
+        )
+    ));
+    out.open("Ok(Self");
+    for (field, low) in &layout {
+        let ty = field.rust_type();
+        let value = if field.signed {
+            // Move the field to the top bits, then shift it back down with sign extension.
+            let up = 64 - low - field.bits;
+            let down = 64 - field.bits;
+            let up = if up == 0 {
+                "bits".to_owned()
+            } else {
+                format!("(bits << {up})")
+            };
+            let shifted = format!("({up} as i64) >> {down}");
+            if ty == "i64" {
+                shifted
+            } else {
+                format!("({shifted}) as {ty}")
+            }
+        } else {
+            let shifted = if *low == 0 {
+                "bits".to_owned()
+            } else {
+                format!("(bits >> {low})")
+            };
+            let masked = format!("{shifted} & {:#x}", mask(field.bits));
+            if ty == "u64" {
+                masked
+            } else {
+                format!("({masked}) as {ty}")
+            }
+        };
+        out.line(&format!("{}: {value},", ident(&field.name)));
+    }
+    out.close_with("})");
     out.close();
     out.close();
 }
@@ -362,6 +569,10 @@ fn rust_type(ty: &Type) -> String {
         Type::Option(inner) => format!("Option<{}>", rust_type(inner)),
         Type::Array { item, .. } => format!("Vec<{}>", rust_type(item)),
         Type::Nbt => "codec::Nbt".to_owned(),
+        Type::OptionalNbt => "Option<codec::Nbt>".to_owned(),
+        Type::Fixed(len) => format!("[u8; {len}]"),
+        Type::Holder(inner) => format!("codec::Holder<{}>", rust_type(inner)),
+        Type::LpVec3 => "codec::LpVec3".to_owned(),
         Type::Named(name) => name.clone(),
     }
 }
@@ -381,6 +592,10 @@ fn decode(ty: &Type) -> String {
             decoder(item)
         ),
         Type::Nbt => "codec::read_nbt(input)".to_owned(),
+        Type::OptionalNbt => "codec::read_optional_nbt(input)".to_owned(),
+        Type::Fixed(_) => "codec::read_fixed(input)".to_owned(),
+        Type::Holder(inner) => format!("codec::read_holder(input, {})", decoder(inner)),
+        Type::LpVec3 => "codec::LpVec3::decode(input)".to_owned(),
         Type::Named(name) => format!("{name}::decode(input)"),
     }
 }
@@ -390,6 +605,9 @@ fn decoder(ty: &Type) -> String {
     match ty {
         Type::Prim(prim) => format!("codec::read_{}", prim.name()),
         Type::Nbt => "codec::read_nbt".to_owned(),
+        Type::OptionalNbt => "codec::read_optional_nbt".to_owned(),
+        Type::Fixed(_) => "codec::read_fixed".to_owned(),
+        Type::LpVec3 => "codec::LpVec3::decode".to_owned(),
         Type::Named(name) => format!("{name}::decode"),
         other => format!("|input| {}", decode(other)),
     }
@@ -416,21 +634,26 @@ fn encode(ty: &Type, value: &str, by_ref: bool) -> String {
         Type::Bytes { .. } => format!("codec::write_bytes(buf, {borrowed})"),
         Type::Rest { .. } => format!("codec::write_rest(buf, {borrowed})"),
         Type::Nbt => format!("codec::write_nbt(buf, {borrowed})"),
+        Type::OptionalNbt => format!("codec::write_optional_nbt(buf, {borrowed})"),
+        Type::Fixed(_) => format!("codec::write_fixed(buf, {borrowed})"),
+        Type::Holder(inner) => format!("codec::write_holder(buf, {borrowed}, {})", encoder(inner)),
         Type::Option(inner) => {
             format!("codec::write_option(buf, {borrowed}, {})", encoder(inner))
         }
         Type::Array { item, .. } => {
             format!("codec::write_array(buf, {borrowed}, {})", encoder(item))
         }
-        Type::Named(_) => format!("{value}.encode(buf)"),
+        Type::Named(_) | Type::LpVec3 => format!("{value}.encode(buf)"),
     }
 }
 
 /// A function or closure that takes `buf: &mut Vec<u8>` and `value: &T` and writes the value.
 fn encoder(ty: &Type) -> String {
     match ty {
-        // The only writer that takes exactly `&T`; the others take `&str`, `&[u8]` or `T`.
+        // The writers that take exactly `&T`; the others take `&str`, `&[u8]` or `T`.
         Type::Nbt => "codec::write_nbt".to_owned(),
+        Type::OptionalNbt => "codec::write_optional_nbt".to_owned(),
+        Type::Fixed(_) => "codec::write_fixed".to_owned(),
         other => format!("|buf, value| {}", encode(other, "value", true)),
     }
 }

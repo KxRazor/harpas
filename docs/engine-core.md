@@ -58,7 +58,7 @@ short delays and resets the target after a delay over two seconds. The tick has 
 dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. Only the
 connection and player work is implemented; the other phases remain placeholders.
 
-Connection threads queue entry, departure and movement for the connection phase, and translate the resulting
+Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting
 messages into edition-specific packets. The logic thread owns each player's profile and position and publishes
 the online count. Player entities have distinct runtime IDs; a duplicate UUID disconnects the old session.
 All players appear in the player list, while entity tracking is per viewer, capped by both its view distance
@@ -71,7 +71,9 @@ before more movement is accepted. In Survival and Adventure, a player hovering i
 ticks is disconnected unless `allow-flight` is enabled; Creative and Spectator may fly [4]. These are the
 current void-world checks, not a complete implementation of vanilla's movement and collision rules: world
 collision, vehicle and elytra movement, velocity effects and their flight exemptions need the later world and
-gameplay work. Signed chat is also pending.
+gameplay work. The logic thread publishes chat sessions before messages and gives late joiners the current
+sessions; verification and each recipient's acknowledgement window stay on the connection thread
+([java-connection.md](java-connection.md#chat-signing)).
 
 ### 2. Parallel only where it cannot be observed
 

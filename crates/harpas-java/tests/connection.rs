@@ -4,8 +4,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use harpas_java::{
-    Connection, ConnectionError, FrameReader, ServerInfo, ServerKey, State, offline_uuid,
-    write_frame,
+    Connection, ConnectionError, FrameReader, PlayEvent, ServerInfo, ServerKey, State,
+    offline_uuid, write_frame,
 };
 use harpas_protocol_java::codec::DecodeError;
 use harpas_protocol_java::v26_1::{configuration, handshaking, login, play, status};
@@ -366,13 +366,60 @@ fn play_uses_the_assigned_entity_id_and_forwards_movement() {
     ]
     .concat();
     connection.receive(&input, &info).unwrap();
-    assert_eq!(connection.take_play_input(), vec![confirm, movement]);
-    assert!(connection.take_play_input().is_empty());
+    assert_eq!(
+        connection.take_play_events(),
+        vec![
+            PlayEvent::Packet(Box::new(confirm)),
+            PlayEvent::Packet(Box::new(movement))
+        ]
+    );
+    assert!(connection.take_play_events().is_empty());
     let update: play::clientbound::Packet =
         play::clientbound::PlayerInfoRemove { players: vec![5] }.into();
     connection.send_play_packet(update.clone());
     let output = frames(&connection.take_output());
     assert_eq!(play::clientbound::Packet::decode(&output[0]), Ok(update));
+}
+
+#[test]
+fn chat_and_movement_reach_the_logic_thread_in_arrival_order() {
+    let info = offline();
+    let mut connection = playing(&info, new_connection());
+    connection.take_output();
+    let chat = |text: &str| -> play::serverbound::Packet {
+        play::serverbound::ChatMessage {
+            message: text.into(),
+            timestamp: 1,
+            salt: 2,
+            signature: None,
+            offset: 0,
+            acknowledged: [0; 3],
+            checksum: 1,
+        }
+        .into()
+    };
+    let first = chat("first");
+    let movement: play::serverbound::Packet = play::serverbound::SetPlayerPosition {
+        x: 1.0,
+        y: 65.0,
+        z: 0.0,
+        flags: play::MovementFlags::default(),
+    }
+    .into();
+    let second = chat("second");
+    let input = [
+        frame(first, |p, b| p.encode(b)),
+        frame(movement, |p, b| p.encode(b)),
+        frame(second, |p, b| p.encode(b)),
+    ]
+    .concat();
+    connection.receive(&input, &info).unwrap();
+    let events = connection.take_play_events();
+    assert!(matches!(&events[..], [
+        PlayEvent::Chat(harpas_java::ChatEvent::Message(first)),
+        PlayEvent::Packet(movement),
+        PlayEvent::Chat(harpas_java::ChatEvent::Message(second)),
+    ] if first.message == "first" && matches!(&**movement, play::serverbound::Packet::SetPlayerPosition(_)) && second.message == "second"));
 }
 
 #[test]

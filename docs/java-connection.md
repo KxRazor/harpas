@@ -7,7 +7,8 @@ counterpart is [nethernet.md](nethernet.md).
 
 Status: in progress. Every state is implemented in `harpas-java`: Handshaking, Status and the server list
 (legacy ping included), Login in online and offline mode with encryption and compression, Configuration with
-registry data, and Play with players in a void world. Signed chat and protection against abuse are design.
+registry data, and Play with players in a void world. Java player chat and signature verification are
+implemented; real-client validation of signed chat and protection against abuse remain open.
 Facts about the protocol cite their source in [References](#references); everything else is a design decision
 of this project.
 
@@ -76,6 +77,7 @@ Every connection starts in Handshaking and moves through the states vanilla defi
   player, the connection was encrypted and compressed, and the player list and the third-person view showed
   the player's skin. On 2026-11-02, two Java 26.1 clients in offline creative mode appeared together in the
   player list, saw each other's entities and synchronized movement, and the disconnect check was successful.
+  Two offline clients also exchanged chat messages in both directions and saw their own messages.
 
 ---
 
@@ -165,9 +167,8 @@ How it works now:
 ## Chat signing
 
 Since 1.19, Java clients sign each chat message with a key Mojang issues for the account, and other clients
-verify the signature; this is what makes messages reportable to Mojang. With `enforce-secure-profile=true`
-(vanilla's default), a server disconnects clients that have no signing key [4]. Bedrock players have no Mojang
-key, so their messages cannot be signed.
+verify the signature; this is what makes messages reportable to Mojang. Bedrock players have no Mojang key,
+so their messages cannot be signed. Vanilla can distribute signing keys lazily [6].
 
 Harpas uses a **mixed** model:
 
@@ -181,6 +182,32 @@ Harpas uses a **mixed** model:
   hides unsigned player chat.
 - `enforce-secure-profile` keeps its vanilla meaning for Java clients.
 - Plugins that change chat see both kinds of messages through the same chat event.
+
+**Java implementation:**
+
+- A connection checks the account's public-key certificate against `playerCertificateKeys` fetched from
+  `https://api.minecraftservices.com/publickeys` over HTTPS at startup. If the keys cannot be fetched or
+  parsed, the server trusts no signing keys; it logs the failure and a restart retries the fetch. Test
+  authorities are generated independently and are never configured as production trust roots.
+- The connection verifies the sender, session, message index, timestamp, salt, text and previously seen
+  signatures [7]. It checks key expiration, rejects invalid signatures and replayed session IDs, and tracks
+  each recipient's 20-message acknowledgement window and pending messages. A bad acknowledgement or
+  checksum closes that connection. A bad signature breaks the signing chain until the player starts a new
+  session; a missing signature or expired key refuses the message. The receiving client determines whether
+  an old message is trustworthy.
+- The logic thread distributes verified session information before signed messages, including to players
+  who join later. It sends each original message to all players, including the sender, subject to their chat
+  visibility setting. Signatures are sent in full rather than through the optional signature cache.
+- With `online-mode=true` and `enforce-secure-profile=true`, a message without a verified session and
+  signature is rejected. Players can join before sending a session. In offline mode, messages are relayed
+  unsigned and `enforcesSecureChat` is false. With secure profiles disabled, an online player without a
+  session can send unsigned messages; an established session cannot silently downgrade to unsigned chat.
+- Commands and Bedrock chat are not implemented yet. Signed commands are discarded but their acknowledgement
+  and signing indices are tracked so they do not break later player messages.
+
+Automated tests use generated player and authority keys, including an encrypted online connection with a
+simulated session server; they are not a substitute for two real premium clients. A real online exchange,
+including verification/reportability and "Only Show Secure Chat", remains to be checked when available.
 
 ---
 
@@ -233,3 +260,7 @@ Limits are chosen so that no vanilla client behavior can hit them *(measure agai
 4. e-im/FreedomChat README (behavior of `enforce-secure-profile` with clients that have no signing key). https://github.com/e-im/FreedomChat
 5. PrismarineJS/minecraft-data, Java 26.1 entity types at the project's pinned revision.
    https://github.com/PrismarineJS/minecraft-data/blob/bd8b5c6048e5af9694374b83f25f5b4aade619cc/data/pc/26.1/entities.json
+6. Minecraft Java Edition snapshot 22w43a, changes to chat-session key distribution.
+   https://feedback.minecraft.net/hc/en-us/articles/10330243077261-Minecraft-Java-Edition-Snapshot-22w43a
+7. Minecraft Packet ID Reference, Java 26.1 chat signing and acknowledgements.
+   https://github.com/xKumorio/Minecraft-Packet-ID-Reference/blob/main/versions/26.1.md

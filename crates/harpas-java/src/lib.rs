@@ -6,6 +6,7 @@
 //!
 //! Design: `docs/java-connection.md`.
 
+mod chat;
 mod compression;
 mod connection;
 mod crypto;
@@ -15,9 +16,10 @@ mod registries;
 mod status;
 mod void_world;
 
+pub use chat::{ChatAuthority, ChatEvent, VerifiedMessage};
 pub use compression::{CompressionError, MAX_UNCOMPRESSED_LEN};
 pub use connection::{
-    AuthOutcome, AuthRequest, Connection, ConnectionError, Player, State, offline_uuid,
+    AuthOutcome, AuthRequest, Connection, ConnectionError, PlayEvent, Player, State, offline_uuid,
 };
 pub use crypto::{ServerKey, server_hash};
 pub use frame::{FrameError, FrameReader, MAX_FRAME_LEN, write_frame};

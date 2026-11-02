@@ -15,6 +15,8 @@ use harpas_core::block::{BlockStates, block_states};
 use harpas_core::chunk::{Packed, PalettedContainer, Section, Strategy};
 use harpas_core::nbt::{Compound, List, Nbt};
 
+use crate::version::check_chunk;
+
 /// The biome a section takes where its biomes are missing or unknown, as in vanilla.
 const DEFAULT_BIOME: &str = "minecraft:plains";
 
@@ -41,8 +43,10 @@ pub struct ChunkSection {
 
 impl Chunk {
     /// Reads a chunk's NBT. `biomes` is the biome registry, an entry's ID being its position. Returns the chunk
-    /// and a warning for each part replaced by its default.
+    /// and a warning for each part replaced by its default. A chunk saved by another Minecraft version is an
+    /// error whose source is a [`VersionError`](crate::VersionError).
     pub fn read(mut nbt: Compound, biomes: &[&str]) -> io::Result<(Self, Vec<String>)> {
+        check_chunk(&nbt).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let entries = match nbt.remove("sections") {
             None | Some(Nbt::List(List::Empty)) => Vec::new(),
             Some(Nbt::List(List::Compound(entries))) => entries,
@@ -457,6 +461,7 @@ mod tests {
     #[test]
     fn damaged_sections_fall_back_to_defaults_with_warnings() {
         let mut chunk = Compound::new();
+        chunk.insert("DataVersion", 4786);
         let sections = vec![
             section(
                 0,
@@ -494,10 +499,32 @@ mod tests {
     #[test]
     fn a_malformed_section_list_is_an_error() {
         let mut chunk = Compound::new();
+        chunk.insert("DataVersion", 4786);
         chunk.insert("sections", Nbt::Int(1));
-        assert!(Chunk::read(chunk, BIOMES).is_err());
-        let mut chunk = Compound::new();
+        assert!(Chunk::read(chunk.clone(), BIOMES).is_err());
         chunk.insert("sections", Nbt::List(List::Compound(vec![Compound::new()])));
         assert!(Chunk::read(chunk, BIOMES).is_err());
+    }
+
+    #[test]
+    fn hotfix_chunks_keep_their_data_version() {
+        let mut chunk = vanilla_chunk();
+        chunk.insert("DataVersion", 4790);
+        let (read, warnings) = Chunk::read(chunk.clone(), BIOMES).unwrap();
+        assert!(warnings.is_empty());
+        // Written back as 26.1.2 saved it, so that vanilla 26.1.2 opens it as its own.
+        assert_eq!(read.to_nbt(BIOMES), chunk);
+    }
+
+    #[test]
+    fn chunks_of_other_versions_are_refused() {
+        let mut chunk = vanilla_chunk();
+        chunk.insert("DataVersion", 3955);
+        let error = Chunk::read(chunk, BIOMES).unwrap_err();
+        let version = error
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<crate::VersionError>())
+            .unwrap();
+        assert_eq!(version.data_version, Some(3955));
     }
 }

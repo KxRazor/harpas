@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`harpas-core`).
 - `level.dat` and player data read and written as gzip NBT with vanilla's `_old` backups, and the 26.1 world
   folder layout with dimensions under `dimensions/` and players under `players/data/` (`harpas-anvil`).
+- World versions: worlds of 26.1 and its hotfixes 26.1.1 and 26.1.2 open, and the server does not start on a
+  `level-name` world saved by any other version, explaining how to upgrade an older one with vanilla's
+  `--forceUpgrade`; chunks of another version are refused as they are read (`harpas-anvil`, `harpas-server`).
 
 ### Changed
 

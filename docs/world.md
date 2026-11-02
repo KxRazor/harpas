@@ -33,7 +33,7 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
   timestamp table as the first two sectors.
 - Three folders of each dimension use region files: `region/` (chunks), `entities/` and `poi/`. Since 26.1
   every dimension, the overworld included, lives in `dimensions/<namespace>/<path>/`, such as
-  `dimensions/minecraft/overworld/`, and player data in `players/data/` [6].
+  `dimensions/minecraft/overworld/`, and player data in `players/data/` [7].
 - Each chunk's data starts with its length and a compression byte. Harpas writes **zlib**, as vanilla does.
   Other types vanilla supports, including LZ4 since 24w04a, are read [1]. Whether to write LZ4 is decided by a
   benchmark, and only if it wins clearly. Gzip and uncompressed chunks are read today; an LZ4 chunk is
@@ -45,7 +45,7 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
   unknown block becomes air, an unknown biome plains, and a container that cannot be read its default, each
   with a warning.
 - `level.dat` and player data (`players/data/<uuid>.dat`) are gzip NBT files, saved as vanilla saves them
-  [6]: the new file is written first (`level.dat_new` for `level.dat`), the current one becomes `<name>_old`,
+  [7]: the new file is written first (`level.dat_new` for `level.dat`), the current one becomes `<name>_old`,
   and the new one takes its place. Reading falls back to the `_old` backup when the file is missing or
   damaged, so a crash at any point leaves a readable file.
 - The rest of the world folder (statistics, advancements, saved data such as maps, raids and scoreboards)
@@ -53,12 +53,22 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
 
 ### Supported world versions
 
-- Harpas opens worlds of the server version ([versions.md](versions.md#normal-mode-rust-engine)), currently
-  26.1.
-- **Older world:** the server does not start, and the error explains how to upgrade it: open it once with
-  vanilla of the supported version, which upgrades worlds on load. Converters for older versions may come
-  later.
-- **Newer world:** the server does not start, to avoid damaging data it does not understand.
+- Harpas opens worlds of the server version ([versions.md](versions.md#normal-mode-rust-engine)) and its
+  hotfixes, currently 26.1, 26.1.1 and 26.1.2 (data versions 4786, 4788 and 4790, each `world_version` in the
+  release's server jar). The hotfixes changed nothing in the save format: they fix chat reporting, a UI detail
+  and a spectator exploit, and share 26.1's protocol (775) and data pack format (101.1) [6]. They are listed
+  one by one, so a later hotfix is accepted only once it has been checked the same way. `level.dat` and every
+  chunk record the data version that saved them; a world saved before 1.9 records none and counts as older.
+- **Older world:** the server does not start, and the error explains how to upgrade it: start the vanilla
+  server of the supported version once with `--forceUpgrade`. Vanilla upgrades chunks only when it loads them,
+  so a world merely opened in vanilla can still hold old chunks; `--forceUpgrade` upgrades every chunk at once.
+  Converters for older versions may come later.
+- **Newer world,** or any data version not listed: the server does not start, to avoid damaging data it does
+  not understand.
+- A chunk keeps the data version it was read with when it is saved again, so a world from 26.1.2 still opens
+  in vanilla 26.1.2 as its own.
+- `level.dat` is checked before the server starts. Chunks are checked one by one as they are read, since a
+  world can mix versions; a chunk of another version is an error, not a chunk to generate again.
 
 ### Saving
 
@@ -209,5 +219,8 @@ Vanilla is the specification. Every behavior is ported one to one and checked ag
 3. minecraft.wiki, "Custom world generation" (world generation data in `data/minecraft/worldgen` since 22w42a). https://minecraft.wiki/w/Custom_world_generation
 4. Mojang version manifest, with each version's server download and hash. https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
 5. PaperMC documentation, "Anti-Xray" (engine modes 1, 2 and 3; bypass permission). https://docs.papermc.io/paper/anti-xray/
-6. minecraft.wiki, "Java Edition level format" (26.1 world folder layout, `level.dat`, `level.dat_new` and
+6. minecraft.wiki, "Java Edition 26.1.1" and "Java Edition 26.1.2" (hotfixes for chat reporting, UI tooltips and
+   spectators attacking players). https://minecraft.wiki/w/Java_Edition_26.1.1,
+   https://minecraft.wiki/w/Java_Edition_26.1.2
+7. minecraft.wiki, "Java Edition level format" (26.1 world folder layout, `level.dat`, `level.dat_new` and
    `level.dat_old`). https://minecraft.wiki/w/Java_Edition_level_format

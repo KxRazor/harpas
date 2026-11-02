@@ -79,7 +79,7 @@ fn login_serverbound() {
         login::serverbound::Packet,
         concat(&[&[0x00, 0x05], b"Notch", &NOTCH.to_be_bytes()]),
         login::serverbound::LoginStart {
-            username: "Notch".into(),
+            name: "Notch".into(),
             player_uuid: NOTCH
         }
     );

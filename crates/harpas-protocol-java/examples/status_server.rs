@@ -88,7 +88,7 @@ fn serve_login(mut stream: TcpStream) -> io::Result<()> {
     };
     let reason = format!(
         r#"{{"text":"Hello, {}. Harpas cannot play yet."}}"#,
-        start.username
+        start.name
     );
     let reply: login::clientbound::Packet = login::clientbound::LoginDisconnect { reason }.into();
     write_frame(&mut stream, |buf| reply.encode(buf))

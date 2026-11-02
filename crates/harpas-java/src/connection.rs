@@ -659,13 +659,13 @@ impl Connection {
         };
         match (packet, &self.login) {
             (login::serverbound::Packet::LoginStart(start), LoginStep::Start) => {
-                if !valid_player_name(&start.username) {
-                    return Err(ConnectionError::InvalidUsername(start.username));
+                if !valid_player_name(&start.name) {
+                    return Err(ConnectionError::InvalidUsername(start.name));
                 }
                 if !info.online_mode {
                     let player = Player {
-                        uuid: offline_uuid(&start.username),
-                        name: start.username,
+                        uuid: offline_uuid(&start.name),
+                        name: start.name,
                         properties: Vec::new(),
                     };
                     self.finish_login(player, info);
@@ -682,7 +682,7 @@ impl Connection {
                 .into();
                 self.send(|buf| request.encode(buf));
                 self.login = LoginStep::Encryption {
-                    username: start.username,
+                    username: start.name,
                     token,
                 };
                 Ok(())

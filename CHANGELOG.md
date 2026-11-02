@@ -66,6 +66,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Login Start's player name field is `name`, as the protocol documentation calls it, instead of `username`;
+  CodeQL read the old name as account credentials and flagged the vanilla log lines that show player names
+  (`harpas-protocol-java`).
+
 ### Fixed
 
 ### Removed

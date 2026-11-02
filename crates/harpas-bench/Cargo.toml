@@ -13,6 +13,7 @@ aes = "0.9.3"
 cfb8 = "0.9.1"
 ctr = "0.10.1"
 libdeflater = "1.26.1"
+jni = { version = "0.22.4", features = ["invocation"] }
 miniz_oxide = "0.9.1"
 sha2 = "0.11.1"
 zlib-rs = "0.6.8"

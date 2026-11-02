@@ -818,6 +818,7 @@ dependencies = [
  "aes 0.9.3",
  "cfb8",
  "ctr 0.10.1",
+ "getrandom 0.4.3",
  "jni",
  "libdeflater",
  "miniz_oxide",

@@ -17,6 +17,13 @@ type BedrockCipher = ctr::Ctr32BE<Aes256>;
 
 const VIEWERS: [usize; 5] = [1, 2, 10, 50, 200];
 
+/// Draws a fresh session key before entering a timed section.
+fn session_key<const N: usize>() -> [u8; N] {
+    let mut key = [0; N];
+    getrandom::fill(&mut key).expect("the system random number generator works");
+    key
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
     /// zlib header and checksum, as Java uses.
@@ -117,8 +124,7 @@ struct JavaConnection {
 }
 
 impl JavaConnection {
-    fn new(seed: u8) -> JavaConnection {
-        let key = [seed; 16];
+    fn new(key: [u8; 16]) -> JavaConnection {
         JavaConnection {
             cipher: JavaCipher::new(&key.into(), &key.into()),
             out: Vec::new(),
@@ -181,8 +187,9 @@ struct BedrockConnection {
 }
 
 impl BedrockConnection {
-    fn new(seed: u8) -> BedrockConnection {
-        let key = [seed; 32];
+    fn new(key: [u8; 32]) -> BedrockConnection {
+        // The legacy Bedrock CTR format uses a key-derived 12-byte nonce and a counter starting at 2.
+        // These counter bytes are protocol constants, not a fixed nonce or key.
         let mut iv = [0u8; 16];
         iv[..12].copy_from_slice(&key[..12]);
         iv[15] = 2;
@@ -300,12 +307,13 @@ fn main() {
     let mut compressor = Compressor::new(Library::Libdeflate, 6);
     let frame = java_frame(&java, compressor.compress(&java, Format::Zlib));
     let bedrock_batch = compressor.compress(&bedrock, Format::Raw).to_vec();
-    let mut java_conn = JavaConnection::new(1);
+    let java_key = session_key();
+    let mut java_conn = JavaConnection::new(java_key);
     let cfb8 = time(|| java_conn.send(black_box(&frame)));
-    let mut manual = ManualCfb8::new([1; 16]);
+    let mut manual = ManualCfb8::new(java_key);
     let mut check = frame.clone();
     manual.encrypt(&mut check);
-    java_conn = JavaConnection::new(1);
+    java_conn = JavaConnection::new(java_key);
     java_conn.send(&frame);
     assert_eq!(check, java_conn.out, "manual CFB8 matches the cfb8 crate");
     let mut out = frame.clone();
@@ -313,7 +321,7 @@ fn main() {
         out.copy_from_slice(&frame);
         manual.encrypt(black_box(&mut out));
     });
-    let mut bedrock_conn = BedrockConnection::new(1);
+    let mut bedrock_conn = BedrockConnection::new(session_key());
     let ctr = time(|| bedrock_conn.send(black_box(&bedrock_batch)));
     let rate = |bytes: usize, ns: f64| format!("{:.0}", bytes as f64 / ns * 1e9 / 1e6);
     println!("| Cipher | Bytes | µs | MB/s |\n|---|---|---|---|");
@@ -344,9 +352,11 @@ fn main() {
     println!("|---|---|---|---|---|---|");
     let mut compressor = zlib;
     for viewers in VIEWERS {
-        let mut java_conns: Vec<_> = (0..viewers).map(|i| JavaConnection::new(i as u8)).collect();
+        let mut java_conns: Vec<_> = (0..viewers)
+            .map(|_| JavaConnection::new(session_key()))
+            .collect();
         let mut bedrock_conns: Vec<_> = (0..viewers)
-            .map(|i| BedrockConnection::new(i as u8))
+            .map(|_| BedrockConnection::new(session_key()))
             .collect();
         let java_each = time(|| {
             for conn in &mut java_conns {
@@ -399,5 +409,58 @@ fn main() {
             per(bedrock_each),
             per(bedrock_shared)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn java_cfb8_matches_manual_across_frames() {
+        let key = session_key();
+        let mut connection = JavaConnection::new(key);
+        let mut manual = ManualCfb8::new(key);
+        for frame in [b"first".as_slice(), b"a second, longer frame", b"", b"last"] {
+            let mut expected = frame.to_vec();
+            manual.encrypt(&mut expected);
+            connection.send(frame);
+            assert_eq!(connection.out, expected);
+        }
+    }
+
+    #[test]
+    fn bedrock_batches_keep_the_checksum_and_continuous_ctr_stream() {
+        let key: [u8; 32] = session_key();
+        let mut connection = BedrockConnection::new(key);
+        let mut encrypted = Vec::new();
+        let mut expected = Vec::new();
+        for (counter, batch) in [b"first".as_slice(), b"a second, longer batch", b""]
+            .into_iter()
+            .enumerate()
+        {
+            connection.send(batch);
+            assert_eq!(connection.out[0], 0xfe);
+            encrypted.extend_from_slice(&connection.out[1..]);
+            let checksum = Sha256::new()
+                .chain_update((counter as u64).to_le_bytes())
+                .chain_update(batch)
+                .chain_update(key)
+                .finalize();
+            expected.extend_from_slice(batch);
+            expected.extend_from_slice(&checksum[..8]);
+        }
+
+        // Verify the wire bytes with the AES block primitive, independently of the CTR wrapper.
+        let aes = Aes256::new(&key.into());
+        for (index, chunk) in encrypted.chunks_mut(16).enumerate() {
+            let mut block = Array::from(<[u8; 16]>::try_from(&key[..16]).unwrap());
+            block[12..].copy_from_slice(&(index as u32 + 2).to_be_bytes());
+            aes.encrypt_block(&mut block);
+            for (byte, mask) in chunk.iter_mut().zip(block) {
+                *byte ^= mask;
+            }
+        }
+        assert_eq!(encrypted, expected);
     }
 }

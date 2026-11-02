@@ -2,4 +2,5 @@
 //!
 //! Design: `docs/engine-core.md`.
 
+pub mod chunk;
 pub mod nbt;

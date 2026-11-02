@@ -94,6 +94,10 @@ vanilla for the same seed.
   - [x] Chunk NBT to and from sections, with the block state registry.
   - [x] `level.dat` and player data, in the 26.1 world folder layout.
 - [ ] Chunk loading, saving and sending on worker threads; non-blocking autosave.
+  - [x] Load the chunk occupied by each player from an existing overworld on worker threads, and apply the
+        result on the logic thread.
+  - [ ] Load and send the chunks within each player's view distance.
+  - [ ] Save chunk snapshots on workers, including non-blocking autosave, unloading and shutdown.
 - [ ] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
 - [ ] Features and structures.

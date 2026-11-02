@@ -998,6 +998,11 @@ dependencies = [
 [[package]]
 name = "harpas-engine"
 version = "0.1.0"
+dependencies = [
+ "harpas-anvil",
+ "harpas-core",
+ "log",
+]
 
 [[package]]
 name = "harpas-java"

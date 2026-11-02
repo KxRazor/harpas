@@ -11,8 +11,8 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 | `harpas-engine` | Game engine: vanilla tick order on one logic thread |
 | `harpas-protocol-java` | Java Edition packet codecs, generated from `schema/` at build time |
 | `harpas-protocol-codegen` | Protocol schema loader, Rust code generator and minecraft-data check |
-| `harpas-protocol-bedrock` | Bedrock Edition batching, compression, encryption and packet codecs |
-| `harpas-raknet` | RakNet transport for Bedrock connections |
+| `harpas-protocol-bedrock` | Bedrock Edition batching, compression and packet codecs |
+| `harpas-nethernet` | NetherNet transport for Bedrock connections: HTTP signaling and WebRTC data channels |
 | `harpas-bedrock` | Translation between the engine and Bedrock packets |
 | `harpas-jvm` | Embedded JVM bridge for Bukkit and Paper plugins |
 | `harpas-server` | The `harpas` binary |
@@ -34,7 +34,7 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 
 | Prefix | Use |
 |---|---|
-| `m<N>/<task>` | A roadmap task, for example `m1/raknet-prototype` |
+| `m<N>/<task>` | A roadmap task, for example `m1/nethernet-prototype` |
 | `fix/<name>` | Bug fixes |
 | `docs/<name>` | Documentation only |
 | `chore/<name>` | Build, CI and tooling |
@@ -52,20 +52,20 @@ Pull requests are squash merged, so the title becomes the commit message on `mai
 ```
 
 - **`<area>`** is the part of the project the change touches: a crate name without the `harpas-` prefix
-  (`raknet`, `protocol-java`, `engine`), or `docs`, `ci`, `deps` or `workspace`. A change that spans many
+  (`nethernet`, `protocol-java`, `engine`), or `docs`, `ci`, `deps` or `workspace`. A change that spans many
   areas uses the main one.
 - **The summary** is in the imperative, lowercase after the colon, with no final period, and the whole title
   stays under about 72 characters. It says what changes, not how hard it was.
 
 | Good | Not as good | Why |
 |---|---|---|
-| `raknet: add the offline handshake` | `RakNet stuff` | Says nothing about the change |
+| `nethernet: add the signaling endpoint` | `NetherNet stuff` | Says nothing about the change |
 | `engine: run random ticks in vanilla order` | `engine: fixed ticks.` | Past tense, vague, final period |
 | `protocol-java: generate Status and Login codecs` | `M1 task 3` | The reader of `git log` has no roadmap open |
 | `docs: record the JVM bridge benchmark` | `Update jvm.md` | Says which file, not what changed in it |
 
 The description follows [the pull request template](.github/pull_request_template.md): what changes and why,
-the issue or roadmap task it belongs to (`Closes #12`, `M1: RakNet prototype`), and how it was tested.
+the issue or roadmap task it belongs to (`Closes #12`, `M1: NetherNet prototype`), and how it was tested.
 
 ## Issues
 

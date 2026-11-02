@@ -3,7 +3,7 @@
 Scope: how Harpas produces the code that encodes and decodes Java Edition packets (`harpas-protocol-java`) and
 Bedrock packets (`harpas-protocol-bedrock`): the protocol schema they are generated from, the generator, the
 hand-written exceptions, testing, and the constraints on the sources. Bedrock transport is covered in
-[raknet.md](raknet.md); translation and gameplay in [bedrock-interop.md](bedrock-interop.md).
+[nethernet.md](nethernet.md); translation and gameplay in [bedrock-interop.md](bedrock-interop.md).
 
 Status: prototype. The Java 26.1 Handshaking, Status and Login codecs are generated from the schema
 ([Prototype results](#prototype-results)); Configuration, Play and Bedrock are design. Facts about sources cite

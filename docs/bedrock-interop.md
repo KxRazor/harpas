@@ -73,7 +73,7 @@ The [Validation](#validation) section compares memory and CPU against a proxy se
 │                                                                          │
 │   Java clients ── TCP ──► harpas-protocol-java ─┐                        │
 │                                                 ├──► engine (Java model) │
-│   Bedrock clients ─ UDP ─► harpas-raknet ─► harpas-protocol-bedrock      │
+│   Bedrock clients ─ WebRTC ─► harpas-nethernet ─► harpas-protocol-bedrock│
 │                                        │        │                        │
 │                                        ▼        │                        │
 │                                 harpas-bedrock ─┘                        │
@@ -81,8 +81,9 @@ The [Validation](#validation) section compares memory and CPU against a proxy se
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **`harpas-raknet`**: the RakNet transport, described in [raknet.md](raknet.md).
-- **`harpas-protocol-bedrock`**: batching, compression, encryption, packet codecs. No game logic.
+- **`harpas-nethernet`**: the NetherNet transport (HTTP signaling and WebRTC data channels), described in
+  [nethernet.md](nethernet.md).
+- **`harpas-protocol-bedrock`**: batching, compression, packet codecs. No game logic.
 - **`harpas-bedrock`**: translation between the engine and Bedrock packets; per-session state that is truly
   per player (inventory views, movement validation, form state); the shared encode cache.
 
@@ -139,22 +140,22 @@ encoded once. Compression can be shared too, because of how a batch is built on 
 1. Packets are length-prefixed and concatenated into a batch.
 2. Once compression is enabled, a byte selects the algorithm (`0` zlib, `1` snappy, `0xff` none); batches
    below the negotiated threshold are sent uncompressed with `0xff`.
-3. Encryption, when enabled, comes after compression: an 8-byte checksum (the first 8 bytes of SHA-256 over
-   the per-connection send counter, the compressed data and the key) is appended, then the result is
-   encrypted with AES-256 in CTR mode using a per-connection key.
+3. The batch goes into the connection's NetherNet data channel, which DTLS encrypts. Minecraft's own packet
+   encryption (a SHA-256 checksum and AES-256-CTR) is not used over NetherNet
+   ([nethernet.md](nethernet.md#webrtc-connection)).
 
-Compression depends only on the batch contents, the algorithm and the level. The checksum and encryption
-depend on the connection. So Harpas:
+Compression depends only on the batch contents, the algorithm and the level. Encryption depends on the
+connection. So Harpas:
 
 - uses the same compression algorithm, level and threshold for every Bedrock connection;
 - sends shared packets in their own batch, compressed once;
-- does only the checksum and AES-CTR pass per connection, which is much cheaper than compressing.
+- does only the DTLS encryption per connection, which is much cheaper than compressing.
 
 Trade-off: a shared batch cannot be merged with that player's own packets, so there are more batches per
 tick. Measured on one chunk column, sharing wins from the second viewer: 104 µs per viewer for two viewers
-instead of 203 µs, and 3.8 µs with 200 viewers, where the per-connection checksum and AES-CTR pass is all that is
-left ([protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). The cost of the extra batches is the
-checksum, encryption and RakNet framing of a small batch *(measure)*.
+instead of 203 µs, and 3.8 µs with 200 viewers, where the per-connection encryption is all that is left
+([protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). That measurement used the old checksum and
+AES-CTR pass; DTLS replaces it *(measure)*, as does the cost of the extra batches.
 
 ### 6. Native authentication
 
@@ -169,13 +170,14 @@ Bedrock settings live in `harpas.toml`:
 
 ```toml
 [bedrock]
-enabled = true   # default
-port = 19132     # UDP, Bedrock's default
+enabled = true       # default
+port = 19132         # TCP, signaling; Bedrock's default, the port players type
+webrtc_port = 19133  # UDP, WebRTC connections
 ```
 
 With `enabled = false`:
 
-- The UDP listener is not opened.
+- The signaling and WebRTC listeners are not opened.
 - Mapping tables (blocks, items, entities, biomes) are not loaded.
 - The shared encode cache does not exist.
 - Entities keep no Bedrock-specific metadata.
@@ -260,7 +262,7 @@ hand-written exceptions, testing and the licensing constraints are described in
 |---|---|---|
 | Protocol reference | Mojang/bedrock-protocol-docs [13] | Official, for server partners. Read only; its files never enter the repository or the build (see [protocol-codecs.md](protocol-codecs.md)). Microsoft states the protocol is not a supported API and has no backward-compatibility guarantee [14] |
 | Block, item and entity mappings | GeyserMC/mappings [15] | MIT licensed (copyright GeyserMC), actively maintained. Contains block, item, biome, particle, sound and collision data. Reuse requires keeping the copyright and license notice in `THIRD_PARTY_NOTICES.md` |
-| RakNet transport | Our own, `harpas-raknet` | See [raknet.md](raknet.md) |
+| NetherNet transport | Our own signaling and segment framing, on a WebRTC stack (open question) | See [nethernet.md](nethernet.md) |
 | Bedrock protocol codecs | Generated from our own schema | See [protocol-codecs.md](protocol-codecs.md) |
 | Skin signing | External signing service | Required for Java viewers (see [Skins](#skins)) |
 

@@ -19,7 +19,7 @@ see the report.
 
 Include what you can of:
 
-- the affected component (for example the Java protocol, RakNet, the JVM bridge) and version or commit;
+- the affected component (for example the Java protocol, NetherNet, the JVM bridge) and version or commit;
 - what an attacker can do: crash or stall the server, read or change data, run code, impersonate a player;
 - steps or a proof of concept to reproduce it;
 - whether it needs an account, operator rights, a plugin or a specific configuration.

@@ -1,6 +1,6 @@
 [package]
 name = "harpas-protocol-bedrock"
-description = "Bedrock Edition batching, compression, encryption and packet codecs"
+description = "Bedrock Edition batching, compression and packet codecs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

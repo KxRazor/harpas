@@ -29,7 +29,7 @@ The design behind every milestone is in [docs/](docs/README.md). Release numberi
 are in place.
 
 - [x] Create the Cargo workspace with the crate layout used by the design documents (`harpas-core`,
-      `harpas-protocol-java`, `harpas-protocol-bedrock`, `harpas-raknet`, `harpas-engine`, `harpas-jvm`,
+      `harpas-protocol-java`, `harpas-protocol-bedrock`, `harpas-nethernet`, `harpas-engine`, `harpas-jvm`,
       `harpas-server`, …), each declaring `MIT OR Apache-2.0`.
 - [x] Add CI: build, `rustfmt`, `clippy`, tests, on Linux, Windows and macOS.
 - [x] Write `CONTRIBUTING.md`: how contributions are licensed ([docs/licensing.md](docs/licensing.md#contributions)),
@@ -49,8 +49,8 @@ documents.
 - [ ] Temurin vs. GraalVM Community Edition comparison on the same benchmark.
 - [x] Protocol codegen prototype: generate the Java 26.1 Status and Login codecs from a schema built from
       minecraft-data ([docs/protocol-codecs.md](docs/protocol-codecs.md)); decide on ProtoDef vs. our own format.
-- [ ] RakNet prototype: offline phase and a Bedrock client reaching the login packet
-      ([docs/raknet.md](docs/raknet.md)).
+- [x] NetherNet prototype: HTTP signaling and WebRTC data channels, with a Bedrock 26.60 client reaching the
+      login packet ([docs/nethernet.md](docs/nethernet.md)).
 - [x] Shared encoding prototype: encode and compress a chunk section once and serve it to many simulated
       connections, measuring cost per viewer.
 - [ ] Record results and update the affected documents; close or reopen design questions accordingly.
@@ -133,9 +133,9 @@ as shown by the parity report.
 **Done when:** Bedrock players from the supported window join without anything installed, play with Java
 players, and use clearly less memory and CPU than a proxy setup.
 
-- [ ] RakNet transport with robustness limits and congestion control ([docs/raknet.md](docs/raknet.md)).
+- [ ] NetherNet transport with robustness limits, HTTPS signaling and LAN discovery ([docs/nethernet.md](docs/nethernet.md)).
 - [ ] Generated Bedrock codecs for the version window ([docs/versions.md](docs/versions.md#bedrock-window)).
-- [ ] Batching, shared compression, encryption.
+- [ ] Batching and shared compression; encryption is DTLS's ([docs/nethernet.md](docs/nethernet.md)).
 - [ ] Xbox Live authentication and Floodgate-compatible identity ([docs/identity.md](docs/identity.md)).
 - [ ] Hashed block network IDs and Java-to-Bedrock mappings.
 - [ ] Shared chunk encoding, sub-chunk requests, blob cache ([docs/bedrock-interop.md](docs/bedrock-interop.md)).

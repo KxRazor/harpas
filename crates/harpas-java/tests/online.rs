@@ -13,7 +13,7 @@ use harpas_java::{
     ServerKey, State, server_hash, write_frame,
 };
 use harpas_protocol_java::codec;
-use harpas_protocol_java::v26_1::{configuration, handshaking, login};
+use harpas_protocol_java::v26_1::{configuration, handshaking, login, play};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 
@@ -239,6 +239,73 @@ fn online_login_encrypts_compresses_and_uses_the_mojang_profile() {
         })
         .collect();
     assert_eq!(names, ["PluginMessage", "FeatureFlags", "SelectKnownPacks"]);
+
+    let known: configuration::serverbound::Packet = configuration::serverbound::SelectKnownPacks {
+        packs: vec![configuration::KnownPack {
+            namespace: "minecraft".into(),
+            id: "core".into(),
+            version: "26.1".into(),
+        }],
+    }
+    .into();
+    connection
+        .receive(&client.send(|buf| known.encode(buf)), &info)
+        .unwrap();
+    assert_eq!(client.receive(connection.take_output()).len(), 30);
+    let finish: configuration::serverbound::Packet =
+        configuration::serverbound::AcknowledgeFinishConfiguration.into();
+    connection
+        .receive(&client.send(|buf| finish.encode(buf)), &info)
+        .unwrap();
+    let packets = client.receive(connection.take_output());
+    assert!(matches!(
+        play::clientbound::Packet::decode(&packets[0]),
+        Ok(play::clientbound::Packet::Login(_))
+    ));
+
+    // Engine output and movement inputs use the same continuous encryption and compression streams.
+    let removal: play::clientbound::Packet = play::clientbound::PlayerInfoRemove {
+        players: vec![STEVE],
+    }
+    .into();
+    connection.send_play_packet(removal.clone());
+    let packets = client.receive(connection.take_output());
+    assert_eq!(play::clientbound::Packet::decode(&packets[0]), Ok(removal));
+    let profile: play::clientbound::Packet = play::clientbound::PlayerInfoUpdate {
+        updates: play::PlayerInfoUpdates {
+            actions: play::PlayerInfoActions {
+                add_player: true,
+                update_listed: true,
+                ..Default::default()
+            },
+            entries: vec![play::PlayerInfoEntry {
+                uuid: STEVE,
+                name: "Steve".into(),
+                properties: vec![play::ProfileProperty {
+                    name: "textures".into(),
+                    value: "x".repeat(300),
+                    signature: Some("signature".into()),
+                }],
+                listed: true,
+                ..Default::default()
+            }],
+        },
+    }
+    .into();
+    connection.send_play_packet(profile.clone());
+    let packets = client.receive(connection.take_output());
+    assert_eq!(play::clientbound::Packet::decode(&packets[0]), Ok(profile));
+    let movement: play::serverbound::Packet = play::serverbound::SetPlayerPosition {
+        x: 1.5,
+        y: 65.0,
+        z: 0.5,
+        flags: play::MovementFlags::default(),
+    }
+    .into();
+    connection
+        .receive(&client.send(|buf| movement.encode(buf)), &info)
+        .unwrap();
+    assert_eq!(connection.take_play_input(), vec![movement]);
 }
 
 #[test]

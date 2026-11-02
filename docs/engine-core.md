@@ -4,9 +4,9 @@ Scope: how the Rust engine runs the game in normal mode: the tick loop and its o
 parallel, how threads are laid out, how the world and entities are stored, and how plugins are called from
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
-Status: in progress. The logic thread and its tick skeleton are implemented; world and entity logic are still
-design. Facts about vanilla cite their source in [References](#references); everything else is a design
-decision of this project.
+Status: in progress. The logic thread, tick skeleton and players in the void world are implemented; world
+storage and the remaining entity logic are still design. Facts about vanilla cite their source in
+[References](#references); everything else is a design decision of this project.
 
 ---
 
@@ -55,14 +55,23 @@ This order is observable (redstone timing, farms, entity interactions), so Harpa
 
 **Implemented skeleton:** the server starts one logic thread with a 50 ms tick target. It catches up after
 short delays and resets the target after a delay over two seconds. The tick has phases for functions,
-dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. All but
-connection bookkeeping are placeholders: there are no worlds, entities or saves yet.
+dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. Only the
+connection and player work is implemented; the other phases remain placeholders.
 
-Connection threads queue a player's entry to Play and departure for the connection phase. The logic thread
-publishes the resulting player count for server-list responses; a connection's departure is queued even when
-it ends with an I/O or protocol error. The queue currently carries only these lifecycle events, not Play
-packets. Authentication and Keep Alive remain on the connection threads, and player entities, movement and
-chat are later tasks.
+Connection threads queue entry, departure and movement for the connection phase, and translate the resulting
+messages into edition-specific packets. The logic thread owns each player's profile and position and publishes
+the online count. Player entities have distinct runtime IDs; a duplicate UUID disconnects the old session.
+All players appear in the player list, while entity tracking is per viewer, capped by both its view distance
+and 128 blocks. Spectator entities are hidden from non-spectators. A departure removes the entity and list entry
+even after an I/O or protocol error. Authentication and Keep Alive remain on the connection threads.
+
+For the void world, movement rejects non-finite positions or angles, clamps coordinates to vanilla's limits [3],
+and corrects a displacement over 10 blocks from the beginning of a tick. A pending teleport must be confirmed
+before more movement is accepted. In Survival and Adventure, a player hovering in the void for more than 80
+ticks is disconnected unless `allow-flight` is enabled; Creative and Spectator may fly [4]. These are the
+current void-world checks, not a complete implementation of vanilla's movement and collision rules: world
+collision, vehicle and elytra movement, velocity effects and their flight exemptions need the later world and
+gameplay work. Signed chat is also pending.
 
 ### 2. Parallel only where it cannot be observed
 
@@ -164,3 +173,7 @@ Harpas uses its own storage:
 
 1. minecraft.wiki, "Tick" (Java Edition tick order, 20 TPS target, two-second reset, random ticks). https://minecraft.wiki/w/Tick
 2. PaperMC/Folia README (regionized multithreading, plugin compatibility, broken APIs). https://github.com/PaperMC/Folia
+3. Minecraft Packet ID Reference, Java 26.1 (movement packets and coordinate limits).
+   https://github.com/xKumorio/Minecraft-Packet-ID-Reference/blob/main/versions/26.1.md
+4. Minecraft Docs, "Input to movement" (speed and flight checks; current Java behavior).
+   https://minecraftdocs.dev/systems/player/input-to-movement

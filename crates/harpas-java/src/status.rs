@@ -22,6 +22,8 @@ pub struct ServerInfo {
     pub accepts_transfers: bool,
     /// Whether players are authenticated with Mojang, from `online-mode`.
     pub online_mode: bool,
+    /// Whether Survival and Adventure players may fly, from `allow-flight`.
+    pub allow_flight: bool,
     /// View distance in chunks, from `view-distance`.
     pub view_distance: u32,
     /// Simulation distance in chunks, from `simulation-distance`.
@@ -44,6 +46,7 @@ impl Default for ServerInfo {
             enforces_secure_chat: true,
             accepts_transfers: false,
             online_mode: true,
+            allow_flight: false,
             view_distance: 10,
             simulation_distance: 10,
             game_mode: GameMode::Survival,

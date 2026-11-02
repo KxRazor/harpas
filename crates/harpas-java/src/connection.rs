@@ -23,8 +23,6 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", v26_1::MINECRAFT_VERSION);
 /// Where players appear in the void world: above the middle of chunk (0, 0).
 const SPAWN: (f64, f64, f64) = (0.5, 65.0, 0.5);
-/// Entity ID of the player. There is one player per connection and no entities yet.
-const PLAYER_ENTITY_ID: i32 = 1;
 
 /// The connection states, in the order a connection goes through them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,12 +164,24 @@ pub struct Connection {
     next_keepalive: Option<Instant>,
     pending_keepalive: Option<PendingKeepAlive>,
     keepalive_counter: i64,
+    entity_id: i32,
+    play_input: Vec<play::serverbound::Packet>,
+    client_view_distance: Option<u8>,
+    server_view_distance: i32,
+    view_distance: i32,
+    center_chunk: (i32, i32),
+    biome: i32,
 }
 
 impl Connection {
     /// A connection that has received nothing yet. `key` is the server's RSA key, shared by every
     /// connection.
     pub fn new(key: Arc<ServerKey>) -> Self {
+        Self::with_entity_id(key, 1)
+    }
+
+    /// A connection with the runtime entity ID assigned to its player.
+    pub fn with_entity_id(key: Arc<ServerKey>, entity_id: i32) -> Self {
         Self {
             state: State::Handshaking,
             key,
@@ -187,6 +197,13 @@ impl Connection {
             next_keepalive: None,
             pending_keepalive: None,
             keepalive_counter: 0,
+            entity_id,
+            play_input: Vec::new(),
+            client_view_distance: None,
+            server_view_distance: 2,
+            view_distance: 2,
+            center_chunk: (0, 0),
+            biome: 0,
         }
     }
 
@@ -236,6 +253,109 @@ impl Connection {
     /// Bytes to send to the client, in order. Taking them empties the output.
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.out)
+    }
+
+    /// Takes the Play packets that must be handled by the logic thread.
+    pub fn take_play_input(&mut self) -> Vec<play::serverbound::Packet> {
+        std::mem::take(&mut self.play_input)
+    }
+
+    /// The client's requested view distance, if it sent its settings.
+    pub fn client_view_distance(&self) -> Option<u8> {
+        self.client_view_distance
+    }
+
+    /// Sends an engine-produced Play packet through this connection's compression and encryption.
+    pub fn send_play_packet(&mut self, packet: play::clientbound::Packet) {
+        if self.state == State::Play {
+            self.send_play(packet);
+        }
+    }
+
+    /// Disconnects a player in Play with a text reason.
+    pub fn disconnect_play(&mut self, reason: &str) {
+        if self.state == State::Play {
+            self.send_play(
+                play::clientbound::Disconnect {
+                    reason: Nbt::from(reason),
+                }
+                .into(),
+            );
+            self.state = State::Closed;
+        }
+    }
+
+    /// Updates the void chunks sent to the client after an accepted movement or settings change.
+    pub fn update_view(&mut self, x: f64, z: f64, client_distance: Option<u8>) {
+        if self.state != State::Play || !x.is_finite() || !z.is_finite() {
+            return;
+        }
+        if let Some(distance) = client_distance {
+            self.client_view_distance = Some(distance.clamp(2, 32));
+        }
+        let distance = self
+            .client_view_distance
+            .map_or(self.server_view_distance, |distance| {
+                self.server_view_distance.min(i32::from(distance))
+            });
+        let center = (
+            (x.clamp(-30_000_000.0, 30_000_000.0) / 16.0).floor() as i32,
+            (z.clamp(-30_000_000.0, 30_000_000.0) / 16.0).floor() as i32,
+        );
+        if center == self.center_chunk && distance == self.view_distance {
+            return;
+        }
+        let (old_x, old_z) = self.center_chunk;
+        let old_distance = self.view_distance;
+        self.center_chunk = center;
+        self.view_distance = distance;
+        self.send_play(
+            play::clientbound::SetCenterChunk {
+                x: center.0,
+                z: center.1,
+            }
+            .into(),
+        );
+        for chunk_x in old_x - old_distance..=old_x + old_distance {
+            for chunk_z in old_z - old_distance..=old_z + old_distance {
+                if (chunk_x - center.0).abs() > distance || (chunk_z - center.1).abs() > distance {
+                    self.send_play(
+                        play::clientbound::UnloadChunk {
+                            x: chunk_x,
+                            z: chunk_z,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+        let mut added = Vec::new();
+        for chunk_x in center.0 - distance..=center.0 + distance {
+            for chunk_z in center.1 - distance..=center.1 + distance {
+                if (chunk_x - old_x).abs() > old_distance || (chunk_z - old_z).abs() > old_distance
+                {
+                    added.push((chunk_x, chunk_z));
+                }
+            }
+        }
+        if !added.is_empty() {
+            self.send_play(play::clientbound::ChunkBatchStart.into());
+            for &(chunk_x, chunk_z) in &added {
+                self.send_play(void_world::empty_chunk(chunk_x, chunk_z, self.biome).into());
+            }
+            self.send_play(
+                play::clientbound::ChunkBatchFinished {
+                    batch_size: added.len() as i32,
+                }
+                .into(),
+            );
+        }
+    }
+
+    /// Applies a new client view distance at the current chunk center.
+    pub fn update_view_distance(&mut self, distance: u8) {
+        let (x, z) = self.center_chunk;
+        self.update_view(f64::from(x) * 16.0, f64::from(z) * 16.0, Some(distance));
     }
 
     /// Handles bytes read from the socket. `info` is the server's current settings and list entry.
@@ -597,9 +717,11 @@ impl Connection {
                 self.join(info);
             }
             Packet::KeepAlive(keepalive) => self.keepalive_answered(keepalive.id)?,
-            // Settings, the client's brand and answers to things the server never sent are not used yet.
-            Packet::ClientInformation(_)
-            | Packet::PluginMessage(_)
+            Packet::ClientInformation(settings) => {
+                self.client_view_distance = Some(settings.view_distance.clamp(2, 32) as u8);
+            }
+            // The client's brand and answers to things the server never sent are not used yet.
+            Packet::PluginMessage(_)
             | Packet::Pong(_)
             | Packet::CookieResponse(_)
             | Packet::ResourcePackResponse(_)
@@ -618,12 +740,19 @@ impl Connection {
                 .expect("the overworld dimension type is synchronized");
         let biome = registries::entry_id("minecraft:worldgen/biome", "minecraft:plains")
             .expect("the plains biome is synchronized");
-        let view_distance = info.view_distance.clamp(2, 32) as i32;
+        self.biome = biome;
+        self.server_view_distance = info.view_distance.clamp(2, 32) as i32;
+        let view_distance = self
+            .client_view_distance
+            .map_or(self.server_view_distance, |distance| {
+                self.server_view_distance.min(i32::from(distance))
+            });
+        self.view_distance = view_distance;
         let simulation_distance = info.simulation_distance.clamp(2, 32) as i32;
 
         self.send_play(
             play::clientbound::Login {
-                entity_id: PLAYER_ENTITY_ID,
+                entity_id: self.entity_id,
                 is_hardcore: false,
                 dimensions: vec!["minecraft:overworld".to_owned()],
                 max_players: info.max_players as i32,
@@ -739,10 +868,18 @@ impl Connection {
     }
 
     fn play(&mut self, packet: play::serverbound::Packet) -> Result<(), ConnectionError> {
-        if let play::serverbound::Packet::KeepAlive(keepalive) = packet {
-            self.keepalive_answered(keepalive.id)?;
+        use play::serverbound::Packet;
+        match packet {
+            Packet::KeepAlive(keepalive) => self.keepalive_answered(keepalive.id)?,
+            Packet::ConfirmTeleportation(_)
+            | Packet::SetPlayerPosition(_)
+            | Packet::SetPlayerPositionAndRotation(_)
+            | Packet::SetPlayerRotation(_)
+            | Packet::SetPlayerMovementFlags(_)
+            | Packet::PlayerAbilities(_)
+            | Packet::ClientInformation(_) => self.play_input.push(packet),
+            _ => {}
         }
-        // Movement, chat and the rest come with the logic thread, in later tasks.
         Ok(())
     }
 

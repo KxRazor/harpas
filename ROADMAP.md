@@ -68,6 +68,7 @@ and chats.
   - [x] Framing, Handshaking, Status and the server list, legacy ping included.
   - [x] Login, Configuration and Play states, up to a void world.
 - [x] Online-mode authentication with Mojang's session server; offline mode.
+- [x] Logins refused with vanilla's message when `max-players` players are in Play.
 - [x] Encryption and compression following `server.properties`.
 - [x] Configuration state with registry data for 26.1.
 - [x] Abuse protection: connection limits, packet size limits, decompression limits, timeouts.
@@ -110,6 +111,9 @@ as shown by the parity report.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
+- [ ] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
+      `banned-ips.json` and `ops.json`: checked at login in vanilla's order, managed by their commands, and
+      operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/world.md](docs/world.md#parity-strategy)).

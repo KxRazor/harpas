@@ -101,7 +101,7 @@ vanilla for the same seed.
 - [ ] Parity harness: block-by-block generation comparison against vanilla in CI.
 - [ ] Shared Java chunk encoding cache.
 - [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
-- [ ] Older and newer world detection with clear errors.
+- [x] Older and newer world detection with clear errors.
 
 ## M4 — Vanilla gameplay (0.3.0)
 

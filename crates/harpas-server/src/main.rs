@@ -149,6 +149,7 @@ fn run() -> io::Result<()> {
     // Every start needs Minecraft's game data, downloaded from Mojang (`docs/world.md`).
     eula::require(Path::new(""), &settings)?;
     vanilla_data::provision(Path::new(""))?;
+    check_world(Path::new(&properties.string("level-name", "world")))?;
     let info = Arc::new(server_info(&properties));
     info!("Default game type: {:?}", info.game_mode);
     info!("Generating keypair");
@@ -233,6 +234,22 @@ fn run() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Refuses to start on a world another Minecraft version saved (`docs/world.md#supported-world-versions`). A
+/// folder without `level.dat` has no world yet.
+fn check_world(world: &Path) -> io::Result<()> {
+    let Some((data, source)) = harpas_anvil::read_level(world)? else {
+        return Ok(());
+    };
+    if source == harpas_anvil::Source::Backup {
+        warn!(
+            "{} is missing or damaged; using level.dat_old",
+            world.join("level.dat").display()
+        );
+    }
+    harpas_anvil::check_level(&data)
+        .map_err(|e| io::Error::other(format!("Cannot open {}: {e}", world.display())))
 }
 
 /// `harpas vanilla-data install --from <jar>`: Mojang's files need the EULA even when the owner provides them.
@@ -678,6 +695,28 @@ mod tests {
         assert!(args(&["vanilla-data", "install"]).is_err());
         assert_eq!(version(), format!("{}+26.1", env!("CARGO_PKG_VERSION")));
         assert!(verbose_version().contains("Java clients: 26.1 (protocol 775)"));
+    }
+
+    #[test]
+    fn worlds_of_other_versions_stop_the_server() {
+        let world = std::env::temp_dir().join(format!("harpas-check-world-{}", std::process::id()));
+        // No world yet.
+        assert!(check_world(&world).is_ok());
+
+        let mut data = harpas_core::nbt::Compound::new();
+        data.insert("DataVersion", harpas_anvil::DATA_VERSION);
+        harpas_anvil::write_level(&world, &data).unwrap();
+        assert!(check_world(&world).is_ok());
+
+        data.insert("DataVersion", 4440);
+        harpas_anvil::write_level(&world, &data).unwrap();
+        let error = check_world(&world).unwrap_err().to_string();
+        let _ = fs::remove_dir_all(&world);
+        assert!(error.starts_with(&format!(
+            "Cannot open {}: this world was saved by",
+            world.display()
+        )));
+        assert!(error.contains("--forceUpgrade"));
     }
 
     #[test]

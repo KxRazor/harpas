@@ -1060,6 +1060,8 @@ dependencies = [
  "ctrlc",
  "flate2",
  "getrandom 0.4.3",
+ "harpas-anvil",
+ "harpas-core",
  "harpas-engine",
  "harpas-java",
  "harpas-protocol-java",

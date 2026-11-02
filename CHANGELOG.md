@@ -9,6 +9,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+### Security
+
+## [0.1.0+26.1] - 2026-11-02
+
+A Java Edition 26.1 client joins a void world in online or offline mode, moves around, sees other players and
+chats (milestone M2).
+
+### Added
+
 - Embedded JDK 25 bridge benchmark with JNI/FFM calls, shared player views, synchronous events for 200
   simulated players, and behavioral checks for both dispatch paths (`harpas-bench`).
 - Cold-start ticks and JIT compiler CPU time in the JVM bridge benchmark, to compare Temurin with GraalVM
@@ -64,15 +79,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   default variants may carry a value, and the minecraft-data check handles nested and optional switches
   (`harpas-protocol-java`, `harpas-protocol-codegen`).
 
+- `harpas --version` prints the version with the supported Minecraft version as build metadata, and
+  `--version --verbose` what the release declares; vanilla's `nogui` argument is accepted (`harpas-server`).
+- Release binaries for Linux and Windows, with SHA-256 checksums, attached to each GitHub release (`ci`).
+
 ### Changed
 
 - Login Start's player name field is `name`, as the protocol documentation calls it, instead of `username`;
   CodeQL read the old name as account credentials and flagged the vanilla log lines that show player names
   (`harpas-protocol-java`).
-
-### Fixed
-
-### Removed
 
 ### Security
 

@@ -10,11 +10,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use harpas_core::noise::NoiseParameters;
+use harpas_core::block::block_states;
+use harpas_core::noise::{NoiseParameters, NormalNoise};
+use harpas_core::random::RandomSource;
 use harpas_worldgen::{
     BinaryOp, BiomeManager, CompiledDensityGraph, CubicSpline, DensityFunctionDef, MarkerKind,
-    NodeId, NoiseChunk, NoiseRouterDef, NoiseSamplingSettings, Parameter, ParameterPoint, RTree,
-    RarityValueMapper, TargetPoint, UnaryOp, quantize_coord,
+    NodeId, NoiseChunk, NoiseRouterDef, NoiseSamplingSettings, OreVeinifier, Parameter,
+    ParameterPoint, PositionalRandom, RTree, RarityValueMapper, TargetPoint, UnaryOp, VeinType,
+    generate_bands, quantize_coord,
 };
 use indexmap::IndexMap;
 
@@ -908,11 +911,180 @@ public final class WorldgenProbe {
         return h;
     }
 
+    // --- 6. Aquifer, OreVeinifier & SurfaceSystem ---
+    static final class XoroshiroPositional {
+        final long seedLo, seedHi;
+        XoroshiroPositional(long seedLo, long seedHi) {
+            this.seedLo = seedLo;
+            this.seedHi = seedHi;
+        }
+        static XoroshiroPositional fromRng(Xoroshiro rng) {
+            return new XoroshiroPositional(rng.nextLong(), rng.nextLong());
+        }
+        Xoroshiro fromHashOf(String name) throws Exception {
+            MessageDigest md5 = MessageDigest.getInstance("MD5");
+            byte[] d = md5.digest(name.getBytes(StandardCharsets.UTF_8));
+            ByteBuffer bb = ByteBuffer.wrap(d).order(ByteOrder.BIG_ENDIAN);
+            long hLo = bb.getLong();
+            long hHi = bb.getLong();
+            return new Xoroshiro(hLo ^ seedLo, hHi ^ seedHi);
+        }
+        Xoroshiro at(int x, int y, int z) {
+            long posSeed = ((long) (x * 3129871) ^ ((long) z * 116129781L) ^ (long) y);
+            posSeed = posSeed * posSeed * 42317861L + posSeed * 11L;
+            long b = posSeed >> 16;
+            return new Xoroshiro(b ^ seedLo, seedHi);
+        }
+    }
+
+    static float nextFloat(Xoroshiro rng) {
+        return (rng.nextLong() >>> 40) * (1.0f / (1L << 24));
+    }
+
+    static boolean nextBoolean(Xoroshiro rng) {
+        return (rng.nextLong() & 1L) != 0L;
+    }
+
+    static int nextIntBetweenInclusive(Xoroshiro rng, int min, int max) {
+        return rng.nextInt(max - min + 1) + min;
+    }
+
+    static void makeBands(Xoroshiro rng, int[] bands, int minWidth, int state) {
+        int bandCount = nextIntBetweenInclusive(rng, 6, 15);
+        for (int i = 0; i < bandCount; i++) {
+            int width = minWidth + rng.nextInt(3);
+            int start = rng.nextInt(bands.length);
+            for (int p = 0; start + p < bands.length && p < width; p++) {
+                bands[start + p] = state;
+            }
+        }
+    }
+
+    static double clampedMap(double val, double fromMin, double fromMax, double toMin, double toMax) {
+        double delta = (val - fromMin) / (fromMax - fromMin);
+        if (delta < 0.0) return toMin;
+        if (delta > 1.0) return toMax;
+        return toMin + delta * (toMax - toMin);
+    }
+
+    static double mapVal(double val, double fromMin, double fromMax, double toMin, double toMax) {
+        double delta = (val - fromMin) / (fromMax - fromMin);
+        return toMin + delta * (toMax - toMin);
+    }
+
+    private static long hashAquiferVeinsAndSurface() throws Exception {
+        long worldSeed = 20260329L;
+        XoroshiroPositional rootPos = XoroshiroPositional.fromRng(Xoroshiro.fromSeed(worldSeed));
+
+        // 1. Clay bands (orange=10, yellow=11, brown=12, red=13, white=14, light_gray=15, terracotta=16)
+        Xoroshiro clayRng = rootPos.fromHashOf("minecraft:clay_bands");
+        int[] bands = new int[192];
+        Arrays.fill(bands, 16);
+        for (int i = 0; i < bands.length; i++) {
+            i += clayRng.nextInt(5) + 1;
+            if (i < bands.length) {
+                bands[i] = 10;
+            }
+        }
+        makeBands(clayRng, bands, 1, 11);
+        makeBands(clayRng, bands, 2, 12);
+        makeBands(clayRng, bands, 1, 13);
+        int whiteCount = nextIntBetweenInclusive(clayRng, 9, 15);
+        for (int count = 0, pos = 0; count < whiteCount && pos < bands.length; count++, pos += clayRng.nextInt(16) + 4) {
+            bands[pos] = 14;
+            if (pos > 1 && nextBoolean(clayRng)) {
+                bands[pos - 1] = 15;
+            }
+            if (pos + 1 < bands.length && nextBoolean(clayRng)) {
+                bands[pos + 1] = 15;
+            }
+        }
+
+        long h = FNV_OFFSET;
+        for (int b : bands) {
+            h = mix(h, Integer.toUnsignedLong(b));
+        }
+
+        // 2. Surface depth
+        Normal surfaceNoise = new Normal(rootPos.fromHashOf("minecraft:surface"), -6, new double[] { 1.0, 1.0, 1.0 });
+        XoroshiroPositional surfacePos = rootPos;
+        for (int bx = -16; bx < 16; bx += 3) {
+            for (int bz = -16; bz < 16; bz += 3) {
+                double nv = surfaceNoise.getValue(bx, 0.0, bz);
+                int depth = (int) (nv * 2.75 + 3.0 + surfacePos.at(bx, 0, bz).nextDouble() * 0.25);
+                h = mix(h, Integer.toUnsignedLong(depth));
+            }
+        }
+
+        // 3. OreVeinifier
+        XoroshiroPositional veinPos = XoroshiroPositional.fromRng(rootPos.fromHashOf("minecraft:ore"));
+        Normal veinToggleNoise = new Normal(rootPos.fromHashOf("minecraft:ore_veininess"), -8, new double[] { 1.0 });
+        Normal veinRidgedNoise = new Normal(rootPos.fromHashOf("minecraft:ore_vein_a"), -7, new double[] { 1.0 });
+        Normal veinGapNoise = new Normal(rootPos.fromHashOf("minecraft:ore_gap"), -5, new double[] { 1.0 });
+
+        for (int bx = 0; bx < 16; bx += 2) {
+            for (int bz = 0; bz < 16; bz += 2) {
+                for (int by = -56; by <= 48; by += 4) {
+                    double toggle = veinToggleNoise.getValue(bx * 1.5, by * 1.5, bz * 1.5) * 2.0;
+                    boolean isCopper = toggle > 0.0;
+                    int minY = isCopper ? 0 : -60;
+                    int maxY = isCopper ? 50 : -8;
+                    int ore = isCopper ? 101 : 201;
+                    int rawOre = isCopper ? 102 : 202;
+                    int filler = isCopper ? 103 : 203;
+                    int distTop = maxY - by;
+                    int distBot = by - minY;
+                    int outState = 0;
+                    if (distBot >= 0 && distTop >= 0) {
+                        int minEdge = Math.min(distTop, distBot);
+                        double roundoff = clampedMap((double) minEdge, 0.0, 20.0, -0.2, 0.0);
+                        double absToggle = Math.abs(toggle);
+                        if (absToggle + roundoff >= (double) 0.4f) {
+                            Xoroshiro rng = veinPos.at(bx, by, bz);
+                            if (nextFloat(rng) <= 0.7f) {
+                                double ridged = -Math.abs(veinRidgedNoise.getValue(bx * 4.0, by * 4.0, bz * 4.0));
+                                if (ridged < 0.0) {
+                                    double richness = clampedMap(absToggle, (double) 0.4f, (double) 0.6f, (double) 0.1f, (double) 0.3f);
+                                    double gap = veinGapNoise.getValue(bx, by, bz);
+                                    if ((double) nextFloat(rng) < richness && gap > (double) -0.3f) {
+                                        outState = nextFloat(rng) < 0.02f ? rawOre : ore;
+                                    } else {
+                                        outState = filler;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    h = mix(h, Integer.toUnsignedLong(outState));
+                }
+            }
+        }
+
+        // 4. NoiseBasedAquifer centers & similarity
+        XoroshiroPositional aqPos = XoroshiroPositional.fromRng(rootPos.fromHashOf("minecraft:aquifer"));
+        for (int gx = -2; gx <= 1; gx++) {
+            for (int gy = -5; gy <= 5; gy++) {
+                for (int gz = -2; gz <= 1; gz++) {
+                    Xoroshiro rng = aqPos.at(gx, gy, gz);
+                    int cx = gx * 16 + rng.nextInt(10);
+                    int cy = gy * 12 + rng.nextInt(9);
+                    int cz = gz * 16 + rng.nextInt(10);
+                    h = mix(h, Integer.toUnsignedLong(cx));
+                    h = mix(h, Integer.toUnsignedLong(cy));
+                    h = mix(h, Integer.toUnsignedLong(cz));
+                }
+            }
+        }
+
+        return h;
+    }
+
     public static void main(String[] args) throws Exception {
         emit("cubic_spline", hashCubicSpline());
         emit("density_and_noise_chunk", hashDensityAndNoiseChunk());
         emit("rtree", hashRTree());
         emit("biome_manager", hashBiomeManager());
+        emit("aquifer_veins_and_surface", hashAquiferVeinsAndSurface());
     }
 }
 "#;
@@ -1347,6 +1519,160 @@ fn rust_hash_biome_manager() -> u64 {
     h
 }
 
+fn rust_hash_aquifer_veins_and_surface() -> u64 {
+    let world_seed = 20_260_329_i64;
+    let root_pos = PositionalRandom::from_world_seed(world_seed, false);
+
+    // 1. Clay bands (orange=10, yellow=11, brown=12, red=13, white=14, light_gray=15, terracotta=16)
+    let states = block_states();
+    let orange = states.default_state("minecraft:orange_terracotta").unwrap();
+    let yellow = states.default_state("minecraft:yellow_terracotta").unwrap();
+    let brown = states.default_state("minecraft:brown_terracotta").unwrap();
+    let red = states.default_state("minecraft:red_terracotta").unwrap();
+    let white = states.default_state("minecraft:white_terracotta").unwrap();
+    let light_gray = states
+        .default_state("minecraft:light_gray_terracotta")
+        .unwrap();
+    let terracotta = states.default_state("minecraft:terracotta").unwrap();
+
+    let mut clay_rng = root_pos.fork_from_hash_of("minecraft:clay_bands");
+    let bands = generate_bands(clay_rng.as_mut(), states);
+    let mut h = FNV_OFFSET;
+    for &b in &bands {
+        let code = if b == orange {
+            10_u32
+        } else if b == yellow {
+            11
+        } else if b == brown {
+            12
+        } else if b == red {
+            13
+        } else if b == white {
+            14
+        } else if b == light_gray {
+            15
+        } else if b == terracotta {
+            16
+        } else {
+            unreachable!()
+        };
+        mix(&mut h, u64::from(code));
+    }
+
+    // 2. Surface depth
+    let mut surface_rng = root_pos.fork_from_hash_of("minecraft:surface");
+    let surface_noise = NormalNoise::new(surface_rng.as_mut(), -6, &[1.0, 1.0, 1.0]);
+    let surface_pos = root_pos.clone();
+    let mut bx = -16;
+    while bx < 16 {
+        let mut bz = -16;
+        while bz < 16 {
+            let nv = surface_noise.get_value(f64::from(bx), 0.0, f64::from(bz));
+            let jitter = match &surface_pos {
+                PositionalRandom::Xoroshiro(f) => f.at(bx, 0, bz).next_double(),
+                PositionalRandom::Legacy(f) => f.at(bx, 0, bz).next_double(),
+            };
+            let depth = (nv * 2.75 + 3.0 + jitter * 0.25) as i32;
+            mix(&mut h, u64::from(depth as u32));
+            bz += 3;
+        }
+        bx += 3;
+    }
+
+    // 3. OreVeinifier
+    let vein_pos = root_pos.fork_positional_from_hash_of("minecraft:ore");
+    let mut toggle_rng = root_pos.fork_from_hash_of("minecraft:ore_veininess");
+    let vein_toggle_noise = NormalNoise::new(toggle_rng.as_mut(), -8, &[1.0]);
+    let mut ridged_rng = root_pos.fork_from_hash_of("minecraft:ore_vein_a");
+    let vein_ridged_noise = NormalNoise::new(ridged_rng.as_mut(), -7, &[1.0]);
+    let mut gap_rng = root_pos.fork_from_hash_of("minecraft:ore_gap");
+    let vein_gap_noise = NormalNoise::new(gap_rng.as_mut(), -5, &[1.0]);
+
+    let veinifier = OreVeinifier::with_types(
+        vein_pos,
+        VeinType {
+            ore: 101,
+            raw_ore_block: 102,
+            filler: 103,
+            min_y: 0,
+            max_y: 50,
+        },
+        VeinType {
+            ore: 201,
+            raw_ore_block: 202,
+            filler: 203,
+            min_y: -60,
+            max_y: -8,
+        },
+    );
+
+    let mut bx = 0;
+    while bx < 16 {
+        let mut bz = 0;
+        while bz < 16 {
+            let mut by = -56;
+            while by <= 48 {
+                let toggle = vein_toggle_noise.get_value(
+                    f64::from(bx) * 1.5,
+                    f64::from(by) * 1.5,
+                    f64::from(bz) * 1.5,
+                ) * 2.0;
+                let out_state = veinifier
+                    .compute_with_samplers(bx, by, bz, toggle, |is_gap| {
+                        if is_gap {
+                            vein_gap_noise.get_value(f64::from(bx), f64::from(by), f64::from(bz))
+                        } else {
+                            -vein_ridged_noise
+                                .get_value(
+                                    f64::from(bx) * 4.0,
+                                    f64::from(by) * 4.0,
+                                    f64::from(bz) * 4.0,
+                                )
+                                .abs()
+                        }
+                    })
+                    .unwrap_or(0);
+                mix(&mut h, u64::from(out_state));
+                by += 4;
+            }
+            bz += 2;
+        }
+        bx += 2;
+    }
+
+    // 4. NoiseBasedAquifer centers
+    let aq_pos = root_pos.fork_positional_from_hash_of("minecraft:aquifer");
+    for gx in -2..=1 {
+        for gy in -5..=5 {
+            for gz in -2..=1 {
+                let (cx, cy, cz) = match &aq_pos {
+                    PositionalRandom::Xoroshiro(f) => {
+                        let mut rng = f.at(gx, gy, gz);
+                        (
+                            gx * 16 + rng.next_int_bounded(10),
+                            gy * 12 + rng.next_int_bounded(9),
+                            gz * 16 + rng.next_int_bounded(10),
+                        )
+                    }
+                    PositionalRandom::Legacy(f) => {
+                        let mut rng = f.at(gx, gy, gz);
+                        (
+                            gx * 16 + rng.next_int_bounded(10),
+                            gy * 12 + rng.next_int_bounded(9),
+                            gz * 16 + rng.next_int_bounded(10),
+                        )
+                    }
+                };
+                mix(&mut h, u64::from(cx as u32));
+                mix(&mut h, u64::from(cy as u32));
+                mix(&mut h, u64::from(cz as u32));
+            }
+        }
+    }
+
+    h
+}
+
 #[test]
 fn worldgen_density_chunk_spline_rtree_and_biome_zoom_match_java() {
     let Some(java_hashes) = run_java_probe() else {
@@ -1371,5 +1697,10 @@ fn worldgen_density_chunk_spline_rtree_and_biome_zoom_match_java() {
         rust_hash_biome_manager(),
         java_hashes["biome_manager"],
         "BiomeManager 3D Voronoi zoom mismatch vs Java"
+    );
+    assert_eq!(
+        rust_hash_aquifer_veins_and_surface(),
+        java_hashes["aquifer_veins_and_surface"],
+        "Aquifer / OreVeinifier / SurfaceSystem mismatch vs Java"
     );
 }

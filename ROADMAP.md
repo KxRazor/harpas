@@ -111,7 +111,7 @@ vanilla for the same seed.
         `SimplexNoise` and `PerlinSimplexNoise`) in `harpas-core`.
   - [x] Worldgen data loader, density functions, `NoiseChunk`, `NoiseRouter`, `MultiNoiseBiomeSource` and 3D
         biome zoom in `harpas-worldgen`.
-  - [ ] Base terrain block filling (`final_density`), `NoiseBasedAquifer`, `OreVeinifier` and `SurfaceSystem`
+  - [x] Base terrain block filling (`final_density`), `NoiseBasedAquifer`, `OreVeinifier` and `SurfaceSystem`
         (surface rules, conditions, badlands bands/pillars and frozen ocean icebergs).
   - [ ] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
         `harpas-engine`.

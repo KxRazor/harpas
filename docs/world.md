@@ -199,6 +199,19 @@ and the owner **accepts it once**:
   - `MultiNoiseBiomeSource` queries a 7D `Climate` R-tree (`CHILDREN_PER_NODE = 6` and
     `OverworldBiomeBuilder`'s 7,593 parameter boxes) in vanilla's `x → y → z` section order, and `BiomeManager`
     applies SHA-256 little-endian seed obfuscation and 3D Voronoi zoom.
+  - `NoiseBasedChunkGenerator` fills base terrain from `final_density` in `NoiseChunk` cell order, evaluating
+    `NoiseBasedAquifer` (`16×12×16` grid with 4-nearest cell lookup, 13-offset preliminary surface sampling,
+    deep dark suppression and 3-pair barrier pressure) for `density <= 0.0` and `OreVeinifier` (`vein_toggle`,
+    `vein_ridged`, `vein_gap`) for solid blocks and recording fluid positions that need postprocessing. It tracks
+    six heightmaps during generation; their predicates for arbitrary gameplay blocks remain provisional until
+    the heightmap work in the next roadmap task.
+  - `SurfaceSystem` applies all 4 surface rule types (`block`, `sequence`, `condition`, `bandlands`) and all 11
+    condition types (`biome`, `noise_threshold`, `vertical_gradient`, `y_above`, `water`, `temperature`, `steep`,
+    `not`, `hole`, `above_preliminary_surface`, `stone_depth` for both `floor` and `ceiling`), plus eroded
+    badlands hoodoo pillars, the 192-layer terracotta band table (`minecraft:clay_bands`) and frozen ocean
+    icebergs. The vanilla parity harness compares hashes of base terrain and surface blocks across several
+    chunks, including eroded badlands and frozen ocean, along with fluid postprocessing, aquifer samples, ore
+    veins, surface depth and bands. It does not establish parity for every seed, biome or generated-world stage.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** chunks are generated on the worker pool, stage by stage. Each stage of a chunk depends only on

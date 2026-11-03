@@ -8,6 +8,46 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct TempDir(pub PathBuf);
 
+/// A pool element as `TemplateProbe.describe` writes it. Not every test uses it.
+#[allow(dead_code)]
+pub fn describe_element(element: &harpas_worldgen::PoolElementDef) -> String {
+    use harpas_worldgen::{PoolElementDef, Projection};
+    let projection = |projection: &Projection| match projection {
+        Projection::Rigid => "rigid",
+        Projection::TerrainMatching => "terrain_matching",
+    };
+    match element {
+        PoolElementDef::Single {
+            location,
+            processors,
+            projection: p,
+            legacy,
+        } => format!(
+            "minecraft:{}single_pool_element {location} {} {}",
+            if *legacy { "legacy_" } else { "" },
+            processors.as_deref().unwrap_or("inline"),
+            projection(p)
+        ),
+        PoolElementDef::Feature {
+            feature,
+            projection: p,
+        } => format!("minecraft:feature_pool_element {feature} {}", projection(p)),
+        PoolElementDef::List {
+            elements,
+            projection: p,
+        } => format!(
+            "minecraft:list_pool_element {} [{}]",
+            projection(p),
+            elements
+                .iter()
+                .map(describe_element)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        PoolElementDef::Empty => "minecraft:empty_pool_element".to_string(),
+    }
+}
+
 impl TempDir {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);

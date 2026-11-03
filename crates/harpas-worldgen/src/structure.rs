@@ -18,7 +18,8 @@ mod start;
 mod stronghold;
 
 pub use start::{
-    BoundingBox, Direction, JigsawJunction, StructurePiece, StructureReference, StructureStart,
+    BoundingBox, Direction, JigsawJunction, JigsawPiece, StructurePiece, StructureReference,
+    StructureStart,
 };
 
 /// Salt of `StructurePlacement.legacyArbitrarySaltProbabilityReducer`.

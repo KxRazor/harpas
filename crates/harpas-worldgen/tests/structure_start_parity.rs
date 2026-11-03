@@ -8,8 +8,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use harpas_worldgen::{
-    HeightmapType, NoiseBasedChunkGenerator, StructureStart, StructureState, StructureTemplates,
-    WorldgenData,
+    HeightmapType, NoiseBasedChunkGenerator, Rotation, StructureStart, StructureState,
+    StructureTemplates, WorldgenData,
 };
 use reference::Reference;
 
@@ -46,6 +46,18 @@ fn start_lines(start: &StructureStart) -> Vec<String> {
             piece.orientation.map_or(-1, |o| o.data_value()),
             piece.gen_depth
         ));
+        if let Some(jigsaw) = &piece.jigsaw {
+            let [x, y, z] = jigsaw.position;
+            let rotation = Rotation::ALL
+                .iter()
+                .position(|r| *r == jigsaw.rotation)
+                .expect("a rotation");
+            lines.push(format!(
+                "element {} {x} {y} {z} {rotation} {}",
+                reference::describe_element(&jigsaw.element),
+                jigsaw.ground_level_delta
+            ));
+        }
         for junction in &piece.junctions {
             let [x, y, z] = junction.source;
             let projection = if junction.destination_rigid {
@@ -202,6 +214,7 @@ fn structure_starts_and_references_match_vanilla() {
             "StructurePlacementProbe.java",
             include_str!("StructurePlacementProbe.java"),
         ),
+        ("TemplateProbe.java", include_str!("TemplateProbe.java")),
         (
             "StructureStartProbe.java",
             include_str!("StructureStartProbe.java"),

@@ -4,7 +4,9 @@
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
 use super::{StructureState, jigsaw, stronghold};
-use crate::data::{JigsawDef, StructureDef, StructureSetEntryDef, WorldgenData, WorldgenDataError};
+use crate::data::{
+    JigsawDef, PoolElementDef, StructureDef, StructureSetEntryDef, WorldgenData, WorldgenDataError,
+};
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
 use crate::template::StructureTemplates;
 
@@ -108,6 +110,21 @@ pub struct StructurePiece {
     pub gen_depth: i32,
     /// Where a jigsaw piece connects to its neighbors, which the terrain blends towards.
     pub junctions: Vec<JigsawJunction>,
+    /// What a jigsaw piece places and where (`PoolElementStructurePiece`).
+    pub jigsaw: Option<JigsawPiece>,
+}
+
+/// The pool element a jigsaw piece places, and where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JigsawPiece {
+    /// The pool element.
+    pub element: PoolElementDef,
+    /// Where its template's origin is placed.
+    pub position: [i32; 3],
+    /// How its template is turned.
+    pub rotation: crate::template::Rotation,
+    /// The height of the ground above the bottom of the piece, which terrain adaptation follows.
+    pub ground_level_delta: i32,
 }
 
 /// Where a jigsaw piece connects to another (`JigsawJunction`).
@@ -328,6 +345,7 @@ fn try_generate(
                 data,
                 templates,
                 jigsaw,
+                level_seed,
                 &mut random,
                 chunk_x,
                 chunk_z,
@@ -382,6 +400,7 @@ fn try_generate(
             orientation: None,
             gen_depth: 0,
             junctions: Vec::new(),
+            jigsaw: None,
         }],
         StructureKind::Stronghold => stronghold::pieces(
             level_seed,
@@ -410,6 +429,7 @@ fn try_generate(
                 orientation: Some(orientation),
                 gen_depth: 0,
                 junctions: Vec::new(),
+                jigsaw: None,
             }]
         }
     };

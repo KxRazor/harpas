@@ -233,8 +233,9 @@ and the owner **accepts it once**:
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no
     template, which one ancient city pool names, is an empty template as in vanilla. Each piece keeps its
-    junctions, which terrain adaptation will need. Villages, pillager outposts, ancient cities and trail ruins
-    are laid out; trial chambers, which rename pools and start at a random height, are not yet.
+    junctions, which terrain adaptation will need. All jigsaw structures of the
+    Overworld are laid out, including trial chambers, which rename pools for each start (`PoolAliasLookup`) and
+    start at a random height.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by

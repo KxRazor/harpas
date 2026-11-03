@@ -141,6 +141,10 @@ public final class StructureStartProbe {
                 + bb.minY() + " " + bb.minZ() + " " + bb.maxX() + " " + bb.maxY() + " " + bb.maxZ() + " "
                 + (orientation == null ? -1 : orientation.get2DDataValue()) + " " + piece.getGenDepth());
             if (piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece pool) {
+                var position = pool.getPosition();
+                out.println("element " + TemplateProbe.describe(pool.getElement()) + " " + position.getX() + " "
+                    + position.getY() + " " + position.getZ() + " " + pool.getRotation().ordinal() + " "
+                    + pool.getGroundLevelDelta());
                 for (var junction : pool.getJunctions()) {
                     out.println("junction " + junction.getSourceX() + " " + junction.getSourceGroundY() + " "
                         + junction.getSourceZ() + " " + junction.getDeltaY() + " "

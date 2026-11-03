@@ -152,8 +152,8 @@ impl fmt::Display for LogicStopped {
 impl std::error::Error for LogicStopped {}
 
 /// Starts the single logic thread. It stops on [`Handle::shutdown`], or once all handles and player sessions
-/// have been dropped.
-pub fn start() -> io::Result<(Handle, JoinHandle<()>)> {
+/// have been dropped. The thread's result reports any failure to finish saving the world.
+pub fn start() -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
     start_game(None)
 }
 
@@ -161,11 +161,11 @@ pub fn start() -> io::Result<(Handle, JoinHandle<()>)> {
 pub fn start_with_world(
     world_dir: &std::path::Path,
     biomes: &[&str],
-) -> io::Result<(Handle, JoinHandle<()>)> {
+) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
     start_game(Some(world::World::open(world_dir, biomes)?))
 }
 
-fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<()>)> {
+fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
     let (sender, receiver) = mpsc::channel();
     let online_players = Arc::new(AtomicU32::new(0));
     let handle = Handle {
@@ -274,14 +274,7 @@ impl TickWork for Game {
                 .filter_map(move |view| view.get(index).copied())
         });
         if let Err(error) = world.update(wanted) {
-            log::error!("{error}");
-            for state in &mut self.players {
-                if !state.disconnecting {
-                    state.disconnecting = true;
-                    state.send(player::Output::Disconnect("Cannot load the world"));
-                }
-            }
-            self.stopped = true;
+            self.fail_world(error);
             return;
         }
         for (player, view) in self.players.iter_mut().zip(views) {
@@ -484,9 +477,26 @@ impl TickWork for Game {
             Ordering::Relaxed,
         );
     }
+
+    fn autosave(&mut self) {
+        if let Some(Err(error)) = self.world.as_mut().map(world::World::autosave) {
+            self.fail_world(error);
+        }
+    }
 }
 
 impl Game {
+    fn fail_world(&mut self, error: io::Error) {
+        log::error!("{error}");
+        for state in &mut self.players {
+            if !state.disconnecting {
+                state.disconnecting = true;
+                state.send(player::Output::Disconnect("Cannot access the world"));
+            }
+        }
+        self.stopped = true;
+    }
+
     fn join(
         &mut self,
         id: i32,
@@ -570,7 +580,11 @@ impl Game {
     }
 }
 
-fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>, world: Option<world::World>) {
+fn run(
+    receiver: Receiver<Event>,
+    online_players: Arc<AtomicU32>,
+    world: Option<world::World>,
+) -> io::Result<()> {
     let mut game = Game {
         pending: Vec::new(),
         players: Vec::new(),
@@ -586,7 +600,7 @@ fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>, world: Option<
             number += 1;
             tick(&mut game, number);
             if game.stopped {
-                return;
+                break;
             }
         } else {
             // Wake for incoming events, but apply them only at the tick's connection phase. Check the
@@ -594,10 +608,14 @@ fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>, world: Option<
             match receiver.recv_timeout(schedule.next.saturating_duration_since(now)) {
                 Ok(event) => game.pending.push(event),
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
     }
+    if let Some(world) = &mut game.world {
+        world.flush()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1116,7 +1134,7 @@ mod tests {
             .unwrap();
         handle.shutdown("Server closed").unwrap();
         // The thread stops even though a handle and a session are still alive.
-        logic.join().unwrap();
+        logic.join().unwrap().unwrap();
         let mut outputs = std::iter::from_fn(|| session.try_recv());
         assert!(outputs.any(|output| output == Output::Disconnect("Server closed")));
         assert!(handle.shutdown("Server closed").is_err());
@@ -1159,6 +1177,6 @@ mod tests {
         drop(second);
         wait_for_count(&handle, 0);
         drop(handle);
-        logic.join().unwrap();
+        logic.join().unwrap().unwrap();
     }
 }

@@ -1,14 +1,14 @@
-//! Loading existing overworld chunks without doing disk I/O on the logic thread.
+//! Loading and saving overworld chunks without doing disk I/O on the logic thread.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 
-use harpas_anvil::{Chunk, VersionError, dimension_dir, read_chunk};
+use harpas_anvil::{Chunk, Region, VersionError, dimension_dir, read_chunk, region_of};
 use log::{error, warn};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -89,12 +89,54 @@ struct Completion {
     result: Loaded,
 }
 
-/// The chunks currently wanted by the logic thread and their asynchronous loader.
+/// Fixed-size lock striping prevents reads from racing a region and its external chunk files while saving.
+struct RegionLocks([RwLock<()>; 64]);
+
+impl RegionLocks {
+    fn new() -> Self {
+        Self(std::array::from_fn(|_| RwLock::new(())))
+    }
+
+    fn for_region(&self, x: i32, z: i32) -> &RwLock<()> {
+        let index = (x as u32).wrapping_mul(0x9e37_79b9) ^ (z as u32).wrapping_mul(0x85eb_ca6b);
+        &self.0[index as usize % self.0.len()]
+    }
+}
+
+#[derive(Default)]
+struct Changes {
+    revision: u64,
+    saved: u64,
+    in_flight: bool,
+    requested: bool,
+}
+
+struct Snapshot {
+    pos: ChunkPos,
+    revision: u64,
+    chunk: Arc<Chunk>,
+}
+
+struct SaveJob {
+    snapshots: Vec<Snapshot>,
+}
+
+struct Saved {
+    job: SaveJob,
+    result: io::Result<()>,
+}
+
+type Save = dyn Fn(&SaveJob) -> io::Result<()> + Send + Sync;
+
+/// The logic thread's resident chunks and their asynchronous loader and saver.
+/// Call [`World::flush`] before dropping a world whose chunks may have changed.
 pub struct World {
     region_dir: PathBuf,
     chunks: HashMap<ChunkPos, ChunkState>,
     in_flight: HashSet<ChunkPos>,
+    changes: HashMap<ChunkPos, Changes>,
     loader: Loader,
+    saver: Saver,
 }
 
 impl World {
@@ -109,13 +151,44 @@ impl World {
         }
         let region_dir = dimension_dir(world_dir, "minecraft:overworld").join("region");
         let source_dir = region_dir.clone();
-        let biomes: Vec<String> = biomes.iter().map(|name| (*name).to_owned()).collect();
+        let biomes: Arc<Vec<String>> =
+            Arc::new(biomes.iter().map(|name| (*name).to_owned()).collect());
+        let load_biomes = Arc::clone(&biomes);
+        let locks = Arc::new(RegionLocks::new());
+        let read_locks = Arc::clone(&locks);
         let load = Arc::new(move |pos: ChunkPos| {
-            let Some(nbt) = read_chunk(&source_dir, pos.x, pos.z)? else {
+            let (x, z) = region_of(pos.x, pos.z);
+            let nbt = {
+                let _guard = read_locks
+                    .for_region(x, z)
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner());
+                read_chunk(&source_dir, pos.x, pos.z)?
+            };
+            let Some(nbt) = nbt else {
                 return Ok(None);
             };
-            let biomes: Vec<&str> = biomes.iter().map(String::as_str).collect();
+            let biomes: Vec<&str> = load_biomes.iter().map(String::as_str).collect();
             Chunk::read(nbt, &biomes).map(Some)
+        });
+        let target_dir = region_dir.clone();
+        let save = Arc::new(move |job: &SaveJob| {
+            let first = &job.snapshots[0];
+            let (x, z) = region_of(first.pos.x, first.pos.z);
+            let _guard = locks
+                .for_region(x, z)
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut region = Region::open(&target_dir, x, z)?;
+            let biomes: Vec<&str> = biomes.iter().map(String::as_str).collect();
+            for snapshot in &job.snapshots {
+                region.set_chunk(
+                    snapshot.pos.x,
+                    snapshot.pos.z,
+                    &snapshot.chunk.to_nbt(&biomes),
+                );
+            }
+            region.save()
         });
         let workers = thread::available_parallelism()
             .map_or(1, usize::from)
@@ -124,16 +197,126 @@ impl World {
             region_dir,
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
+            changes: HashMap::new(),
             loader: Loader::start(workers, load)?,
+            saver: Saver::start(save)?,
         })
     }
 
-    /// The current state of a wanted chunk, or `None` if it is no longer wanted.
+    /// The current state of a chunk. A changed chunk stays resident until its pending save finishes.
     pub fn chunk(&self, pos: ChunkPos) -> Option<&ChunkState> {
         self.chunks.get(&pos)
     }
 
-    /// Applies finished reads, drops unwanted chunks and queues missing requests without waiting for disk.
+    /// Edits a loaded chunk, marking its complete contents as changed for the next save.
+    /// Previously published snapshots remain immutable while the edit uses copy-on-write.
+    pub fn chunk_mut(&mut self, pos: ChunkPos) -> Option<&mut Chunk> {
+        let ChunkState::Loaded(chunk) = self.chunks.get_mut(&pos)? else {
+            return None;
+        };
+        let changes = self.changes.entry(pos).or_default();
+        changes.revision = changes
+            .revision
+            .checked_add(1)
+            .expect("chunk revision exhausted");
+        Some(Arc::make_mut(chunk))
+    }
+
+    /// Requests an asynchronous save of all changed chunks without waiting for disk. If the bounded queue is
+    /// full, later updates take the remaining snapshots as space becomes available.
+    pub fn autosave(&mut self) -> io::Result<()> {
+        for changes in self.changes.values_mut() {
+            changes.requested = true;
+        }
+        self.queue_saves()
+    }
+
+    /// Waits for all changed chunks to reach disk. Intended for shutdown, not the tick loop.
+    pub fn flush(&mut self) -> io::Result<()> {
+        while !self.changes.is_empty() {
+            for changes in self.changes.values_mut() {
+                changes.requested = true;
+            }
+            self.queue_saves()?;
+            let completion = self
+                .saver
+                .completed
+                .recv()
+                .map_err(|_| io::Error::other("chunk save worker stopped"))?;
+            self.finish_save(completion)?;
+        }
+        Ok(())
+    }
+
+    fn queue_saves(&mut self) -> io::Result<()> {
+        let mut regions: BTreeMap<(i32, i32), Vec<ChunkPos>> = BTreeMap::new();
+        for (&pos, changes) in &self.changes {
+            if changes.requested && !changes.in_flight {
+                regions
+                    .entry(region_of(pos.x, pos.z))
+                    .or_default()
+                    .push(pos);
+            }
+        }
+        for positions in regions.into_values() {
+            let snapshots = positions
+                .iter()
+                .map(|pos| {
+                    let ChunkState::Loaded(chunk) = &self.chunks[pos] else {
+                        unreachable!("changed chunks remain loaded until saved");
+                    };
+                    Snapshot {
+                        pos: *pos,
+                        revision: self.changes[pos].revision,
+                        chunk: Arc::clone(chunk),
+                    }
+                })
+                .collect();
+            let job = SaveJob { snapshots };
+            match self
+                .saver
+                .requests
+                .as_ref()
+                .expect("saver is running")
+                .try_send(job)
+            {
+                Ok(()) => {
+                    for pos in positions {
+                        let changes = self.changes.get_mut(&pos).expect("changed chunk");
+                        changes.in_flight = true;
+                        changes.requested = false;
+                    }
+                }
+                Err(TrySendError::Full(_)) => break,
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(io::Error::other("chunk save worker stopped"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_save(&mut self, completion: Saved) -> io::Result<()> {
+        let success = completion.result.is_ok();
+        for snapshot in completion.job.snapshots {
+            let changes = self
+                .changes
+                .get_mut(&snapshot.pos)
+                .expect("saved chunk remains loaded");
+            changes.in_flight = false;
+            if success {
+                changes.saved = snapshot.revision;
+                if changes.revision == changes.saved {
+                    self.changes.remove(&snapshot.pos);
+                }
+            }
+        }
+        completion.result.map_err(|error| {
+            io::Error::new(error.kind(), format!("Cannot save the world: {error}"))
+        })
+    }
+
+    /// Applies finished reads and writes, saves unwanted changed chunks and queues requests without waiting for disk.
     /// An incompatible chunk or an unavailable worker pool is fatal and returned to the caller, even if the
     /// incompatible chunk is no longer wanted when its read finishes.
     pub fn update(&mut self, wanted: impl IntoIterator<Item = ChunkPos>) -> io::Result<()> {
@@ -142,7 +325,23 @@ impl World {
             .into_iter()
             .filter(|pos| wanted_set.insert(*pos))
             .collect();
-        self.chunks.retain(|pos, _| wanted_set.contains(pos));
+        loop {
+            match self.saver.completed.try_recv() {
+                Ok(completion) => self.finish_save(completion)?,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(io::Error::other("chunk save worker stopped"));
+                }
+            }
+        }
+        self.chunks
+            .retain(|pos, _| wanted_set.contains(pos) || self.changes.contains_key(pos));
+        for (pos, changes) in &mut self.changes {
+            if !wanted_set.contains(pos) {
+                changes.requested = true;
+            }
+        }
+        self.queue_saves()?;
         loop {
             match self.loader.completed.try_recv() {
                 Ok(completion) => {
@@ -210,6 +409,48 @@ impl World {
             }
         }
         Ok(())
+    }
+}
+
+/// A single writer preserves the order of saves and prevents two region rewrites from losing each other.
+struct Saver {
+    requests: Option<SyncSender<SaveJob>>,
+    completed: Receiver<Saved>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Saver {
+    fn start(save: Arc<Save>) -> io::Result<Self> {
+        let (requests, receiver) = mpsc::sync_channel::<SaveJob>(QUEUE_CAPACITY);
+        let (sender, completed) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("harpas-chunk-save".to_owned())
+            .spawn(move || {
+                while let Ok(job) = receiver.recv() {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| save(&job)))
+                            .unwrap_or_else(|_| {
+                                Err(io::Error::other("chunk save worker panicked"))
+                            });
+                    if sender.send(Saved { job, result }).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            requests: Some(requests),
+            completed,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for Saver {
+    fn drop(&mut self) {
+        self.requests.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -369,12 +610,27 @@ mod tests {
     }
 
     fn fake_world(workers: usize, load: Arc<Load>) -> World {
+        fake_world_with_save(workers, load, Arc::new(|_| Ok(())))
+    }
+
+    fn fake_world_with_save(workers: usize, load: Arc<Load>, save: Arc<Save>) -> World {
         World {
             region_dir: PathBuf::from("test"),
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
+            changes: HashMap::new(),
             loader: Loader::start(workers, load).unwrap(),
+            saver: Saver::start(save).unwrap(),
         }
+    }
+
+    fn load_chunks(world: &mut World, wanted: &[ChunkPos]) {
+        wait_until(|| {
+            world.update(wanted.iter().copied()).unwrap();
+            wanted
+                .iter()
+                .all(|pos| matches!(world.chunk(*pos), Some(ChunkState::Loaded(_))))
+        });
     }
 
     fn profile() -> Profile {
@@ -566,6 +822,284 @@ mod tests {
                 .all(|pos| matches!(world.chunk(*pos), Some(ChunkState::Missing)))
         });
         assert_eq!(calls.load(Ordering::Relaxed), wanted.len());
+    }
+
+    #[test]
+    fn snapshots_do_not_block_edits_or_lose_changes_during_unload() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, received) = mpsc::channel();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let load = {
+            let calls = Arc::clone(&calls);
+            Arc::new(move |pos| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(Some((chunk(pos, DATA_VERSION), Vec::new())))
+            })
+        };
+        let save = {
+            let gate = Arc::clone(&gate);
+            let writes = Arc::clone(&writes);
+            Arc::new(move |job: &SaveJob| {
+                assert_eq!(thread::current().name(), Some("harpas-chunk-save"));
+                let marker = job.snapshots[0].chunk.rest.get("Marker").cloned();
+                started.send(()).unwrap();
+                let (lock, signal) = &*gate;
+                let guard = lock.lock().unwrap();
+                let _ = signal
+                    .wait_timeout_while(guard, Duration::from_secs(5), |open| !*open)
+                    .unwrap();
+                writes.lock().unwrap().push(marker);
+                Ok(())
+            })
+        };
+        let mut world = fake_world_with_save(1, load, save);
+        let pos = ChunkPos { x: 0, z: 0 };
+        load_chunks(&mut world, &[pos]);
+        world.chunk_mut(pos).unwrap().rest.insert("Marker", 1);
+        world.autosave().unwrap();
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        // The first snapshot remains unchanged while the worker is blocked and the player leaves and returns.
+        let before = Instant::now();
+        world.chunk_mut(pos).unwrap().rest.insert("Marker", 2);
+        world.update([]).unwrap();
+        world.update([pos]).unwrap();
+        assert!(before.elapsed() < Duration::from_secs(1));
+        let Some(ChunkState::Loaded(current)) = world.chunk(pos) else {
+            panic!("a changed chunk must remain loaded until it is saved");
+        };
+        assert_eq!(current.rest.get("Marker"), Some(&Nbt::Int(2)));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        world.update([]).unwrap();
+        let (lock, signal) = &*gate;
+        *lock.lock().unwrap() = true;
+        signal.notify_all();
+        wait_until(|| {
+            world.update([]).unwrap();
+            world.chunk(pos).is_none()
+        });
+        assert_eq!(
+            *writes.lock().unwrap(),
+            vec![Some(Nbt::Int(1)), Some(Nbt::Int(2))]
+        );
+    }
+
+    #[test]
+    fn autosave_queue_is_bounded_and_flushes_every_region() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, received) = mpsc::channel();
+        let writes = Arc::new(Mutex::new(HashSet::new()));
+        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new()))));
+        let save = {
+            let gate = Arc::clone(&gate);
+            let writes = Arc::clone(&writes);
+            Arc::new(move |job: &SaveJob| {
+                let _ = started.send(());
+                let (lock, signal) = &*gate;
+                let guard = lock.lock().unwrap();
+                let _ = signal
+                    .wait_timeout_while(guard, Duration::from_secs(5), |open| !*open)
+                    .unwrap();
+                writes.lock().unwrap().insert(job.snapshots[0].pos);
+                Ok(())
+            })
+        };
+        let mut world = fake_world_with_save(2, load, save);
+        let wanted: Vec<_> = (0..80).map(|x| ChunkPos { x: x * 32, z: 0 }).collect();
+        load_chunks(&mut world, &wanted);
+        for pos in &wanted {
+            world.chunk_mut(*pos).unwrap().rest.insert("Marker", 1);
+        }
+        world.autosave().unwrap();
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            world
+                .changes
+                .values()
+                .filter(|change| change.in_flight)
+                .count()
+                <= QUEUE_CAPACITY + 1
+        );
+        assert!(world.changes.values().any(|change| change.requested));
+        let (lock, signal) = &*gate;
+        *lock.lock().unwrap() = true;
+        signal.notify_all();
+        world.flush().unwrap();
+        assert_eq!(*writes.lock().unwrap(), wanted.into_iter().collect());
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_chunk_dirty_for_a_retry() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new()))));
+        let save = {
+            let attempts = Arc::clone(&attempts);
+            Arc::new(move |_: &SaveJob| {
+                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Err(io::Error::other("disk unavailable"))
+                } else {
+                    Ok(())
+                }
+            })
+        };
+        let mut world = fake_world_with_save(1, load, save);
+        let pos = ChunkPos { x: 0, z: 0 };
+        load_chunks(&mut world, &[pos]);
+        world.chunk_mut(pos).unwrap().rest.insert("Marker", 1);
+        world.autosave().unwrap();
+        wait_until(|| match world.update([pos]) {
+            Err(error) => {
+                assert!(error.to_string().contains("disk unavailable"));
+                true
+            }
+            Ok(()) => false,
+        });
+        assert!(world.changes.contains_key(&pos));
+        assert!(matches!(world.chunk(pos), Some(ChunkState::Loaded(_))));
+        world.flush().unwrap();
+        assert!(world.changes.is_empty());
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn autosave_unload_and_shutdown_persist_edits_and_preserve_neighbors() {
+        let folder = Folder::new();
+        let a = ChunkPos { x: -1, z: -33 };
+        let b = ChunkPos { x: -2, z: -33 };
+        let c = ChunkPos { x: -3, z: -33 };
+        let neighbor = ChunkPos { x: -4, z: -33 };
+        let wanted = [a, b, c, neighbor];
+        save(&folder, &wanted.map(|pos| (pos, DATA_VERSION)));
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &wanted);
+        let dirt = block_states().default_state("minecraft:dirt").unwrap();
+        world.chunk_mut(a).unwrap().sections[0]
+            .section
+            .as_mut()
+            .unwrap()
+            .set_block_state(0, 0, 0, dirt);
+        world.chunk_mut(a).unwrap().rest.insert("Marker", 1);
+        world.autosave().unwrap();
+        wait_until(|| {
+            world.update(wanted).unwrap();
+            !world.changes.contains_key(&a)
+        });
+        let saved_a = read_chunk(&folder.region_dir(), a.x, a.z).unwrap().unwrap();
+        let (saved_a, _) = Chunk::read(saved_a, BIOMES).unwrap();
+        assert_eq!(saved_a.rest.get("Marker"), Some(&Nbt::Int(1)));
+        assert_eq!(
+            saved_a.sections[0]
+                .section
+                .as_ref()
+                .unwrap()
+                .block_state(0, 0, 0),
+            dirt
+        );
+
+        world.chunk_mut(b).unwrap().rest.insert("Marker", 2);
+        wait_until(|| {
+            world.update([a, c, neighbor]).unwrap();
+            world.chunk(b).is_none()
+        });
+        assert_eq!(
+            read_chunk(&folder.region_dir(), b.x, b.z)
+                .unwrap()
+                .unwrap()
+                .get("Marker"),
+            Some(&Nbt::Int(2))
+        );
+
+        world.chunk_mut(c).unwrap().rest.insert("Marker", 3);
+        let (handle, logic) = crate::start_game(Some(world)).unwrap();
+        handle.shutdown("Server closed").unwrap();
+        logic.join().unwrap().unwrap();
+        assert_eq!(
+            read_chunk(&folder.region_dir(), c.x, c.z)
+                .unwrap()
+                .unwrap()
+                .get("Marker"),
+            Some(&Nbt::Int(3))
+        );
+        assert_eq!(
+            read_chunk(&folder.region_dir(), neighbor.x, neighbor.z)
+                .unwrap()
+                .unwrap(),
+            chunk(neighbor, DATA_VERSION).to_nbt(BIOMES)
+        );
+    }
+
+    #[test]
+    fn the_six_thousandth_tick_saves_changed_chunks() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, _received) = mpsc::channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        wait_until(|| {
+            tick(&mut game, 2);
+            matches!(
+                game.world.as_ref().unwrap().chunk(pos),
+                Some(ChunkState::Loaded(_))
+            )
+        });
+        game.world
+            .as_mut()
+            .unwrap()
+            .chunk_mut(pos)
+            .unwrap()
+            .rest
+            .insert("Marker", 42);
+        tick(&mut game, 5_999);
+        assert!(!game.world.as_ref().unwrap().changes[&pos].in_flight);
+        tick(&mut game, 6_000);
+        assert!(game.world.as_ref().unwrap().changes[&pos].in_flight);
+        wait_until(|| {
+            tick(&mut game, 6_001);
+            !game.world.as_ref().unwrap().changes.contains_key(&pos)
+        });
+        assert_eq!(
+            read_chunk(&folder.region_dir(), pos.x, pos.z)
+                .unwrap()
+                .unwrap()
+                .get("Marker"),
+            Some(&Nbt::Int(42))
+        );
+    }
+
+    #[test]
+    fn a_damaged_neighbor_stops_shutdown_without_overwriting_the_region() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        let neighbor = ChunkPos { x: 1, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION), (neighbor, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        world.chunk_mut(pos).unwrap().rest.insert("Marker", 1);
+        let path = folder.region_dir().join("r.0.0.mca");
+        let mut damaged = fs::read(&path).unwrap();
+        damaged[4..8].copy_from_slice(&0x0000_0101_u32.to_be_bytes());
+        fs::write(&path, &damaged).unwrap();
+        let (handle, logic) = crate::start_game(Some(world)).unwrap();
+        handle.shutdown("Server closed").unwrap();
+        let error = logic.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("Cannot save the world"));
+        assert!(error.to_string().contains("chunk 1, 0"));
+        assert_eq!(fs::read(path).unwrap(), damaged);
     }
 
     #[test]
@@ -853,9 +1387,9 @@ mod tests {
         wait_until(|| logic.is_finished());
         assert!(matches!(
             session.try_recv(),
-            Some(Output::Disconnect("Cannot load the world"))
+            Some(Output::Disconnect("Cannot access the world"))
         ));
-        logic.join().unwrap();
+        logic.join().unwrap().unwrap();
     }
 
     #[test]

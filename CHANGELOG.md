@@ -37,11 +37,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   are generated locally from the verified server jar when Java 25 is available; without them the server warns
   and omits block entities. Missing chunks remain void until generation (`harpas-anvil`, `harpas-engine`,
   `harpas-java`, `harpas-server`).
+- Changed overworld chunks are saved from immutable snapshots on a worker during autosave, unloading and
+  shutdown. Edits made during a save stay pending, and shutdown reports a save failure (`harpas-engine`,
+  `harpas-server`).
 
 ### Changed
 
 ### Fixed
 
+- Saving a region no longer silently drops unreadable neighboring entries or overwrites a truncated header
+  (`harpas-anvil`).
 - Moving pistons in loaded chunks now send their moving block and animation data to Java clients
   (`harpas-server`).
 

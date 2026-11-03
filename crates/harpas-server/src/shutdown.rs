@@ -1,7 +1,7 @@
 //! Stopping the server cleanly, from the console's `stop`, Ctrl-C, SIGINT, SIGTERM or SIGHUP
 //!
 //! Every player is disconnected with vanilla's "Server closed", the logic thread stops, connections get a moment
-//! to send their last packets, and the log is flushed. Saving worlds arrives with worlds (`docs/operations.md`).
+//! to send their last packets, the world is saved, and the log is flushed (`docs/operations.md`).
 
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
+use log::{error, info, warn};
 
 use crate::console;
 
@@ -20,13 +20,16 @@ const CONNECTION_GRACE: Duration = Duration::from_secs(5);
 pub struct Shutdown {
     stopping: AtomicBool,
     logic: harpas_engine::Handle,
-    logic_thread: Mutex<Option<JoinHandle<()>>>,
+    logic_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
     connections: AtomicUsize,
 }
 
 impl Shutdown {
     /// Takes over the logic thread, which the shutdown stops and waits for.
-    pub fn new(logic: harpas_engine::Handle, logic_thread: JoinHandle<()>) -> Arc<Self> {
+    pub fn new(
+        logic: harpas_engine::Handle,
+        logic_thread: JoinHandle<io::Result<()>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             stopping: AtomicBool::new(false),
             logic,
@@ -76,16 +79,24 @@ impl Shutdown {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        if let Some(thread) = logic_thread {
-            let _ = thread.join();
-        }
+        let exit_code = match logic_thread.map(JoinHandle::join) {
+            Some(Ok(Ok(()))) | None => 0,
+            Some(Ok(Err(error))) => {
+                error!("Could not finish saving the world: {error}");
+                1
+            }
+            Some(Err(_)) => {
+                error!("The logic thread panicked during shutdown");
+                1
+            }
+        };
         let open = self.wait_for_connections(CONNECTION_GRACE);
         if open > 0 {
             warn!("{open} connections did not close in time");
         }
         console::restore_terminal();
         log::logger().flush();
-        std::process::exit(0);
+        std::process::exit(exit_code);
     }
 
     /// Waits until every connection has closed or `grace` has passed; returns how many are still open.

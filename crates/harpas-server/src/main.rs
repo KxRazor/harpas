@@ -748,7 +748,7 @@ mod tests {
             assert_eq!(status_count(&info, &key, &logic), 0);
         }
         drop(logic);
-        logic_thread.join().unwrap();
+        logic_thread.join().unwrap().unwrap();
     }
 
     #[test]
@@ -919,7 +919,7 @@ mod tests {
         assert_eq!(departure.kick, Some("Flying is not enabled on this server"));
         drop(input);
         drop(logic);
-        logic_thread.join().unwrap();
+        logic_thread.join().unwrap().unwrap();
     }
 
     #[test]
@@ -963,7 +963,7 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         logic.shutdown("Server closed").unwrap();
-        logic_thread.join().unwrap();
+        logic_thread.join().unwrap().unwrap();
         // A real client keeps sending; its packets must not hide the reason the logic thread gave. The
         // connection may already have closed, as it often has on Windows, and then there is nobody to send to.
         let packet: play::serverbound::Packet =
@@ -1237,7 +1237,7 @@ mod tests {
         assert_eq!(first_state(&entering.unwrap()), diamond as i32);
         client.close();
         drop(logic);
-        logic_thread.join().unwrap();
+        logic_thread.join().unwrap().unwrap();
     }
 
     #[test]
@@ -1331,6 +1331,6 @@ mod tests {
         );
         steve.close();
         drop(logic);
-        logic_thread.join().unwrap();
+        logic_thread.join().unwrap().unwrap();
     }
 }

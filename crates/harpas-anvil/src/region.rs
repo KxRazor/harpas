@@ -99,8 +99,7 @@ enum Slot {
         /// The compressed chunk.
         data: Vec<u8>,
     },
-    /// The region's entry for the chunk cannot be read; saving the region drops it, as vanilla does when it
-    /// writes the chunk again.
+    /// The region's entry for the chunk cannot be read.
     Corrupt(String),
 }
 
@@ -131,9 +130,12 @@ impl Region {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(region),
             Err(e) => return Err(e),
         };
-        // A file too short for its header has no chunks.
+        // Refuse to overwrite a truncated file as though it were a new, empty region.
         if file.len() < 2 * SECTOR {
-            return Ok(region);
+            return Err(invalid(format!(
+                "{}: incomplete region header",
+                region.path().display()
+            )));
         }
         for index in 0..CHUNKS {
             let location = be_u32(&file, index * 4);
@@ -251,8 +253,24 @@ impl Region {
     }
 
     /// Writes the region file and the `.mcc` files of its large chunks, and removes `.mcc` files it no longer
-    /// needs. Chunks whose entry could not be read are dropped.
+    /// needs. An unreadable entry must first be explicitly replaced or removed, so another chunk's save cannot
+    /// silently discard it.
     pub fn save(&mut self) -> io::Result<()> {
+        if let Some((index, reason)) = self.slots.iter().enumerate().find_map(|(index, slot)| {
+            if let Slot::Corrupt(reason) = slot {
+                Some((index, reason))
+            } else {
+                None
+            }
+        }) {
+            let x = self.x * 32 + (index % 32) as i32;
+            let z = self.z * 32 + (index / 32) as i32;
+            return Err(invalid(format!(
+                "cannot save {}: chunk {x}, {z}: {reason}",
+                self.path().display()
+            )));
+        }
+        fs::create_dir_all(&self.dir)?;
         let mut file = vec![0; 2 * SECTOR];
         let mut external = vec![false; CHUNKS];
         for (index, slot) in self.slots.iter().enumerate() {
@@ -285,7 +303,6 @@ impl Region {
             file[SECTOR + index * 4..SECTOR + index * 4 + 4]
                 .copy_from_slice(&timestamp.to_be_bytes());
         }
-        fs::create_dir_all(&self.dir)?;
         write_atomically(&self.path(), &file)?;
         let stale = (0..CHUNKS).filter(|&index| self.external[index] && !external[index]);
         for index in stale {
@@ -440,6 +457,19 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_header_is_not_treated_as_an_empty_region_for_writing() {
+        let folder = Folder::new();
+        let path = folder.0.join("r.0.0.mca");
+        let damaged = vec![1, 2, 3];
+        fs::write(&path, &damaged).unwrap();
+        assert_eq!(
+            Region::open(&folder.0, 0, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(path).unwrap(), damaged);
+    }
+
+    #[test]
     fn saved_chunks_read_back_from_a_sector_aligned_file() {
         let folder = Folder::new();
         let mut region = Region::open(&folder.0, -1, 2).unwrap();
@@ -546,7 +576,15 @@ mod tests {
         assert!(region.chunk(0, 0).is_err());
         assert!(region.chunk(2, 0).is_err());
         assert!(read_chunk(&folder.0, 2, 0).is_err());
-        // Saving drops the entries it cannot read.
+        // A save cannot discard damaged entries without the caller explicitly removing them.
+        assert_eq!(
+            region.save().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(folder.0.join("r.0.0.mca")).unwrap(), wrong_length);
+        region.remove_chunk(0, 0);
+        region.remove_chunk(1, 0);
+        region.remove_chunk(2, 0);
         region.save().unwrap();
         assert_eq!(
             fs::read(folder.0.join("r.0.0.mca")).unwrap().len(),
@@ -557,17 +595,18 @@ mod tests {
     #[test]
     fn large_chunks_go_to_mcc_files_and_back() {
         let folder = Folder::new();
+        let dir = folder.0.join("region");
         let mut large = chunk(33, -1);
         // Over 1020 KiB once compressed.
         large.insert("Noise", Nbt::ByteArray(noise(1_100_000)));
-        let mut region = Region::open(&folder.0, 1, -1).unwrap();
+        let mut region = Region::open(&dir, 1, -1).unwrap();
         region.set_chunk(33, -1, &large);
         region.set_chunk(34, -1, &chunk(34, -1));
         region.save().unwrap();
 
-        let mcc = folder.0.join("c.33.-1.mcc");
+        let mcc = dir.join("c.33.-1.mcc");
         assert!(mcc.is_file());
-        let file = fs::read(folder.0.join("r.1.-1.mca")).unwrap();
+        let file = fs::read(dir.join("r.1.-1.mca")).unwrap();
         // Index 1 + 31 * 32: a one-sector stub with length 1 and the compression marked external.
         let location = be_u32(&file, (1 + 31 * 32) * 4);
         assert_eq!(location & 0xff, 1);
@@ -575,18 +614,18 @@ mod tests {
         assert_eq!(be_u32(&file, start), 1);
         assert_eq!(file[start + 4], ZLIB | EXTERNAL);
 
-        let mut region = Region::open(&folder.0, 1, -1).unwrap();
+        let mut region = Region::open(&dir, 1, -1).unwrap();
         assert_eq!(region.chunk(33, -1).unwrap(), Some(large.clone()));
-        assert_eq!(read_chunk(&folder.0, 33, -1).unwrap(), Some(large));
+        assert_eq!(read_chunk(&dir, 33, -1).unwrap(), Some(large));
         assert_eq!(region.chunk(34, -1).unwrap(), Some(chunk(34, -1)));
 
         // Once the chunk is small again, its .mcc file goes.
         region.set_chunk(33, -1, &chunk(33, -1));
         region.save().unwrap();
         assert!(!mcc.exists());
-        let region = Region::open(&folder.0, 1, -1).unwrap();
+        let region = Region::open(&dir, 1, -1).unwrap();
         assert_eq!(region.chunk(33, -1).unwrap(), Some(chunk(33, -1)));
-        assert!(fs::read_dir(&folder.0).unwrap().all(|entry| {
+        assert!(fs::read_dir(&dir).unwrap().all(|entry| {
             !entry
                 .unwrap()
                 .file_name()

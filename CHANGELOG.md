@@ -48,6 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `BlendedNoise`, `SimplexNoise` and `PerlinSimplexNoise`), preserving modern positional and legacy sequential
   octave seeding, `2^25` coordinate wrapping and `(double) 1.0e-7f` vertical smearing, checked bit for bit
   against Java 25 (`harpas-core`).
+- Worldgen datapack loader (`WorldgenData` from `.harpas/vanilla-data/26.1.zip` or loose JSON files), all 30
+  density functions of 26.1 compiled into a deduplicated DAG with `RandomState` seeding and `f32` `CubicSpline`
+  evaluation, `NoiseChunk` `4×8×4` trilinear cell interpolation and caching, 7D `Climate` R-tree with
+  `OverworldBiomeBuilder`, `MultiNoiseBiomeSource` section biome filling and `BiomeManager` 3D Voronoi zoom,
+  checked bit for bit against Java 25 (`harpas-worldgen`).
 
 ### Changed
 

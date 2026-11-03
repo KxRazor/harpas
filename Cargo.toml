@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 harpas-core = { path = "crates/harpas-core" }
 harpas-anvil = { path = "crates/harpas-anvil" }
+harpas-worldgen = { path = "crates/harpas-worldgen" }
 harpas-engine = { path = "crates/harpas-engine" }
 harpas-protocol-java = { path = "crates/harpas-protocol-java" }
 harpas-java = { path = "crates/harpas-java" }

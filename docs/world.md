@@ -188,6 +188,17 @@ and the owner **accepts it once**:
 
 - **One-to-one port of vanilla's generator**, driven by the extracted data: noise router and density
   functions, noise settings, biome sources, surface rules, aquifers, carvers, features and structures.
+  - `harpas-worldgen` loads `worldgen/noise`, `worldgen/density_function`, `worldgen/noise_settings`,
+    `worldgen/biome`, `worldgen/multi_noise_biome_source_parameter_list` and `worldgen/world_preset` from
+    `.harpas/vanilla-data/26.1.zip` (or an extracted datapack directory).
+  - All 30 density function types of 26.1 are compiled into a deduplicated DAG (`CompiledDensityGraph`) with
+    `RandomState` seeding (`XoroshiroRandom::new(world_seed).fork_positional()` or `LegacyRandom` when
+    `legacy_random_source` is set) and 32-bit `f32` `CubicSpline` evaluation.
+  - `NoiseChunk` evaluates the DAG per chunk with `FlatCache` (`5×5` quart grid at `y = 0`), `Cache2D`,
+    `CacheOnce`, `CacheAllInCell` and `NoiseInterpolator` (`4×8×4` trilinear interpolation in Y → X → Z order).
+  - `MultiNoiseBiomeSource` queries a 7D `Climate` R-tree (`CHILDREN_PER_NODE = 6` and
+    `OverworldBiomeBuilder`'s 7,593 parameter boxes) in vanilla's `x → y → z` section order, and `BiomeManager`
+    applies SHA-256 little-endian seed obfuscation and 3D Voronoi zoom.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** chunks are generated on the worker pool, stage by stage. Each stage of a chunk depends only on

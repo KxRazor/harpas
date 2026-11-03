@@ -109,7 +109,7 @@ vanilla for the same seed.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
   - [x] Vanilla-exact noise primitives (`ImprovedNoise`, `PerlinNoise`, `NormalNoise`, `BlendedNoise`,
         `SimplexNoise` and `PerlinSimplexNoise`) in `harpas-core`.
-  - [ ] Worldgen data loader, density functions, `NoiseChunk`, `NoiseRouter`, `MultiNoiseBiomeSource` and 3D
+  - [x] Worldgen data loader, density functions, `NoiseChunk`, `NoiseRouter`, `MultiNoiseBiomeSource` and 3D
         biome zoom in `harpas-worldgen`.
   - [ ] Base terrain block filling (`final_density`), `NoiseBasedAquifer`, `OreVeinifier` and `SurfaceSystem`
         (surface rules, conditions, badlands bands/pillars and frozen ocean icebergs).

@@ -117,7 +117,9 @@ vanilla for the same seed.
         `harpas-engine`.
 - [ ] Features and structures.
 - [ ] Light engine port.
-- [ ] Parity harness: block-by-block generation comparison against vanilla in CI.
+- [x] Parity harness: block-by-block generation comparison against vanilla in CI.
+  - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
+        comparison as they are ported.
 - [ ] Shared Java chunk encoding cache.
 - [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
 - [x] Older and newer world detection with clear errors.

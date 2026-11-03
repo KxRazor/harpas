@@ -51,6 +51,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_tie_between_different_values_is_ambiguous() {
+        let point = ParameterPoint {
+            temperature: Parameter::point(0.0),
+            humidity: Parameter::point(0.0),
+            continentalness: Parameter::point(0.0),
+            erosion: Parameter::point(0.0),
+            depth: Parameter::point(0.0),
+            weirdness: Parameter::point(0.0),
+            offset: 0,
+        };
+        let target = TargetPoint {
+            temperature: 100,
+            humidity: 0,
+            continentalness: 0,
+            erosion: 0,
+            depth: 0,
+            weirdness: 0,
+        };
+        let tree = RTree::new(vec![(point, 1), (point, 2)]);
+        assert_eq!(tree.unambiguous_search(target), None);
+        let tree = RTree::new(vec![(point, 1), (point, 1)]);
+        assert_eq!(tree.unambiguous_search(target), Some(&1));
+        let far = ParameterPoint {
+            temperature: Parameter::point(1.0),
+            ..point
+        };
+        let tree = RTree::new(vec![(far, 2), (point, 1)]);
+        assert_eq!(tree.unambiguous_search(target), Some(&1));
+    }
+
+    #[test]
     fn overworld_biome_builder_generates_7593_points_with_all_54_overworld_biomes() {
         let points = overworld_biome_parameters();
         assert_eq!(points.len(), 7593);

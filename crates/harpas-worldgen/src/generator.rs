@@ -464,6 +464,11 @@ impl SurfaceChunkAccess for GeneratedChunk {
     }
 
     #[inline]
+    fn mark_fluid_postprocessing(&mut self, local_x: usize, block_y: i32, local_z: usize) {
+        GeneratedChunk::mark_fluid_postprocessing(self, local_x as u8, block_y, local_z as u8);
+    }
+
+    #[inline]
     fn world_surface_wg(&self, local_x: usize, local_z: usize) -> i32 {
         self.heightmaps
             .get(HeightmapType::WorldSurfaceWg, local_x, local_z)

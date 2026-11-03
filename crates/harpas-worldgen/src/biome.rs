@@ -259,6 +259,20 @@ impl RTreeNode {
             }
         }
     }
+
+    /// Whether a leaf at distance `dist` satisfies `other`.
+    fn has_leaf_at(&self, target: &[i64; 7], dist: i64, other: &impl Fn(usize) -> bool) -> bool {
+        match self {
+            Self::Leaf {
+                parameter_space,
+                leaf_index,
+            } => distance_squared(parameter_space, target) == dist && other(*leaf_index),
+            Self::SubTree { children, .. } => children.iter().any(|child| {
+                distance_squared(child.parameter_space(), target) <= dist
+                    && child.has_leaf_at(target, dist, other)
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +336,22 @@ impl<T: Clone> RTree<T> {
     }
 }
 
+impl<T: Clone + PartialEq> RTree<T> {
+    /// The value closest to `target`, or `None` if equally close leaves disagree, when vanilla's answer depends on
+    /// its last result.
+    pub fn unambiguous_search(&self, target: TargetPoint) -> Option<&T> {
+        let mut last_result = None;
+        let value = self.search(target, &mut last_result);
+        let target = target.to_parameter_array();
+        let chosen = last_result.expect("search sets its result");
+        let dist = distance_squared(&self.leaves[chosen].parameter_space, &target);
+        let tied = self
+            .root
+            .has_leaf_at(&target, dist, &|leaf| self.leaves[leaf].value != *value);
+        (!tied).then_some(value)
+    }
+}
+
 fn build_node(mut children: Vec<RTreeNode>) -> RTreeNode {
     assert!(!children.is_empty());
     if children.len() == 1 {
@@ -362,8 +392,15 @@ fn build_node(mut children: Vec<RTreeNode>) -> RTreeNode {
         }
     }
 
-    let _ = best_dim;
-    let built_children: Vec<RTreeNode> = best_buckets.into_iter().map(build_node).collect();
+    let mut best_buckets: Vec<_> = best_buckets
+        .into_iter()
+        .map(|bucket| (union_space(&bucket), bucket))
+        .collect();
+    best_buckets.sort_by(|(a, _), (b, _)| compare_spaces(a, b, best_dim, true));
+    let built_children: Vec<RTreeNode> = best_buckets
+        .into_iter()
+        .map(|(_, bucket)| build_node(bucket))
+        .collect();
     let parameter_space = union_space(&built_children);
     RTreeNode::SubTree {
         parameter_space,
@@ -372,22 +409,28 @@ fn build_node(mut children: Vec<RTreeNode>) -> RTreeNode {
 }
 
 fn sort_nodes(children: &mut [RTreeNode], start_dim: usize, abs: bool) {
-    children.sort_by(|a, b| {
-        let sa = a.parameter_space();
-        let sb = b.parameter_space();
-        for offset in 0..7 {
-            let dim = (start_dim + offset) % 7;
-            let mid_a = (sa[dim].min + sa[dim].max) / 2;
-            let mid_b = (sb[dim].min + sb[dim].max) / 2;
-            let ka = if abs { mid_a.abs() } else { mid_a };
-            let kb = if abs { mid_b.abs() } else { mid_b };
-            let cmp = ka.cmp(&kb);
-            if cmp != std::cmp::Ordering::Equal {
-                return cmp;
-            }
+    children
+        .sort_by(|a, b| compare_spaces(a.parameter_space(), b.parameter_space(), start_dim, abs));
+}
+
+fn compare_spaces(
+    a: &[Parameter; 7],
+    b: &[Parameter; 7],
+    start_dim: usize,
+    abs: bool,
+) -> std::cmp::Ordering {
+    for offset in 0..7 {
+        let dim = (start_dim + offset) % 7;
+        let mid_a = (a[dim].min + a[dim].max) / 2;
+        let mid_b = (b[dim].min + b[dim].max) / 2;
+        let ka = if abs { mid_a.abs() } else { mid_a };
+        let kb = if abs { mid_b.abs() } else { mid_b };
+        let cmp = ka.cmp(&kb);
+        if cmp != std::cmp::Ordering::Equal {
+            return cmp;
         }
-        std::cmp::Ordering::Equal
-    });
+    }
+    std::cmp::Ordering::Equal
 }
 
 fn bucketize(nodes: &[RTreeNode]) -> Vec<Vec<RTreeNode>> {
@@ -521,6 +564,52 @@ impl MultiNoiseBiomeSource {
                 }
             }
         }
+    }
+
+    /// The biome at quart coordinates in a chunk other than the one `noise_chunk` generates, as vanilla reads it
+    /// from that chunk. Ties between parameter points depend on what was searched before, so a tie takes the result
+    /// of filling that whole chunk in section order, starting without a last result. Filled chunks are kept in
+    /// `noise_chunk`.
+    pub fn neighbor_biome(
+        &self,
+        noise_chunk: &mut NoiseChunk<'_>,
+        quart_x: i32,
+        quart_y: i32,
+        quart_z: i32,
+        min_quart_y: i32,
+        max_quart_y: i32,
+    ) -> u32 {
+        let chunk = (quart_x >> 2, quart_z >> 2);
+        let index = ((quart_y - min_quart_y) as usize) * 16
+            + ((quart_z & 3) as usize) * 4
+            + (quart_x & 3) as usize;
+        if let Some(biomes) = noise_chunk.neighbor_biomes(chunk) {
+            return biomes[index];
+        }
+        let target = noise_chunk.sample_climate(quart_x, quart_y, quart_z);
+        if let Some(&biome) = self.tree.unambiguous_search(target) {
+            return biome;
+        }
+        let mut biomes = vec![0; (max_quart_y - min_quart_y + 1) as usize * 16];
+        let mut last_result = None;
+        for section_y in (min_quart_y..=max_quart_y).step_by(4) {
+            for x in 0..4 {
+                for y in 0..4 {
+                    for z in 0..4 {
+                        let target = noise_chunk.sample_climate(
+                            (chunk.0 << 2) + x,
+                            section_y + y,
+                            (chunk.1 << 2) + z,
+                        );
+                        biomes[((section_y + y - min_quart_y) * 16 + z * 4 + x) as usize] =
+                            self.get_noise_biome(target, &mut last_result);
+                    }
+                }
+            }
+        }
+        let biome = biomes[index];
+        noise_chunk.keep_neighbor_biomes(chunk, biomes);
+        biome
     }
 
     /// Fills the `4×4×4` biome containers for all `sections` of a chunk starting at `min_section_y`
@@ -841,7 +930,7 @@ const PLATEAU_BIOMES: [[&str; 5]; 5] = [
         "minecraft:meadow",
         "minecraft:meadow",
         "minecraft:meadow",
-        "minecraft:dark_forest",
+        "minecraft:pale_garden",
     ],
     [
         "minecraft:savanna_plateau",

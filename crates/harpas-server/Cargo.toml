@@ -17,6 +17,7 @@ ctrlc = { version = "3.5.2", features = ["termination"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 getrandom = "0.4.3"
 harpas-anvil.workspace = true
+harpas-core.workspace = true
 harpas-engine.workspace = true
 harpas-java.workspace = true
 harpas-protocol-java.workspace = true
@@ -29,9 +30,6 @@ sha1 = "0.11.0"
 toml = "1.1.8"
 ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-provider"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-
-[dev-dependencies]
-harpas-core.workspace = true
 
 [lints]
 workspace = true

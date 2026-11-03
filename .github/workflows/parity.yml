@@ -1,7 +1,7 @@
 name: Parity
 
 # Differential tests against Mojang's server (docs/world.md#parity-strategy).
-# The reference server runs only here: it is never committed, cached, uploaded or released.
+# The reference server is used only for tests: it is never committed, cached, uploaded or released.
 # Maintainers accept the Minecraft EULA for CI by setting the repository variable
 # MOJANG_EULA_ACCEPTED to "true"; without it this workflow skips.
 
@@ -41,5 +41,4 @@ jobs:
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
-        # Harnesses arrive with the subsystems they compare (generation parity in M3).
-        run: echo "No parity harnesses yet."
+        run: cargo test -p harpas-server --test block_entity_parity -- --nocapture

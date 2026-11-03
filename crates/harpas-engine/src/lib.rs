@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_LAG: Duration = Duration::from_secs(2);
 const AUTOSAVE_INTERVAL: u64 = 6_000;
+const CHUNKS_PER_BATCH: usize = 8;
 
 /// A handle for sending connection events to the logic thread.
 #[derive(Clone, Debug)]
@@ -24,9 +25,15 @@ pub struct Handle {
     events: Sender<Event>,
     online_players: Arc<AtomicU32>,
     next_entity_id: Arc<AtomicI32>,
+    has_world: bool,
 }
 
 impl Handle {
+    /// Whether this engine supplies world chunks to connections.
+    pub fn has_world(&self) -> bool {
+        self.has_world
+    }
+
     /// Reserves a runtime entity ID; IDs are never reused during this server process.
     pub fn next_entity_id(&self) -> Option<i32> {
         self.next_entity_id
@@ -42,12 +49,31 @@ impl Handle {
         view_distance: u8,
         allow_flight: bool,
     ) -> Result<PlayerSession, LogicStopped> {
+        self.player_joined_with_view(
+            entity_id,
+            profile,
+            view_distance,
+            view_distance,
+            allow_flight,
+        )
+    }
+
+    /// Registers a player with its initial client view distance and the server's maximum.
+    pub fn player_joined_with_view(
+        &self,
+        entity_id: i32,
+        profile: player::Profile,
+        max_view_distance: u8,
+        initial_view_distance: u8,
+        allow_flight: bool,
+    ) -> Result<PlayerSession, LogicStopped> {
         let (output, receiver) = mpsc::channel();
         self.events
             .send(Event::Joined {
                 entity_id,
                 profile,
-                view_distance,
+                view_distance: max_view_distance,
+                initial_view_distance,
                 allow_flight,
                 output,
             })
@@ -132,7 +158,6 @@ pub fn start() -> io::Result<(Handle, JoinHandle<()>)> {
 }
 
 /// Starts the logic thread with an existing world's overworld and the server's ordered biome registry.
-/// Until chunk sending is implemented, players still see the void world.
 pub fn start_with_world(
     world_dir: &std::path::Path,
     biomes: &[&str],
@@ -147,6 +172,7 @@ fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<()>
         events: sender,
         online_players: Arc::clone(&online_players),
         next_entity_id: Arc::new(AtomicI32::new(1)),
+        has_world: world.is_some(),
     };
     let thread = thread::Builder::new()
         .name("harpas-logic".to_owned())
@@ -160,6 +186,7 @@ enum Event {
         entity_id: i32,
         profile: player::Profile,
         view_distance: u8,
+        initial_view_distance: u8,
         allow_flight: bool,
         output: Sender<player::Output>,
     },
@@ -197,7 +224,7 @@ impl Schedule {
     }
 }
 
-/// The phases that exist in vanilla's tick order. Only connection bookkeeping has work so far.
+/// The phases that exist in vanilla's tick order.
 trait TickWork {
     fn functions(&mut self) {}
     fn dimensions(&mut self) {}
@@ -227,13 +254,25 @@ impl TickWork for Game {
         let Some(world) = &mut self.world else {
             return;
         };
-        // For this first loading step, retain only the chunk occupied by each player. View-distance loading
-        // and sending the resulting chunks follow separately.
-        let wanted = self
+        let views: Vec<_> = self
             .players
             .iter()
-            .filter(|p| !p.disconnecting)
-            .map(|p| world::ChunkPos::at(p.player.position.x, p.player.position.z));
+            .map(|p| {
+                if p.disconnecting {
+                    Vec::new()
+                } else {
+                    world::ChunkPos::at(p.player.position.x, p.player.position.z)
+                        .view(p.view_distance)
+                }
+            })
+            .collect();
+        // Interleave each player's nearest-first view so one large view cannot monopolize the work queue.
+        let longest = views.iter().map(Vec::len).max().unwrap_or(0);
+        let wanted = (0..longest).flat_map(|index| {
+            views
+                .iter()
+                .filter_map(move |view| view.get(index).copied())
+        });
         if let Err(error) = world.update(wanted) {
             log::error!("{error}");
             for state in &mut self.players {
@@ -243,6 +282,46 @@ impl TickWork for Game {
                 }
             }
             self.stopped = true;
+            return;
+        }
+        for (player, view) in self.players.iter_mut().zip(views) {
+            let center = world::ChunkPos::at(player.player.position.x, player.player.position.z);
+            player
+                .sent_chunks
+                .retain(|pos| pos.within(center, player.view_distance));
+            if player.disconnecting || player.awaiting_chunk_batch {
+                continue;
+            }
+            player.chunk_credit =
+                (player.chunk_credit + player.chunks_per_tick).min(CHUNKS_PER_BATCH as f32);
+            let limit = (player.chunk_credit as usize).min(CHUNKS_PER_BATCH);
+            if limit == 0 {
+                continue;
+            }
+            let mut batch = Vec::with_capacity(limit);
+            for pos in view {
+                if player.sent_chunks.contains(&pos) {
+                    continue;
+                }
+                let chunk = match world.chunk(pos) {
+                    Some(world::ChunkState::Loaded(chunk)) => Some(Arc::clone(chunk)),
+                    Some(world::ChunkState::Missing) => None,
+                    _ => continue,
+                };
+                player.sent_chunks.insert(pos);
+                batch.push(player::VisibleChunk {
+                    position: pos,
+                    chunk,
+                });
+                if batch.len() == limit {
+                    break;
+                }
+            }
+            if !batch.is_empty() {
+                player.chunk_credit -= batch.len() as f32;
+                player.awaiting_chunk_batch = true;
+                player.send(player::Output::ChunkBatch(batch));
+            }
         }
     }
 
@@ -261,10 +340,18 @@ impl TickWork for Game {
                     entity_id,
                     profile,
                     view_distance,
+                    initial_view_distance,
                     allow_flight,
                     output,
                 } => {
-                    self.join(entity_id, profile, view_distance, allow_flight, output);
+                    self.join(
+                        entity_id,
+                        profile,
+                        view_distance,
+                        initial_view_distance,
+                        allow_flight,
+                        output,
+                    );
                     tracking_changed = true;
                 }
                 Event::Left(entity_id) => self.leave(entity_id),
@@ -334,6 +421,13 @@ impl TickWork for Game {
                             }
                             player::Input::Movement(movement) => {
                                 if state.accepts(movement) {
+                                    let center = world::ChunkPos::at(
+                                        state.player.position.x,
+                                        state.player.position.z,
+                                    );
+                                    state
+                                        .sent_chunks
+                                        .retain(|pos| pos.within(center, state.view_distance));
                                     moved.insert(entity_id);
                                     tracking_changed = true;
                                 }
@@ -355,6 +449,24 @@ impl TickWork for Game {
                                 let distance = distance.clamp(2, state.max_view_distance);
                                 tracking_changed |= state.view_distance != distance;
                                 state.view_distance = distance;
+                                let center = world::ChunkPos::at(
+                                    state.player.position.x,
+                                    state.player.position.z,
+                                );
+                                state.sent_chunks.retain(|pos| pos.within(center, distance));
+                                state.send(player::Output::ViewDistance(distance));
+                            }
+                            player::Input::ChunkBatchReceived(rate) => {
+                                if state.awaiting_chunk_batch {
+                                    state.awaiting_chunk_batch = false;
+                                    state.chunks_per_tick = if rate.is_finite() {
+                                        rate.clamp(0.01, CHUNKS_PER_BATCH as f32)
+                                    } else {
+                                        0.01
+                                    };
+                                    state.chunk_credit =
+                                        state.chunk_credit.min(state.chunks_per_tick);
+                                }
                             }
                         }
                     }
@@ -380,6 +492,7 @@ impl Game {
         id: i32,
         profile: player::Profile,
         view_distance: u8,
+        initial_view_distance: u8,
         allow_flight: bool,
         output: Sender<player::Output>,
     ) {
@@ -394,7 +507,8 @@ impl Game {
             let old_id = self.players[old].player.entity_id;
             self.leave(old_id);
         }
-        let player = player::PlayerState::new(id, profile, view_distance, allow_flight, output);
+        let mut player = player::PlayerState::new(id, profile, view_distance, allow_flight, output);
+        player.view_distance = initial_view_distance.clamp(2, player.max_view_distance);
         for existing in &self.players {
             player.send(player::Output::AddPlayer(existing.player.profile.clone()));
             if let Some(session) = &existing.chat_session {
@@ -516,6 +630,7 @@ mod tests {
             entity_id: id,
             profile: profile(name, id as u128),
             view_distance: distance,
+            initial_view_distance: distance,
             allow_flight: false,
             output,
         });
@@ -609,6 +724,30 @@ mod tests {
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
         tick(&mut game, 2);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn returning_to_a_view_in_one_tick_resends_the_columns_the_client_unloaded() {
+        let mut game = game();
+        let _output = join(&mut game, 1, "Steve", 3);
+        tick(&mut game, 1);
+        let center = world::ChunkPos { x: 0, z: 0 };
+        game.players[0].view_distance = 2;
+        game.players[0].sent_chunks = center.view(2).into_iter().collect();
+        input(&mut game, 1, Input::ConfirmTeleport(1));
+        input(&mut game, 1, movement(-0.5, 0.0));
+        input(&mut game, 1, movement(0.5, 0.0));
+        tick(&mut game, 2);
+        assert_eq!(game.players[0].sent_chunks.len(), 20);
+        assert!(game.players[0].sent_chunks.iter().all(|pos| pos.x != 2));
+
+        game.players[0].view_distance = 3;
+        game.players[0].sent_chunks = center.view(3).into_iter().collect();
+        input(&mut game, 1, Input::ViewDistance(2));
+        input(&mut game, 1, Input::ViewDistance(3));
+        tick(&mut game, 3);
+        assert_eq!(game.players[0].view_distance, 3);
+        assert_eq!(game.players[0].sent_chunks.len(), 25);
     }
 
     #[test]
@@ -811,6 +950,7 @@ mod tests {
             entity_id: 3,
             profile: spectator,
             view_distance: 10,
+            initial_view_distance: 10,
             allow_flight: false,
             output,
         });
@@ -918,6 +1058,7 @@ mod tests {
                 entity_id: 1,
                 profile,
                 view_distance: 10,
+                initial_view_distance: 10,
                 allow_flight,
                 output,
             });
@@ -947,6 +1088,7 @@ mod tests {
             entity_id: 2,
             profile: profile("Steve", 1),
             view_distance: 10,
+            initial_view_distance: 10,
             allow_flight: false,
             output,
         });

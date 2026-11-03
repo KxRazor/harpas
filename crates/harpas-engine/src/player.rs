@@ -1,7 +1,12 @@
-//! Players in the void world, movement checks, and what each player can see.
+//! Players, movement checks, and what each player can see.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
+
+use harpas_anvil::Chunk;
+
+use crate::world::ChunkPos;
 
 /// A signed profile property, such as a Java player's skin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +41,7 @@ pub struct Profile {
     pub name: String,
     /// Signed identity properties.
     pub properties: Vec<ProfileProperty>,
-    /// The game mode in the void world.
+    /// The player's game mode.
     pub game_mode: GameMode,
 }
 
@@ -126,6 +131,17 @@ pub enum Input {
     Flying(bool),
     /// The client's requested view distance in chunks.
     ViewDistance(u8),
+    /// The client acknowledged the last chunk batch and reported its desired chunks per tick.
+    ChunkBatchReceived(f32),
+}
+
+/// A chunk ready to send to a player; an absent chunk is the temporary void until generation exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleChunk {
+    /// The chunk column's position.
+    pub position: ChunkPos,
+    /// Existing chunk data, or none when the world has no chunk at this position.
+    pub chunk: Option<Arc<Chunk>>,
 }
 
 /// A player as seen by another player.
@@ -173,6 +189,10 @@ pub enum Output {
     },
     /// The player's own accepted position changed; update the visible chunks if necessary.
     OwnPosition(Position),
+    /// Apply an accepted client view distance in connection order.
+    ViewDistance(u8),
+    /// Send these ready chunks as one batch. At most one batch per player is in flight.
+    ChunkBatch(Vec<VisibleChunk>),
     /// Correct the player's position and wait for the corresponding confirmation.
     Teleport {
         /// Teleport ID to be acknowledged by the client.
@@ -194,6 +214,10 @@ pub(crate) struct PlayerState {
     pub(crate) client_floating: bool,
     pub(crate) floating_ticks: u32,
     pub(crate) tracked: HashSet<i32>,
+    pub(crate) sent_chunks: HashSet<ChunkPos>,
+    pub(crate) awaiting_chunk_batch: bool,
+    pub(crate) chunks_per_tick: f32,
+    pub(crate) chunk_credit: f32,
     pub(crate) awaiting_teleport: Option<i32>,
     pub(crate) next_teleport: i32,
     pub(crate) flying: bool,
@@ -225,6 +249,10 @@ impl PlayerState {
             client_floating: false,
             floating_ticks: 0,
             tracked: HashSet::new(),
+            sent_chunks: HashSet::new(),
+            awaiting_chunk_batch: false,
+            chunks_per_tick: 8.0,
+            chunk_credit: 8.0,
             // The Play Login sequence sends teleport 1 before accepting movement.
             awaiting_teleport: Some(1),
             next_teleport: 2,

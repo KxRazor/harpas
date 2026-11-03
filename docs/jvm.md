@@ -119,9 +119,11 @@ Each technique states why it is unobservable to plugins. All of them are automat
 
 ### 1. No JVM unless needed
 
-The JVM starts only if `plugins/` contains at least one Bukkit/Paper plugin. Without one, the runtime is not
-even downloaded (see [Runtime provisioning](#runtime-provisioning)). A server with only WASM plugins pays
-nothing. *Unobservable: there is no plugin to observe it.*
+The embedded plugin JVM starts only if `plugins/` contains at least one Bukkit/Paper plugin. Without one, its
+runtime is not downloaded (see [Runtime provisioning](#runtime-provisioning)). The one-time vanilla data
+installation can separately invoke an already-installed Java to generate registry IDs
+([world.md](world.md#vanilla-game-data)); it does not keep a JVM running. A server with only WASM plugins pays
+nothing for the plugin bridge. *Unobservable: there is no plugin to observe it.*
 
 ### 2. Event interest mask
 

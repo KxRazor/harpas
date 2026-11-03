@@ -85,8 +85,8 @@ Bukkit shim is licensed GPL-3.0. Apache-2.0 states this rule for contributions e
 |---|---|
 | The shim could be considered a work based on the GPLv3 Bukkit/Paper APIs | The shim is licensed GPL-3.0 and kept a separate artifact, so the obligation is met where it applies |
 | The separation between the shim and the core could be challenged | No linking between them: a separate Java artifact, provisioned on demand, talking through Harpas' own interface |
-| Protocol and registry data come from the community | Only permissively licensed community data (minecraft-data) is used; Mojang's files and code never enter the project |
-| Vanilla game data (world generation, recipes, loot) is Mojang's | Extracted on the owner's machine from Mojang's official jar, never redistributed; Mojang's server runs only in CI as a test reference |
+| Protocol and registry data come from the community | Only permissively licensed community data (minecraft-data) is committed; Mojang's files and code never enter the project |
+| Vanilla game data (world generation, recipes, loot, generated registry IDs) is Mojang's | Extracted or generated on the owner's machine from Mojang's official jar, never redistributed; the server itself is used only as a test reference |
 
 ## Open questions
 

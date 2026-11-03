@@ -4,10 +4,10 @@ Scope: how the Rust engine runs the game in normal mode: the tick loop and its o
 parallel, how threads are laid out, how the world and entities are stored, and how plugins are called from
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
-Status: in progress. The logic thread, tick skeleton, players in the void world, chunk sections and loading the
-occupied overworld chunks are implemented; the rest of world storage and the remaining entity logic are still
-design. Facts about vanilla cite their source in [References](#references); everything else is a design decision
-of this project.
+Status: in progress. The logic thread, tick skeleton, players, chunk sections and loading and sending existing
+overworld chunks are implemented; block entity updates, saving and the remaining entity logic are still in
+progress. Facts about vanilla cite their source in [References](#references); everything else is a design
+decision of this project.
 
 ---
 
@@ -67,8 +67,8 @@ All players appear in the player list, while entity tracking is per viewer, capp
 and 128 blocks. Spectator entities are hidden from non-spectators. A departure removes the entity and list entry
 even after an I/O or protocol error. Authentication and Keep Alive remain on the connection threads.
 
-For the void world, movement rejects non-finite positions or angles, clamps coordinates to vanilla's limits [3],
-and corrects a displacement over 10 blocks from the beginning of a tick. A pending teleport must be confirmed
+Movement currently uses the void-world checks even in loaded chunks: it rejects non-finite positions or angles,
+clamps coordinates to vanilla's limits [3], and corrects a displacement over 10 blocks from the beginning of a tick. A pending teleport must be confirmed
 before more movement is accepted. In Survival and Adventure, a player hovering in the void for more than 80
 ticks is disconnected unless `allow-flight` is enabled; Creative and Spectator may fly [4]. These are the
 current void-world checks, not a complete implementation of vanilla's movement and collision rules: world
@@ -107,11 +107,12 @@ Work that cannot change the result of the tick runs in parallel, off the logic t
 
 The logic thread is attached to the JVM at startup when Java plugins are present ([jvm.md](jvm.md#threads)).
 
-The current chunk loader uses up to four workers and a bounded queue. The logic thread requests the overworld
-chunk occupied by each player and applies finished reads in the dimension phase. Requests shared by players
-are deduplicated; results no longer needed are discarded, except that discovering an incompatible chunk still
-stops the server. The Java configuration registry supplies the biome ID order. Loading the rest of each
-player's view and sending chunks are still to come.
+The current chunk loader uses up to four workers and a bounded queue. The logic thread requests each player's
+view, interleaving viewers and prioritizing nearby chunks, and applies completed reads in the dimension phase.
+Shared requests are deduplicated; results no longer needed are discarded, except that discovering an
+incompatible chunk still stops the server. Java connections encode chunks in batches of at most eight, wait for
+the client's acknowledgement and honor its requested chunk rate; the Java configuration registry supplies the biome ID order. Missing
+chunks remain void until generation exists, and block entity updates are still to come.
 
 ### 4. Plugins are called from inside the tick
 

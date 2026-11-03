@@ -97,9 +97,11 @@ vanilla for the same seed.
   - [x] Load the chunk occupied by each player from an existing overworld on worker threads, and apply the
         result on the logic thread.
   - [ ] Load and send the chunks within each player's view distance.
-    - [ ] Send block entities with verified 26.1 type IDs and check their client update data against vanilla.
-          The interim approach uses Java 25 on `PATH` to run Mojang's data generator; if the registry is
-          unavailable, the server will warn and omit block entities.
+    - [x] Send existing block states, biomes, heightmaps and saved light in bounded batches.
+    - [x] Generate 26.1 block entity type IDs locally and send updates for types compared against vanilla.
+          Provisionally, generation needs Java 25 on `PATH`; if neither Java nor the generated registry is
+          present, the server starts without sending block entities.
+    - [ ] Verify remaining block entity update cases against vanilla.
   - [ ] Save chunk snapshots on workers, including non-blocking autosave, unloading and shutdown.
 - [ ] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.

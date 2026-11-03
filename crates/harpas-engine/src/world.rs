@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use harpas_anvil::{Chunk, Region, VersionError, dimension_dir, region_of};
+use harpas_anvil::{Chunk, VersionError, dimension_dir, read_chunk};
 use log::{error, warn};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -31,6 +31,41 @@ impl ChunkPos {
             z: (z.floor() as i32) >> 4,
         }
     }
+
+    pub(crate) fn within(self, center: Self, distance: u8) -> bool {
+        (self.x - center.x).abs() <= i32::from(distance)
+            && (self.z - center.z).abs() <= i32::from(distance)
+    }
+
+    /// Nearest chunks first, in the square currently used by Java's view updates.
+    pub(crate) fn view(self, distance: u8) -> Vec<Self> {
+        let distance = i32::from(distance);
+        let mut chunks = Vec::with_capacity(((distance * 2 + 1).pow(2)) as usize);
+        chunks.push(self);
+        for radius in 1..=distance {
+            for x in -radius..=radius {
+                chunks.push(Self {
+                    x: self.x + x,
+                    z: self.z - radius,
+                });
+                chunks.push(Self {
+                    x: self.x + x,
+                    z: self.z + radius,
+                });
+            }
+            for z in (-radius + 1)..radius {
+                chunks.push(Self {
+                    x: self.x - radius,
+                    z: self.z + z,
+                });
+                chunks.push(Self {
+                    x: self.x + radius,
+                    z: self.z + z,
+                });
+            }
+        }
+        chunks
+    }
 }
 
 /// The result of requesting an existing chunk.
@@ -39,7 +74,7 @@ pub enum ChunkState {
     /// Waiting for a worker or for a place in the bounded work queue.
     Loading,
     /// The chunk was loaded and is owned by the logic thread.
-    Loaded(Chunk),
+    Loaded(Arc<Chunk>),
     /// No chunk is stored at these coordinates. Generation is not implemented yet.
     Missing,
     /// The chunk exists or its region was accessed, but it could not be read.
@@ -76,9 +111,7 @@ impl World {
         let source_dir = region_dir.clone();
         let biomes: Vec<String> = biomes.iter().map(|name| (*name).to_owned()).collect();
         let load = Arc::new(move |pos: ChunkPos| {
-            let (x, z) = region_of(pos.x, pos.z);
-            let region = Region::open(&source_dir, x, z)?;
-            let Some(nbt) = region.chunk(pos.x, pos.z)? else {
+            let Some(nbt) = read_chunk(&source_dir, pos.x, pos.z)? else {
                 return Ok(None);
             };
             let biomes: Vec<&str> = biomes.iter().map(String::as_str).collect();
@@ -104,8 +137,12 @@ impl World {
     /// An incompatible chunk or an unavailable worker pool is fatal and returned to the caller, even if the
     /// incompatible chunk is no longer wanted when its read finishes.
     pub fn update(&mut self, wanted: impl IntoIterator<Item = ChunkPos>) -> io::Result<()> {
-        let wanted: HashSet<_> = wanted.into_iter().collect();
-        self.chunks.retain(|pos, _| wanted.contains(pos));
+        let mut wanted_set = HashSet::new();
+        let wanted: Vec<_> = wanted
+            .into_iter()
+            .filter(|pos| wanted_set.insert(*pos))
+            .collect();
+        self.chunks.retain(|pos, _| wanted_set.contains(pos));
         loop {
             match self.loader.completed.try_recv() {
                 Ok(completion) => {
@@ -122,7 +159,7 @@ impl World {
                             for warning in warnings {
                                 warn!("{prefix}: {warning}");
                             }
-                            ChunkState::Loaded(chunk)
+                            ChunkState::Loaded(Arc::new(chunk))
                         }
                         Ok(None) => ChunkState::Missing,
                         Err(error) => {
@@ -138,7 +175,7 @@ impl World {
                             ChunkState::Failed(error)
                         }
                     };
-                    if wanted.contains(&pos) {
+                    if wanted_set.contains(&pos) {
                         self.chunks.insert(pos, state);
                     }
                 }
@@ -250,7 +287,7 @@ mod tests {
     use std::sync::{Condvar, mpsc};
     use std::time::{Duration, Instant};
 
-    use harpas_anvil::{ChunkSection, DATA_VERSION};
+    use harpas_anvil::{ChunkSection, DATA_VERSION, Region, region_of};
     use harpas_core::block::block_states;
     use harpas_core::chunk::{PalettedContainer, Section, Strategy};
     use harpas_core::nbt::{Compound, Nbt};
@@ -347,6 +384,48 @@ mod tests {
             properties: Vec::new(),
             game_mode: GameMode::Creative,
         }
+    }
+
+    #[test]
+    fn view_is_a_nearest_first_square_even_at_negative_coordinates() {
+        let center = ChunkPos { x: -1, z: -2 };
+        let view = center.view(2);
+        assert_eq!(view.len(), 25);
+        assert_eq!(view[0], center);
+        assert_eq!(view.iter().copied().collect::<HashSet<_>>().len(), 25);
+        assert!(view.iter().all(|pos| pos.within(center, 2)));
+        let distance = |pos: &ChunkPos| (pos.x - center.x).abs().max((pos.z - center.z).abs());
+        assert!(
+            view.windows(2)
+                .all(|pair| distance(&pair[0]) <= distance(&pair[1]))
+        );
+    }
+
+    #[test]
+    fn client_view_distance_applies_from_join_without_lowering_the_server_maximum() {
+        let folder = Folder::new();
+        let (output, _received) = mpsc::channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 3,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        tick(&mut game, 2);
+        assert_eq!(game.players[0].view_distance, 2);
+        assert_eq!(game.players[0].max_view_distance, 3);
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(world.chunks.len(), 25);
+        assert!(world.chunk(ChunkPos { x: 3, z: 0 }).is_none());
     }
 
     #[test]
@@ -490,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn game_loads_the_occupied_chunk_on_the_dimension_tick_and_releases_it_on_movement() {
+    fn game_loads_chunks_in_view_and_releases_them_after_the_player_leaves() {
         let folder = Folder::new();
         let origin = ChunkPos { x: 0, z: 0 };
         let west = ChunkPos { x: -1, z: 0 };
@@ -501,6 +580,7 @@ mod tests {
                 entity_id: 1,
                 profile: profile(),
                 view_distance: 10,
+                initial_view_distance: 10,
                 allow_flight: false,
                 output,
             }],
@@ -538,11 +618,230 @@ mod tests {
                 Some(ChunkState::Loaded(_))
             )
         });
-        assert!(game.world.as_ref().unwrap().chunk(origin).is_none());
+        assert!(matches!(
+            game.world.as_ref().unwrap().chunk(origin),
+            Some(ChunkState::Loaded(_))
+        ));
         game.pending.push(Event::Left(1));
         tick(&mut game, 5);
         tick(&mut game, 6);
         assert!(game.world.as_ref().unwrap().chunk(west).is_none());
+        assert!(game.world.as_ref().unwrap().chunk(origin).is_none());
+    }
+
+    #[test]
+    fn game_sends_each_viewed_chunk_once_and_waits_for_the_previous_batch() {
+        let folder = Folder::new();
+        let origin = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(origin, DATA_VERSION)]);
+        let (output, received) = mpsc::channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        let mut first = None;
+        wait_until(|| {
+            tick(&mut game, 2);
+            for output in received.try_iter() {
+                if let Output::ChunkBatch(batch) = output {
+                    first = Some(batch);
+                }
+            }
+            first.is_some()
+        });
+        let first = first.unwrap();
+        assert!(!first.is_empty() && first.len() <= crate::CHUNKS_PER_BATCH);
+        for _ in 0..20 {
+            tick(&mut game, 3);
+        }
+        assert!(
+            !received
+                .try_iter()
+                .any(|output| matches!(output, Output::ChunkBatch(_)))
+        );
+        let mut seen: HashSet<_> = first.iter().map(|chunk| chunk.position).collect();
+        let mut found_origin = first
+            .iter()
+            .any(|chunk| chunk.position == origin && chunk.chunk.is_some());
+        wait_until(|| {
+            game.pending.push(Event::Input {
+                entity_id: 1,
+                input: Input::ChunkBatchReceived(8.0),
+            });
+            tick(&mut game, 4);
+            tick(&mut game, 5);
+            for output in received.try_iter() {
+                if let Output::ChunkBatch(batch) = output {
+                    assert!(batch.len() <= crate::CHUNKS_PER_BATCH);
+                    for chunk in batch {
+                        assert!(chunk.position.within(origin, 2));
+                        assert!(seen.insert(chunk.position), "a chunk was sent twice");
+                        found_origin |= chunk.position == origin && chunk.chunk.is_some();
+                    }
+                }
+            }
+            seen.len() == 25
+        });
+        assert!(found_origin);
+    }
+
+    #[test]
+    fn client_acknowledgements_control_batch_rate_and_invalid_rates_are_bounded() {
+        let folder = Folder::new();
+        let (output, received) = mpsc::channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        let mut first_batch = false;
+        wait_until(|| {
+            tick(&mut game, 2);
+            first_batch |= received
+                .try_iter()
+                .any(|output| matches!(output, Output::ChunkBatch(_)));
+            first_batch
+                && game
+                    .world
+                    .as_ref()
+                    .unwrap()
+                    .chunks
+                    .values()
+                    .all(|state| !matches!(state, ChunkState::Loading))
+        });
+        game.players[0].chunk_credit = 0.0;
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ChunkBatchReceived(0.25),
+        });
+        tick(&mut game, 3);
+        for number in 4..=6 {
+            tick(&mut game, number);
+            assert!(
+                !received
+                    .try_iter()
+                    .any(|output| matches!(output, Output::ChunkBatch(_)))
+            );
+        }
+        tick(&mut game, 7);
+        assert!(
+            received
+                .try_iter()
+                .any(|output| matches!(output, Output::ChunkBatch(batch) if batch.len() == 1))
+        );
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ChunkBatchReceived(f32::NAN),
+        });
+        tick(&mut game, 8);
+        assert_eq!(game.players[0].chunks_per_tick, 0.01);
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ChunkBatchReceived(8.0),
+        });
+        tick(&mut game, 9);
+        assert_eq!(
+            game.players[0].chunks_per_tick, 0.01,
+            "unsolicited acknowledgements are ignored"
+        );
+    }
+
+    #[test]
+    fn changing_view_distance_forgets_and_resends_only_the_outer_ring() {
+        let folder = Folder::new();
+        let (output, received) = mpsc::channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 3,
+                initial_view_distance: 3,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        let mut initial = HashSet::new();
+        wait_until(|| {
+            game.pending.push(Event::Input {
+                entity_id: 1,
+                input: Input::ChunkBatchReceived(8.0),
+            });
+            tick(&mut game, 2);
+            for output in received.try_iter() {
+                if let Output::ChunkBatch(batch) = output {
+                    for chunk in batch {
+                        assert!(initial.insert(chunk.position));
+                    }
+                }
+            }
+            initial.len() == 49
+        });
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ChunkBatchReceived(8.0),
+        });
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ViewDistance(2),
+        });
+        tick(&mut game, 3);
+        tick(&mut game, 4);
+        assert_eq!(game.players[0].sent_chunks.len(), 25);
+        assert!(
+            received
+                .try_iter()
+                .any(|output| matches!(output, Output::ViewDistance(2)))
+        );
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ViewDistance(3),
+        });
+        tick(&mut game, 5);
+        let mut resent = HashSet::new();
+        wait_until(|| {
+            game.pending.push(Event::Input {
+                entity_id: 1,
+                input: Input::ChunkBatchReceived(8.0),
+            });
+            tick(&mut game, 6);
+            for output in received.try_iter() {
+                if let Output::ChunkBatch(batch) = output {
+                    for chunk in batch {
+                        let pos = chunk.position;
+                        assert!(!pos.within(ChunkPos { x: 0, z: 0 }, 2));
+                        assert!(pos.within(ChunkPos { x: 0, z: 0 }, 3));
+                        assert!(resent.insert(pos));
+                    }
+                }
+            }
+            resent.len() == 24
+        });
     }
 
     #[test]

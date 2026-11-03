@@ -469,6 +469,43 @@ fn moving_to_an_adjacent_chunk_updates_only_the_entering_and_leaving_columns() {
 }
 
 #[test]
+fn external_chunks_are_not_replaced_with_void_during_join_or_movement() {
+    let info = offline();
+    let mut connection = new_connection();
+    connection.use_external_chunks();
+    let mut connection = playing(&info, connection);
+    let joined: Vec<_> = frames(&connection.take_output())
+        .iter()
+        .map(|frame| play::clientbound::Packet::decode(frame).unwrap())
+        .collect();
+    assert!(
+        joined
+            .iter()
+            .any(|packet| matches!(packet, play::clientbound::Packet::SetCenterChunk(_)))
+    );
+    assert!(!joined.iter().any(|packet| matches!(
+        packet,
+        play::clientbound::Packet::ChunkDataAndUpdateLight(_)
+            | play::clientbound::Packet::ChunkBatchStart(_)
+    )));
+    connection.update_view(16.5, 0.5, None);
+    let moved: Vec<_> = frames(&connection.take_output())
+        .iter()
+        .map(|frame| play::clientbound::Packet::decode(frame).unwrap())
+        .collect();
+    assert!(
+        moved
+            .iter()
+            .any(|packet| matches!(packet, play::clientbound::Packet::UnloadChunk(_)))
+    );
+    assert!(!moved.iter().any(|packet| matches!(
+        packet,
+        play::clientbound::Packet::ChunkDataAndUpdateLight(_)
+            | play::clientbound::Packet::ChunkBatchStart(_)
+    )));
+}
+
+#[test]
 fn clients_without_the_core_pack_are_turned_away() {
     let info = offline();
     let mut connection = logged_in(&info);

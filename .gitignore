@@ -1,4 +1,7 @@
 /target
 
+# Locally provisioned Mojang data must never be committed.
+.harpas/
+
 # Local server folder for manual tests with a client
 /test-environment/

@@ -7,7 +7,7 @@ counterpart is [nethernet.md](nethernet.md).
 
 Status: in progress. Every state is implemented in `harpas-java`: Handshaking, Status and the server list
 (legacy ping included), Login in online and offline mode with encryption and compression, Configuration with
-registry data, and Play with players in a void world. Java player chat and signature verification are
+registry data, and Play with existing overworld chunks. Java player chat and signature verification are
 implemented, as is the protection against abuse; real-client validation of signed chat remains open.
 Facts about the protocol cite their source in [References](#references); everything else is a design decision
 of this project.
@@ -65,10 +65,12 @@ Every connection starts in Handshaking and moves through the states vanilla defi
   compression, as in vanilla; players still in Configuration are not counted, as in vanilla. The whitelist,
   bans and operators who bypass the limit come with commands (M4).
 - **Configuration:** see [Configuration state](#configuration-state).
-- **Play:** players join the void world at (0.5, 65, 0.5), with abilities for the `gamemode` of
+- **Play:** players join the overworld at (0.5, 65, 0.5), with abilities for the `gamemode` of
   `server.properties`. The server maintains a shared player list and sends profiles, entities and accepted
-  movement to other players in range. Empty overworld chunks follow the player's position and effective view
-  distance. Java 26.1's player entity type is 155 in the project's pinned minecraft-data version [5]. Play
+  movement to other players in range. Existing overworld chunks follow the player's position and effective view
+  distance; missing chunks are void until generation. Block entity types and verified client update fields are
+  sent when the locally generated registry is available; see [world.md](world.md#loading). Java 26.1's
+  player entity type is 155 in the project's pinned minecraft-data version [5]. Play
   packets the schema does not have yet are ignored instead of closing the connection. The implemented
   movement checks and their limits are described in [engine-core.md](engine-core.md#1-vanilla-tick-order-on-one-logic-thread).
 - **Keep Alive:** every 15 seconds in Configuration and Play; a client that does not answer within 15 seconds,
@@ -162,7 +164,7 @@ How it works now:
    registries, or fails when it builds its items, if one is missing. Until Harpas has vanilla's data
    ([world.md](world.md#vanilla-game-data)), the server sends the tags the client needs **empty**: 122 of them,
    found from the errors a 26.1 client reports and completed with the vanilla tags its item components use.
-   Empty tags change nothing in a void world; with real worlds, the real tags replace them.
+   Empty tags change nothing in a void world; replacing them with real tags for loaded worlds remains pending.
 4. Finish Configuration; the client acknowledges it and the connection moves to Play.
 
 ---

@@ -12,6 +12,7 @@ pub mod noise_chunk;
 pub mod ore_vein;
 pub mod seed;
 pub mod spline;
+pub mod structure;
 pub mod surface;
 
 pub use aquifer::{
@@ -24,8 +25,10 @@ pub use biome::{
 };
 pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
-    ConfiguredCarverDef, DimensionDef, MultiNoiseParameterListDef, NoiseSamplingSettings,
-    NoiseSettingsDef, TemperatureModifier, WorldPresetDef, WorldgenData, WorldgenDataError,
+    ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod,
+    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, StructureDef,
+    StructurePlacementCommon, StructurePlacementDef, StructurePlacementKind, StructureSetDef,
+    StructureSetEntryDef, TemperatureModifier, WorldPresetDef, WorldgenData, WorldgenDataError,
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
@@ -36,6 +39,7 @@ pub use noise_chunk::NoiseChunk;
 pub use ore_vein::{OreVeinifier, VeinType};
 pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
+pub use structure::StructureState;
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
     SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,

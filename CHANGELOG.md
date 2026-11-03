@@ -67,6 +67,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A parity harness in CI that generates whole Overworld chunks with Mojang's server and compares every block,
   biome, carving mask, fluid update and heightmap, in 1,621 chunks of 5 seeds covering all 54 biomes, along with
   the climate parameter points (`harpas-worldgen`).
+- Where structures may start: structure sets, structures and biome tags are loaded, with vanilla's random spread
+  and concentric ring placements, frequency reduction and exclusion zones, checked against Minecraft 26.1. The
+  generator does not place structures yet (`harpas-worldgen`).
 
 ### Changed
 

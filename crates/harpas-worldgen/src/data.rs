@@ -256,13 +256,110 @@ pub struct BlockTagEntry {
     pub required: bool,
 }
 
-/// A block tag used by configured carvers.
+/// A block or biome tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockTagDef {
     /// Whether this tag replaces an earlier definition in a layered data pack.
     pub replace: bool,
-    /// Block and nested tag references, in data-pack order.
+    /// Element and nested tag references, in data-pack order.
     pub values: Vec<BlockTagEntry>,
+}
+
+/// Parsed contents of a `worldgen/structure/<name>.json` file relevant to structure placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructureDef {
+    /// Biome IDs and `#`-prefixed tags where the structure may generate.
+    pub biomes: Vec<String>,
+}
+
+/// Parsed contents of a `worldgen/structure_set/<name>.json` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructureSetDef {
+    /// Structures to choose from, in data-pack order.
+    pub structures: Vec<StructureSetEntryDef>,
+    /// Where the set's structures may start.
+    pub placement: StructurePlacementDef,
+}
+
+/// One weighted structure of a structure set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructureSetEntryDef {
+    /// The structure's resource location.
+    pub structure: String,
+    /// Relative chance of choosing this structure.
+    pub weight: i32,
+}
+
+/// The chance of skipping a placement (`StructurePlacement.FrequencyReductionMethod`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrequencyReductionMethod {
+    /// `default`.
+    #[default]
+    Default,
+    /// `legacy_type_1`, originally for pillager outposts.
+    LegacyType1,
+    /// `legacy_type_2`, with a fixed salt.
+    LegacyType2,
+    /// `legacy_type_3`, comparing a double.
+    LegacyType3,
+}
+
+/// A structure set whose nearby starts forbid a placement (`StructurePlacement.ExclusionZone`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExclusionZoneDef {
+    /// The other structure set's resource location.
+    pub other_set: String,
+    /// Chunks to search around a placement in each direction.
+    pub chunk_count: i32,
+}
+
+/// Fields shared by all structure placements (`StructurePlacement`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructurePlacementCommon {
+    /// Added to the seed of the placement's random generators.
+    pub salt: i32,
+    /// Chance that a placement goes ahead.
+    pub frequency: f32,
+    /// How `frequency` is decided for a chunk.
+    pub frequency_reduction_method: FrequencyReductionMethod,
+    /// A structure set that this placement must stay away from.
+    pub exclusion_zone: Option<ExclusionZoneDef>,
+    /// Offset from the chunk's corner that locating a structure reports.
+    pub locate_offset: [i32; 3],
+}
+
+/// How a structure set chooses its chunks.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructurePlacementKind {
+    /// `minecraft:random_spread`: one candidate chunk in each square region.
+    RandomSpread {
+        /// Size of the region in chunks.
+        spacing: i32,
+        /// Chunks kept free between the candidates of neighboring regions.
+        separation: i32,
+        /// Whether candidates tend to the middle of the region.
+        triangular: bool,
+    },
+    /// `minecraft:concentric_rings`: a fixed list of chunks around the origin.
+    ConcentricRings {
+        /// Distance between rings, in units of 6 chunks.
+        distance: i32,
+        /// Positions in the first ring.
+        spread: i32,
+        /// Total positions.
+        count: i32,
+        /// Biome IDs and `#`-prefixed tags to move each position towards.
+        preferred_biomes: Vec<String>,
+    },
+}
+
+/// Parsed `placement` of a structure set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructurePlacementDef {
+    /// Fields shared by all placements.
+    pub common: StructurePlacementCommon,
+    /// The placement type and its own fields.
+    pub kind: StructurePlacementKind,
 }
 
 /// All worldgen registries loaded from a datapack (`26.1.zip` or directory).
@@ -284,6 +381,12 @@ pub struct WorldgenData {
     pub configured_carvers: IndexMap<String, ConfiguredCarverDef>,
     /// Block tags, including nested tags used to select replaceable terrain.
     pub block_tags: IndexMap<String, BlockTagDef>,
+    /// Biome tags, including nested tags, which select where structures generate.
+    pub biome_tags: IndexMap<String, BlockTagDef>,
+    /// `minecraft:worldgen/structure` definitions, as far as structure placement needs them.
+    pub structures: IndexMap<String, StructureDef>,
+    /// `minecraft:worldgen/structure_set` definitions in lexicographical order.
+    pub structure_sets: IndexMap<String, StructureSetDef>,
 }
 
 impl WorldgenData {
@@ -393,45 +496,22 @@ impl WorldgenData {
                     );
                 }
                 "block_tag" => {
-                    let obj = json
-                        .as_object()
-                        .ok_or_else(|| invalid_def(&resource_id, "block tag must be an object"))?;
-                    let replace = match obj.get("replace") {
-                        Some(value) => value.as_bool().ok_or_else(|| {
-                            invalid_def(&resource_id, "block tag `replace` must be a boolean")
-                        })?,
-                        None => false,
-                    };
-                    let entries = obj.get("values").and_then(Value::as_array).ok_or_else(|| {
-                        invalid_def(&resource_id, "block tag has no values array")
-                    })?;
-                    let mut values = Vec::with_capacity(entries.len());
-                    for entry in entries {
-                        let (id, required) = if let Some(id) = entry.as_str() {
-                            (id, true)
-                        } else {
-                            let obj = entry.as_object().ok_or_else(|| {
-                                invalid_def(&resource_id, "invalid block tag entry")
-                            })?;
-                            let id = req_str(obj, "id", &resource_id)?;
-                            let required = match obj.get("required") {
-                                Some(value) => value.as_bool().ok_or_else(|| {
-                                    invalid_def(
-                                        &resource_id,
-                                        "block tag `required` must be a boolean",
-                                    )
-                                })?,
-                                None => true,
-                            };
-                            (id, required)
-                        };
-                        values.push(BlockTagEntry {
-                            id: id.to_string(),
-                            required,
-                        });
-                    }
                     data.block_tags
-                        .insert(resource_id, BlockTagDef { replace, values });
+                        .insert(resource_id.clone(), parse_tag(&resource_id, &json)?);
+                }
+                "biome_tag" => {
+                    data.biome_tags
+                        .insert(resource_id.clone(), parse_tag(&resource_id, &json)?);
+                }
+                "structure" => {
+                    data.structures
+                        .insert(resource_id.clone(), parse_structure(&resource_id, &json)?);
+                }
+                "structure_set" => {
+                    data.structure_sets.insert(
+                        resource_id.clone(),
+                        parse_structure_set(&resource_id, &json)?,
+                    );
                 }
                 _ => {}
             }
@@ -481,39 +561,255 @@ impl WorldgenData {
         done: &mut HashSet<String>,
         blocks: &mut HashSet<String>,
     ) -> Result<(), WorldgenDataError> {
-        let tag = resource_name(tag);
-        if done.contains(&tag) {
-            return Ok(());
-        }
-        let definition = self
-            .block_tags
-            .get(&tag)
-            .ok_or_else(|| invalid_def(&tag, "unknown block tag"))?;
-        if !active.insert(tag.clone()) {
-            return Err(invalid_def(&tag, "cyclic block tag reference"));
-        }
-        for entry in &definition.values {
-            if let Some(child) = entry.id.strip_prefix('#') {
-                let child = resource_name(child);
-                if !entry.required && !self.block_tags.contains_key(&child) {
-                    continue;
-                }
-                self.collect_block_tag(&child, active, done, blocks)?;
+        collect_tag(
+            &self.block_tags,
+            "block",
+            &|name| block_states().default_state(name).is_some(),
+            tag,
+            active,
+            done,
+            blocks,
+        )
+    }
+
+    /// Resolves biome IDs and `#`-prefixed tags to biome registry IDs.
+    /// Unknown required entries and cyclic references are errors; optional missing entries are skipped.
+    pub fn resolve_biomes(&self, selector: &[String]) -> Result<HashSet<u32>, WorldgenDataError> {
+        let mut biomes = HashSet::new();
+        let (mut active, mut done) = (HashSet::new(), HashSet::new());
+        for entry in selector {
+            if let Some(tag) = entry.strip_prefix('#') {
+                collect_tag(
+                    &self.biome_tags,
+                    "biome",
+                    &|name| self.biomes.contains_key(name),
+                    tag,
+                    &mut active,
+                    &mut done,
+                    &mut biomes,
+                )?;
             } else {
-                let name = resource_name(&entry.id);
-                if block_states().default_state(&name).is_none() {
-                    if entry.required {
-                        return Err(invalid_def(&tag, format!("unknown block `{name}`")));
-                    }
-                    continue;
+                let name = resource_name(entry);
+                if !self.biomes.contains_key(&name) {
+                    return Err(invalid_def(&name, "unknown biome"));
                 }
-                blocks.insert(name);
+                biomes.insert(name);
             }
         }
-        active.remove(&tag);
-        done.insert(tag);
-        Ok(())
+        Ok(biomes
+            .iter()
+            .filter_map(|name| self.biome_id(name))
+            .collect())
     }
+}
+
+fn collect_tag(
+    tags: &IndexMap<String, BlockTagDef>,
+    kind: &str,
+    exists: &impl Fn(&str) -> bool,
+    tag: &str,
+    active: &mut HashSet<String>,
+    done: &mut HashSet<String>,
+    elements: &mut HashSet<String>,
+) -> Result<(), WorldgenDataError> {
+    let tag = resource_name(tag);
+    if done.contains(&tag) {
+        return Ok(());
+    }
+    let definition = tags
+        .get(&tag)
+        .ok_or_else(|| invalid_def(&tag, format!("unknown {kind} tag")))?;
+    if !active.insert(tag.clone()) {
+        return Err(invalid_def(&tag, format!("cyclic {kind} tag reference")));
+    }
+    for entry in &definition.values {
+        if let Some(child) = entry.id.strip_prefix('#') {
+            let child = resource_name(child);
+            if !entry.required && !tags.contains_key(&child) {
+                continue;
+            }
+            collect_tag(tags, kind, exists, &child, active, done, elements)?;
+        } else {
+            let name = resource_name(&entry.id);
+            if !exists(&name) {
+                if entry.required {
+                    return Err(invalid_def(&tag, format!("unknown {kind} `{name}`")));
+                }
+                continue;
+            }
+            elements.insert(name);
+        }
+    }
+    active.remove(&tag);
+    done.insert(tag);
+    Ok(())
+}
+
+fn parse_tag(context: &str, json: &Value) -> Result<BlockTagDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(context, "tag must be an object"))?;
+    let replace = match obj.get("replace") {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| invalid_def(context, "tag `replace` must be a boolean"))?,
+        None => false,
+    };
+    let entries = obj
+        .get("values")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_def(context, "tag has no values array"))?;
+    let mut values = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (id, required) = if let Some(id) = entry.as_str() {
+            (id, true)
+        } else {
+            let obj = entry
+                .as_object()
+                .ok_or_else(|| invalid_def(context, "invalid tag entry"))?;
+            let id = req_str(obj, "id", context)?;
+            let required = match obj.get("required") {
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| invalid_def(context, "tag `required` must be a boolean"))?,
+                None => true,
+            };
+            (id, required)
+        };
+        values.push(BlockTagEntry {
+            id: id.to_string(),
+            required,
+        });
+    }
+    Ok(BlockTagDef { replace, values })
+}
+
+/// A vanilla `HolderSet` of biomes: a `#`-prefixed tag, one ID or a list of IDs.
+fn parse_biome_selector(context: &str, json: &Value) -> Result<Vec<String>, WorldgenDataError> {
+    if let Some(entry) = json.as_str() {
+        return Ok(vec![entry.to_string()]);
+    }
+    json.as_array()
+        .ok_or_else(|| invalid_def(context, "biomes must be a string or an array"))?
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| invalid_def(context, "biome entries must be strings"))
+        })
+        .collect()
+}
+
+fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, WorldgenDataError> {
+    let biomes = json
+        .get("biomes")
+        .ok_or_else(|| invalid_def(context, "structure has no biomes"))?;
+    Ok(StructureDef {
+        biomes: parse_biome_selector(context, biomes)?,
+    })
+}
+
+fn parse_structure_set(context: &str, json: &Value) -> Result<StructureSetDef, WorldgenDataError> {
+    let integer = |obj: &Value, key: &str| -> Result<i32, WorldgenDataError> {
+        obj.get(key)
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| invalid_def(context, format!("`{key}` must be a 32-bit integer")))
+    };
+    let structures = json
+        .get("structures")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_def(context, "structure set has no structures array"))?
+        .iter()
+        .map(|entry| {
+            Ok(StructureSetEntryDef {
+                structure: entry
+                    .get("structure")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid_def(context, "structure entry has no structure"))?
+                    .to_string(),
+                weight: integer(entry, "weight")?,
+            })
+        })
+        .collect::<Result<_, WorldgenDataError>>()?;
+    let placement = json
+        .get("placement")
+        .ok_or_else(|| invalid_def(context, "structure set has no placement"))?;
+    let frequency_reduction_method = match placement
+        .get("frequency_reduction_method")
+        .map(Value::as_str)
+    {
+        None | Some(Some("default")) => FrequencyReductionMethod::Default,
+        Some(Some("legacy_type_1")) => FrequencyReductionMethod::LegacyType1,
+        Some(Some("legacy_type_2")) => FrequencyReductionMethod::LegacyType2,
+        Some(Some("legacy_type_3")) => FrequencyReductionMethod::LegacyType3,
+        Some(_) => return Err(invalid_def(context, "unknown frequency reduction method")),
+    };
+    let exclusion_zone = match placement.get("exclusion_zone") {
+        Some(zone) => Some(ExclusionZoneDef {
+            other_set: zone
+                .get("other_set")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid_def(context, "exclusion zone has no other_set"))?
+                .to_string(),
+            chunk_count: integer(zone, "chunk_count")?,
+        }),
+        None => None,
+    };
+    let locate_offset = match placement.get("locate_offset") {
+        Some(offset) => {
+            let offset: Vec<_> = offset
+                .as_array()
+                .ok_or_else(|| invalid_def(context, "locate_offset must be an array"))?
+                .iter()
+                .filter_map(|value| value.as_i64().and_then(|value| i32::try_from(value).ok()))
+                .collect();
+            <[i32; 3]>::try_from(offset)
+                .map_err(|_| invalid_def(context, "locate_offset must have 3 integers"))?
+        }
+        None => [0, 0, 0],
+    };
+    let common = StructurePlacementCommon {
+        salt: integer(placement, "salt")?,
+        frequency: match placement.get("frequency") {
+            Some(value) => value
+                .as_f64()
+                .ok_or_else(|| invalid_def(context, "frequency must be a number"))?
+                as f32,
+            None => 1.0,
+        },
+        frequency_reduction_method,
+        exclusion_zone,
+        locate_offset,
+    };
+    let kind = match placement.get("type").and_then(Value::as_str) {
+        Some("minecraft:random_spread") => StructurePlacementKind::RandomSpread {
+            spacing: integer(placement, "spacing")?,
+            separation: integer(placement, "separation")?,
+            triangular: match placement.get("spread_type").map(Value::as_str) {
+                None | Some(Some("linear")) => false,
+                Some(Some("triangular")) => true,
+                Some(_) => return Err(invalid_def(context, "unknown spread type")),
+            },
+        },
+        Some("minecraft:concentric_rings") => StructurePlacementKind::ConcentricRings {
+            distance: integer(placement, "distance")?,
+            spread: integer(placement, "spread")?,
+            count: integer(placement, "count")?,
+            preferred_biomes: parse_biome_selector(
+                context,
+                placement
+                    .get("preferred_biomes")
+                    .ok_or_else(|| invalid_def(context, "rings have no preferred_biomes"))?,
+            )?,
+        },
+        _ => return Err(invalid_def(context, "unknown structure placement type")),
+    };
+    Ok(StructureSetDef {
+        structures,
+        placement: StructurePlacementDef { common, kind },
+    })
 }
 
 fn resource_name(name: &str) -> String {
@@ -537,6 +833,12 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
     {
         return Some((namespace, "block_tag", rel_id));
     }
+    if let Some(rel_id) = after_ns
+        .strip_prefix("tags/worldgen/biome/")
+        .and_then(|path| path.strip_suffix(".json"))
+    {
+        return Some((namespace, "biome_tag", rel_id));
+    }
     let after_worldgen = after_ns.strip_prefix("worldgen/")?;
     let (category, file_part) = after_worldgen.split_once('/')?;
     let rel_id = file_part.strip_suffix(".json")?;
@@ -547,6 +849,8 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
         | "biome"
         | "multi_noise_biome_source_parameter_list"
         | "configured_carver"
+        | "structure"
+        | "structure_set"
         | "world_preset" => Some((namespace, category, rel_id)),
         _ => None,
     }

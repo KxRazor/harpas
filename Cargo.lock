@@ -1002,6 +1002,7 @@ version = "0.1.0"
 dependencies = [
  "harpas-anvil",
  "harpas-core",
+ "harpas-worldgen",
  "log",
 ]
 
@@ -1071,6 +1072,7 @@ dependencies = [
  "harpas-engine",
  "harpas-java",
  "harpas-protocol-java",
+ "harpas-worldgen",
  "log",
  "nix",
  "rustls",

@@ -4,11 +4,13 @@
 
 pub mod aquifer;
 pub mod biome;
+pub mod carver;
 pub mod data;
 pub mod density;
 pub mod generator;
 pub mod noise_chunk;
 pub mod ore_vein;
+pub mod seed;
 pub mod spline;
 pub mod surface;
 
@@ -21,9 +23,9 @@ pub use biome::{
     nether_biome_parameters, overworld_biome_parameters, quantize_coord, unquantize_coord,
 };
 pub use data::{
-    BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, DimensionDef,
-    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, TemperatureModifier,
-    WorldPresetDef, WorldgenData, WorldgenDataError,
+    BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
+    ConfiguredCarverDef, DimensionDef, MultiNoiseParameterListDef, NoiseSamplingSettings,
+    NoiseSettingsDef, TemperatureModifier, WorldPresetDef, WorldgenData, WorldgenDataError,
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
@@ -32,6 +34,7 @@ pub use density::{
 pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
 pub use noise_chunk::NoiseChunk;
 pub use ore_vein::{OreVeinifier, VeinType};
+pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
@@ -152,6 +155,21 @@ mod tests {
         assert_eq!(data.biomes.len(), 65);
         assert_eq!(data.noises.len(), 62);
         assert_eq!(data.density_functions.len(), 35);
+        assert_eq!(data.configured_carvers.len(), 4);
+        for name in data.configured_carvers.keys() {
+            carver::CarverConfig::compile(name, &data)
+                .unwrap_or_else(|error| panic!("compile carver {name}: {error}"));
+        }
+        assert!(
+            data.block_tags
+                .contains_key("minecraft:overworld_carver_replaceables")
+        );
+        let replaceable = data
+            .block_tag_states("minecraft:overworld_carver_replaceables")
+            .expect("resolve vanilla carver replaceables");
+        let states = harpas_core::block::block_states();
+        assert!(replaceable[states.default_state("minecraft:stone").unwrap() as usize]);
+        assert!(!replaceable[states.default_state("minecraft:bedrock").unwrap() as usize]);
         assert!(data.noise_settings.contains_key("minecraft:overworld"));
 
         let overworld = &data.noise_settings["minecraft:overworld"];
@@ -269,6 +287,73 @@ mod tests {
                 .len(),
             37
         );
+    }
+
+    #[test]
+    fn loads_configured_carvers_and_nested_block_tags() {
+        let data = WorldgenData::from_json_entries([
+            (
+                "data/example/worldgen/configured_carver/test.json",
+                r##"{"type":"minecraft:cave","config":{
+                    "probability":0.25, "y":{"type":"minecraft:uniform",
+                        "min_inclusive":{"above_bottom":2},"max_inclusive":{"absolute":30}},
+                    "yScale":0.5, "lava_level":{"below_top":10}, "replaceable":"#example:replaceable",
+                    "horizontal_radius_multiplier":1.0, "vertical_radius_multiplier":1.0,
+                    "floor_level":{"type":"minecraft:uniform","min_inclusive":-1.0,"max_exclusive":-0.5}
+                }}"##,
+            ),
+            (
+                "data/example/tags/block/replaceable.json",
+                r##"{"values":["minecraft:stone", "#example:nested", {"id":"example:optional", "required":false}]}"##,
+            ),
+            (
+                "data/example/tags/block/nested.json",
+                r#"{"replace":true,"values":["minecraft:dirt"]}"#,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(
+            data.configured_carvers["example:test"].carver_type,
+            "minecraft:cave"
+        );
+        assert_eq!(
+            data.configured_carvers["example:test"].config["probability"],
+            0.25
+        );
+        assert!(data.block_tags["example:nested"].replace);
+        let values = &data.block_tags["example:replaceable"].values;
+        assert_eq!(values[1].id, "#example:nested");
+        assert!(!values[2].required);
+        let resolved = data.block_tag_states("example:replaceable").unwrap();
+        let states = harpas_core::block::block_states();
+        assert!(resolved[states.default_state("minecraft:stone").unwrap() as usize]);
+        assert!(resolved[states.default_state("minecraft:dirt").unwrap() as usize]);
+        assert!(!resolved[states.default_state("minecraft:bedrock").unwrap() as usize]);
+        let compiled = carver::CarverConfig::compile("example:test", &data).unwrap();
+        assert_eq!(compiled.probability, 0.25);
+        assert_eq!(compiled.lava_level, VerticalAnchor::BelowTop(10));
+        assert_eq!(compiled.replaceable, resolved);
+        assert!(matches!(
+            compiled.shape,
+            carver::CarverShape::Cave { nether: false, .. }
+        ));
+        let mut unsupported = data.clone();
+        unsupported.configured_carvers["example:test"].config["y"]["type"] =
+            serde_json::json!("example:unknown");
+        assert!(carver::CarverConfig::compile("example:test", &unsupported).is_err());
+
+        let cycle = WorldgenData::from_json_entries([
+            (
+                "data/example/tags/block/a.json",
+                r##"{"values":["#example:b"]}"##,
+            ),
+            (
+                "data/example/tags/block/b.json",
+                r##"{"values":["#example:a"]}"##,
+            ),
+        ])
+        .unwrap();
+        assert!(cycle.block_tag_states("example:a").is_err());
     }
 
     #[test]

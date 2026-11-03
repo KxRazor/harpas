@@ -21,6 +21,7 @@ harpas-core.workspace = true
 harpas-engine.workspace = true
 harpas-java.workspace = true
 harpas-protocol-java.workspace = true
+harpas-worldgen.workspace = true
 log = "0.4.35"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.5"

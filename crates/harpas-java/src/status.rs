@@ -30,6 +30,12 @@ pub struct ServerInfo {
     pub simulation_distance: u32,
     /// Game mode of new players, from `gamemode`.
     pub game_mode: GameMode,
+    /// Overworld spawn block where new players enter the world.
+    pub spawn_position: [i32; 3],
+    /// Seed hash sent to the client for biome rendering.
+    pub hashed_seed: i64,
+    /// Whether the Overworld uses a flat generator.
+    pub is_flat: bool,
     /// Smallest packet that is compressed, from `network-compression-threshold`; negative turns compression
     /// off.
     pub compression_threshold: i32,
@@ -50,6 +56,9 @@ impl Default for ServerInfo {
             view_distance: 10,
             simulation_distance: 10,
             game_mode: GameMode::Survival,
+            spawn_position: [0, 65, 0],
+            hashed_seed: 0,
+            is_flat: true,
             compression_threshold: 256,
         }
     }

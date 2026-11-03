@@ -4,13 +4,19 @@
 //! Generates chunk columns through the `biomes`, `noise`, and `surface` worldgen stages
 //! (`docs/world.md#world-generation`).
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use harpas_core::block::block_states;
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
+use harpas_core::random::{LegacyRandom, WorldgenRandom};
 
 use crate::aquifer::{Aquifer, GlobalFluidPicker};
 use crate::biome::{BiomeManager, MultiNoiseBiomeSource};
+use crate::carver::{
+    CarverConfig, CarverShape, CarvingEnvironment, CarvingMask, CavePart, canyon_should_skip,
+    carve_ellipsoid, cave_should_skip, plan_canyon_path, plan_cave_parts,
+};
 use crate::data::{
     MultiNoiseParameterListDef, NoiseSamplingSettings, WorldgenData, WorldgenDataError,
 };
@@ -267,6 +273,7 @@ pub struct GeneratedChunk {
     sections: Vec<Section>,
     heightmaps: Heightmaps,
     fluid_postprocessing: Vec<(u8, i32, u8)>,
+    carving_mask: Option<CarvingMask>,
 }
 
 impl GeneratedChunk {
@@ -299,6 +306,7 @@ impl GeneratedChunk {
             sections,
             heightmaps: Heightmaps::new(min_y, height),
             fluid_postprocessing: Vec::new(),
+            carving_mask: None,
         }
     }
 
@@ -337,6 +345,11 @@ impl GeneratedChunk {
         &mut self.sections
     }
 
+    /// Takes ownership of the generated sections, from the minimum section upward.
+    pub fn into_sections(self) -> Vec<Section> {
+        self.sections
+    }
+
     /// Current heightmaps of this chunk.
     pub const fn heightmaps(&self) -> &Heightmaps {
         &self.heightmaps
@@ -345,6 +358,15 @@ impl GeneratedChunk {
     /// Local X, absolute Y, and local Z of fluid blocks that require postprocessing after generation.
     pub fn fluid_postprocessing(&self) -> &[(u8, i32, u8)] {
         &self.fluid_postprocessing
+    }
+
+    /// The carving mask once the carving stage has completed.
+    pub fn carving_mask(&self) -> Option<&CarvingMask> {
+        self.carving_mask.as_ref()
+    }
+
+    pub(crate) fn mark_fluid_postprocessing(&mut self, x: u8, y: i32, z: u8) {
+        self.fluid_postprocessing.push((x, y, z));
     }
 
     /// Recomputes all 6 heightmaps by scanning each `(local_x, local_z)` column from top to bottom.
@@ -463,6 +485,7 @@ impl SurfaceChunkAccess for GeneratedChunk {
 /// Vanilla's `NoiseBasedChunkGenerator` compiled for a world seed and noise settings definition.
 #[derive(Debug, Clone)]
 pub struct NoiseBasedChunkGenerator {
+    world_seed: i64,
     graph: CompiledDensityGraph,
     router: CompiledNoiseRouter,
     sampling: NoiseSamplingSettings,
@@ -521,6 +544,7 @@ impl NoiseBasedChunkGenerator {
         let surface_rule = SurfaceRule::compile(&settings.surface_rule, &graph, data)?;
 
         Ok(Self {
+            world_seed,
             graph,
             router,
             sampling: settings.noise,
@@ -627,6 +651,16 @@ impl NoiseBasedChunkGenerator {
     /// Fills base terrain blocks, aquifers, and ore veins in `chunk` (`NoiseBasedChunkGenerator.fillFromNoise` / `doFill`).
     pub fn fill_from_noise(&self, chunk: &mut GeneratedChunk, noise_chunk: &mut NoiseChunk<'_>) {
         let mut aquifer = self.create_aquifer(chunk.chunk_x(), chunk.chunk_z());
+        self.fill_from_noise_with_aquifer(chunk, noise_chunk, &mut aquifer);
+    }
+
+    /// Fills terrain while retaining the aquifer for the subsequent carving pass.
+    pub fn fill_from_noise_with_aquifer(
+        &self,
+        chunk: &mut GeneratedChunk,
+        noise_chunk: &mut NoiseChunk<'_>,
+        aquifer: &mut Aquifer,
+    ) {
         let cell_width = self.sampling.cell_width() as usize;
         let cell_height = self.sampling.cell_height() as usize;
         let cell_count_xz = self.sampling.cell_count_xz();
@@ -731,6 +765,181 @@ impl NoiseBasedChunkGenerator {
         );
     }
 
+    /// Evaluates the surface rule for a block of dirt newly exposed by a carver.
+    pub fn top_material(
+        &self,
+        chunk: &GeneratedChunk,
+        noise_chunk: &mut NoiseChunk<'_>,
+        data: &WorldgenData,
+        position: [i32; 3],
+        above_has_fluid: bool,
+    ) -> Option<u32> {
+        self.surface_system.top_material(
+            chunk,
+            &self.biome_manager,
+            Some(&self.biome_source),
+            noise_chunk,
+            &data.biomes,
+            &self.surface_rule,
+            position,
+            above_has_fluid,
+        )
+    }
+
+    /// Applies one configured carver from `source` to `chunk`, after its start decision has succeeded.
+    /// The same mask and aquifer must be reused for all carvers in a target chunk.
+    #[allow(clippy::too_many_arguments)]
+    pub fn carve_from_source(
+        &self,
+        chunk: &mut GeneratedChunk,
+        noise_chunk: &mut NoiseChunk<'_>,
+        aquifer: &mut Aquifer,
+        data: &WorldgenData,
+        mask: &mut CarvingMask,
+        config: &CarverConfig,
+        random: &mut impl harpas_core::random::RandomSource,
+        source: [i32; 2],
+    ) -> Result<(), WorldgenDataError> {
+        let min_y = chunk.min_y();
+        let height = chunk.height();
+        let (chunk_x, chunk_z) = (chunk.chunk_x(), chunk.chunk_z());
+        let mut environment = GeneratorCarvingEnvironment {
+            generator: self,
+            data,
+            noise_chunk,
+            aquifer,
+        };
+        match config.shape {
+            CarverShape::Cave { nether: false, .. } => {
+                plan_cave_parts(
+                    config,
+                    random,
+                    source[0],
+                    source[1],
+                    min_y,
+                    height,
+                    |part| match part {
+                        CavePart::Room(room) => {
+                            carve_ellipsoid(
+                                chunk,
+                                mask,
+                                config,
+                                room.ellipsoid(),
+                                &mut environment,
+                                |point, _| cave_should_skip(point, f64::from(room.floor_level)),
+                            );
+                        }
+                        CavePart::Tunnel { path, floor_level } => {
+                            path.for_each_ellipsoid(chunk_x, chunk_z, |ellipsoid| {
+                                carve_ellipsoid(
+                                    chunk,
+                                    mask,
+                                    config,
+                                    ellipsoid,
+                                    &mut environment,
+                                    |point, _| cave_should_skip(point, f64::from(floor_level)),
+                                );
+                            });
+                        }
+                    },
+                )
+                .map_err(|message| WorldgenDataError::InvalidDefinition {
+                    context: "cave carver".to_owned(),
+                    message: message.to_owned(),
+                })?;
+            }
+            CarverShape::Canyon(shape) => {
+                let path = plan_canyon_path(config, random, source[0], source[1], min_y, height)
+                    .map_err(|message| WorldgenDataError::InvalidDefinition {
+                        context: "canyon carver".to_owned(),
+                        message: message.to_owned(),
+                    })?;
+                path.for_each_ellipsoid(
+                    &shape,
+                    chunk_x,
+                    chunk_z,
+                    height as usize,
+                    |ellipsoid, widths| {
+                        carve_ellipsoid(
+                            chunk,
+                            mask,
+                            config,
+                            ellipsoid,
+                            &mut environment,
+                            |point, y| canyon_should_skip(point, widths[(y - min_y - 1) as usize]),
+                        );
+                    },
+                );
+            }
+            CarverShape::Cave { nether: true, .. } => {
+                return Err(WorldgenDataError::InvalidDefinition {
+                    context: "nether cave carver".to_owned(),
+                    message: "Nether cave placement is not supported yet".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies the configured carvers of the surrounding source chunks to a surface-generated chunk.
+    pub fn apply_carvers(
+        &self,
+        chunk: &mut GeneratedChunk,
+        noise_chunk: &mut NoiseChunk<'_>,
+        aquifer: &mut Aquifer,
+        data: &WorldgenData,
+    ) -> Result<CarvingMask, WorldgenDataError> {
+        let mut mask = CarvingMask::new(chunk.min_y(), chunk.height());
+        let mut compiled = HashMap::new();
+        let mut last_biome = None;
+        let mut random = WorldgenRandom::new(LegacyRandom::new(0));
+        let chunk_x = chunk.chunk_x();
+        let chunk_z = chunk.chunk_z();
+        for dx in -8_i32..=8 {
+            for dz in -8_i32..=8 {
+                let sx = chunk_x.wrapping_add(dx);
+                let sz = chunk_z.wrapping_add(dz);
+                let climate = noise_chunk.sample_climate(sx.wrapping_mul(4), 0, sz.wrapping_mul(4));
+                let biome_id = self.biome_source.get_noise_biome(climate, &mut last_biome);
+                let (_, biome) = data.biomes.get_index(biome_id as usize).ok_or_else(|| {
+                    WorldgenDataError::InvalidDefinition {
+                        context: "carver biome".to_owned(),
+                        message: format!("unknown biome ID {biome_id}"),
+                    }
+                })?;
+                for (index, name) in biome.carvers.iter().enumerate() {
+                    let name = if name.contains(':') {
+                        name.clone()
+                    } else {
+                        format!("minecraft:{name}")
+                    };
+                    if !compiled.contains_key(&name) {
+                        compiled.insert(name.clone(), CarverConfig::compile(&name, data)?);
+                    }
+                    let config = &compiled[&name];
+                    random.set_large_feature_seed(
+                        self.world_seed.wrapping_add(index as i64),
+                        sx,
+                        sz,
+                    );
+                    if config.starts(&mut random) {
+                        self.carve_from_source(
+                            chunk,
+                            noise_chunk,
+                            aquifer,
+                            data,
+                            &mut mask,
+                            config,
+                            &mut random,
+                            [sx, sz],
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(mask)
+    }
+
     /// Generates a complete chunk up to the `surface` stage (`populate_biomes` + `fill_from_noise` + `build_surface`).
     pub fn generate_chunk_surface(
         &self,
@@ -750,6 +959,71 @@ impl NoiseBasedChunkGenerator {
         self.fill_from_noise(&mut chunk, &mut noise_chunk);
         self.build_surface(&mut chunk, &mut noise_chunk, data);
         chunk
+    }
+
+    /// Generates a chunk through the cave and canyon carving stage.
+    pub fn generate_chunk_carved(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        data: &WorldgenData,
+    ) -> Result<GeneratedChunk, WorldgenDataError> {
+        let mut chunk = GeneratedChunk::new(
+            chunk_x,
+            chunk_z,
+            self.sampling.min_y,
+            self.sampling.height,
+            data.biomes.len().max(1),
+        );
+        let mut noise_chunk = self.create_noise_chunk(chunk_x, chunk_z);
+        let mut aquifer = self.create_aquifer(chunk_x, chunk_z);
+        self.populate_biomes(&mut chunk, &mut noise_chunk);
+        self.fill_from_noise_with_aquifer(&mut chunk, &mut noise_chunk, &mut aquifer);
+        self.build_surface(&mut chunk, &mut noise_chunk, data);
+        chunk.carving_mask =
+            Some(self.apply_carvers(&mut chunk, &mut noise_chunk, &mut aquifer, data)?);
+        Ok(chunk)
+    }
+}
+
+struct GeneratorCarvingEnvironment<'a, 'graph> {
+    generator: &'a NoiseBasedChunkGenerator,
+    data: &'a WorldgenData,
+    noise_chunk: &'a mut NoiseChunk<'graph>,
+    aquifer: &'a mut Aquifer,
+}
+
+impl CarvingEnvironment for GeneratorCarvingEnvironment<'_, '_> {
+    fn compute_substance(&mut self, x: i32, y: i32, z: i32) -> Option<u32> {
+        self.aquifer
+            .compute_substance(self.noise_chunk, x, y, z, 0.0)
+    }
+
+    fn should_schedule_fluid_update(&self) -> bool {
+        self.aquifer.should_schedule_fluid_update()
+    }
+
+    fn has_fluid(&self, state: u32) -> bool {
+        block_heightmap_flags()
+            .get(state as usize)
+            .is_some_and(|flags| flags & FLAG_HAS_FLUID != 0)
+    }
+
+    fn top_material(
+        &mut self,
+        chunk: &GeneratedChunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        above_has_fluid: bool,
+    ) -> Option<u32> {
+        self.generator.top_material(
+            chunk,
+            self.noise_chunk,
+            self.data,
+            [x, y, z],
+            above_has_fluid,
+        )
     }
 }
 

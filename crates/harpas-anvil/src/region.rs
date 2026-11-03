@@ -56,7 +56,7 @@ pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<C
     };
     let file_len = file.metadata()?.len();
     if file_len < (2 * SECTOR) as u64 {
-        return Ok(None);
+        return Err(invalid("incomplete region header"));
     }
     let index = (chunk_x & 31) as u64 + (chunk_z & 31) as u64 * 32;
     file.seek(SeekFrom::Start(index * 4))?;
@@ -487,13 +487,17 @@ mod tests {
     }
 
     #[test]
-    fn a_truncated_header_is_not_treated_as_an_empty_region_for_writing() {
+    fn a_truncated_header_is_not_treated_as_an_empty_region() {
         let folder = Folder::new();
         let path = folder.0.join("r.0.0.mca");
         let damaged = vec![1, 2, 3];
         fs::write(&path, &damaged).unwrap();
         assert_eq!(
             Region::open(&folder.0, 0, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            read_chunk(&folder.0, 0, 0).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
         assert_eq!(fs::read(path).unwrap(), damaged);

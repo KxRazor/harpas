@@ -361,6 +361,48 @@ impl SurfaceSystem {
             .get_value(f64::from(bx), 0.0, f64::from(bz))
     }
 
+    /// Evaluates the surface rule for dirt exposed by a carver at `position`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn top_material<C: SurfaceChunkAccess>(
+        &self,
+        chunk: &C,
+        biome_manager: &BiomeManager,
+        biome_source: Option<&MultiNoiseBiomeSource>,
+        noise_chunk: &mut NoiseChunk<'_>,
+        biomes: &IndexMap<String, BiomeDef>,
+        rule: &SurfaceRule,
+        position: [i32; 3],
+        above_has_fluid: bool,
+    ) -> Option<u32> {
+        let [bx, by, bz] = position;
+        let mut last_rtree_node = None;
+        let mut context = SurfaceContext {
+            system: self,
+            chunk,
+            biome_manager,
+            biome_source,
+            noise_chunk,
+            biomes,
+            last_rtree_node: &mut last_rtree_node,
+            min_y: chunk.min_y(),
+            height: chunk.height(),
+            bx,
+            by,
+            bz,
+            local_x: (bx & 15) as usize,
+            local_z: (bz & 15) as usize,
+            surface_depth: self.get_surface_depth(bx, bz),
+            stone_depth_above: 1,
+            stone_depth_below: 1,
+            water_height: if above_has_fluid { by + 1 } else { i32::MIN },
+            cached_surface_secondary: None,
+            cached_min_surface_level: None,
+            cached_steep: None,
+            cached_biome_id: None,
+        };
+        rule.try_apply(&mut context)
+    }
+
     /// Applies eroded badlands pillars, frozen ocean icebergs, and `rule` across all 16×16 columns of `chunk`
     /// (`SurfaceSystem.buildSurface`).
     #[allow(clippy::too_many_arguments)]

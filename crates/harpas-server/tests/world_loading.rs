@@ -92,7 +92,7 @@ fn start(folder: &Folder) -> (Server, SocketAddr) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_harpas"));
     command
         .current_dir(&folder.0)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (name, _) in std::env::vars_os() {
@@ -119,6 +119,44 @@ fn start(folder: &Folder) -> (Server, SocketAddr) {
         thread::sleep(Duration::from_millis(10));
     };
     (server, address)
+}
+
+fn stop(server: &mut Server) {
+    server
+        .0
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"stop\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(status) = server.0.try_wait().unwrap() {
+            assert!(status.success(), "server failed during shutdown: {status}");
+            return;
+        }
+        assert!(Instant::now() < deadline, "server did not stop and save");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_log(server: &mut Server, log: &std::path::Path, text: &str) {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let contents = fs::read_to_string(log).unwrap_or_default();
+        if contents.contains(text) {
+            return;
+        }
+        assert!(
+            server.0.try_wait().unwrap().is_none(),
+            "server exited before {text}: {contents}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "server did not reach {text}: {contents}"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn login(address: SocketAddr) -> TcpStream {
@@ -265,5 +303,162 @@ fn server_sends_saved_block_states_over_a_real_connection() {
             }
             _ => {}
         }
+    }
+}
+
+#[test]
+fn a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available() {
+    if !loopback_available() {
+        return;
+    }
+    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-environment/.harpas/vanilla-data/26.1.zip");
+    let reference = std::env::var_os("HARPAS_VANILLA_SERVER_DIR").map(PathBuf::from);
+    if !pack.is_file() && reference.is_none() {
+        return;
+    }
+    let folder = Folder::new();
+    fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
+    let properties = "server-ip=127.0.0.1\nserver-port=0\nonline-mode=false\nnetwork-compression-threshold=-1\nview-distance=2\nlevel-seed=42\n";
+    fs::write(folder.0.join("server.properties"), properties).unwrap();
+    let installed = folder.0.join(".harpas/vanilla-data/26.1.zip");
+    fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    if pack.is_file() {
+        fs::copy(pack, installed).unwrap();
+    } else {
+        let reference = reference.as_ref().unwrap();
+        let eula = fs::read_to_string(reference.join("eula.txt")).expect("reference EULA");
+        assert!(eula.lines().any(|line| line.trim() == "eula=true"));
+        let output = Command::new(env!("CARGO_BIN_EXE_harpas"))
+            .args(["vanilla-data", "install", "--from"])
+            .arg(reference.join("server.jar"))
+            .current_dir(&folder.0)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "could not install test data: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let (mut server, address) = start(&folder);
+    let world = folder.0.join("world");
+    assert_eq!(
+        harpas_anvil::read_world_seed(&world).unwrap().unwrap().0,
+        42
+    );
+    let spawn =
+        harpas_anvil::overworld_spawn(&harpas_anvil::read_level(&world).unwrap().unwrap().0)
+            .unwrap();
+    let mut client = login(address);
+    client
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let mut frames = FrameReader::default();
+    login::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)).unwrap();
+    for _ in 0..33 {
+        configuration::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)).unwrap();
+    }
+    let play::clientbound::Packet::Login(login) =
+        play::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)).unwrap()
+    else {
+        panic!("expected play login")
+    };
+    assert!(!login.spawn.is_flat);
+    assert_eq!(
+        login.spawn.hashed_seed,
+        harpas_worldgen::BiomeManager::obfuscate_seed(42)
+    );
+    loop {
+        match play::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)).unwrap() {
+            play::clientbound::Packet::ChunkDataAndUpdateLight(chunk)
+                if (chunk.x, chunk.z) == (0, 0) =>
+            {
+                let mut data = chunk.data.as_slice();
+                assert!(
+                    codec::read_i16(&mut data).unwrap() > 0,
+                    "the lowest section should contain terrain"
+                );
+                break;
+            }
+            play::clientbound::Packet::ChunkBatchFinished(_) => {
+                let ack: play::serverbound::Packet = play::serverbound::ChunkBatchReceived {
+                    chunks_per_tick: 8.0,
+                }
+                .into();
+                client.write_all(&frame(|buf| ack.encode(buf))).unwrap();
+            }
+            _ => {}
+        }
+    }
+    drop(client);
+    stop(&mut server);
+    let region = dimension_dir(&world, "minecraft:overworld").join("region");
+    let chunk = harpas_anvil::read_chunk(&region, 0, 0).unwrap().unwrap();
+    assert_eq!(chunk.get("Status"), Some(&Nbt::from("minecraft:carvers")));
+    fs::write(
+        folder.0.join("server.properties"),
+        properties.replace("level-seed=42", "level-seed=99"),
+    )
+    .unwrap();
+    let (mut restarted, _) = start(&folder);
+    assert_eq!(
+        harpas_anvil::read_world_seed(&world).unwrap().unwrap().0,
+        42
+    );
+    assert_eq!(
+        harpas_anvil::overworld_spawn(&harpas_anvil::read_level(&world).unwrap().unwrap().0),
+        Some(spawn)
+    );
+    stop(&mut restarted);
+
+    if let Some(reference) = reference {
+        let eula = fs::read_to_string(reference.join("eula.txt")).expect("reference EULA");
+        assert!(eula.lines().any(|line| line.trim() == "eula=true"));
+        fs::write(folder.0.join("eula.txt"), "eula=true\n").unwrap();
+        let log = folder.0.join("vanilla-output.log");
+        let output = fs::File::create(&log).unwrap();
+        let mut vanilla = Server(
+            Command::new("java")
+                .args(["-Xms256M", "-Xmx1G", "-jar"])
+                .arg(reference.join("server.jar"))
+                .arg("nogui")
+                .current_dir(&folder.0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::from(output.try_clone().unwrap()))
+                .stderr(Stdio::from(output))
+                .spawn()
+                .unwrap(),
+        );
+        wait_for_log(&mut vanilla, &log, "Done (");
+        vanilla
+            .0
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"forceload add 0 0\n")
+            .unwrap();
+        wait_for_log(&mut vanilla, &log, "Marked chunk [0, 0]");
+        vanilla
+            .0
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"save-all flush\n")
+            .unwrap();
+        wait_for_log(&mut vanilla, &log, "Saved the game");
+        stop(&mut vanilla);
+        let log_contents = fs::read_to_string(&log).unwrap();
+        assert!(
+            !log_contents.contains("Failed to load chunk"),
+            "{log_contents}"
+        );
+        let chunk = harpas_anvil::read_chunk(&region, 0, 0).unwrap().unwrap();
+        assert_eq!(chunk.get("Status"), Some(&Nbt::from("minecraft:full")));
+        assert_eq!(
+            harpas_anvil::read_world_seed(&world).unwrap().unwrap().0,
+            42
+        );
     }
 }

@@ -22,6 +22,7 @@ mod properties;
 mod session;
 mod shutdown;
 mod vanilla_data;
+mod world_generation;
 
 use std::io::{self, Read, Write};
 use std::net::{self, TcpListener, TcpStream};
@@ -164,7 +165,7 @@ fn run() -> io::Result<()> {
     }
     // Every start needs Minecraft's game data, downloaded from Mojang (`docs/world.md`).
     eula::require(Path::new(""), &settings)?;
-    vanilla_data::provision(Path::new(""))?;
+    let data_pack = vanilla_data::provision(Path::new(""))?;
     let block_entities = match block_entity_registry::load(Path::new("")) {
         Ok(Some(registry)) => registry,
         result => {
@@ -179,8 +180,21 @@ fn run() -> io::Result<()> {
     };
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
+    let generator = world_generation::prepare(&world_dir, &properties, &data_pack)?;
+    let mut server_info = server_info(&properties);
+    if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
+        && let Some(spawn) = harpas_anvil::overworld_spawn(&level)
+    {
+        server_info.spawn_position = spawn;
+    }
+    if let Some((seed, _)) = harpas_anvil::read_world_seed(&world_dir)? {
+        server_info.hashed_seed = harpas_worldgen::BiomeManager::obfuscate_seed(seed);
+    }
+    if generator.is_some() {
+        server_info.is_flat = false;
+    }
     let environment = Arc::new(ConnectionEnvironment {
-        info: server_info(&properties),
+        info: server_info,
         block_entities,
     });
     let info = &environment.info;
@@ -214,8 +228,14 @@ fn run() -> io::Result<()> {
     })?;
     // Poll the listener so an asynchronous fatal world error also stops an otherwise idle server.
     listener.set_nonblocking(true)?;
-    let (logic, logic_thread) =
-        harpas_engine::start_with_world(&world_dir, harpas_java::biome_names())?;
+    let (logic, logic_thread) = match generator {
+        Some(generator) => harpas_engine::start_with_world_generator(
+            &world_dir,
+            harpas_java::biome_names(),
+            generator,
+        )?,
+        None => harpas_engine::start_with_world(&world_dir, harpas_java::biome_names())?,
+    };
     let shutdown = Shutdown::new(logic.clone(), logic_thread);
     shutdown.handle_signals()?;
     info!("Listening for Java Edition on {}", listener.local_addr()?);
@@ -346,6 +366,9 @@ fn server_info(properties: &Properties) -> ServerInfo {
             .get("gamemode")
             .and_then(parse_game_mode)
             .unwrap_or(defaults.game_mode),
+        spawn_position: defaults.spawn_position,
+        hashed_seed: defaults.hashed_seed,
+        is_flat: defaults.is_flat,
         compression_threshold: properties.parsed(
             "network-compression-threshold",
             defaults.compression_threshold,

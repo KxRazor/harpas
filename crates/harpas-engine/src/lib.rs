@@ -4,6 +4,7 @@
 
 pub mod player;
 pub mod world;
+pub mod worldgen;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -163,6 +164,18 @@ pub fn start_with_world(
     biomes: &[&str],
 ) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
     start_game(Some(world::World::open(world_dir, biomes)?))
+}
+
+/// Starts the logic thread with a generator for chunks missing from an existing or newly initialized world.
+/// The generator executes on chunk workers and its newly generated chunks are persisted on unload or shutdown.
+pub fn start_with_world_generator(
+    world_dir: &std::path::Path,
+    biomes: &[&str],
+    generator: Arc<world::ChunkGenerator>,
+) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
+    start_game(Some(world::World::open_with_generator(
+        world_dir, biomes, generator,
+    )?))
 }
 
 fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
@@ -518,6 +531,11 @@ impl Game {
             self.leave(old_id);
         }
         let mut player = player::PlayerState::new(id, profile, view_distance, allow_flight, output);
+        if let Some(world) = &self.world {
+            let position = world.spawn_position();
+            player.player.position = position;
+            player.tick_start = position;
+        }
         player.view_distance = initial_view_distance.clamp(2, player.max_view_distance);
         for existing in &self.players {
             player.send(player::Output::AddPlayer(existing.player.profile.clone()));

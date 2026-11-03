@@ -8,8 +8,8 @@
 
 use std::sync::OnceLock;
 
-/// Scale factor converting radians to indices in the 65,536-entry sine table (`65536 / 2π` as `f32`).
-const SIN_SCALE: f32 = 10_430.378_f32;
+/// Scale factor converting radians to indices in the 65,536-entry sine table (`65536 / 2π`).
+const SIN_SCALE: f64 = 65_536.0 / (std::f64::consts::PI * 2.0);
 
 /// Java's truncating 32-bit signed division (`x / y`), where `i32::MIN / -1 == i32::MIN`.
 ///
@@ -440,12 +440,22 @@ fn sin_table() -> &'static [f32; 65_536] {
 
 /// Sine from vanilla's 65,536-entry `f32` lookup table (`Mth.sin`).
 pub fn sin_f32(radians: f32) -> f32 {
-    sin_table()[((radians * SIN_SCALE) as i32 & 0xffff) as usize]
+    sin_f64(f64::from(radians))
 }
 
 /// Cosine from vanilla's 65,536-entry `f32` lookup table (`Mth.cos`).
 pub fn cos_f32(radians: f32) -> f32 {
-    sin_table()[((radians * SIN_SCALE + 16_384.0_f32) as i32 & 0xffff) as usize]
+    cos_f64(f64::from(radians))
+}
+
+/// Sine from vanilla's lookup table for a double-precision angle (`Mth.sin`).
+pub fn sin_f64(radians: f64) -> f32 {
+    sin_table()[((radians * SIN_SCALE) as i32 & 0xffff) as usize]
+}
+
+/// Cosine from vanilla's lookup table for a double-precision angle (`Mth.cos`).
+pub fn cos_f64(radians: f64) -> f32 {
+    sin_table()[((radians * SIN_SCALE + 16_384.0) as i32 & 0xffff) as usize]
 }
 
 /// Vanilla's deterministic block-coordinate hash (`Mth.getSeed`), preserving Java's 32-bit `x * 3129871` overflow.

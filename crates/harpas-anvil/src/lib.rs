@@ -23,4 +23,7 @@ pub use region::{Region, read_chunk, region_of};
 pub use version::{
     DATA_VERSION, MINECRAFT_VERSION, SUPPORTED, VersionError, check_chunk, check_level,
 };
-pub use world::{dimension_dir, read_level, read_player, write_level, write_player};
+pub use world::{
+    dimension_dir, open_or_create_world_gen_settings, overworld_spawn, read_level, read_player,
+    read_world_gen_settings, read_world_seed, write_level, write_player, write_world_gen_settings,
+};

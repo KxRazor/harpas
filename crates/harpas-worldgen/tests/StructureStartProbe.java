@@ -2,8 +2,8 @@
 // starts and references.
 //
 // Arguments: <output> <seed> <radius in chunks> <file of reference chunks, "x z" per line> <structure set>...
-// Writes the base heights of a grid of columns, then the starts of each chunk around the origin, then the
-// references of the listed chunks.
+// Writes the base heights of a grid of columns, then the starts of each chunk around the origin, then those of
+// every ring position of the concentric ring sets, then the references of the listed chunks.
 // Only the given structure sets are possible, so that structures Harpas cannot make yet are left out.
 import java.io.PrintWriter;
 import java.nio.file.Files;
@@ -33,6 +33,7 @@ import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
+import net.minecraft.world.level.levelgen.structure.placement.ConcentricRingsStructurePlacement;
 
 public final class StructureStartProbe {
     public static void main(String[] args) throws Exception {
@@ -50,9 +51,12 @@ public final class StructureStartProbe {
         for (int index = 4; index < args.length; index++) {
             chosen.add(sets.getOrThrow(ResourceKey.create(Registries.STRUCTURE_SET, Identifier.parse(args[index]))));
         }
-        // A normal world's state, but only with the given sets. Their placements are not concentric rings, whose
-        // seed is the only difference from a normal world's.
-        var state = ChunkGeneratorStructureState.createForFlat(random, seed, generator.getBiomeSource(), chosen.stream());
+        // A normal world's state, with the level seed for concentric rings, but only with the given sets.
+        var constructor = ChunkGeneratorStructureState.class.getDeclaredConstructor(RandomState.class,
+            net.minecraft.world.level.biome.BiomeSource.class, long.class, long.class, java.util.List.class);
+        constructor.setAccessible(true);
+        var state = constructor.newInstance(random, generator.getBiomeSource(), seed, seed, chosen);
+        state.ensureStructuresGenerated();
         var height = LevelHeightAccessor.create(-64, 384);
         var factory = PalettedContainerFactory.create(registries);
         var manager = new StructureManager(null, new WorldOptions(seed, true, false), null);
@@ -71,6 +75,16 @@ public final class StructureStartProbe {
                     var proto = new ProtoChunk(new ChunkPos(x, z), UpgradeData.EMPTY, height, factory, null);
                     generator.createStructures(registries, state, manager, proto, null, Level.OVERWORLD);
                     chunks.put(key(x, z), proto);
+                    var starts = new ArrayList<>(proto.getAllStarts().entrySet());
+                    starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
+                    for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());
+                }
+            }
+            for (var set : chosen) {
+                if (!(set.value().placement() instanceof ConcentricRingsStructurePlacement rings)) continue;
+                for (var position : state.getRingPositionsFor(rings)) {
+                    var proto = new ProtoChunk(position, UpgradeData.EMPTY, height, factory, null);
+                    generator.createStructures(registries, state, manager, proto, null, Level.OVERWORLD);
                     var starts = new ArrayList<>(proto.getAllStarts().entrySet());
                     starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
                     for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());

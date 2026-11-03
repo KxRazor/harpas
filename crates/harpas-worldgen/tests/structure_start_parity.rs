@@ -91,6 +91,14 @@ fn compare_seed(reference: &Reference, data: &WorldgenData, seed: i64) -> (usize
             }
         }
     }
+    for set in &sets {
+        for &(x, z) in state.ring_positions(set).unwrap_or_default() {
+            for start in state.starts_in_chunk(&generator, data, x, z).unwrap() {
+                start_count += 1;
+                expected.extend(start_lines(&start));
+            }
+        }
+    }
     let mut reference_count = 0;
     for &(x, z) in &reference_chunks {
         let mut lines: Vec<_> = state
@@ -120,7 +128,7 @@ fn compare_seed(reference: &Reference, data: &WorldgenData, seed: i64) -> (usize
         RADIUS.to_string(),
         chunk_file.display().to_string(),
     ];
-    args.extend(sets);
+    args.extend(sets.iter().cloned());
     reference.java("StructureStartProbe", args);
     let vanilla = read_lines(&output);
     for (index, (vanilla, harpas)) in vanilla.iter().zip(&expected).enumerate() {

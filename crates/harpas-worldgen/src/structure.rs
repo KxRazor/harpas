@@ -14,6 +14,7 @@ use crate::data::{
 use crate::generator::NoiseBasedChunkGenerator;
 
 mod start;
+mod stronghold;
 
 pub use start::{BoundingBox, Direction, StructurePiece, StructureReference, StructureStart};
 

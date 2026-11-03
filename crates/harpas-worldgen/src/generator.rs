@@ -796,6 +796,11 @@ impl NoiseBasedChunkGenerator {
         self.sampling.min_y
     }
 
+    /// The lowest Y of the noise settings.
+    pub const fn min_y(&self) -> i32 {
+        self.sampling.min_y
+    }
+
     /// The sea level of the noise settings.
     pub const fn sea_level(&self) -> i32 {
         self.sea_level

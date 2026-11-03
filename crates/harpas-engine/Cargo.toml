@@ -8,10 +8,9 @@ publish.workspace = true
 
 [dependencies]
 harpas-anvil.workspace = true
-log = "0.4.35"
-
-[dev-dependencies]
 harpas-core.workspace = true
+harpas-worldgen.workspace = true
+log = "0.4.35"
 
 [lints]
 workspace = true

@@ -60,6 +60,7 @@ pub(crate) fn read_with_backup(path: &Path) -> io::Result<Option<(Compound, Sour
     }
     match read_gzip(&with_suffix(path, "_old")) {
         Ok(Some(root)) => Ok(Some((root, Source::Backup))),
+        Err(error) if matches!(current, Ok(None)) => Err(error),
         _ => current.map(|_| None),
     }
 }

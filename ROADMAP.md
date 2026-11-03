@@ -113,7 +113,7 @@ vanilla for the same seed.
         biome zoom in `harpas-worldgen`.
   - [x] Base terrain block filling (`final_density`), `NoiseBasedAquifer`, `OreVeinifier` and `SurfaceSystem`
         (surface rules, conditions, badlands bands/pillars and frozen ocean icebergs).
-  - [ ] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
+  - [x] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
         `harpas-engine`.
 - [ ] Features and structures.
 - [ ] Light engine port.

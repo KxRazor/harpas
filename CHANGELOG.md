@@ -35,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Existing overworld chunks within each player's view are loaded and sent to Java clients in bounded batches,
   including block states, biomes, heightmaps, stored light and verified block entity updates. Their type IDs
   are generated locally from the verified server jar when Java 25 is available; without them the server warns
-  and omits block entities. Missing chunks remain void until generation (`harpas-anvil`, `harpas-engine`,
+  and omits block entities. Missing chunks remain void when generation is unavailable (`harpas-anvil`, `harpas-engine`,
   `harpas-java`, `harpas-server`).
 - Changed overworld chunks are saved from immutable snapshots on a worker during autosave, unloading and
   shutdown. Edits made during a save stay pending, and shutdown reports a save failure (`harpas-engine`,
@@ -60,6 +60,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   icebergs. Sampled terrain and surface chunks, fluid updates, aquifers, ore veins and surface calculations
   are checked against Minecraft 26.1; parity for complete generated worlds remains to be verified
   (`harpas-worldgen`).
+- Normal Overworld generation now applies cave and canyon carvers, heightmaps and fluid postprocessing on
+  chunk workers. New worlds preserve `level-seed`, while existing worlds retain their saved seed; generated
+  chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, structures and
+  lighting remain separate roadmap tasks (`harpas-worldgen`, `harpas-engine`, `harpas-anvil`, `harpas-server`).
 
 ### Changed
 
@@ -72,6 +76,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   completes or discards on start (`harpas-anvil`, `harpas-engine`).
 - Moving pistons in loaded chunks now send their moving block and animation data to Java clients
   (`harpas-server`).
+- Truncated region headers and damaged world-generation backups are no longer treated as missing data, and
+  chunks requiring old-terrain blending are not generated with an incompatible algorithm (`harpas-anvil`,
+  `harpas-engine`).
+- The sine table uses Minecraft 26.1's double-precision angle scaling, including near lookup boundaries
+  (`harpas-core`).
 
 ### Removed
 

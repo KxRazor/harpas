@@ -8,7 +8,10 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 
-use harpas_anvil::{Chunk, Region, VersionError, dimension_dir, read_chunk, recover, region_of};
+use harpas_anvil::{
+    Chunk, Region, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk,
+    read_level, recover, region_of,
+};
 use log::{error, warn};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -75,13 +78,16 @@ pub enum ChunkState {
     Loading,
     /// The chunk was loaded and is owned by the logic thread.
     Loaded(Arc<Chunk>),
-    /// No chunk is stored at these coordinates. Generation is not implemented yet.
+    /// No chunk is stored at these coordinates and no generator was configured.
     Missing,
     /// The chunk exists or its region was accessed, but it could not be read.
     Failed(io::Error),
 }
 
-type Loaded = io::Result<Option<(Chunk, Vec<String>)>>;
+/// Generates a previously missing chunk on a chunk worker, outside the logic thread.
+pub type ChunkGenerator = dyn Fn(ChunkPos) -> io::Result<Chunk> + Send + Sync;
+
+type Loaded = io::Result<Option<(Chunk, Vec<String>, bool)>>;
 type Load = dyn Fn(ChunkPos) -> Loaded + Send + Sync;
 
 struct Completion {
@@ -100,6 +106,65 @@ impl RegionLocks {
     fn for_region(&self, x: i32, z: i32) -> &RwLock<()> {
         let index = (x as u32).wrapping_mul(0x9e37_79b9) ^ (z as u32).wrapping_mul(0x85eb_ca6b);
         &self.0[index as usize % self.0.len()]
+    }
+}
+
+/// Cache neighbor checks without holding a lock across disk reads or terrain generation.
+#[derive(Default)]
+struct GenerationSafety(Mutex<HashMap<ChunkPos, bool>>);
+
+impl GenerationSafety {
+    fn check(&self, dir: &Path, locks: &RegionLocks, target: ChunkPos) -> io::Result<()> {
+        for dx in -8_i32..=8 {
+            for dz in -8_i32..=8 {
+                let pos = ChunkPos {
+                    x: target.x.wrapping_add(dx),
+                    z: target.z.wrapping_add(dz),
+                };
+                let cached = self
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&pos)
+                    .copied();
+                let needs_blending = if let Some(cached) = cached {
+                    cached
+                } else {
+                    let (x, z) = region_of(pos.x, pos.z);
+                    let nbt = {
+                        let _guard = locks
+                            .for_region(x, z)
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner());
+                        read_chunk(dir, pos.x, pos.z)?
+                    };
+                    let needs_blending = if let Some(nbt) = nbt {
+                        check_chunk(&nbt)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                        nbt.get("blending_data").is_some()
+                            || nbt.get("below_zero_retrogen").is_some()
+                    } else {
+                        false
+                    };
+                    let mut cache = self.0.lock().unwrap_or_else(|e| e.into_inner());
+                    if cache.len() >= 8_192 {
+                        cache.clear();
+                    }
+                    cache.insert(pos, needs_blending);
+                    needs_blending
+                };
+                if needs_blending {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!(
+                            "chunk {}, {} needs terrain blending, which is not supported",
+                            pos.x, pos.z
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -132,6 +197,7 @@ type Save = dyn Fn(&SaveJob) -> io::Result<()> + Send + Sync;
 /// Call [`World::flush`] before dropping a world whose chunks may have changed.
 pub struct World {
     region_dir: PathBuf,
+    spawn: [i32; 3],
     chunks: HashMap<ChunkPos, ChunkState>,
     in_flight: HashSet<ChunkPos>,
     changes: HashMap<ChunkPos, Changes>,
@@ -143,6 +209,27 @@ impl World {
     /// Opens the overworld in `world_dir`. `biomes` must be the server's biome registry in numeric ID order.
     /// Reading a region happens only after a chunk is requested by [`World::update`].
     pub fn open(world_dir: &Path, biomes: &[&str]) -> io::Result<Self> {
+        Self::open_inner(world_dir, biomes, None)
+    }
+
+    /// Opens an overworld and generates absent chunks on the bounded chunk worker pool.
+    /// Existing chunks are read unchanged, and newly generated chunks are saved on unload or flush.
+    pub fn open_with_generator(
+        world_dir: &Path,
+        biomes: &[&str],
+        generator: Arc<ChunkGenerator>,
+    ) -> io::Result<Self> {
+        Self::open_inner(world_dir, biomes, Some(generator))
+    }
+
+    fn open_inner(
+        world_dir: &Path,
+        biomes: &[&str],
+        generator: Option<Arc<ChunkGenerator>>,
+    ) -> io::Result<Self> {
+        let spawn = read_level(world_dir)?
+            .and_then(|(data, _)| overworld_spawn(&data))
+            .unwrap_or([0, 65, 0]);
         if !biomes.contains(&"minecraft:plains") {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -164,6 +251,7 @@ impl World {
         let load_biomes = Arc::clone(&biomes);
         let locks = Arc::new(RegionLocks::new());
         let read_locks = Arc::clone(&locks);
+        let generation_safety = GenerationSafety::default();
         let load = Arc::new(move |pos: ChunkPos| {
             let (x, z) = region_of(pos.x, pos.z);
             let nbt = {
@@ -174,10 +262,16 @@ impl World {
                 read_chunk(&source_dir, pos.x, pos.z)?
             };
             let Some(nbt) = nbt else {
-                return Ok(None);
+                return match generator.as_ref() {
+                    Some(generate) => {
+                        generation_safety.check(&source_dir, &read_locks, pos)?;
+                        generate(pos).map(|chunk| Some((chunk, Vec::new(), true)))
+                    }
+                    None => Ok(None),
+                };
             };
             let biomes: Vec<&str> = load_biomes.iter().map(String::as_str).collect();
-            Chunk::read(nbt, &biomes).map(Some)
+            Chunk::read(nbt, &biomes).map(|(chunk, warnings)| Some((chunk, warnings, false)))
         });
         let target_dir = region_dir.clone();
         let save = Arc::new(move |job: &SaveJob| {
@@ -203,12 +297,22 @@ impl World {
             .min(MAX_WORKERS);
         Ok(Self {
             region_dir,
+            spawn,
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
             loader: Loader::start(workers, load)?,
             saver: Saver::start(save)?,
         })
+    }
+
+    pub(crate) fn spawn_position(&self) -> crate::player::Position {
+        crate::player::Position {
+            x: f64::from(self.spawn[0]) + 0.5,
+            y: f64::from(self.spawn[1]),
+            z: f64::from(self.spawn[2]) + 0.5,
+            ..crate::player::Position::default()
+        }
     }
 
     /// The current state of a chunk. A changed chunk stays resident until its pending save finishes.
@@ -361,8 +465,10 @@ impl World {
                         pos.z,
                         self.region_dir.display()
                     );
+                    let mut generated = false;
                     let state = match completion.result {
-                        Ok(Some((chunk, warnings))) => {
+                        Ok(Some((chunk, warnings, is_generated))) => {
+                            generated = is_generated;
                             for warning in warnings {
                                 warn!("{prefix}: {warning}");
                             }
@@ -383,6 +489,15 @@ impl World {
                         }
                     };
                     if wanted_set.contains(&pos) {
+                        if generated {
+                            self.changes.insert(
+                                pos,
+                                Changes {
+                                    revision: 1,
+                                    ..Changes::default()
+                                },
+                            );
+                        }
                         self.chunks.insert(pos, state);
                     }
                 }
@@ -624,6 +739,7 @@ mod tests {
     fn fake_world_with_save(workers: usize, load: Arc<Load>, save: Arc<Save>) -> World {
         World {
             region_dir: PathBuf::from("test"),
+            spawn: [0, 65, 0],
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
@@ -693,6 +809,36 @@ mod tests {
     }
 
     #[test]
+    fn joining_players_start_at_the_saved_overworld_spawn() {
+        let folder = Folder::new();
+        let mut spawn = Compound::new();
+        spawn.insert("dimension", "minecraft:overworld");
+        spawn.insert("pos", Nbt::IntArray(vec![-32, 71, 8]));
+        let mut level = Compound::new();
+        level.insert("DataVersion", DATA_VERSION);
+        level.insert("spawn", spawn);
+        harpas_anvil::write_level(&folder.0, &level).unwrap();
+        let (output, _received) = mpsc::channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        let position = game.players[0].player.position;
+        assert_eq!([position.x, position.y, position.z], [-31.5, 71.0, 8.5]);
+    }
+
+    #[test]
     fn reads_existing_chunks_and_distinguishes_missing_and_corrupt_entries() {
         let folder = Folder::new();
         let existing = ChunkPos { x: -1, z: -33 };
@@ -734,6 +880,135 @@ mod tests {
         );
         assert!(matches!(world.chunk(missing), Some(ChunkState::Missing)));
         assert!(matches!(world.chunk(corrupt), Some(ChunkState::Failed(_))));
+    }
+
+    #[test]
+    fn generates_only_absent_chunks_on_workers_and_persists_them() {
+        let folder = Folder::new();
+        let existing = ChunkPos { x: 0, z: 0 };
+        let corrupt = ChunkPos { x: 33, z: 0 };
+        let truncated = ChunkPos { x: 64, z: 0 };
+        let missing = ChunkPos { x: 2, z: 0 };
+        let failed = ChunkPos { x: 3, z: 0 };
+        save(
+            &folder,
+            &[(existing, DATA_VERSION), (corrupt, DATA_VERSION)],
+        );
+        let path = folder.region_dir().join("r.1.0.mca");
+        let mut data = fs::read(&path).unwrap();
+        data[4..8].copy_from_slice(&0x00000101_u32.to_be_bytes());
+        fs::write(path, data).unwrap();
+        fs::write(folder.region_dir().join("r.2.0.mca"), b"broken").unwrap();
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let generator = {
+            let calls = Arc::clone(&calls);
+            Arc::new(move |pos| {
+                let thread = thread::current();
+                assert!(thread.name().unwrap().starts_with("harpas-chunk-"));
+                calls.lock().unwrap().push(pos);
+                if pos == failed {
+                    return Err(io::Error::other("generation failed"));
+                }
+                let mut generated = chunk(pos, DATA_VERSION);
+                generated.rest.insert("GeneratedMarker", 42);
+                Ok(generated)
+            })
+        };
+        let mut world = World::open_with_generator(&folder.0, BIOMES, generator).unwrap();
+        let wanted = [existing, corrupt, truncated, missing, failed];
+        wait_until(|| {
+            world.update(wanted).unwrap();
+            wanted.iter().all(|pos| {
+                world
+                    .chunk(*pos)
+                    .is_some_and(|state| !matches!(state, ChunkState::Loading))
+            })
+        });
+        assert!(matches!(world.chunk(existing), Some(ChunkState::Loaded(_))));
+        assert!(matches!(world.chunk(corrupt), Some(ChunkState::Failed(_))));
+        assert!(matches!(
+            world.chunk(truncated),
+            Some(ChunkState::Failed(_))
+        ));
+        assert!(matches!(world.chunk(failed), Some(ChunkState::Failed(_))));
+        assert!(world.changes.contains_key(&missing));
+        assert!(!world.changes.contains_key(&existing));
+        let mut generated_positions = calls.lock().unwrap().clone();
+        generated_positions.sort_by_key(|pos| pos.x);
+        assert_eq!(generated_positions, vec![missing, failed]);
+        world.flush().unwrap();
+        drop(world);
+
+        let mut reopened = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut reopened, &[existing, missing]);
+        let Some(ChunkState::Loaded(chunk)) = reopened.chunk(missing) else {
+            panic!("generated chunk was not persisted");
+        };
+        assert_eq!(chunk.rest.get("GeneratedMarker"), Some(&Nbt::Int(42)));
+        let Some(ChunkState::Loaded(chunk)) = reopened.chunk(existing) else {
+            panic!("existing chunk was not loaded");
+        };
+        assert!(chunk.rest.get("GeneratedMarker").is_none());
+    }
+
+    #[test]
+    fn discarded_generated_results_are_not_saved() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, received) = mpsc::channel();
+        let load = {
+            let gate = Arc::clone(&gate);
+            Arc::new(move |pos| {
+                started.send(()).unwrap();
+                let (lock, signal) = &*gate;
+                let guard = lock.lock().unwrap();
+                let _ = signal
+                    .wait_timeout_while(guard, Duration::from_secs(3), |open| !*open)
+                    .unwrap();
+                Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), true)))
+            })
+        };
+        let mut world = fake_world(1, load);
+        let pos = ChunkPos { x: 0, z: 0 };
+        world.update([pos]).unwrap();
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+        world.update([]).unwrap();
+        let (lock, signal) = &*gate;
+        *lock.lock().unwrap() = true;
+        signal.notify_all();
+        wait_until(|| {
+            world.update([]).unwrap();
+            world.in_flight.is_empty()
+        });
+        assert!(world.chunk(pos).is_none());
+        assert!(world.changes.is_empty());
+    }
+
+    #[test]
+    fn generation_refuses_neighbors_that_require_terrain_blending() {
+        let folder = Folder::new();
+        let old = ChunkPos { x: 0, z: 0 };
+        let missing = ChunkPos { x: 1, z: 0 };
+        let mut previous = chunk(old, DATA_VERSION);
+        previous.rest.insert("blending_data", Compound::new());
+        let mut region = Region::open(&folder.region_dir(), 0, 0).unwrap();
+        region.set_chunk(old.x, old.z, &previous.to_nbt(BIOMES));
+        region.save().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let generator = {
+            let calls = Arc::clone(&calls);
+            Arc::new(move |pos| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(chunk(pos, DATA_VERSION))
+            })
+        };
+        let mut world = World::open_with_generator(&folder.0, BIOMES, generator).unwrap();
+        wait_until(|| {
+            world.update([missing]).unwrap();
+            matches!(world.chunk(missing), Some(ChunkState::Failed(_)))
+        });
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert!(world.changes.is_empty());
     }
 
     #[test]
@@ -779,7 +1054,7 @@ mod tests {
                 let _ = signal
                     .wait_timeout_while(guard, Duration::from_secs(3), |open| !*open)
                     .unwrap();
-                Ok(Some((chunk(pos, DATA_VERSION), Vec::new())))
+                Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false)))
             })
         };
         let mut world = fake_world(2, load);
@@ -867,7 +1142,7 @@ mod tests {
             let calls = Arc::clone(&calls);
             Arc::new(move |pos| {
                 calls.fetch_add(1, Ordering::Relaxed);
-                Ok(Some((chunk(pos, DATA_VERSION), Vec::new())))
+                Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false)))
             })
         };
         let save = {
@@ -923,7 +1198,7 @@ mod tests {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let (started, received) = mpsc::channel();
         let writes = Arc::new(Mutex::new(HashSet::new()));
-        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new()))));
+        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
         let save = {
             let gate = Arc::clone(&gate);
             let writes = Arc::clone(&writes);
@@ -965,7 +1240,7 @@ mod tests {
     #[test]
     fn a_failed_save_keeps_the_chunk_dirty_for_a_retry() {
         let attempts = Arc::new(AtomicUsize::new(0));
-        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new()))));
+        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
         let save = {
             let attempts = Arc::clone(&attempts);
             Arc::new(move |_: &SaveJob| {

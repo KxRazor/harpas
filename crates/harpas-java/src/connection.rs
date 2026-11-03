@@ -25,9 +25,6 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// The data pack whose registry data the client must have: Harpas sends registry entries without their data.
 const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", v26_1::MINECRAFT_VERSION);
-/// Temporary spawn position: above the middle of chunk (0, 0).
-const SPAWN: (f64, f64, f64) = (0.5, 65.0, 0.5);
-
 fn unix_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -903,11 +900,11 @@ impl Connection {
                 spawn: play::SpawnInfo {
                     dimension_type,
                     dimension: "minecraft:overworld".to_owned(),
-                    hashed_seed: 0,
+                    hashed_seed: info.hashed_seed,
                     game_mode: info.game_mode,
                     previous_game_mode: -1,
                     is_debug: false,
-                    is_flat: true,
+                    is_flat: info.is_flat,
                     death_location: None,
                     portal_cooldown: 0,
                     sea_level: 63,
@@ -964,14 +961,23 @@ impl Connection {
             play::clientbound::SetDefaultSpawnPosition {
                 position: play::GlobalPos {
                     dimension: "minecraft:overworld".to_owned(),
-                    position: play::BlockPos { x: 0, y: 64, z: 0 },
+                    position: play::BlockPos {
+                        x: info.spawn_position[0],
+                        y: info.spawn_position[1],
+                        z: info.spawn_position[2],
+                    },
                 },
                 yaw: 0.0,
                 pitch: 0.0,
             }
             .into(),
         );
-        let (x, y, z) = SPAWN;
+        let [spawn_x, spawn_y, spawn_z] = info.spawn_position;
+        let (x, y, z) = (
+            f64::from(spawn_x) + 0.5,
+            f64::from(spawn_y),
+            f64::from(spawn_z) + 0.5,
+        );
         self.send_play(
             play::clientbound::SynchronizePlayerPosition {
                 teleport_id: 1,

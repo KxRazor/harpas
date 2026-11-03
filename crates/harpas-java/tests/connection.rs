@@ -338,6 +338,27 @@ fn offline_players_join_the_void_world() {
 }
 
 #[test]
+fn play_login_uses_the_world_seed_hash_and_saved_spawn() {
+    let mut info = offline();
+    info.spawn_position = [-32, 71, 8];
+    info.hashed_seed = 123_456;
+    info.is_flat = false;
+    let mut connection = playing(&info, Connection::new(Arc::new(ServerKey::generate())));
+    let packets: Vec<_> = frames(&connection.take_output())
+        .iter()
+        .map(|frame| play::clientbound::Packet::decode(frame).unwrap())
+        .collect();
+    assert!(packets.iter().any(|packet| matches!(packet,
+        play::clientbound::Packet::Login(login) if login.spawn.hashed_seed == 123_456 && !login.spawn.is_flat)));
+    assert!(packets.iter().any(|packet| matches!(packet,
+        play::clientbound::Packet::SetDefaultSpawnPosition(spawn)
+        if spawn.position.position.x == -32 && spawn.position.position.y == 71 && spawn.position.position.z == 8)));
+    assert!(packets.iter().any(|packet| matches!(packet,
+        play::clientbound::Packet::SynchronizePlayerPosition(pos)
+        if pos.x == -31.5 && pos.y == 71.0 && pos.z == 8.5)));
+}
+
+#[test]
 fn play_uses_the_assigned_entity_id_and_forwards_movement() {
     let info = offline();
     let mut connection = playing(

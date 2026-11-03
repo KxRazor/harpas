@@ -4,13 +4,14 @@
 //! (`.harpas/vanilla-data/26.1.zip`), a directory on disk, or an in-memory map of relative paths to JSON strings.
 //! No Mojang data is embedded in the binary (`docs/world.md#21-generated-worldgen-data`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek};
 use std::path::Path;
 
+use harpas_core::block::block_states;
 use harpas_core::noise::NoiseParameters;
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -237,6 +238,33 @@ pub struct WorldPresetDef {
     pub dimensions: IndexMap<String, DimensionDef>,
 }
 
+/// A configured cave or canyon carver, retaining its data-driven settings for compilation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfiguredCarverDef {
+    /// Registered carver type, such as `minecraft:cave` or `minecraft:canyon`.
+    pub carver_type: String,
+    /// The carver's configuration object.
+    pub config: Value,
+}
+
+/// One block or nested block-tag reference in a data pack tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockTagEntry {
+    /// Block identifier, or a tag identifier prefixed with `#`.
+    pub id: String,
+    /// Whether an unresolved identifier is an error.
+    pub required: bool,
+}
+
+/// A block tag used by configured carvers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockTagDef {
+    /// Whether this tag replaces an earlier definition in a layered data pack.
+    pub replace: bool,
+    /// Block and nested tag references, in data-pack order.
+    pub values: Vec<BlockTagEntry>,
+}
+
 /// All worldgen registries loaded from a datapack (`26.1.zip` or directory).
 #[derive(Debug, Clone, Default)]
 pub struct WorldgenData {
@@ -252,6 +280,10 @@ pub struct WorldgenData {
     pub parameter_lists: IndexMap<String, MultiNoiseParameterListDef>,
     /// `minecraft:worldgen/world_preset` definitions keyed by resource location (e.g. `"minecraft:normal"`).
     pub world_presets: IndexMap<String, WorldPresetDef>,
+    /// Configured cave and canyon carvers, keyed by resource location.
+    pub configured_carvers: IndexMap<String, ConfiguredCarverDef>,
+    /// Block tags, including nested tags used to select replaceable terrain.
+    pub block_tags: IndexMap<String, BlockTagDef>,
 }
 
 impl WorldgenData {
@@ -343,6 +375,64 @@ impl WorldgenData {
                     let preset = parse_world_preset(&resource_id, &json)?;
                     data.world_presets.insert(resource_id, preset);
                 }
+                "configured_carver" => {
+                    let obj = json.as_object().ok_or_else(|| {
+                        invalid_def(&resource_id, "configured carver must be an object")
+                    })?;
+                    let carver_type = req_str(obj, "type", &resource_id)?.to_string();
+                    let config = req_field(obj, "config", &resource_id)?.clone();
+                    if !config.is_object() {
+                        return Err(invalid_def(&resource_id, "carver config must be an object"));
+                    }
+                    data.configured_carvers.insert(
+                        resource_id,
+                        ConfiguredCarverDef {
+                            carver_type,
+                            config,
+                        },
+                    );
+                }
+                "block_tag" => {
+                    let obj = json
+                        .as_object()
+                        .ok_or_else(|| invalid_def(&resource_id, "block tag must be an object"))?;
+                    let replace = match obj.get("replace") {
+                        Some(value) => value.as_bool().ok_or_else(|| {
+                            invalid_def(&resource_id, "block tag `replace` must be a boolean")
+                        })?,
+                        None => false,
+                    };
+                    let entries = obj.get("values").and_then(Value::as_array).ok_or_else(|| {
+                        invalid_def(&resource_id, "block tag has no values array")
+                    })?;
+                    let mut values = Vec::with_capacity(entries.len());
+                    for entry in entries {
+                        let (id, required) = if let Some(id) = entry.as_str() {
+                            (id, true)
+                        } else {
+                            let obj = entry.as_object().ok_or_else(|| {
+                                invalid_def(&resource_id, "invalid block tag entry")
+                            })?;
+                            let id = req_str(obj, "id", &resource_id)?;
+                            let required = match obj.get("required") {
+                                Some(value) => value.as_bool().ok_or_else(|| {
+                                    invalid_def(
+                                        &resource_id,
+                                        "block tag `required` must be a boolean",
+                                    )
+                                })?,
+                                None => true,
+                            };
+                            (id, required)
+                        };
+                        values.push(BlockTagEntry {
+                            id: id.to_string(),
+                            required,
+                        });
+                    }
+                    data.block_tags
+                        .insert(resource_id, BlockTagDef { replace, values });
+                }
                 _ => {}
             }
         }
@@ -363,6 +453,75 @@ impl WorldgenData {
             .get_index(biome_id as usize)
             .map(|(name, _)| name.as_str())
     }
+
+    /// Resolves a block tag and nested references to a membership table indexed by global block state ID.
+    /// Unknown required entries and cyclic references are errors; optional missing entries are skipped.
+    pub fn block_tag_states(&self, tag: &str) -> Result<Vec<bool>, WorldgenDataError> {
+        let mut blocks = HashSet::new();
+        self.collect_block_tag(
+            tag.strip_prefix('#').unwrap_or(tag),
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            &mut blocks,
+        )?;
+        let states = block_states();
+        Ok((0..states.len())
+            .map(|id| {
+                states
+                    .properties(id)
+                    .is_some_and(|(name, _)| blocks.contains(name))
+            })
+            .collect())
+    }
+
+    fn collect_block_tag(
+        &self,
+        tag: &str,
+        active: &mut HashSet<String>,
+        done: &mut HashSet<String>,
+        blocks: &mut HashSet<String>,
+    ) -> Result<(), WorldgenDataError> {
+        let tag = resource_name(tag);
+        if done.contains(&tag) {
+            return Ok(());
+        }
+        let definition = self
+            .block_tags
+            .get(&tag)
+            .ok_or_else(|| invalid_def(&tag, "unknown block tag"))?;
+        if !active.insert(tag.clone()) {
+            return Err(invalid_def(&tag, "cyclic block tag reference"));
+        }
+        for entry in &definition.values {
+            if let Some(child) = entry.id.strip_prefix('#') {
+                let child = resource_name(child);
+                if !entry.required && !self.block_tags.contains_key(&child) {
+                    continue;
+                }
+                self.collect_block_tag(&child, active, done, blocks)?;
+            } else {
+                let name = resource_name(&entry.id);
+                if block_states().default_state(&name).is_none() {
+                    if entry.required {
+                        return Err(invalid_def(&tag, format!("unknown block `{name}`")));
+                    }
+                    continue;
+                }
+                blocks.insert(name);
+            }
+        }
+        active.remove(&tag);
+        done.insert(tag);
+        Ok(())
+    }
+}
+
+fn resource_name(name: &str) -> String {
+    if name.contains(':') {
+        name.to_string()
+    } else {
+        format!("minecraft:{name}")
+    }
 }
 
 fn is_relevant_worldgen_json(path: &str) -> bool {
@@ -372,6 +531,12 @@ fn is_relevant_worldgen_json(path: &str) -> bool {
 fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
     let rest = path.strip_prefix("data/")?;
     let (namespace, after_ns) = rest.split_once('/')?;
+    if let Some(rel_id) = after_ns
+        .strip_prefix("tags/block/")
+        .and_then(|path| path.strip_suffix(".json"))
+    {
+        return Some((namespace, "block_tag", rel_id));
+    }
     let after_worldgen = after_ns.strip_prefix("worldgen/")?;
     let (category, file_part) = after_worldgen.split_once('/')?;
     let rel_id = file_part.strip_suffix(".json")?;
@@ -381,6 +546,7 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
         | "noise_settings"
         | "biome"
         | "multi_noise_biome_source_parameter_list"
+        | "configured_carver"
         | "world_preset" => Some((namespace, category, rel_id)),
         _ => None,
     }

@@ -189,8 +189,10 @@ and the owner **accepts it once**:
 - **One-to-one port of vanilla's generator**, driven by the extracted data: noise router and density
   functions, noise settings, biome sources, surface rules, aquifers, carvers, features and structures.
   - `harpas-worldgen` loads `worldgen/noise`, `worldgen/density_function`, `worldgen/noise_settings`,
-    `worldgen/biome`, `worldgen/multi_noise_biome_source_parameter_list` and `worldgen/world_preset` from
-    `.harpas/vanilla-data/26.1.zip` (or an extracted datapack directory).
+    `worldgen/biome`, `worldgen/multi_noise_biome_source_parameter_list`, `worldgen/world_preset`,
+    `worldgen/configured_carver` and block tags from `.harpas/vanilla-data/26.1.zip` (or an extracted datapack
+    directory). Configured carvers compile their distributions and recursively resolve replaceable block tags;
+    unsupported provider types or debug carving are reported as errors.
   - All 30 density function types of 26.1 are compiled into a deduplicated DAG (`CompiledDensityGraph`) with
     `RandomState` seeding (`XoroshiroRandom::new(world_seed).fork_positional()` or `LegacyRandom` when
     `legacy_random_source` is set) and 32-bit `f32` `CubicSpline` evaluation.
@@ -203,19 +205,32 @@ and the owner **accepts it once**:
     `NoiseBasedAquifer` (`16×12×16` grid with 4-nearest cell lookup, 13-offset preliminary surface sampling,
     deep dark suppression and 3-pair barrier pressure) for `density <= 0.0` and `OreVeinifier` (`vein_toggle`,
     `vein_ridged`, `vein_gap`) for solid blocks and recording fluid positions that need postprocessing. It tracks
-    six heightmaps during generation; their predicates for arbitrary gameplay blocks remain provisional until
-    the heightmap work in the next roadmap task.
+    six heightmaps during generation. Their predicates for terrain and carver blocks are compared with vanilla;
+    classification of arbitrary gameplay blocks remains provisional until gameplay block updates are implemented.
   - `SurfaceSystem` applies all 4 surface rule types (`block`, `sequence`, `condition`, `bandlands`) and all 11
     condition types (`biome`, `noise_threshold`, `vertical_gradient`, `y_above`, `water`, `temperature`, `steep`,
     `not`, `hole`, `above_preliminary_surface`, `stone_depth` for both `floor` and `ceiling`), plus eroded
     badlands hoodoo pillars, the 192-layer terracotta band table (`minecraft:clay_bands`) and frozen ocean
     icebergs. The vanilla parity harness compares hashes of base terrain and surface blocks across several
     chunks, including eroded badlands and frozen ocean, along with fluid postprocessing, aquifer samples, ore
-    veins, surface depth and bands. It does not establish parity for every seed, biome or generated-world stage.
+    veins, surface depth and bands. The same harness compares the six packed heightmaps, carver decisions,
+    paths and masks, and complete carver output against vanilla. It does not establish parity for every seed,
+    biome or generated-world stage.
+  - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
+    saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
+    Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by
+    this pipeline. Generation is refused near saved chunks that require blending with older terrain.
+  - The generation settings and seed live in `data/minecraft/world_gen_settings.dat`, separately from
+    `level.dat`. A new world's seed comes from `level-seed` or a random value and is saved before generation;
+    existing settings and unknown fields are preserved. If an existing world lacks generation settings,
+    uses another Overworld generator or enables unsupported data packs, its existing chunks can still load but
+    missing chunks are not generated. A new world's initial spawn is the surface at the origin, pending the
+    vanilla spawn-selection work.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
-- **Parallel:** chunks are generated on the worker pool, stage by stage. Each stage of a chunk depends only on
-  the seed, the data and earlier stages of nearby chunks, so parallel generation gives the same result.
+- **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
+  status `minecraft:carvers`, so vanilla can continue the later stages. Features, structures and lighting
+  remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline

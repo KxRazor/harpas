@@ -44,3 +44,4 @@ jobs:
         run: |
           cargo test -p harpas-server --test block_entity_parity -- --nocapture
           cargo test -p harpas-worldgen --test vanilla_parity -- --nocapture
+          cargo test -p harpas-server --test world_loading a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available -- --nocapture

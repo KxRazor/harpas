@@ -818,8 +818,8 @@ public final class Probe {
         h = FNV_OFFSET;
         for (int i = -1000; i <= 1000; i++) {
             float rad = i * 0.1234567f;
-            float s = sinTable[(int) (rad * 10430.378f) & 0xffff];
-            float c = sinTable[(int) (rad * 10430.378f + 16384.0f) & 0xffff];
+            float s = sinTable[(int) ((double) rad * (65536.0 / (2.0 * Math.PI))) & 0xffff];
+            float c = sinTable[(int) ((double) rad * (65536.0 / (2.0 * Math.PI)) + 16384.0) & 0xffff];
             h = mix(h, Float.floatToIntBits(s));
             h = mix(h, Float.floatToIntBits(c));
         }

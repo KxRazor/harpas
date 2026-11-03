@@ -75,6 +75,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   not use them yet (`harpas-worldgen`).
 - Stronghold starts with vanilla's piece layout, checked against Minecraft 26.1 at every ring position. The
   generator does not use them yet (`harpas-worldgen`).
+- Structure templates and template pools are read from the vanilla data: template sizes, bounding boxes,
+  palettes and jigsaw blocks in every rotation, and pool elements with their weights, checked against Minecraft
+  26.1 (`harpas-worldgen`).
 
 ### Changed
 

@@ -276,6 +276,79 @@ pub struct StructureDef {
     pub terrain_adaptation: String,
 }
 
+/// Parsed contents of a `worldgen/template_pool/<name>.json` file (`StructureTemplatePool`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplatePoolDef {
+    /// The pool to use when none of this pool's elements fit.
+    pub fallback: String,
+    /// The elements and their weights, in data-pack order.
+    pub elements: Vec<(PoolElementDef, i32)>,
+}
+
+impl TemplatePoolDef {
+    /// Each element repeated by its weight, in data-pack order (`StructureTemplatePool.templates`).
+    pub fn templates(&self) -> Vec<&PoolElementDef> {
+        self.elements
+            .iter()
+            .flat_map(|(element, weight)| std::iter::repeat_n(element, *weight as usize))
+            .collect()
+    }
+
+    /// The weighted elements in a random order (`StructureTemplatePool.getShuffledTemplates`).
+    pub fn shuffled_templates(
+        &self,
+        random: &mut impl harpas_core::random::RandomSource,
+    ) -> Vec<&PoolElementDef> {
+        let mut templates = self.templates();
+        for size in (2..=templates.len()).rev() {
+            let other = random.next_int_bounded(size as i32) as usize;
+            templates.swap(size - 1, other);
+        }
+        templates
+    }
+}
+
+/// How a pool element follows the terrain (`StructureTemplatePool.Projection`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Projection {
+    /// Placed as it is.
+    Rigid,
+    /// Each column moved to the terrain's surface.
+    TerrainMatching,
+}
+
+/// An element of a template pool (`StructurePoolElement`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolElementDef {
+    /// `minecraft:single_pool_element`, or `minecraft:legacy_single_pool_element` when `legacy`.
+    Single {
+        /// The template's resource location.
+        location: String,
+        /// The processor list's resource location, or `None` when it is written inline.
+        processors: Option<String>,
+        /// How it follows the terrain.
+        projection: Projection,
+        /// Whether it is the legacy variant, which places air blocks differently.
+        legacy: bool,
+    },
+    /// `minecraft:feature_pool_element`: a placed feature instead of a template.
+    Feature {
+        /// The placed feature's resource location.
+        feature: String,
+        /// How it follows the terrain.
+        projection: Projection,
+    },
+    /// `minecraft:list_pool_element`: several elements placed at the same spot.
+    List {
+        /// The elements, which take the list's projection.
+        elements: Vec<PoolElementDef>,
+        /// How they follow the terrain.
+        projection: Projection,
+    },
+    /// `minecraft:empty_pool_element`: nothing.
+    Empty,
+}
+
 /// Parsed contents of a `worldgen/structure_set/<name>.json` file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructureSetDef {
@@ -391,6 +464,8 @@ pub struct WorldgenData {
     pub structures: IndexMap<String, StructureDef>,
     /// `minecraft:worldgen/structure_set` definitions in lexicographical order.
     pub structure_sets: IndexMap<String, StructureSetDef>,
+    /// `minecraft:worldgen/template_pool` definitions, the pieces jigsaw structures choose from.
+    pub template_pools: IndexMap<String, TemplatePoolDef>,
 }
 
 impl WorldgenData {
@@ -510,6 +585,12 @@ impl WorldgenData {
                 "structure" => {
                     data.structures
                         .insert(resource_id.clone(), parse_structure(&resource_id, &json)?);
+                }
+                "template_pool" => {
+                    data.template_pools.insert(
+                        resource_id.clone(),
+                        parse_template_pool(&resource_id, &json)?,
+                    );
                 }
                 "structure_set" => {
                     data.structure_sets.insert(
@@ -726,6 +807,104 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
     })
 }
 
+fn parse_template_pool(context: &str, json: &Value) -> Result<TemplatePoolDef, WorldgenDataError> {
+    let fallback = json
+        .get("fallback")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_def(context, "template pool has no fallback"))?
+        .to_string();
+    let elements = json
+        .get("elements")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_def(context, "template pool has no elements"))?
+        .iter()
+        .map(|entry| {
+            let weight = entry
+                .get("weight")
+                .and_then(Value::as_i64)
+                .filter(|weight| (1..=150).contains(weight))
+                .ok_or_else(|| invalid_def(context, "pool element weight must be from 1 to 150"))?;
+            let element = entry
+                .get("element")
+                .ok_or_else(|| invalid_def(context, "pool entry has no element"))?;
+            Ok((parse_pool_element(context, element)?, weight as i32))
+        })
+        .collect::<Result<_, WorldgenDataError>>()?;
+    Ok(TemplatePoolDef { fallback, elements })
+}
+
+fn parse_pool_element(context: &str, json: &Value) -> Result<PoolElementDef, WorldgenDataError> {
+    let projection = || match json.get("projection").and_then(Value::as_str) {
+        Some("rigid") => Ok(Projection::Rigid),
+        Some("terrain_matching") => Ok(Projection::TerrainMatching),
+        _ => Err(invalid_def(context, "pool element has no valid projection")),
+    };
+    let string = |key: &str| {
+        json.get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| invalid_def(context, format!("pool element has no `{key}`")))
+    };
+    let element_type = json.get("element_type").and_then(Value::as_str);
+    Ok(match element_type {
+        Some(kind @ ("minecraft:single_pool_element" | "minecraft:legacy_single_pool_element")) => {
+            PoolElementDef::Single {
+                location: string("location")?,
+                processors: json
+                    .get("processors")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                projection: projection()?,
+                legacy: kind == "minecraft:legacy_single_pool_element",
+            }
+        }
+        Some("minecraft:feature_pool_element") => PoolElementDef::Feature {
+            feature: string("feature")?,
+            projection: projection()?,
+        },
+        Some("minecraft:list_pool_element") => {
+            let projection = projection()?;
+            let elements = json
+                .get("elements")
+                .and_then(Value::as_array)
+                .filter(|elements| !elements.is_empty())
+                .ok_or_else(|| invalid_def(context, "list pool element has no elements"))?
+                .iter()
+                .map(|element| {
+                    let mut element = parse_pool_element(context, element)?;
+                    element.set_projection(projection);
+                    Ok(element)
+                })
+                .collect::<Result<_, WorldgenDataError>>()?;
+            PoolElementDef::List {
+                elements,
+                projection,
+            }
+        }
+        Some("minecraft:empty_pool_element") => PoolElementDef::Empty,
+        _ => return Err(invalid_def(context, "unknown pool element type")),
+    })
+}
+
+impl PoolElementDef {
+    /// `StructurePoolElement.setProjection`, which a list passes on to its elements.
+    fn set_projection(&mut self, new: Projection) {
+        match self {
+            Self::Single { projection, .. } | Self::Feature { projection, .. } => *projection = new,
+            Self::List {
+                elements,
+                projection,
+            } => {
+                *projection = new;
+                for element in elements {
+                    element.set_projection(new);
+                }
+            }
+            Self::Empty => {}
+        }
+    }
+}
+
 fn parse_structure_set(context: &str, json: &Value) -> Result<StructureSetDef, WorldgenDataError> {
     let integer = |obj: &Value, key: &str| -> Result<i32, WorldgenDataError> {
         obj.get(key)
@@ -867,6 +1046,7 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
         | "configured_carver"
         | "structure"
         | "structure_set"
+        | "template_pool"
         | "world_preset" => Some((namespace, category, rel_id)),
         _ => None,
     }

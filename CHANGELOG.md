@@ -40,6 +40,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Changed overworld chunks are saved from immutable snapshots on a worker during autosave, unloading and
   shutdown. Edits made during a save stay pending, and shutdown reports a save failure (`harpas-engine`,
   `harpas-server`).
+- Vanilla-exact deterministic random generators (`LegacyRandom`, `XoroshiroRandom`, Stafford `Mix13` and MD5
+  positional seeding, `RandomSequence` and `WorldgenRandom`) and Java math helpers (`floorDiv`/`floorMod`,
+  masked shifts, `Math.round`, deterministic `ln`, interpolation and the 65,536-entry `f32` sine table),
+  checked bit for bit against Java 25 (`harpas-core`).
 
 ### Changed
 

@@ -105,7 +105,7 @@ vanilla for the same seed.
   - [x] Save chunk snapshots on workers, including non-blocking autosave, unloading and shutdown.
 - [x] Make saves crash-consistent across region files and external `.mcc` chunks, including recovery and tests
       for interruptions during each write stage.
-- [ ] Vanilla-exact random generators and Java math semantics.
+- [x] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
 - [ ] Features and structures.
 - [ ] Light engine port.

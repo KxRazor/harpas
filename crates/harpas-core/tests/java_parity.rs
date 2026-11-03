@@ -1,4 +1,5 @@
-//! Differential checks of `harpas_core::math` and `harpas_core::random` against a Java runtime (`javac`/`java`).
+//! Differential checks of `harpas_core::math`, `harpas_core::random` and `harpas_core::noise` against a Java
+//! runtime (`javac`/`java`).
 //!
 //! Uses only standard Java SE classes (`java.util.Random`, `java.lang.Math`, `java.lang.StrictMath`,
 //! `java.security.MessageDigest`), never Mojang's files or code.
@@ -10,6 +11,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_core::math;
+use harpas_core::noise::{
+    BlendedNoise, ImprovedNoise, NormalNoise, PerlinNoise, PerlinSimplexNoise, SimplexNoise,
+};
 use harpas_core::random::{
     LegacyRandom, RandomSequence, RandomSource, Seed128, WorldgenRandom, XoroshiroRandom,
 };
@@ -197,6 +201,508 @@ public final class Probe {
         }
     }
 
+    private interface Rng {
+        int nextInt();
+        int nextInt(int bound);
+        long nextLong();
+        double nextDouble();
+        PosRng forkPositional();
+        default void consumeCount(int count) {
+            for (int i = 0; i < count; i++) nextInt();
+        }
+    }
+
+    private interface PosRng {
+        Rng fromHashOf(String name) throws Exception;
+    }
+
+    private static final class LegacyRng implements Rng {
+        private final Random inner;
+
+        LegacyRng(long seed) {
+            this.inner = new Random(seed);
+        }
+
+        @Override public int nextInt() { return inner.nextInt(); }
+        @Override public int nextInt(int bound) { return inner.nextInt(bound); }
+        @Override public long nextLong() { return inner.nextLong(); }
+        @Override public double nextDouble() { return inner.nextDouble(); }
+        @Override public PosRng forkPositional() {
+            long forkSeed = nextLong();
+            return name -> new LegacyRng(((long) name.hashCode()) ^ forkSeed);
+        }
+    }
+
+    private static final class XoroRng implements Rng {
+        private final Xoro inner;
+
+        XoroRng(Xoro inner) {
+            this.inner = inner;
+        }
+
+        static XoroRng fromSeed(long seed) {
+            return new XoroRng(Xoro.fromSeed(seed));
+        }
+
+        @Override public int nextInt() { return inner.nextInt(); }
+        @Override public int nextInt(int bound) { return inner.nextInt(bound); }
+        @Override public long nextLong() { return inner.nextLong(); }
+        @Override public double nextDouble() { return inner.nextDouble(); }
+        @Override public PosRng forkPositional() {
+            long fLo = inner.nextLong();
+            long fHi = inner.nextLong();
+            return name -> {
+                long[] md5 = md5Words(name);
+                return new XoroRng(new Xoro(md5[0] ^ fLo, md5[1] ^ fHi));
+            };
+        }
+    }
+
+    private static final int[][] GRAD = {
+        { 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 },
+        { 1, 0, 1 }, { -1, 0, 1 }, { 1, 0, -1 }, { -1, 0, -1 },
+        { 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 },
+        { 1, 1, 0 }, { 0, -1, 1 }, { -1, 1, 0 }, { 0, -1, -1 }
+    };
+
+    private static double dot3(int[] g, double x, double y, double z) {
+        return g[0] * x + g[1] * y + g[2] * z;
+    }
+
+    private static double smoothstep(double x) {
+        return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+    }
+
+    private static double lerp(double d, double a, double b) {
+        return a + d * (b - a);
+    }
+
+    private static double lerp2(double dx, double dy, double v00, double v10, double v01, double v11) {
+        return lerp(dy, lerp(dx, v00, v10), lerp(dx, v01, v11));
+    }
+
+    private static double lerp3(
+        double dx, double dy, double dz,
+        double v000, double v100, double v010, double v110,
+        double v001, double v101, double v011, double v111
+    ) {
+        return lerp(dz, lerp2(dx, dy, v000, v100, v010, v110), lerp2(dx, dy, v001, v101, v011, v111));
+    }
+
+    private static double clampedLerp(double a, double b, double d) {
+        if (d < 0.0) return a;
+        if (d > 1.0) return b;
+        return lerp(d, a, b);
+    }
+
+    private static double perlinWrap(double v) {
+        return v - (double) mthLfloor(v / 3.3554432E7 + 0.5) * 3.3554432E7;
+    }
+
+    private static final class Improved {
+        final byte[] p = new byte[256];
+        final double xo, yo, zo;
+
+        Improved(Rng rng) {
+            xo = rng.nextDouble() * 256.0;
+            yo = rng.nextDouble() * 256.0;
+            zo = rng.nextDouble() * 256.0;
+            for (int i = 0; i < 256; i++) p[i] = (byte) i;
+            for (int i = 0; i < 256; i++) {
+                int j = rng.nextInt(256 - i);
+                byte tmp = p[i];
+                p[i] = p[i + j];
+                p[i + j] = tmp;
+            }
+        }
+
+        int perm(int i) {
+            return p[i & 255] & 255;
+        }
+
+        double noise(double x, double y, double z, double yScale, double yMax) {
+            double sx = x + xo;
+            double sy = y + yo;
+            double sz = z + zo;
+            int gx = mthFloor(sx);
+            int gy = mthFloor(sy);
+            int gz = mthFloor(sz);
+            double lx = sx - (double) gx;
+            double ly = sy - (double) gy;
+            double lz = sz - (double) gz;
+            double fudge;
+            if (yScale != 0.0) {
+                double clamped = yMax >= 0.0 && yMax < ly ? yMax : ly;
+                fudge = (double) mthFloor(clamped / yScale + (double) 1.0E-7F) * yScale;
+            } else {
+                fudge = 0.0;
+            }
+            int i = perm(gx);
+            int j = perm(gx + 1);
+            int k = perm(i + gy);
+            int l = perm(i + gy + 1);
+            int m = perm(j + gy);
+            int n = perm(j + gy + 1);
+            double wy = ly - fudge;
+            double d000 = dot3(GRAD[perm(k + gz) & 15], lx, wy, lz);
+            double d100 = dot3(GRAD[perm(m + gz) & 15], lx - 1.0, wy, lz);
+            double d010 = dot3(GRAD[perm(l + gz) & 15], lx, wy - 1.0, lz);
+            double d110 = dot3(GRAD[perm(n + gz) & 15], lx - 1.0, wy - 1.0, lz);
+            double d001 = dot3(GRAD[perm(k + gz + 1) & 15], lx, wy, lz - 1.0);
+            double d101 = dot3(GRAD[perm(m + gz + 1) & 15], lx - 1.0, wy, lz - 1.0);
+            double d011 = dot3(GRAD[perm(l + gz + 1) & 15], lx, wy - 1.0, lz - 1.0);
+            double d111 = dot3(GRAD[perm(n + gz + 1) & 15], lx - 1.0, wy - 1.0, lz - 1.0);
+            return lerp3(smoothstep(lx), smoothstep(ly), smoothstep(lz), d000, d100, d010, d110, d001, d101, d011, d111);
+        }
+    }
+
+    private static final class Perlin {
+        final Improved[] levels;
+        final double[] amplitudes;
+        final double lowestFreqValueFactor;
+        final double lowestFreqInputFactor;
+        final double maxValue;
+
+        Perlin(Improved[] levels, int firstOctave, double[] amplitudes) {
+            this.levels = levels;
+            this.amplitudes = amplitudes;
+            int n = amplitudes.length;
+            this.lowestFreqInputFactor = Math.pow(2.0, firstOctave);
+            this.lowestFreqValueFactor = Math.pow(2.0, n - 1) / (Math.pow(2.0, n) - 1.0);
+            this.maxValue = edgeValue(2.0);
+        }
+
+        static Perlin createModern(Rng rng, int firstOctave, double[] amplitudes) throws Exception {
+            PosRng pos = rng.forkPositional();
+            Improved[] levels = new Improved[amplitudes.length];
+            for (int i = 0; i < amplitudes.length; i++) {
+                if (amplitudes[i] != 0.0) {
+                    int oct = firstOctave + i;
+                    levels[i] = new Improved(pos.fromHashOf("octave_" + oct));
+                }
+            }
+            return new Perlin(levels, firstOctave, amplitudes);
+        }
+
+        static Perlin createLegacy(Rng rng, int firstOctave, double[] amplitudes) {
+            int n = amplitudes.length;
+            int zeroIdx = -firstOctave;
+            Improved[] levels = new Improved[n];
+            Improved zero = new Improved(rng);
+            if (zeroIdx >= 0 && zeroIdx < n && amplitudes[zeroIdx] != 0.0) {
+                levels[zeroIdx] = zero;
+            }
+            for (int k = zeroIdx - 1; k >= 0; k--) {
+                if (k < n && amplitudes[k] != 0.0) {
+                    levels[k] = new Improved(rng);
+                } else {
+                    rng.consumeCount(262);
+                }
+            }
+            return new Perlin(levels, firstOctave, amplitudes);
+        }
+
+        double edgeValue(double x) {
+            double total = 0.0;
+            double vf = lowestFreqValueFactor;
+            for (int i = 0; i < levels.length; i++) {
+                if (levels[i] != null) {
+                    total += amplitudes[i] * x * vf;
+                }
+                vf /= 2.0;
+            }
+            return total;
+        }
+
+        double maxBrokenValue(double yScale) {
+            return edgeValue(yScale + 2.0);
+        }
+
+        Improved getOctaveNoise(int i) {
+            return levels[levels.length - 1 - i];
+        }
+
+        double getValue(double x, double y, double z, double yScale, double yMax, boolean useOrigin) {
+            double total = 0.0;
+            double inf = lowestFreqInputFactor;
+            double vf = lowestFreqValueFactor;
+            for (int i = 0; i < levels.length; i++) {
+                Improved lv = levels[i];
+                if (lv != null) {
+                    double s = lv.noise(
+                        perlinWrap(x * inf),
+                        useOrigin ? -lv.yo : perlinWrap(y * inf),
+                        perlinWrap(z * inf),
+                        yScale * inf,
+                        yMax * inf
+                    );
+                    total += amplitudes[i] * s * vf;
+                }
+                inf *= 2.0;
+                vf /= 2.0;
+            }
+            return total;
+        }
+    }
+
+    private static final class Normal {
+        static final double INPUT_FACTOR = 1.0181268882175227;
+        final Perlin first, second;
+        final double valueFactor, maxValue;
+
+        Normal(Perlin first, Perlin second, double[] amplitudes) {
+            this.first = first;
+            this.second = second;
+            int min = Integer.MAX_VALUE;
+            int max = Integer.MIN_VALUE;
+            for (int i = 0; i < amplitudes.length; i++) {
+                if (amplitudes[i] != 0.0) {
+                    min = Math.min(min, i);
+                    max = Math.max(max, i);
+                }
+            }
+            int span = min <= max ? (max - min) : 0;
+            double expected = 0.1 * (1.0 + 1.0 / (double) (span + 1));
+            this.valueFactor = (1.0 / 6.0) / expected;
+            this.maxValue = (first.maxValue + second.maxValue) * this.valueFactor;
+        }
+
+        double getValue(double x, double y, double z) {
+            double x2 = x * INPUT_FACTOR;
+            double y2 = y * INPUT_FACTOR;
+            double z2 = z * INPUT_FACTOR;
+            return (first.getValue(x, y, z, 0.0, 0.0, false) + second.getValue(x2, y2, z2, 0.0, 0.0, false)) * valueFactor;
+        }
+    }
+
+    private static final class Blended {
+        final Perlin minLimit, maxLimit, main;
+        final double xzMul, yMul, xzFactor, yFactor, smearScaleMultiplier, maxValue;
+
+        Blended(Rng rng, double xzScale, double yScale, double xzFactor, double yFactor, double smearScaleMultiplier) {
+            double[] ones16 = new double[16];
+            java.util.Arrays.fill(ones16, 1.0);
+            double[] ones8 = new double[8];
+            java.util.Arrays.fill(ones8, 1.0);
+            this.minLimit = Perlin.createLegacy(rng, -15, ones16);
+            this.maxLimit = Perlin.createLegacy(rng, -15, ones16);
+            this.main = Perlin.createLegacy(rng, -7, ones8);
+            this.xzMul = 684.412 * xzScale;
+            this.yMul = 684.412 * yScale;
+            this.xzFactor = xzFactor;
+            this.yFactor = yFactor;
+            this.smearScaleMultiplier = smearScaleMultiplier;
+            this.maxValue = this.minLimit.maxBrokenValue(this.yMul);
+        }
+
+        double sample(double x, double y, double z) {
+            double lx = x * xzMul;
+            double ly = y * yMul;
+            double lz = z * xzMul;
+            double mx = lx / xzFactor;
+            double my = ly / yFactor;
+            double mz = lz / xzFactor;
+            double smearLimit = yMul * smearScaleMultiplier;
+            double smearMain = smearLimit / yFactor;
+
+            double mainVal = 0.0;
+            double scale = 1.0;
+            for (int i = 0; i < 8; i++) {
+                Improved oct = main.getOctaveNoise(i);
+                if (oct != null) {
+                    mainVal += oct.noise(perlinWrap(mx * scale), perlinWrap(my * scale), perlinWrap(mz * scale), smearMain * scale, my * scale) / scale;
+                }
+                scale /= 2.0;
+            }
+
+            double blend = (mainVal / 10.0 + 1.0) / 2.0;
+            boolean skipMax = blend <= 0.0;
+            boolean skipMin = blend >= 1.0;
+            double minVal = 0.0;
+            double maxVal = 0.0;
+            scale = 1.0;
+            for (int i = 0; i < 16; i++) {
+                double wx = perlinWrap(lx * scale);
+                double wy = perlinWrap(ly * scale);
+                double wz = perlinWrap(lz * scale);
+                double ySmear = smearLimit * scale;
+                if (!skipMin) {
+                    Improved oct = minLimit.getOctaveNoise(i);
+                    if (oct != null) {
+                        minVal += oct.noise(wx, wy, wz, ySmear, ly * scale) / scale;
+                    }
+                }
+                if (!skipMax) {
+                    Improved oct = maxLimit.getOctaveNoise(i);
+                    if (oct != null) {
+                        maxVal += oct.noise(wx, wy, wz, ySmear, ly * scale) / scale;
+                    }
+                }
+                scale /= 2.0;
+            }
+            return clampedLerp(minVal / 512.0, maxVal / 512.0, blend) / 128.0;
+        }
+    }
+
+    private static final class Simplex {
+        static final double SQRT_3 = Math.sqrt(3.0);
+        static final double F2 = 0.5 * (SQRT_3 - 1.0);
+        static final double G2 = (3.0 - SQRT_3) / 6.0;
+        static final double F3 = 1.0 / 3.0;
+        static final double G3 = 1.0 / 6.0;
+
+        final int[] p = new int[512];
+        final double xo, yo, zo;
+
+        Simplex(Rng rng) {
+            xo = rng.nextDouble() * 256.0;
+            yo = rng.nextDouble() * 256.0;
+            zo = rng.nextDouble() * 256.0;
+            for (int i = 0; i < 256; i++) p[i] = i;
+            for (int i = 0; i < 256; i++) {
+                int j = rng.nextInt(256 - i);
+                int tmp = p[i];
+                p[i] = p[i + j];
+                p[i + j] = tmp;
+            }
+            for (int i = 0; i < 256; i++) p[i + 256] = p[i];
+        }
+
+        static double corner(int gi, double x, double y, double z, double falloff) {
+            double t = falloff - x * x - y * y - z * z;
+            if (t < 0.0) return 0.0;
+            t *= t;
+            return t * t * dot3(GRAD[gi], x, y, z);
+        }
+
+        double getValue2D(double x, double y) {
+            double s = (x + y) * F2;
+            int i = mthFloor(x + s);
+            int j = mthFloor(y + s);
+            double t = (double) (i + j) * G2;
+            double x0 = x - ((double) i - t);
+            double y0 = y - ((double) j - t);
+            int i1, j1;
+            if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+            double x1 = x0 - (double) i1 + G2;
+            double y1 = y0 - (double) j1 + G2;
+            double x2 = x0 - 1.0 + 2.0 * G2;
+            double y2 = y0 - 1.0 + 2.0 * G2;
+            int ii = i & 255;
+            int jj = j & 255;
+            int gi0 = p[ii + p[jj]] % 12;
+            int gi1 = p[ii + i1 + p[jj + j1]] % 12;
+            int gi2 = p[ii + 1 + p[jj + 1]] % 12;
+            double n0 = corner(gi0, x0, y0, 0.0, 0.5);
+            double n1 = corner(gi1, x1, y1, 0.0, 0.5);
+            double n2 = corner(gi2, x2, y2, 0.0, 0.5);
+            return 70.0 * (n0 + n1 + n2);
+        }
+
+        double getValue3D(double x, double y, double z) {
+            double s = (x + y + z) * F3;
+            int i = mthFloor(x + s);
+            int j = mthFloor(y + s);
+            int k = mthFloor(z + s);
+            double t = (double) (i + j + k) * G3;
+            double x0 = x - ((double) i - t);
+            double y0 = y - ((double) j - t);
+            double z0 = z - ((double) k - t);
+            int i1, j1, k1, i2, j2, k2;
+            if (x0 >= y0) {
+                if (y0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+                else if (x0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 0; k2 = 1; }
+                else { i1 = 0; j1 = 0; k1 = 1; i2 = 1; j2 = 0; k2 = 1; }
+            } else {
+                if (y0 < z0) { i1 = 0; j1 = 0; k1 = 1; i2 = 0; j2 = 1; k2 = 1; }
+                else if (x0 < z0) { i1 = 0; j1 = 1; k1 = 0; i2 = 0; j2 = 1; k2 = 1; }
+                else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+            }
+            double x1 = x0 - (double) i1 + G3;
+            double y1 = y0 - (double) j1 + G3;
+            double z1 = z0 - (double) k1 + G3;
+            double x2 = x0 - (double) i2 + 2.0 * G3;
+            double y2 = y0 - (double) j2 + 2.0 * G3;
+            double z2 = z0 - (double) k2 + 2.0 * G3;
+            double x3 = x0 - 1.0 + 3.0 * G3;
+            double y3 = y0 - 1.0 + 3.0 * G3;
+            double z3 = z0 - 1.0 + 3.0 * G3;
+            int ii = i & 255;
+            int jj = j & 255;
+            int kk = k & 255;
+            int gi0 = p[ii + p[jj + p[kk]]] % 12;
+            int gi1 = p[ii + i1 + p[jj + j1 + p[kk + k1]]] % 12;
+            int gi2 = p[ii + i2 + p[jj + j2 + p[kk + k2]]] % 12;
+            int gi3 = p[ii + 1 + p[jj + 1 + p[kk + 1]]] % 12;
+            double n0 = corner(gi0, x0, y0, z0, 0.6);
+            double n1 = corner(gi1, x1, y1, z1, 0.6);
+            double n2 = corner(gi2, x2, y2, z2, 0.6);
+            double n3 = corner(gi3, x3, y3, z3, 0.6);
+            return 32.0 * (n0 + n1 + n2 + n3);
+        }
+    }
+
+    private static final class PerlinSimplex {
+        final Simplex[] levels;
+        final double highestFreqValueFactor;
+        final double highestFreqInputFactor;
+
+        PerlinSimplex(Rng rng, int[] octaves) {
+            java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
+            for (int o : octaves) set.add(o);
+            int low = -set.first();
+            int high = set.last();
+            int total = low + high + 1;
+            Simplex first = new Simplex(rng);
+            int zeroIdx = high;
+            this.levels = new Simplex[total];
+            if (zeroIdx >= 0 && zeroIdx < total && set.contains(0)) {
+                this.levels[zeroIdx] = first;
+            }
+            for (int idx = zeroIdx + 1; idx < total; idx++) {
+                if (idx >= 0) {
+                    int oct = zeroIdx - idx;
+                    if (set.contains(oct)) {
+                        this.levels[idx] = new Simplex(rng);
+                    } else {
+                        rng.consumeCount(262);
+                    }
+                }
+            }
+            if (high > 0) {
+                long posSeed = (long) (first.getValue3D(first.xo, first.yo, first.zo) * (double) Long.MAX_VALUE);
+                Rng hiRng = new LegacyRng(posSeed);
+                for (int idx = zeroIdx - 1; idx >= 0; idx--) {
+                    int oct = zeroIdx - idx;
+                    if (idx < total && set.contains(oct)) {
+                        this.levels[idx] = new Simplex(hiRng);
+                    } else {
+                        hiRng.consumeCount(262);
+                    }
+                }
+            }
+            this.highestFreqInputFactor = Math.pow(2.0, high);
+            this.highestFreqValueFactor = 1.0 / (Math.pow(2.0, total) - 1.0);
+        }
+
+        double getValue(double x, double y, boolean useOffsets) {
+            double total = 0.0;
+            double inf = highestFreqInputFactor;
+            double vf = highestFreqValueFactor;
+            for (Simplex s : levels) {
+                if (s != null) {
+                    total += s.getValue2D(
+                        x * inf + (useOffsets ? s.xo : 0.0),
+                        y * inf + (useOffsets ? s.yo : 0.0)
+                    ) * vf;
+                }
+                inf /= 2.0;
+                vf *= 2.0;
+            }
+            return total;
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         int[] i32s = {
             Integer.MIN_VALUE, Integer.MIN_VALUE + 1, -1_000_000_000, -100, -7, -4, -1,
@@ -379,6 +885,143 @@ public final class Probe {
             h = mix(h, seq.nextLong());
         }
         emit("xoroshiro_rng", h);
+
+        double[] coords = {
+            -40_000_000.75, -16_777_216.0, -512.375, -1.0000001, -0.5, 0.0,
+            0.125, 0.9999999, 17.625, 1024.875, 16_777_216.0, 50_000_000.25
+        };
+        h = FNV_OFFSET;
+        for (long seed : new long[] { 0L, 2026L, -987654321012345L }) {
+            Improved impX = new Improved(XoroRng.fromSeed(seed));
+            Improved impL = new Improved(new LegacyRng(seed));
+            for (double x : coords) {
+                for (double y : new double[] { -64.25, 0.0, 0.375, 127.875 }) {
+                    for (double z : new double[] { -33_554_432.5, -12.75, 0.0, 99.125 }) {
+                        h = mix(h, Double.doubleToLongBits(impX.noise(x, y, z, 0.0, 0.0)));
+                        h = mix(h, Double.doubleToLongBits(impX.noise(x, y, z, 0.25, y * 0.25)));
+                        h = mix(h, Double.doubleToLongBits(impL.noise(x, y, z, 0.125, -1.0)));
+                    }
+                }
+            }
+
+            double[][] ampCases = {
+                { 1.0, 2.0, 1.0, 0.0, 0.0, 0.0 },
+                { 0.0, 1.0, 0.0, 1.5, 0.5 },
+                { 1.0 }
+            };
+            int[] firstOcts = { -7, -5, 0 };
+            for (int c = 0; c < ampCases.length; c++) {
+                Perlin pm = Perlin.createModern(XoroRng.fromSeed(seed), firstOcts[c], ampCases[c]);
+                Perlin pl = Perlin.createLegacy(new LegacyRng(seed), firstOcts[c], ampCases[c]);
+                h = mix(h, Double.doubleToLongBits(pm.maxValue));
+                h = mix(h, Double.doubleToLongBits(pm.maxBrokenValue(85.5515)));
+                h = mix(h, Double.doubleToLongBits(pl.maxValue));
+                for (int i = -5; i <= 5; i++) {
+                    double px = i * 37.25;
+                    double py = i * 11.5;
+                    double pz = -i * 53.75;
+                    h = mix(h, Double.doubleToLongBits(pm.getValue(px, py, pz, 0.0, 0.0, false)));
+                    h = mix(h, Double.doubleToLongBits(pm.getValue(px, py, pz, 0.5, py, true)));
+                    h = mix(h, Double.doubleToLongBits(pl.getValue(px, py, pz, 0.0, 0.0, false)));
+                    h = mix(h, Double.doubleToLongBits(pl.getValue(px * 1_000_000.0, py, pz * 1_000_000.0, 0.25, py, false)));
+                }
+            }
+        }
+        emit("improved_perlin_noise", h);
+
+        h = FNV_OFFSET;
+        double[][] normalAmps = {
+            { 1.0, 1.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0 },
+            { 1.0, 2.0, 1.0, 0.0, 0.0, 0.0 },
+            { 1.0, 1.0, 1.0, 0.0 },
+            { 0.0, 1.0, 0.0 },
+            { 0.0, 0.0 }
+        };
+        int[] normalFirst = { -9, -7, -3, -4, -2 };
+        for (long seed : new long[] { 1L, -42L, 8675309L }) {
+            for (int c = 0; c < normalAmps.length; c++) {
+                XoroRng xr = XoroRng.fromSeed(seed);
+                Normal nm = new Normal(
+                    Perlin.createModern(xr, normalFirst[c], normalAmps[c]),
+                    Perlin.createModern(xr, normalFirst[c], normalAmps[c]),
+                    normalAmps[c]
+                );
+                LegacyRng lr = new LegacyRng(seed);
+                Normal nl = new Normal(
+                    Perlin.createLegacy(lr, normalFirst[c], normalAmps[c]),
+                    Perlin.createLegacy(lr, normalFirst[c], normalAmps[c]),
+                    normalAmps[c]
+                );
+                h = mix(h, Double.doubleToLongBits(nm.maxValue));
+                h = mix(h, Double.doubleToLongBits(nl.maxValue));
+                for (int i = -8; i <= 8; i++) {
+                    double nx = i * 64.125;
+                    double ny = -64.0 + i * 24.0;
+                    double nz = -i * 91.375;
+                    h = mix(h, Double.doubleToLongBits(nm.getValue(nx, ny, nz)));
+                    h = mix(h, Double.doubleToLongBits(nl.getValue(nx, ny, nz)));
+                }
+            }
+        }
+        emit("normal_noise", h);
+
+        h = FNV_OFFSET;
+        for (long seed : new long[] { 0L, 2026L, -7777777777777L }) {
+            Blended bx = new Blended(XoroRng.fromSeed(seed), 0.25, 0.125, 80.0, 160.0, 8.0);
+            Blended bl = new Blended(new LegacyRng(seed), 0.25, 0.25, 80.0, 80.0, 4.0);
+            h = mix(h, Double.doubleToLongBits(bx.maxValue));
+            h = mix(h, Double.doubleToLongBits(bl.maxValue));
+            for (int ix = -4; ix <= 4; ix++) {
+                for (int iy = -4; iy <= 4; iy++) {
+                    for (int iz = -4; iz <= 4; iz++) {
+                        double x = ix * 16.0;
+                        double y = iy * 32.0;
+                        double z = iz * 16.0;
+                        h = mix(h, Double.doubleToLongBits(bx.sample(x, y, z)));
+                        h = mix(h, Double.doubleToLongBits(bl.sample(x, y, z)));
+                    }
+                }
+            }
+        }
+        emit("blended_noise", h);
+
+        h = FNV_OFFSET;
+        int[][] simplexOctaves = {
+            { 0 },
+            { -3, -2, -1, 0 },
+            { -4, -2, 0 },
+            { -3, -1, 0, 2 }
+        };
+        for (long seed : new long[] { 2345L, 0L, -123456789L }) {
+            Simplex sx = new Simplex(XoroRng.fromSeed(seed));
+            Simplex sl = new Simplex(new LegacyRng(seed));
+            for (int ix = -6; ix <= 6; ix++) {
+                for (int iy = -6; iy <= 6; iy++) {
+                    double x = ix * 0.37;
+                    double y = iy * 0.43;
+                    h = mix(h, Double.doubleToLongBits(sx.getValue2D(x, y)));
+                    h = mix(h, Double.doubleToLongBits(sl.getValue2D(x, y)));
+                    for (int iz = -3; iz <= 3; iz++) {
+                        double z = iz * 0.29;
+                        h = mix(h, Double.doubleToLongBits(sx.getValue3D(x, y, z)));
+                        h = mix(h, Double.doubleToLongBits(sl.getValue3D(x, y, z)));
+                    }
+                }
+            }
+            for (int[] octs : simplexOctaves) {
+                PerlinSimplex psx = new PerlinSimplex(XoroRng.fromSeed(seed), octs);
+                PerlinSimplex psl = new PerlinSimplex(new LegacyRng(seed), octs);
+                for (int i = -10; i <= 10; i++) {
+                    double x = i * 19.625;
+                    double y = -i * 23.125;
+                    h = mix(h, Double.doubleToLongBits(psx.getValue(x, y, false)));
+                    h = mix(h, Double.doubleToLongBits(psx.getValue(x, y, true)));
+                    h = mix(h, Double.doubleToLongBits(psl.getValue(x, y, false)));
+                    h = mix(h, Double.doubleToLongBits(psl.getValue(x, y, true)));
+                }
+            }
+        }
+        emit("simplex_noise", h);
     }
 }
 "#;
@@ -723,6 +1366,170 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
         mix(&mut h, seq.random().next_long() as u64);
     }
     assert_eq!(h, expected["xoroshiro_rng"], "xoroshiro_rng mismatch");
+
+    let coords = [
+        -40_000_000.75,
+        -16_777_216.0,
+        -512.375,
+        -1.000_000_1,
+        -0.5,
+        0.0,
+        0.125,
+        0.999_999_9,
+        17.625,
+        1024.875,
+        16_777_216.0,
+        50_000_000.25,
+    ];
+    h = FNV_OFFSET;
+    for seed in [0_i64, 2026, -987_654_321_012_345] {
+        let mut xoro = XoroshiroRandom::new(seed);
+        let imp_x = ImprovedNoise::new(&mut xoro);
+        let mut leg = LegacyRandom::new(seed);
+        let imp_l = ImprovedNoise::new(&mut leg);
+        for x in coords {
+            for y in [-64.25, 0.0, 0.375, 127.875] {
+                for z in [-33_554_432.5, -12.75, 0.0, 99.125] {
+                    mix(&mut h, canonical_f64_bits(imp_x.noise(x, y, z)));
+                    mix(
+                        &mut h,
+                        canonical_f64_bits(imp_x.noise_with_y_scale(x, y, z, 0.25, y * 0.25)),
+                    );
+                    mix(
+                        &mut h,
+                        canonical_f64_bits(imp_l.noise_with_y_scale(x, y, z, 0.125, -1.0)),
+                    );
+                }
+            }
+        }
+
+        let amp_cases: [(&[f64], i32); 3] = [
+            (&[1.0, 2.0, 1.0, 0.0, 0.0, 0.0], -7),
+            (&[0.0, 1.0, 0.0, 1.5, 0.5], -5),
+            (&[1.0], 0),
+        ];
+        for (amps, first_oct) in amp_cases {
+            let mut xoro = XoroshiroRandom::new(seed);
+            let pm = PerlinNoise::new(&mut xoro, first_oct, amps);
+            let mut leg = LegacyRandom::new(seed);
+            let pl = PerlinNoise::new_legacy(&mut leg, first_oct, amps);
+            mix(&mut h, canonical_f64_bits(pm.max_value()));
+            mix(&mut h, canonical_f64_bits(pm.max_broken_value(85.5515)));
+            mix(&mut h, canonical_f64_bits(pl.max_value()));
+            for i in -5..=5_i32 {
+                let px = (i as f64) * 37.25;
+                let py = (i as f64) * 11.5;
+                let pz = (-i as f64) * 53.75;
+                mix(&mut h, canonical_f64_bits(pm.get_value(px, py, pz)));
+                mix(
+                    &mut h,
+                    canonical_f64_bits(pm.get_value_with_y_scale(px, py, pz, 0.5, py, true)),
+                );
+                mix(&mut h, canonical_f64_bits(pl.get_value(px, py, pz)));
+                mix(
+                    &mut h,
+                    canonical_f64_bits(pl.get_value_with_y_scale(
+                        px * 1_000_000.0,
+                        py,
+                        pz * 1_000_000.0,
+                        0.25,
+                        py,
+                        false,
+                    )),
+                );
+            }
+        }
+    }
+    assert_eq!(
+        h, expected["improved_perlin_noise"],
+        "improved_perlin_noise mismatch"
+    );
+
+    h = FNV_OFFSET;
+    let normal_cases: [(&[f64], i32); 5] = [
+        (&[1.0, 1.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0], -9),
+        (&[1.0, 2.0, 1.0, 0.0, 0.0, 0.0], -7),
+        (&[1.0, 1.0, 1.0, 0.0], -3),
+        (&[0.0, 1.0, 0.0], -4),
+        (&[0.0, 0.0], -2),
+    ];
+    for seed in [1_i64, -42, 8_675_309] {
+        for (amps, first_oct) in normal_cases {
+            let mut xoro = XoroshiroRandom::new(seed);
+            let nm = NormalNoise::new(&mut xoro, first_oct, amps);
+            let mut leg = LegacyRandom::new(seed);
+            let nl = NormalNoise::new_legacy(&mut leg, first_oct, amps);
+            mix(&mut h, canonical_f64_bits(nm.max_value()));
+            mix(&mut h, canonical_f64_bits(nl.max_value()));
+            for i in -8..=8_i32 {
+                let nx = (i as f64) * 64.125;
+                let ny = -64.0 + (i as f64) * 24.0;
+                let nz = (-i as f64) * 91.375;
+                mix(&mut h, canonical_f64_bits(nm.get_value(nx, ny, nz)));
+                mix(&mut h, canonical_f64_bits(nl.get_value(nx, ny, nz)));
+            }
+        }
+    }
+    assert_eq!(h, expected["normal_noise"], "normal_noise mismatch");
+
+    h = FNV_OFFSET;
+    for seed in [0_i64, 2026, -7_777_777_777_777] {
+        let mut xoro = XoroshiroRandom::new(seed);
+        let bx = BlendedNoise::new(&mut xoro, 0.25, 0.125, 80.0, 160.0, 8.0);
+        let mut leg = LegacyRandom::new(seed);
+        let bl = BlendedNoise::new(&mut leg, 0.25, 0.25, 80.0, 80.0, 4.0);
+        mix(&mut h, canonical_f64_bits(bx.max_value()));
+        mix(&mut h, canonical_f64_bits(bl.max_value()));
+        for ix in -4..=4_i32 {
+            for iy in -4..=4_i32 {
+                for iz in -4..=4_i32 {
+                    let x = (ix as f64) * 16.0;
+                    let y = (iy as f64) * 32.0;
+                    let z = (iz as f64) * 16.0;
+                    mix(&mut h, canonical_f64_bits(bx.sample(x, y, z)));
+                    mix(&mut h, canonical_f64_bits(bl.sample(x, y, z)));
+                }
+            }
+        }
+    }
+    assert_eq!(h, expected["blended_noise"], "blended_noise mismatch");
+
+    h = FNV_OFFSET;
+    let simplex_octaves: [&[i32]; 4] = [&[0], &[-3, -2, -1, 0], &[-4, -2, 0], &[-3, -1, 0, 2]];
+    for seed in [2345_i64, 0, -123_456_789] {
+        let mut xoro = XoroshiroRandom::new(seed);
+        let sx = SimplexNoise::new(&mut xoro);
+        let mut leg = LegacyRandom::new(seed);
+        let sl = SimplexNoise::new(&mut leg);
+        for ix in -6..=6_i32 {
+            for iy in -6..=6_i32 {
+                let x = (ix as f64) * 0.37;
+                let y = (iy as f64) * 0.43;
+                mix(&mut h, canonical_f64_bits(sx.get_value_2d(x, y)));
+                mix(&mut h, canonical_f64_bits(sl.get_value_2d(x, y)));
+                for iz in -3..=3_i32 {
+                    let z = (iz as f64) * 0.29;
+                    mix(&mut h, canonical_f64_bits(sx.get_value_3d(x, y, z)));
+                    mix(&mut h, canonical_f64_bits(sl.get_value_3d(x, y, z)));
+                }
+            }
+        }
+        for octs in simplex_octaves {
+            let mut xoro = XoroshiroRandom::new(seed);
+            let psx = PerlinSimplexNoise::new(&mut xoro, octs);
+            let mut leg = LegacyRandom::new(seed);
+            let psl = PerlinSimplexNoise::new(&mut leg, octs);
+            for i in -10..=10_i32 {
+                let x = (i as f64) * 19.625;
+                let y = (-i as f64) * 23.125;
+                mix(&mut h, canonical_f64_bits(psx.get_value(x, y, false)));
+                mix(&mut h, canonical_f64_bits(psx.get_value(x, y, true)));
+                mix(&mut h, canonical_f64_bits(psl.get_value(x, y, false)));
+                mix(&mut h, canonical_f64_bits(psl.get_value(x, y, true)));
+            }
+        }
+    }
+    assert_eq!(h, expected["simplex_noise"], "simplex_noise mismatch");
 
     // Verify `WorldgenRandom` and `Seed128` round-trip invariants as well.
     let mut wg = WorldgenRandom::new(LegacyRandom::new(0));

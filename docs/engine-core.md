@@ -5,9 +5,9 @@ parallel, how threads are laid out, how the world and entities are stored, and h
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
 Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
-overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators and Java math
-helpers are implemented. World generation, live block changes, saving other world and player data, and the
-remaining entity logic are still in progress. Facts about vanilla cite their source in
+overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
+and gradient/simplex noise samplers are implemented. World generation, live block changes, saving other world
+and player data, and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -185,6 +185,13 @@ Harpas uses its own storage:
   and logical `>>>`, `Math.round` ties toward `+∞` without `x + 0.5` double-rounding [7], a cross-platform
   1-ULP natural logarithm, Java-ordered interpolation and `Mth` floor/ceil/angle helpers, vanilla's
   65,536-entry `f32` sine table, `position_seed` and UTF-16 `String.hashCode`.
+- **Gradient and simplex noise samplers identical to vanilla's** (`harpas_core::noise`): Ken Perlin's 2002
+  3D improved gradient noise [10] (`ImprovedNoise`, with `(double) 1.0e-7f` vertical step quantization),
+  multi-octave `PerlinNoise` (preserving zero-amplitude entries in the `2^(N-1) / (2^N - 1)` normalization
+  factor, `2^25` coordinate wrapping, modern `"octave_<k>"` positional seeding and legacy sequential
+  `consume_count(262)` seeding), paired `NormalNoise` (`337 / 331` frequency ratio and `1 / 6` target
+  deviation), three-sampler `BlendedNoise` (`684.412` coordinate scale and smeared limit/main octaves), and
+  2D/3D `SimplexNoise` and `PerlinSimplexNoise` [11].
 - Parallel work never consumes the logic's random sequences.
 
 ---
@@ -230,3 +237,9 @@ Harpas uses its own storage:
 9. minecraft.wiki, "Random" and "Seed (level generation)" (`XoroshiroRandomSource`, Stafford `Mix13`, MD5
    positional seeding, decoration, feature, carver, structure and slime-chunk seeds).
    https://minecraft.wiki/w/Random, https://minecraft.wiki/w/Seed_(level_generation)
+10. Ken Perlin, "Improving Noise", *ACM Transactions on Graphics (SIGGRAPH 2002)*, 21(3):681–682, and
+    minecraft.wiki, "Noise" (`ImprovedNoise`, `PerlinNoise`, `NormalNoise` and `BlendedNoise`).
+    https://mrl.cs.nyu.edu/~perlin/paper445.pdf, https://minecraft.wiki/w/Noise
+11. Stefan Gustavson, "Simplex noise demystified", Linköping University (2005), for 2D and 3D simplex
+    skew/unskew constants, corner falloff and 12-edge gradient table.
+    https://weber.itn.liu.se/~stegu/simplexnoise/simplexnoise.pdf

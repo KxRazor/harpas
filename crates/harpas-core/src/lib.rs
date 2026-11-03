@@ -6,4 +6,5 @@ pub mod block;
 pub mod chunk;
 pub mod math;
 pub mod nbt;
+pub mod noise;
 pub mod random;

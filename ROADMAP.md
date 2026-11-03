@@ -107,6 +107,14 @@ vanilla for the same seed.
       for interruptions during each write stage.
 - [x] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
+  - [x] Vanilla-exact noise primitives (`ImprovedNoise`, `PerlinNoise`, `NormalNoise`, `BlendedNoise`,
+        `SimplexNoise` and `PerlinSimplexNoise`) in `harpas-core`.
+  - [ ] Worldgen data loader, density functions, `NoiseChunk`, `NoiseRouter`, `MultiNoiseBiomeSource` and 3D
+        biome zoom in `harpas-worldgen`.
+  - [ ] Base terrain block filling (`final_density`), `NoiseBasedAquifer`, `OreVeinifier` and `SurfaceSystem`
+        (surface rules, conditions, badlands bands/pillars and frozen ocean icebergs).
+  - [ ] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
+        `harpas-engine`.
 - [ ] Features and structures.
 - [ ] Light engine port.
 - [ ] Parity harness: block-by-block generation comparison against vanilla in CI.

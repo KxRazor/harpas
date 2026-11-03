@@ -8,7 +8,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use harpas_worldgen::{
-    HeightmapType, NoiseBasedChunkGenerator, StructureStart, StructureState, WorldgenData,
+    HeightmapType, NoiseBasedChunkGenerator, StructureStart, StructureState, StructureTemplates,
+    WorldgenData,
 };
 use reference::Reference;
 
@@ -45,12 +46,29 @@ fn start_lines(start: &StructureStart) -> Vec<String> {
             piece.orientation.map_or(-1, |o| o.data_value()),
             piece.gen_depth
         ));
+        for junction in &piece.junctions {
+            let [x, y, z] = junction.source;
+            let projection = if junction.destination_rigid {
+                "rigid"
+            } else {
+                "terrain_matching"
+            };
+            lines.push(format!(
+                "junction {x} {y} {z} {} {projection}",
+                junction.delta_y
+            ));
+        }
     }
     lines
 }
 
 /// Returns how many lines matched and how many starts and references there were.
-fn compare_seed(reference: &Reference, data: &WorldgenData, seed: i64) -> (usize, usize, usize) {
+fn compare_seed(
+    reference: &Reference,
+    data: &WorldgenData,
+    templates: &StructureTemplates,
+    seed: i64,
+) -> (usize, usize, usize) {
     let generator = NoiseBasedChunkGenerator::overworld(seed, data).expect("compile generator");
     let state = StructureState::new(seed, data, &generator).expect("structure state");
     let sets: Vec<_> = state
@@ -72,12 +90,18 @@ fn compare_seed(reference: &Reference, data: &WorldgenData, seed: i64) -> (usize
         }
     }
     let mut start_count = 0;
+    // Starts of the whole area, so that references do not lay out each structure again for every chunk it reaches.
+    let mut known_starts = std::collections::HashMap::new();
     // The chunks each start reaches, and their neighbors, so that references are compared where they exist.
     let mut reference_chunks = BTreeSet::new();
     let inner = RADIUS - 8;
     for x in -RADIUS..RADIUS {
         for z in -RADIUS..RADIUS {
-            for start in state.starts_in_chunk(&generator, data, x, z).unwrap() {
+            let starts = state
+                .starts_in_chunk(&generator, data, templates, x, z)
+                .unwrap();
+            known_starts.insert((x, z), starts.clone());
+            for start in starts {
                 start_count += 1;
                 let b = start.bounding_box;
                 for cx in (b.min[0] >> 4) - 1..=(b.max[0] >> 4) + 1 {
@@ -93,16 +117,26 @@ fn compare_seed(reference: &Reference, data: &WorldgenData, seed: i64) -> (usize
     }
     for set in &sets {
         for &(x, z) in state.ring_positions(set).unwrap_or_default() {
-            for start in state.starts_in_chunk(&generator, data, x, z).unwrap() {
+            for start in state
+                .starts_in_chunk(&generator, data, templates, x, z)
+                .unwrap()
+            {
                 start_count += 1;
                 expected.extend(start_lines(&start));
             }
         }
     }
+    let mut starts_of = |x: i32, z: i32| {
+        if let Some(starts) = known_starts.get(&(x, z)) {
+            return Ok(Vec::clone(starts));
+        }
+        let starts = state.starts_in_chunk(&generator, data, templates, x, z)?;
+        known_starts.insert((x, z), starts.clone());
+        Ok(starts)
+    };
     let mut reference_count = 0;
     for &(x, z) in &reference_chunks {
-        let mut lines: Vec<_> = state
-            .references_in_chunk(&generator, data, x, z)
+        let mut lines: Vec<_> = StructureState::references_from(x, z, &mut starts_of)
             .unwrap()
             .into_iter()
             .map(|reference| {
@@ -157,6 +191,8 @@ fn structure_starts_and_references_match_vanilla() {
     };
     let data =
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
+    let templates =
+        StructureTemplates::from_zip_path(&reference.server_jar).expect("load vanilla templates");
     reference.compile(&[
         (
             "WorldgenReferenceProbe.java",
@@ -172,7 +208,7 @@ fn structure_starts_and_references_match_vanilla() {
         ),
     ]);
     for seed in SEEDS {
-        let (lines, starts, references) = compare_seed(&reference, &data, seed);
+        let (lines, starts, references) = compare_seed(&reference, &data, &templates, seed);
         eprintln!("Seed {seed}: {lines} lines match, {starts} starts and {references} references");
     }
 }

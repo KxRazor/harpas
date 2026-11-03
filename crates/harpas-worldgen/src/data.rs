@@ -274,6 +274,31 @@ pub struct StructureDef {
     pub biomes: Vec<String>,
     /// How the structure changes the terrain around it, such as `none` or `beard_thin`.
     pub terrain_adaptation: String,
+    /// The settings of a `minecraft:jigsaw` structure.
+    pub jigsaw: Option<JigsawDef>,
+}
+
+/// The settings of a `minecraft:jigsaw` structure (`JigsawStructure`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JigsawDef {
+    /// The pool the first piece comes from.
+    pub start_pool: String,
+    /// The jigsaw of the first piece that sits at the start position, if any.
+    pub start_jigsaw_name: Option<String>,
+    /// How many pieces deep the structure may grow (`size`).
+    pub max_depth: i32,
+    /// The Y of the start position, or `None` when it is not a constant height.
+    pub start_height: Option<crate::surface::VerticalAnchor>,
+    /// Whether pieces reserve room above for taller children (`use_expansion_hack`).
+    pub use_expansion_hack: bool,
+    /// The heightmap the first piece stands on, if any, such as `WORLD_SURFACE_WG`.
+    pub project_start_to_heightmap: Option<String>,
+    /// How far pieces may reach from the center horizontally and vertically.
+    pub max_distance_from_center: (i32, i32),
+    /// Whether the structure renames pools (`pool_aliases`), which Harpas does not support yet.
+    pub has_pool_aliases: bool,
+    /// Blocks kept free below and above the structure (`dimension_padding`).
+    pub dimension_padding: (i32, i32),
 }
 
 /// Parsed contents of a `worldgen/template_pool/<name>.json` file (`StructureTemplatePool`).
@@ -804,6 +829,91 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
                 .to_string(),
             None => "none".to_string(),
         },
+        jigsaw: match json.get("type").and_then(Value::as_str) {
+            Some("minecraft:jigsaw") => Some(parse_jigsaw(context, json)?),
+            _ => None,
+        },
+    })
+}
+
+fn parse_jigsaw(context: &str, json: &Value) -> Result<JigsawDef, WorldgenDataError> {
+    let integer = |value: Option<&Value>, what: &str| {
+        value
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| invalid_def(context, format!("`{what}` must be a 32-bit integer")))
+    };
+    let start_height = json
+        .get("start_height")
+        .ok_or_else(|| invalid_def(context, "jigsaw has no start_height"))?;
+    let start_height = match start_height.get("type").and_then(Value::as_str) {
+        None => Some(crate::surface::parse_vertical_anchor(
+            context,
+            start_height,
+        )?),
+        Some("minecraft:constant") => Some(crate::surface::parse_vertical_anchor(
+            context,
+            start_height
+                .get("value")
+                .ok_or_else(|| invalid_def(context, "constant height has no value"))?,
+        )?),
+        Some(_) => None,
+    };
+    let max_distance = json
+        .get("max_distance_from_center")
+        .ok_or_else(|| invalid_def(context, "jigsaw has no max_distance_from_center"))?;
+    let max_distance_from_center = if max_distance.is_object() {
+        let horizontal = integer(max_distance.get("horizontal"), "horizontal")?;
+        let vertical = match max_distance.get("vertical") {
+            Some(value) => integer(Some(value), "vertical")?,
+            None => 4064,
+        };
+        (horizontal, vertical)
+    } else {
+        let value = integer(Some(max_distance), "max_distance_from_center")?;
+        (value, value)
+    };
+    let dimension_padding = match json.get("dimension_padding") {
+        None => (0, 0),
+        Some(padding) if padding.is_object() => (
+            padding
+                .get("bottom")
+                .map_or(Ok(0), |value| integer(Some(value), "bottom"))?,
+            padding
+                .get("top")
+                .map_or(Ok(0), |value| integer(Some(value), "top"))?,
+        ),
+        Some(padding) => {
+            let value = integer(Some(padding), "dimension_padding")?;
+            (value, value)
+        }
+    };
+    Ok(JigsawDef {
+        start_pool: json
+            .get("start_pool")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_def(context, "jigsaw has no start_pool"))?
+            .to_string(),
+        start_jigsaw_name: json
+            .get("start_jigsaw_name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        max_depth: integer(json.get("size"), "size")?,
+        start_height,
+        use_expansion_hack: json
+            .get("use_expansion_hack")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid_def(context, "jigsaw has no use_expansion_hack"))?,
+        project_start_to_heightmap: json
+            .get("project_start_to_heightmap")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        max_distance_from_center,
+        has_pool_aliases: json
+            .get("pool_aliases")
+            .and_then(Value::as_array)
+            .is_some_and(|aliases| !aliases.is_empty()),
+        dimension_padding,
     })
 }
 

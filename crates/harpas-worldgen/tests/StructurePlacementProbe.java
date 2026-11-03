@@ -61,16 +61,24 @@ public final class StructurePlacementProbe {
 
     /** The registries a dedicated server loads from the vanilla data pack, with their tags. */
     static RegistryAccess.Frozen loadRegistries() throws Exception {
+        var server = loadServer();
+        server.resources().close();
+        return server.registries();
+    }
+
+    /** The registries and the open resources of the vanilla data pack, which structure templates are read from. */
+    record Server(RegistryAccess.Frozen registries, net.minecraft.server.packs.resources.CloseableResourceManager resources) {
+    }
+
+    static Server loadServer() throws Exception {
         var packs = new WorldLoader.PackConfig(
             ServerPacksSource.createVanillaTrustedRepository(), WorldDataConfiguration.DEFAULT, false, false);
         var init = new WorldLoader.InitConfig(packs, Commands.CommandSelection.DEDICATED,
             net.minecraft.server.permissions.LevelBasedPermissionSet.OWNER);
-        return WorldLoader.<Void, RegistryAccess.Frozen>load(init,
+        return WorldLoader.<Void, Server>load(init,
             context -> new WorldLoader.DataLoadOutput<>(null, context.datapackDimensions()),
-            (resources, reloadable, layers, cookie) -> {
-                resources.close();
-                return layers.compositeAccess();
-            }, Util.backgroundExecutor(), Runnable::run).get();
+            (resources, reloadable, layers, cookie) -> new Server(layers.compositeAccess(), resources),
+            Util.backgroundExecutor(), Runnable::run).get();
     }
 
     static void writeStarts(PrintWriter out, String name, net.minecraft.world.level.chunk.ChunkGeneratorStructureState state,

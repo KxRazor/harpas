@@ -26,7 +26,7 @@ pub use biome::{
 };
 pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
-    ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod,
+    ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod, JigsawDef,
     MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, PoolElementDef,
     Projection, StructureDef, StructurePlacementCommon, StructurePlacementDef,
     StructurePlacementKind, StructureSetDef, StructureSetEntryDef, TemperatureModifier,
@@ -42,7 +42,8 @@ pub use ore_vein::{OreVeinifier, VeinType};
 pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
 pub use structure::{
-    BoundingBox, Direction, StructurePiece, StructureReference, StructureStart, StructureState,
+    BoundingBox, Direction, JigsawJunction, StructurePiece, StructureReference, StructureStart,
+    StructureState,
 };
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,

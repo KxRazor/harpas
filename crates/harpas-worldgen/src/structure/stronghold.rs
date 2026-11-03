@@ -498,6 +498,7 @@ pub(super) fn pieces(
                     bounding_box: piece.bounding_box,
                     orientation: Some(piece.orientation),
                     gen_depth: piece.gen_depth,
+                    junctions: Vec::new(),
                 })
                 .collect();
         }

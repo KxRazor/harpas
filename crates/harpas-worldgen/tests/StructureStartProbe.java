@@ -42,7 +42,13 @@ public final class StructureStartProbe {
         Bootstrap.bootStrap();
         long seed = Long.parseLong(args[1]);
         int radius = Integer.parseInt(args[2]);
-        var registries = StructurePlacementProbe.loadRegistries();
+        var server = StructurePlacementProbe.loadServer();
+        var registries = server.registries();
+        // Jigsaw structures read templates through a template manager, which also looks in a world folder.
+        var storage = net.minecraft.world.level.storage.LevelStorageSource
+            .createDefault(Path.of("probe-worlds")).createAccess("probe");
+        var templates = new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager(
+            server.resources(), storage, net.minecraft.util.datafix.DataFixers.getDataFixer(), BuiltInRegistries.BLOCK);
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var sets = registries.lookupOrThrow(Registries.STRUCTURE_SET);
         var generator = WorldPresets.getNormalOverworld(registries).generator();
@@ -73,7 +79,7 @@ public final class StructureStartProbe {
             for (int x = -radius; x < radius; x++) {
                 for (int z = -radius; z < radius; z++) {
                     var proto = new ProtoChunk(new ChunkPos(x, z), UpgradeData.EMPTY, height, factory, null);
-                    generator.createStructures(registries, state, manager, proto, null, Level.OVERWORLD);
+                    generator.createStructures(registries, state, manager, proto, templates, Level.OVERWORLD);
                     chunks.put(key(x, z), proto);
                     var starts = new ArrayList<>(proto.getAllStarts().entrySet());
                     starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
@@ -84,7 +90,7 @@ public final class StructureStartProbe {
                 if (!(set.value().placement() instanceof ConcentricRingsStructurePlacement rings)) continue;
                 for (var position : state.getRingPositionsFor(rings)) {
                     var proto = new ProtoChunk(position, UpgradeData.EMPTY, height, factory, null);
-                    generator.createStructures(registries, state, manager, proto, null, Level.OVERWORLD);
+                    generator.createStructures(registries, state, manager, proto, templates, Level.OVERWORLD);
                     var starts = new ArrayList<>(proto.getAllStarts().entrySet());
                     starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
                     for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());
@@ -134,6 +140,13 @@ public final class StructureStartProbe {
             out.println("piece " + BuiltInRegistries.STRUCTURE_PIECE.getKey(piece.getType()) + " " + bb.minX() + " "
                 + bb.minY() + " " + bb.minZ() + " " + bb.maxX() + " " + bb.maxY() + " " + bb.maxZ() + " "
                 + (orientation == null ? -1 : orientation.get2DDataValue()) + " " + piece.getGenDepth());
+            if (piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece pool) {
+                for (var junction : pool.getJunctions()) {
+                    out.println("junction " + junction.getSourceX() + " " + junction.getSourceGroundY() + " "
+                        + junction.getSourceZ() + " " + junction.getDeltaY() + " "
+                        + junction.getDestProjection().getSerializedName());
+                }
+            }
         }
     }
 }

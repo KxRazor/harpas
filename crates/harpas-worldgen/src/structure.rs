@@ -13,10 +13,13 @@ use crate::data::{
 };
 use crate::generator::NoiseBasedChunkGenerator;
 
+mod jigsaw;
 mod start;
 mod stronghold;
 
-pub use start::{BoundingBox, Direction, StructurePiece, StructureReference, StructureStart};
+pub use start::{
+    BoundingBox, Direction, JigsawJunction, StructurePiece, StructureReference, StructureStart,
+};
 
 /// Salt of `StructurePlacement.legacyArbitrarySaltProbabilityReducer`.
 const LEGACY_TYPE_2_SALT: i32 = 10_387_320;

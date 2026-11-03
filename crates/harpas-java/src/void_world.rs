@@ -1,4 +1,4 @@
-//! The void world players join until worlds exist (M3): empty chunks in the overworld
+//! Empty overworld chunks for standalone void-world connections.
 
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::play;

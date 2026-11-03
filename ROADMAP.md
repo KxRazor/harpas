@@ -97,6 +97,11 @@ vanilla for the same seed.
   - [x] Load the chunk occupied by each player from an existing overworld on worker threads, and apply the
         result on the logic thread.
   - [ ] Load and send the chunks within each player's view distance.
+    - [x] Send existing block states, biomes, heightmaps and saved light in bounded batches.
+    - [x] Generate 26.1 block entity type IDs locally and send updates for types compared against vanilla.
+          Provisionally, generation needs Java 25 on `PATH`; if neither Java nor the generated registry is
+          present, the server starts without sending block entities.
+    - [ ] Verify remaining block entity update cases against vanilla.
   - [ ] Save chunk snapshots on workers, including non-blocking autosave, unloading and shutdown.
 - [ ] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
@@ -136,6 +141,8 @@ as shown by the parity report.
 
 - [ ] JVM runtime provisioning: detection, pinned download, verification, atomic install, offline install
       ([docs/jvm.md](docs/jvm.md#runtime-provisioning)).
+  - [ ] Reuse the provisioned runtime to generate block entity type IDs without a system Java installation,
+        including installations that do not yet have the registry.
 - [ ] JVM embedding: creation, logic thread attachment, signal handling.
 - [ ] Shim core: plugin loading, per-plugin classloaders, `plugin.yml` and `paper-plugin.yml`.
 - [ ] Synchronous event dispatch with interest masks; listener priorities; generated executors.

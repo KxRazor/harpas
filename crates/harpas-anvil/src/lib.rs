@@ -17,7 +17,7 @@ mod world;
 
 pub use chunk::{Chunk, ChunkSection};
 pub use file::Source;
-pub use region::{Region, region_of};
+pub use region::{Region, read_chunk, region_of};
 pub use version::{
     DATA_VERSION, MINECRAFT_VERSION, SUPPORTED, VersionError, check_chunk, check_level,
 };

@@ -39,6 +39,7 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
         let input = match event {
             PlayEvent::Packet(packet) => match *packet {
                 Packet::ConfirmTeleportation(p) => Input::ConfirmTeleport(p.teleport_id),
+                Packet::ChunkBatchReceived(p) => Input::ChunkBatchReceived(p.chunks_per_tick),
                 Packet::SetPlayerPosition(p) => Input::Movement(Movement {
                     position: Some([p.x, p.y, p.z]),
                     rotation: None,
@@ -62,7 +63,6 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                 Packet::PlayerAbilities(p) => Input::Flying(p.flags.flying),
                 Packet::ClientInformation(p) => {
                     let distance = p.view_distance.clamp(2, 32) as u8;
-                    connection.update_view_distance(distance);
                     Input::ViewDistance(distance)
                 }
                 _ => continue,
@@ -120,7 +120,11 @@ fn sync(position: Position, teleport_id: i32) -> clientbound::SynchronizePlayerP
 }
 
 /// Sends the logic thread's output for this player; returns the reason if the player was disconnected.
-pub(crate) fn send(connection: &mut Connection, session: &PlayerSession) -> Option<&'static str> {
+pub(crate) fn send(
+    connection: &mut Connection,
+    session: &PlayerSession,
+    block_entities: &crate::block_entity_registry::Registry,
+) -> Option<&'static str> {
     while let Some(output) = session.try_recv() {
         let packet = match output {
             Output::ChatSession { uuid, session } => clientbound::PlayerInfoUpdate {
@@ -248,6 +252,21 @@ pub(crate) fn send(connection: &mut Connection, session: &PlayerSession) -> Opti
             }
             Output::OwnPosition(position) => {
                 connection.update_view(position.x, position.z, None);
+                continue;
+            }
+            Output::ViewDistance(distance) => {
+                connection.update_view_distance(distance);
+                continue;
+            }
+            Output::ChunkBatch(chunks) => {
+                connection.send_play_packet(clientbound::ChunkBatchStart.into());
+                let count = chunks.len() as i32;
+                for chunk in chunks {
+                    connection
+                        .send_play_packet(crate::chunks::encode(chunk, block_entities).into());
+                }
+                connection
+                    .send_play_packet(clientbound::ChunkBatchFinished { batch_size: count }.into());
                 continue;
             }
             Output::Teleport {

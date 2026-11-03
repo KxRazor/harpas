@@ -1,7 +1,7 @@
-//! A real server stops on an incompatible chunk even if no new connection wakes its listener.
+//! A real server loads chunks and handles incompatible worlds over a loopback connection.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -10,9 +10,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harpas_anvil::{DATA_VERSION, Region, dimension_dir, write_level};
-use harpas_core::nbt::Compound;
-use harpas_java::write_frame;
-use harpas_protocol_java::v26_1::{configuration, handshaking, login};
+use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_java::{FrameReader, write_frame};
+use harpas_protocol_java::codec;
+use harpas_protocol_java::v26_1::{configuration, handshaking, login, play};
 
 struct Folder(PathBuf);
 
@@ -50,17 +51,21 @@ fn frame(encode: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
+fn loopback_available() -> bool {
     match TcpListener::bind("127.0.0.1:0") {
-        Ok(listener) => drop(listener),
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             eprintln!("Skipping loopback test: local sockets are not permitted");
-            return;
+            false
         }
         Err(error) => panic!("Cannot open a loopback listener: {error}"),
     }
-    let folder = Folder::new();
+}
+
+fn prepare(folder: &Folder, chunk: &Compound) {
     fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
     fs::write(
         folder.0.join("server.properties"),
@@ -79,11 +84,11 @@ fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
     let region_dir = dimension_dir(&world, "minecraft:overworld").join("region");
     fs::create_dir_all(&region_dir).unwrap();
     let mut region = Region::open(&region_dir, 0, 0).unwrap();
-    let mut old_chunk = Compound::new();
-    old_chunk.insert("DataVersion", DATA_VERSION - 1);
-    region.set_chunk(0, 0, &old_chunk);
+    region.set_chunk(0, 0, chunk);
     region.save().unwrap();
+}
 
+fn start(folder: &Folder) -> (Server, SocketAddr) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_harpas"));
     command
         .current_dir(&folder.0)
@@ -98,7 +103,7 @@ fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
     let mut server = Server(command.spawn().unwrap());
     let deadline = Instant::now() + Duration::from_secs(15);
     let log = folder.0.join("logs/latest.log");
-    let address: SocketAddr = loop {
+    let address = loop {
         let lines = fs::read_to_string(&log).unwrap_or_default();
         assert!(
             server.0.try_wait().unwrap().is_none(),
@@ -113,6 +118,10 @@ fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
         assert!(Instant::now() < deadline, "server did not listen: {lines}");
         thread::sleep(Duration::from_millis(10));
     };
+    (server, address)
+}
+
+fn login(address: SocketAddr) -> TcpStream {
     let handshake: handshaking::serverbound::Packet = handshaking::serverbound::Handshake {
         protocol_version: 775,
         server_address: "localhost".into(),
@@ -146,6 +155,33 @@ fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
     ] {
         client.write_all(&bytes).unwrap();
     }
+    client
+}
+
+fn next_frame(client: &mut TcpStream, frames: &mut FrameReader) -> Vec<u8> {
+    loop {
+        if let Some(frame) = frames.next_frame().unwrap() {
+            return frame;
+        }
+        let mut buffer = [0; 16 * 1024];
+        let count = client.read(&mut buffer).expect("server output timed out");
+        assert_ne!(count, 0, "server closed before sending a chunk");
+        frames.push(&buffer[..count]);
+    }
+}
+
+#[test]
+fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
+    if !loopback_available() {
+        return;
+    }
+    let folder = Folder::new();
+    let mut old_chunk = Compound::new();
+    old_chunk.insert("DataVersion", DATA_VERSION - 1);
+    prepare(&folder, &old_chunk);
+    let (mut server, address) = start(&folder);
+    let _client = login(address);
+    let log = folder.0.join("logs/latest.log");
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
         if let Some(status) = server.0.try_wait().unwrap() {
@@ -163,4 +199,71 @@ fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
     assert!(lines.contains("Steve joined the game"), "{lines}");
     assert!(lines.contains("Cannot load chunk 0, 0"), "{lines}");
     assert!(lines.contains("--forceUpgrade"), "{lines}");
+}
+
+#[test]
+fn server_sends_saved_block_states_over_a_real_connection() {
+    if !loopback_available() {
+        return;
+    }
+    let folder = Folder::new();
+    let mut stone = Compound::new();
+    stone.insert("Name", "minecraft:stone");
+    let mut blocks = Compound::new();
+    blocks.insert("palette", Nbt::List(List::Compound(vec![stone])));
+    let mut biomes = Compound::new();
+    biomes.insert(
+        "palette",
+        Nbt::List(List::String(vec!["minecraft:plains".into()])),
+    );
+    let mut section = Compound::new();
+    section.insert("Y", -4_i8);
+    section.insert("block_states", blocks);
+    section.insert("biomes", biomes);
+    let mut chunk = Compound::new();
+    chunk.insert("DataVersion", DATA_VERSION);
+    chunk.insert("xPos", 0);
+    chunk.insert("zPos", 0);
+    chunk.insert("Status", "minecraft:full");
+    chunk.insert("sections", Nbt::List(List::Compound(vec![section])));
+    prepare(&folder, &chunk);
+    let (_server, address) = start(&folder);
+    let mut client = login(address);
+    client
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut frames = FrameReader::default();
+    assert!(matches!(
+        login::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)),
+        Ok(login::clientbound::Packet::LoginSuccess(_))
+    ));
+    for _ in 0..33 {
+        configuration::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)).unwrap();
+    }
+    assert!(matches!(
+        play::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)),
+        Ok(play::clientbound::Packet::Login(_))
+    ));
+    loop {
+        match play::clientbound::Packet::decode(&next_frame(&mut client, &mut frames)).unwrap() {
+            play::clientbound::Packet::ChunkDataAndUpdateLight(chunk)
+                if (chunk.x, chunk.z) == (0, 0) =>
+            {
+                let mut data = chunk.data.as_slice();
+                assert_eq!(codec::read_i16(&mut data).unwrap(), 4096);
+                assert_eq!(codec::read_i16(&mut data).unwrap(), 0);
+                assert_eq!(codec::read_u8(&mut data).unwrap(), 0);
+                assert_eq!(codec::read_varint(&mut data).unwrap(), 1); // minecraft:stone
+                break;
+            }
+            play::clientbound::Packet::ChunkBatchFinished(_) => {
+                let ack: play::serverbound::Packet = play::serverbound::ChunkBatchReceived {
+                    chunks_per_tick: 8.0,
+                }
+                .into();
+                client.write_all(&frame(|buf| ack.encode(buf))).unwrap();
+            }
+            _ => {}
+        }
+    }
 }

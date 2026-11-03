@@ -2,13 +2,15 @@
 //!
 //! Listens for Java Edition connections on `server-ip` and `server-port` from `server.properties`, answers the
 //! server list, logs players in (online mode through Mojang's session server, or offline mode) and brings them
-//! into a void world. The engine runs on one logic thread; there is one thread per connection for now. The
+//! into the configured overworld. The engine runs on one logic thread; there is one thread per connection for now. The
 //! network runtime comes with the protection against abusive connections (`docs/java-connection.md`). Settings
 //! come from `server.properties`, `harpas.toml` and `HARPAS_*` environment variables; the log goes to the
 //! console and `logs/latest.log`. The server starts only once the owner has accepted Mojang's EULA.
 //!
 //! Design: `docs/operations.md`.
 
+mod block_entity_registry;
+mod chunks;
 mod console;
 mod eula;
 mod harpas_toml;
@@ -59,6 +61,10 @@ enum Command {
     InstallVanillaData {
         from: PathBuf,
     },
+    /// Generate the block entity registry from an optional owner-provided jar.
+    GenerateRegistry {
+        from: Option<PathBuf>,
+    },
 }
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
@@ -77,8 +83,13 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         ["vanilla-data", "install", "--from", jar] => Ok(Command::InstallVanillaData {
             from: PathBuf::from(jar),
         }),
+        ["vanilla-data", "generate-registry"] => Ok(Command::GenerateRegistry { from: None }),
+        ["vanilla-data", "generate-registry", "--from", jar] => Ok(Command::GenerateRegistry {
+            from: Some(PathBuf::from(jar)),
+        }),
         _ => Err("usage: harpas [nogui] | harpas --version [--verbose] | \
-                  harpas vanilla-data install --from <server.jar>"
+                  harpas vanilla-data install --from <server.jar> | \
+                  harpas vanilla-data generate-registry [--from <server.jar>]"
             .to_owned()),
     }
 }
@@ -109,7 +120,11 @@ fn verbose_version() -> String {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = match parse_args(&args) {
-        Ok(command @ (Command::Run | Command::InstallVanillaData { .. })) => command,
+        Ok(
+            command @ (Command::Run
+            | Command::InstallVanillaData { .. }
+            | Command::GenerateRegistry { .. }),
+        ) => command,
         // Before the log opens, so that asking for the version leaves no files behind.
         Ok(Command::Version { verbose: false }) => return println!("harpas {}", version()),
         Ok(Command::Version { verbose: true }) => return println!("{}", verbose_version()),
@@ -124,6 +139,7 @@ fn main() {
     }
     let result = match command {
         Command::InstallVanillaData { from } => install_vanilla_data(&from),
+        Command::GenerateRegistry { from } => generate_registry(from.as_deref()),
         _ => run(),
     };
     if let Err(e) = result {
@@ -149,9 +165,25 @@ fn run() -> io::Result<()> {
     // Every start needs Minecraft's game data, downloaded from Mojang (`docs/world.md`).
     eula::require(Path::new(""), &settings)?;
     vanilla_data::provision(Path::new(""))?;
+    let block_entities = match block_entity_registry::load(Path::new("")) {
+        Ok(Some(registry)) => registry,
+        result => {
+            if let Err(error) = result {
+                warn!("Could not load block entity registry: {error}");
+            }
+            warn!(
+                "Block entity updates are unavailable. Install Java 25 and run `harpas vanilla-data generate-registry`"
+            );
+            block_entity_registry::Registry::default()
+        }
+    };
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
-    let info = Arc::new(server_info(&properties));
+    let environment = Arc::new(ConnectionEnvironment {
+        info: server_info(&properties),
+        block_entities,
+    });
+    let info = &environment.info;
     info!("Default game type: {:?}", info.game_mode);
     info!("Generating keypair");
     let key = Arc::new(ServerKey::generate());
@@ -229,7 +261,7 @@ fn run() -> io::Result<()> {
         let Some(mut permit) = limits.connect(peer.ip(), Instant::now()) else {
             continue;
         };
-        let info = Arc::clone(&info);
+        let environment = Arc::clone(&environment);
         let key = Arc::clone(&key);
         let session = session.clone();
         let logic = logic.clone();
@@ -238,7 +270,7 @@ fn run() -> io::Result<()> {
             .name(format!("Connection {peer}"))
             .spawn(move || {
                 let session = session.as_deref();
-                if let Err(e) = serve(stream, &info, key, session, &logic, &mut permit) {
+                if let Err(e) = serve(stream, &environment, key, session, &logic, &mut permit) {
                     info!("{peer} disconnected: {e}");
                 }
                 drop(guard);
@@ -271,6 +303,12 @@ fn install_vanilla_data(jar: &Path) -> io::Result<()> {
     eula::require(Path::new(""), &settings)?;
     vanilla_data::install_from(Path::new(""), jar)?;
     Ok(())
+}
+
+fn generate_registry(jar: Option<&Path>) -> io::Result<()> {
+    let settings = harpas_toml::load(Path::new("harpas.toml"))?;
+    eula::require(Path::new(""), &settings)?;
+    vanilla_data::generate_registry(Path::new(""), jar)
 }
 
 /// Loads `server.properties`, completes and rewrites it as vanilla does, and applies `HARPAS_*` overrides.
@@ -347,9 +385,14 @@ fn load_icon(path: &Path) -> Option<String> {
 }
 
 /// Runs one connection until it is closed.
+struct ConnectionEnvironment {
+    info: ServerInfo,
+    block_entities: block_entity_registry::Registry,
+}
+
 fn serve(
     mut stream: TcpStream,
-    info: &ServerInfo,
+    environment: &ConnectionEnvironment,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
@@ -358,7 +401,7 @@ fn serve(
     // Reads wake up to send the logic thread's output even when this player is idle.
     stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
     stream.set_nodelay(true)?;
-    let result = drive(&mut stream, info, key, session, logic, Some(permit));
+    let result = drive(&mut stream, environment, key, session, logic, Some(permit));
     let _ = stream.shutdown(net::Shutdown::Both);
     result
 }
@@ -368,14 +411,22 @@ fn serve(
 /// login attempts count against the connection limits.
 fn drive(
     stream: &mut (impl Read + Write),
-    info: &ServerInfo,
+    environment: &ConnectionEnvironment,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
     permit: Option<&mut Permit>,
 ) -> io::Result<()> {
     let mut departure = Departure::default();
-    let result = play(stream, info, key, session, logic, permit, &mut departure);
+    let result = play(
+        stream,
+        environment,
+        key,
+        session,
+        logic,
+        permit,
+        &mut departure,
+    );
     let Some(name) = departure.name else {
         return result;
     };
@@ -406,7 +457,7 @@ struct Departure {
 
 fn play(
     stream: &mut (impl Read + Write),
-    info: &ServerInfo,
+    environment: &ConnectionEnvironment,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
@@ -417,13 +468,16 @@ fn play(
         .next_entity_id()
         .ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
     let mut connection = Connection::with_entity_id(key, entity_id);
+    if logic.has_world() {
+        connection.use_external_chunks();
+    }
     if permit.is_some() {
         connection.require_admission();
     }
     if let Some(session) = session {
         connection.set_chat_authority(session.chat_authority());
     }
-    let mut info = info.clone();
+    let mut info = environment.info.clone();
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
     let mut player_session = None;
@@ -480,19 +534,18 @@ fn play(
             let player = connection
                 .player()
                 .ok_or_else(|| io::Error::other("Play without a player"))?;
+            let max_view_distance = info.view_distance.clamp(2, 32) as u8;
             let session = logic
-                .player_joined(
+                .player_joined_with_view(
                     entity_id,
                     player::profile(player, info.game_mode),
-                    info.view_distance.clamp(2, 32) as u8,
+                    max_view_distance,
+                    connection
+                        .client_view_distance()
+                        .unwrap_or(max_view_distance),
                     info.allow_flight,
                 )
                 .map_err(io::Error::other)?;
-            if let Some(distance) = connection.client_view_distance() {
-                session
-                    .send(harpas_engine::player::Input::ViewDistance(distance))
-                    .map_err(io::Error::other)?;
-            }
             info!("{} joined the game", player.name);
             departure.name = Some(player.name.clone());
             if let Some(permit) = permit.as_deref_mut() {
@@ -503,7 +556,11 @@ fn play(
         if let Some(session) = &player_session {
             // The logic thread's output first: once it disconnects the player, there is nothing left to
             // forward, and forwarding to a stopped logic thread would hide its reason.
-            departure.kick = departure.kick.or(player::send(&mut connection, session));
+            departure.kick = departure.kick.or(player::send(
+                &mut connection,
+                session,
+                &environment.block_entities,
+            ));
             if !connection.is_closed() {
                 player::receive(&mut connection, session)?;
             }
@@ -612,7 +669,15 @@ mod tests {
             ]),
             ..Stream::default()
         };
-        drive(&mut stream, info, Arc::clone(key), None, logic, None).unwrap();
+        drive(
+            &mut stream,
+            &test_environment(info),
+            Arc::clone(key),
+            None,
+            logic,
+            None,
+        )
+        .unwrap();
         let mut frames = FrameReader::default();
         frames.push(&stream.output);
         let packet =
@@ -622,6 +687,13 @@ mod tests {
         };
         let json: serde_json::Value = serde_json::from_str(&response.json).unwrap();
         json["players"]["online"].as_u64().unwrap()
+    }
+
+    fn test_environment(info: &ServerInfo) -> ConnectionEnvironment {
+        ConnectionEnvironment {
+            info: info.clone(),
+            block_entities: block_entity_registry::Registry::default(),
+        }
     }
 
     #[test]
@@ -660,7 +732,7 @@ mod tests {
                 };
                 drive(
                     &mut stream,
-                    &client_info,
+                    &test_environment(&client_info),
                     client_key,
                     None,
                     &client_logic,
@@ -706,6 +778,17 @@ mod tests {
             })
         );
         assert!(args(&["vanilla-data", "install"]).is_err());
+        assert_eq!(
+            args(&["vanilla-data", "generate-registry"]),
+            Ok(Command::GenerateRegistry { from: None })
+        );
+        assert_eq!(
+            args(&["vanilla-data", "generate-registry", "--from", "server.jar"]),
+            Ok(Command::GenerateRegistry {
+                from: Some(PathBuf::from("server.jar"))
+            })
+        );
+        assert!(args(&["vanilla-data", "generate-registry", "--from"]).is_err());
         assert_eq!(version(), format!("{}+26.1", env!("CARGO_PKG_VERSION")));
         assert!(verbose_version().contains("Java clients: 26.1 (protocol 775)"));
     }
@@ -800,7 +883,15 @@ mod tests {
                     output: server_output,
                 };
                 let mut departure = Departure::default();
-                let result = play(&mut stream, &info, key, None, &logic, None, &mut departure);
+                let result = play(
+                    &mut stream,
+                    &test_environment(&info),
+                    key,
+                    None,
+                    &logic,
+                    None,
+                    &mut departure,
+                );
                 (result, departure)
             })
         };
@@ -851,7 +942,15 @@ mod tests {
                     output: server_output,
                 };
                 let mut departure = Departure::default();
-                let result = play(&mut stream, &info, key, None, &logic, None, &mut departure);
+                let result = play(
+                    &mut stream,
+                    &test_environment(&info),
+                    key,
+                    None,
+                    &logic,
+                    None,
+                    &mut departure,
+                );
                 (result, departure)
             })
         };
@@ -929,7 +1028,14 @@ mod tests {
                     input: server_input,
                     output: server_output,
                 };
-                drive(&mut stream, &info, key, None, &logic, None)
+                drive(
+                    &mut stream,
+                    &test_environment(&info),
+                    key,
+                    None,
+                    &logic,
+                    None,
+                )
             });
             for packet in login_packets(name) {
                 input.send(packet).unwrap();
@@ -958,6 +1064,10 @@ mod tests {
         }
 
         fn join(&mut self) -> i32 {
+            self.join_with_chunks().0
+        }
+
+        fn join_with_chunks(&mut self) -> (i32, Vec<play::clientbound::ChunkDataAndUpdateLight>) {
             assert!(matches!(
                 login::clientbound::Packet::decode(&self.next_frame()),
                 Ok(login::clientbound::Packet::LoginSuccess(_))
@@ -969,18 +1079,34 @@ mod tests {
             let play::clientbound::Packet::Login(login) = login else {
                 panic!("expected Play Login");
             };
+            let mut chunks = Vec::new();
             loop {
-                if matches!(
-                    play::clientbound::Packet::decode(&self.next_frame()).unwrap(),
-                    play::clientbound::Packet::ChunkBatchFinished(_)
-                ) {
-                    return login.entity_id;
+                match play::clientbound::Packet::decode(&self.next_frame()).unwrap() {
+                    play::clientbound::Packet::ChunkDataAndUpdateLight(chunk) => chunks.push(chunk),
+                    play::clientbound::Packet::ChunkBatchFinished(_) => {
+                        self.acknowledge_chunks();
+                        return (login.entity_id, chunks);
+                    }
+                    _ => {}
                 }
             }
         }
 
         fn next_play(&mut self) -> play::clientbound::Packet {
-            play::clientbound::Packet::decode(&self.next_frame()).unwrap()
+            let packet = play::clientbound::Packet::decode(&self.next_frame()).unwrap();
+            if matches!(packet, play::clientbound::Packet::ChunkBatchFinished(_)) {
+                self.acknowledge_chunks();
+            }
+            packet
+        }
+
+        fn acknowledge_chunks(&self) {
+            self.send(
+                play::serverbound::ChunkBatchReceived {
+                    chunks_per_tick: 8.0,
+                }
+                .into(),
+            );
         }
 
         fn send(&self, packet: play::serverbound::Packet) {
@@ -991,6 +1117,127 @@ mod tests {
             drop(self.input);
             self.thread.join().unwrap().unwrap();
         }
+    }
+
+    #[test]
+    fn players_receive_existing_chunks_and_new_columns_after_moving() {
+        use harpas_anvil::{Chunk, ChunkSection, DATA_VERSION, Region, dimension_dir, region_of};
+        use harpas_core::block::block_states;
+        use harpas_core::chunk::{PalettedContainer, Section, Strategy};
+        use harpas_core::nbt::Compound;
+        use harpas_protocol_java::codec;
+        use std::collections::HashSet;
+
+        struct Folder(PathBuf);
+        impl Drop for Folder {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let folder =
+            Folder(std::env::temp_dir().join(format!("harpas-view-test-{}", std::process::id())));
+        fs::create_dir_all(&folder.0).unwrap();
+        let dir = dimension_dir(&folder.0, "minecraft:overworld").join("region");
+        fs::create_dir_all(&dir).unwrap();
+        let states = block_states();
+        let stone = states.default_state("minecraft:stone").unwrap();
+        let diamond = states.default_state("minecraft:diamond_block").unwrap();
+        for (x, state) in [(0, stone), (-3, diamond)] {
+            let mut rest = Compound::new();
+            rest.insert("DataVersion", DATA_VERSION);
+            rest.insert("xPos", x);
+            rest.insert("zPos", 0);
+            let chunk = Chunk {
+                sections: vec![ChunkSection {
+                    y: -4,
+                    section: Some(Section::new(
+                        PalettedContainer::filled(
+                            Strategy::block_states(states.global_bits()),
+                            state,
+                        ),
+                        PalettedContainer::filled(Strategy::biomes(7), 0),
+                    )),
+                    rest: Compound::new(),
+                }],
+                rest,
+            };
+            let (rx, rz) = region_of(x, 0);
+            let mut region = Region::open(&dir, rx, rz).unwrap();
+            region.set_chunk(x, 0, &chunk.to_nbt(harpas_java::biome_names()));
+            region.save().unwrap();
+        }
+        let info = ServerInfo {
+            online_mode: false,
+            compression_threshold: -1,
+            view_distance: 2,
+            ..ServerInfo::default()
+        };
+        let key = Arc::new(ServerKey::generate());
+        let (logic, logic_thread) =
+            harpas_engine::start_with_world(&folder.0, harpas_java::biome_names()).unwrap();
+        let mut client = TestClient::start("Steve", &info, &key, &logic);
+        let (_, first) = client.join_with_chunks();
+        let mut received = HashSet::new();
+        let mut origin = None;
+        for chunk in first {
+            received.insert((chunk.x, chunk.z));
+            if (chunk.x, chunk.z) == (0, 0) {
+                origin = Some(chunk);
+            }
+        }
+        while received.len() < 25 {
+            if let play::clientbound::Packet::ChunkDataAndUpdateLight(chunk) = client.next_play() {
+                assert!(received.insert((chunk.x, chunk.z)), "chunk was sent twice");
+                if (chunk.x, chunk.z) == (0, 0) {
+                    origin = Some(chunk);
+                }
+            }
+        }
+        fn first_state(chunk: &play::clientbound::ChunkDataAndUpdateLight) -> i32 {
+            let mut data = chunk.data.as_slice();
+            assert_eq!(codec::read_i16(&mut data).unwrap(), 4096);
+            assert_eq!(codec::read_i16(&mut data).unwrap(), 0);
+            assert_eq!(codec::read_u8(&mut data).unwrap(), 0);
+            codec::read_varint(&mut data).unwrap()
+        }
+        assert_eq!(first_state(&origin.unwrap()), stone as i32);
+        client.send(play::serverbound::ConfirmTeleportation { teleport_id: 1 }.into());
+        client.send(
+            play::serverbound::SetPlayerPosition {
+                x: -0.5,
+                y: 65.0,
+                z: 0.5,
+                flags: play::MovementFlags::default(),
+            }
+            .into(),
+        );
+        let mut center = false;
+        let mut unloaded = false;
+        let mut entering = None;
+        while !center || !unloaded || entering.is_none() {
+            match client.next_play() {
+                play::clientbound::Packet::SetCenterChunk(packet)
+                    if (packet.x, packet.z) == (-1, 0) =>
+                {
+                    center = true
+                }
+                play::clientbound::Packet::UnloadChunk(packet)
+                    if (packet.x, packet.z) == (2, 0) =>
+                {
+                    unloaded = true
+                }
+                play::clientbound::Packet::ChunkDataAndUpdateLight(packet)
+                    if (packet.x, packet.z) == (-3, 0) =>
+                {
+                    entering = Some(packet)
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(first_state(&entering.unwrap()), diamond as i32);
+        client.close();
+        drop(logic);
+        logic_thread.join().unwrap();
     }
 
     #[test]

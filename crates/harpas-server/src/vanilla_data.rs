@@ -3,7 +3,8 @@
 //! World generation, recipes, loot tables, tags and structures are data files inside Mojang's server jar, which
 //! Harpas does not redistribute. On the first start the jar is downloaded from Mojang, verified, and only its
 //! `data/` files are copied into `.harpas/vanilla-data/<version>.zip`, a pack laid out like a zipped datapack;
-//! the jar is never run and is deleted afterwards. `harpas vanilla-data install --from <server.jar>` does the same with a jar the owner provides
+//! the jar is also used to generate registry IDs locally when Java is available, and deleted afterwards.
+//! `harpas vanilla-data install --from <server.jar>` does the same with a jar the owner provides
 //! (`docs/world.md#vanilla-game-data`).
 
 use std::fs::{self, File};
@@ -11,7 +12,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use log::info;
+use log::{info, warn};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 
@@ -20,7 +21,7 @@ pub const VERSION: &str = harpas_protocol_java::v26_1::MINECRAFT_VERSION;
 
 /// The SHA-1 and size of Mojang's server jar for [`VERSION`], as its version manifest gives them. Pinned, so
 /// that a jar provided offline is checked as strictly as a download, and a changed manifest is noticed.
-const SERVER_JAR_SHA1: &str = "3872a7f07a1a595e651aef8b058dfc2bb3772f46";
+pub(crate) const SERVER_JAR_SHA1: &str = "3872a7f07a1a595e651aef8b058dfc2bb3772f46";
 const SERVER_JAR_SIZE: u64 = 60_417_588;
 
 const MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -48,7 +49,11 @@ pub fn provision(server: &Path) -> io::Result<PathBuf> {
     let parent = pack.parent().expect("the data pack has a parent");
     fs::create_dir_all(parent)?;
     let jar = parent.join(format!(".{VERSION}-server.jar.partial"));
-    let result = download(&jar).and_then(|()| unpack(&jar, &pack));
+    let result = download(&jar).and_then(|()| {
+        unpack(&jar, &pack)?;
+        generate_if_possible(server, &jar);
+        Ok(())
+    });
     let _ = fs::remove_file(&jar);
     result.map_err(|e| {
         io::Error::new(
@@ -66,14 +71,48 @@ pub fn provision(server: &Path) -> io::Result<PathBuf> {
 
 /// Extracts the data from a server jar the owner provides, replacing any data already installed.
 pub fn install_from(server: &Path, jar: &Path) -> io::Result<PathBuf> {
-    let mut file =
-        File::open(jar).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", jar.display())))?;
-    let (sha1, size) = hash(&mut file, &mut io::sink())?;
-    check(&sha1, size)?;
+    verify_jar(jar)?;
     let pack = pack(server);
     fs::create_dir_all(pack.parent().expect("the data pack has a parent"))?;
     unpack(jar, &pack)?;
+    generate_if_possible(server, jar);
     Ok(pack)
+}
+
+fn verify_jar(jar: &Path) -> io::Result<()> {
+    let mut file =
+        File::open(jar).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", jar.display())))?;
+    let (sha1, size) = hash(&mut file, &mut io::sink())?;
+    check(&sha1, size)
+}
+
+/// Generate missing IDs during data installation without making Java a startup requirement.
+fn generate_if_possible(server: &Path, jar: &Path) {
+    if matches!(crate::block_entity_registry::load(server), Ok(Some(_))) {
+        return;
+    }
+    if let Err(error) = crate::block_entity_registry::generate(server, jar) {
+        warn!(
+            "Could not generate block entity IDs: {error}. Install Java 25 and run `harpas vanilla-data generate-registry`"
+        );
+    }
+}
+
+/// Generate the registry explicitly, from either a verified local jar or a fresh download.
+pub fn generate_registry(server: &Path, from: Option<&Path>) -> io::Result<()> {
+    if let Some(jar) = from {
+        verify_jar(jar)?;
+        return crate::block_entity_registry::generate(server, jar);
+    }
+    let parent = pack(server)
+        .parent()
+        .expect("the data pack has a parent")
+        .to_owned();
+    fs::create_dir_all(&parent)?;
+    let jar = parent.join(format!(".{VERSION}-registry-server.jar.partial"));
+    let result = download(&jar).and_then(|()| crate::block_entity_registry::generate(server, &jar));
+    let _ = fs::remove_file(jar);
+    result
 }
 
 /// Downloads the server jar into `to`, following Mojang's version manifest, and verifies it.
@@ -345,6 +384,12 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains(SERVER_JAR_SHA1));
         assert!(!pack(&folder.0).exists());
+        assert!(generate_registry(&folder.0, Some(&jar)).is_err());
+        assert!(
+            crate::block_entity_registry::load(&folder.0)
+                .unwrap()
+                .is_none()
+        );
         assert!(check(SERVER_JAR_SHA1, SERVER_JAR_SIZE).is_ok());
         assert!(check(SERVER_JAR_SHA1, SERVER_JAR_SIZE - 1).is_err());
     }

@@ -31,7 +31,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `--forceUpgrade`; chunks of another version are refused as they are read (`harpas-anvil`, `harpas-server`).
 - Existing overworld chunks occupied by players are read on a bounded worker pool and delivered to the logic
   thread. Missing and damaged chunks are distinguished, and an incompatible chunk stops the server with an
-  error. Clients still see the void until chunk sending is implemented (`harpas-engine`, `harpas-server`).
+  error (`harpas-engine`, `harpas-server`).
+- Existing overworld chunks within each player's view are loaded and sent to Java clients in bounded batches,
+  including block states, biomes, heightmaps, stored light and verified block entity updates. Their type IDs
+  are generated locally from the verified server jar when Java 25 is available; without them the server warns
+  and omits block entities. Missing chunks remain void until generation (`harpas-anvil`, `harpas-engine`,
+  `harpas-java`, `harpas-server`).
 
 ### Changed
 

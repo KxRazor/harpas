@@ -25,7 +25,7 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// The data pack whose registry data the client must have: Harpas sends registry entries without their data.
 const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", v26_1::MINECRAFT_VERSION);
-/// Where players appear in the void world: above the middle of chunk (0, 0).
+/// Temporary spawn position: above the middle of chunk (0, 0).
 const SPAWN: (f64, f64, f64) = (0.5, 65.0, 0.5);
 
 fn unix_millis() -> i64 {
@@ -212,6 +212,7 @@ pub struct Connection {
     view_distance: i32,
     center_chunk: (i32, i32),
     biome: i32,
+    external_chunks: bool,
 }
 
 impl Connection {
@@ -249,6 +250,7 @@ impl Connection {
             view_distance: 2,
             center_chunk: (0, 0),
             biome: 0,
+            external_chunks: false,
         }
     }
 
@@ -337,6 +339,11 @@ impl Connection {
         }
     }
 
+    /// Takes chunk contents from the engine instead of generating void chunks for the player's view.
+    pub fn use_external_chunks(&mut self) {
+        self.external_chunks = true;
+    }
+
     /// Disconnects a player in Play with a text reason.
     pub fn disconnect_play(&mut self, reason: &str) {
         if self.state == State::Play {
@@ -350,7 +357,7 @@ impl Connection {
         }
     }
 
-    /// Updates the void chunks sent to the client after an accepted movement or settings change.
+    /// Updates the chunk center and unloads columns outside the accepted view.
     pub fn update_view(&mut self, x: f64, z: f64, client_distance: Option<u8>) {
         if self.state != State::Play || !x.is_finite() || !z.is_finite() {
             return;
@@ -393,6 +400,9 @@ impl Connection {
                     );
                 }
             }
+        }
+        if self.external_chunks {
+            return;
         }
         let mut added = Vec::new();
         for chunk_x in center.0 - distance..=center.0 + distance {
@@ -860,7 +870,7 @@ impl Connection {
         Ok(())
     }
 
-    /// Brings the player into the void world.
+    /// Brings the player into Play.
     fn join(&mut self, info: &ServerInfo) {
         let player = self.player.clone().expect("Login set the player");
         debug_assert_eq!(self.login, LoginStep::Done);
@@ -985,6 +995,9 @@ impl Connection {
             .into(),
         );
         self.send_play(play::clientbound::SetCenterChunk { x: 0, z: 0 }.into());
+        if self.external_chunks {
+            return;
+        }
         self.send_play(play::clientbound::ChunkBatchStart.into());
         let mut count = 0;
         for chunk_x in -view_distance..=view_distance {
@@ -1049,6 +1062,7 @@ impl Connection {
                 self.play_input.push(PlayEvent::Packet(Box::new(packet)));
             }
             Packet::ConfirmTeleportation(_)
+            | Packet::ChunkBatchReceived(_)
             | Packet::SetPlayerPosition(_)
             | Packet::SetPlayerPositionAndRotation(_)
             | Packet::SetPlayerRotation(_)

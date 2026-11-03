@@ -5,11 +5,11 @@
 //! than 255 sectors is stored in its own `c.x.z.mcc` file, and the region keeps only the compression byte with
 //! 128 added. Harpas writes zlib, as vanilla does, and reads gzip, zlib and uncompressed chunks.
 //!
-//! A region is read whole and saved whole: the new file is written under a temporary name and renamed over the
-//! old one, so a crash never leaves a half-written region (`docs/world.md#saving`).
+//! Individual chunks can be read without loading their whole region. A region is saved whole: the new file is
+//! written under a temporary name and renamed over the old one (`docs/world.md#saving`).
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,6 +36,56 @@ const EXTERNAL: u8 = 128;
 /// The region that holds chunk `chunk_x`, `chunk_z`.
 pub fn region_of(chunk_x: i32, chunk_z: i32) -> (i32, i32) {
     (chunk_x >> 5, chunk_z >> 5)
+}
+
+/// Reads one chunk from `dir` without reading the rest of its region. A missing region or entry is `None`.
+pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Compound>> {
+    let (region_x, region_z) = region_of(chunk_x, chunk_z);
+    let path = dir.join(format!("r.{region_x}.{region_z}.mca"));
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let file_len = file.metadata()?.len();
+    if file_len < (2 * SECTOR) as u64 {
+        return Ok(None);
+    }
+    let index = (chunk_x & 31) as u64 + (chunk_z & 31) as u64 * 32;
+    file.seek(SeekFrom::Start(index * 4))?;
+    let mut location = [0; 4];
+    file.read_exact(&mut location)?;
+    let location = u32::from_be_bytes(location);
+    if location == 0 {
+        return Ok(None);
+    }
+    let offset = u64::from(location >> 8);
+    let sectors = u64::from(location & 0xff);
+    let start = offset * SECTOR as u64;
+    if offset < 2 || sectors == 0 || start + 5 > file_len {
+        return Err(invalid(format!(
+            "location {offset}+{sectors} is outside the region file"
+        )));
+    }
+    file.seek(SeekFrom::Start(start))?;
+    let mut header = [0; 5];
+    file.read_exact(&mut header)?;
+    let length = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
+    let compression = header[4];
+    let data = if compression & EXTERNAL != 0 {
+        let path = dir.join(format!("c.{chunk_x}.{chunk_z}.mcc"));
+        fs::read(&path).map_err(|error| invalid(format!("{}: {error}", path.display())))?
+    } else {
+        if length == 0 || length > sectors * SECTOR as u64 - 4 || start + 4 + length > file_len {
+            return Err(invalid(format!(
+                "length {length} does not fit its {sectors} sectors"
+            )));
+        }
+        let mut data = vec![0; (length - 1) as usize];
+        file.read_exact(&mut data)?;
+        data
+    };
+    decode_chunk(compression & !EXTERNAL, &data).map(Some)
 }
 
 /// What a region holds for one chunk.
@@ -163,36 +213,7 @@ impl Region {
                 compression, data, ..
             } => (*compression, data.as_slice()),
         };
-        let mut nbt = Vec::new();
-        match compression {
-            GZIP => GzDecoder::new(data).read_to_end(&mut nbt)?,
-            ZLIB => ZlibDecoder::new(data).read_to_end(&mut nbt)?,
-            UNCOMPRESSED => {
-                nbt.extend_from_slice(data);
-                nbt.len()
-            }
-            LZ4 => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "LZ4 chunks are not supported yet; set region-file-compression=deflate and open the world once \
-                     with vanilla",
-                ));
-            }
-            CUSTOM => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!(
-                        "chunk compressed with a custom algorithm ({})",
-                        custom_name(data)
-                    ),
-                ));
-            }
-            other => return Err(invalid(format!("unknown chunk compression {other}"))),
-        };
-        match Nbt::read_named(&mut nbt.as_slice()).map_err(invalid)? {
-            (_, Nbt::Compound(chunk)) => Ok(Some(chunk)),
-            _ => Err(invalid("the chunk's NBT root is not a compound")),
-        }
+        decode_chunk(compression, data).map(Some)
     }
 
     /// The time of the chunk's last save, in seconds since the Unix epoch.
@@ -279,6 +300,39 @@ impl Region {
 }
 
 /// The algorithm a custom-compressed chunk names: an unsigned 16-bit length and a namespaced string.
+fn decode_chunk(compression: u8, data: &[u8]) -> io::Result<Compound> {
+    let mut nbt = Vec::new();
+    match compression {
+        GZIP => GzDecoder::new(data).read_to_end(&mut nbt)?,
+        ZLIB => ZlibDecoder::new(data).read_to_end(&mut nbt)?,
+        UNCOMPRESSED => {
+            nbt.extend_from_slice(data);
+            nbt.len()
+        }
+        LZ4 => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "LZ4 chunks are not supported yet; set region-file-compression=deflate and open the world once \
+                 with vanilla",
+            ));
+        }
+        CUSTOM => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "chunk compressed with a custom algorithm ({})",
+                    custom_name(data)
+                ),
+            ));
+        }
+        other => return Err(invalid(format!("unknown chunk compression {other}"))),
+    };
+    match Nbt::read_named(&mut nbt.as_slice()).map_err(invalid)? {
+        (_, Nbt::Compound(chunk)) => Ok(chunk),
+        _ => Err(invalid("the chunk's NBT root is not a compound")),
+    }
+}
+
 fn custom_name(data: &[u8]) -> String {
     let length = data
         .get(..2)
@@ -382,6 +436,7 @@ mod tests {
         let region = Region::open(&folder.0, 0, 0).unwrap();
         assert_eq!(region.chunk(3, 4).unwrap(), None);
         assert_eq!(region.timestamp(3, 4), None);
+        assert_eq!(read_chunk(&folder.0, 3, 4).unwrap(), None);
     }
 
     #[test]
@@ -402,6 +457,12 @@ mod tests {
         assert_eq!(region.chunk(-1, 64).unwrap(), Some(chunk(-1, 64)));
         assert_eq!(region.chunk(-32, 95).unwrap(), Some(chunk(-32, 95)));
         assert_eq!(region.chunk(-2, 64).unwrap(), None);
+        assert_eq!(read_chunk(&folder.0, -1, 64).unwrap(), Some(chunk(-1, 64)));
+        assert_eq!(
+            read_chunk(&folder.0, -32, 95).unwrap(),
+            Some(chunk(-32, 95))
+        );
+        assert_eq!(read_chunk(&folder.0, -2, 64).unwrap(), None);
         assert!(region.timestamp(-1, 64).unwrap() > 1_700_000_000);
     }
 
@@ -430,6 +491,7 @@ mod tests {
                 "compression {compression}"
             );
             assert_eq!(region.timestamp(5, 0), Some(1_700_000_000));
+            assert_eq!(read_chunk(&folder.0, 5, 0).unwrap(), Some(chunk(5, 0)));
         }
     }
 
@@ -442,6 +504,10 @@ mod tests {
             .chunk(0, 0)
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            read_chunk(&folder.0, 0, 0).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
 
         let mut custom = vec![0, 11];
         custom.extend_from_slice(b"example:zst");
@@ -465,6 +531,11 @@ mod tests {
         fs::write(folder.0.join("r.0.0.mca"), &file).unwrap();
         let region = Region::open(&folder.0, 0, 0).unwrap();
         assert_eq!(region.chunk(0, 0).unwrap(), Some(chunk(0, 0)));
+        assert_eq!(read_chunk(&folder.0, 0, 0).unwrap(), Some(chunk(0, 0)));
+        assert_eq!(
+            read_chunk(&folder.0, 1, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         assert_eq!(
             region.chunk(1, 0).unwrap_err().kind(),
             io::ErrorKind::InvalidData
@@ -474,6 +545,7 @@ mod tests {
         let mut region = Region::open(&folder.0, 0, 0).unwrap();
         assert!(region.chunk(0, 0).is_err());
         assert!(region.chunk(2, 0).is_err());
+        assert!(read_chunk(&folder.0, 2, 0).is_err());
         // Saving drops the entries it cannot read.
         region.save().unwrap();
         assert_eq!(
@@ -504,7 +576,8 @@ mod tests {
         assert_eq!(file[start + 4], ZLIB | EXTERNAL);
 
         let mut region = Region::open(&folder.0, 1, -1).unwrap();
-        assert_eq!(region.chunk(33, -1).unwrap(), Some(large));
+        assert_eq!(region.chunk(33, -1).unwrap(), Some(large.clone()));
+        assert_eq!(read_chunk(&folder.0, 33, -1).unwrap(), Some(large));
         assert_eq!(region.chunk(34, -1).unwrap(), Some(chunk(34, -1)));
 
         // Once the chunk is small again, its .mcc file goes.

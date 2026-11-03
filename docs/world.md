@@ -6,10 +6,11 @@ tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
 Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
-Region files, chunk sections, `level.dat` and player data are read and written. The engine loads the existing
-overworld chunk occupied by each player, but players still see the void until chunk sending is implemented;
-the rest of world loading and the save format, generation and parity are design. Facts about vanilla cite
-their source in [References](#references); everything else is a design decision of this project.
+Region files, chunk sections, `level.dat` and player data are read and written. Existing overworld chunks are
+loaded and sent within each player's view, with block states, biomes, heightmaps, saved light and block entity
+updates for types checked against vanilla. Generation, the remaining block entity cases, and the rest of world
+loading and saving remain in progress. Facts about vanilla cite their source in [References](#references);
+everything else is a design decision of this project.
 
 ---
 
@@ -74,12 +75,16 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
 
 ### Loading
 
-The server currently requests the existing overworld chunk occupied by each player. A bounded worker pool
-reads the region and decodes the chunk; the logic thread receives the result in its dimension phase. A missing
-chunk is recorded as missing, a read error is logged and retained separately, and an incompatible data version
-stops the server, even if the player left while the read was in progress. Chunks no player occupies are
-released, and other results no longer wanted are discarded. Loading the full view distance, generation and
-sending chunks to players are later steps.
+The server requests existing overworld chunks within each player's effective view distance, prioritizing nearby
+chunks and sharing reads between viewers. Workers read only the requested region entries and decode the chunks;
+the logic thread receives results in its dimension phase. Each connection encodes and sends bounded batches off
+the logic thread. A missing chunk is represented by the temporary void until generation exists; read errors
+are logged separately, and an incompatible data version stops the server even if the player left while its
+read was in progress. Chunks outside every view are released and other stale results discarded. When the local
+block entity registry is available, their positions and types are sent with the client update fields checked
+against 26.1: for example, sign text is visible while a chest's saved inventory is not sent in the chunk.
+Other block entity types currently receive no update data until their fields are verified. If the registry is
+missing, the server warns and omits block entities until it is generated.
 
 ### Saving
 
@@ -107,10 +112,18 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
   endpoints and verifies it against the hash in Mojang's version manifest [4]. Each Harpas release also pins
   that hash and size in its binary: a manifest naming a different jar is refused, and a jar provided offline
   is checked as strictly as a download.
-- It **extracts only the data files** into one zip, `.harpas/vanilla-data/<version>.zip`: the `data/`
+- It **extracts the data files** into one zip, `.harpas/vanilla-data/<version>.zip`: the `data/`
   directory and `version.json` of the game jar, which the server jar bundles under `META-INF/versions/` since
-  1.18. The jar is never run and is deleted after extraction. The zip is written under a temporary name and
+  1.18. The zip is written under a temporary name and
   renamed into place, so an interrupted start leaves nothing behind and keeps the data already installed.
+- If Java 25 is available on `PATH`, Harpas attempts to run the verified jar's data generator once to obtain its
+  block entity type registry [8]. Harpas stores only those IDs in `.harpas/vanilla-data/<version>-block-entity-types.json`;
+  the other generated reports, unpacked executable files and downloaded jar are removed afterwards. Neither
+  the jar nor the generated data is committed or redistributed.
+- Java is not required to start Harpas. If it is unavailable during installation, or for installations made
+  before the registry was added, the server warns that block entities are unavailable. Install Java 25 and run
+  `harpas vanilla-data generate-registry`; to avoid downloading the jar again, use
+  `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA and the jar hash.
 
 The data stays in a zip, as vanilla reads it from inside its own jar, rather than being unpacked into a folder:
 
@@ -192,8 +205,9 @@ in `harpas.toml`:
 
 Vanilla is the specification. Every behavior is ported one to one and checked against vanilla itself.
 
-- **Reference server in CI only.** Mojang's server runs in continuous integration as the reference for
-  differential tests. It is never committed, never part of a release, and never part of the Harpas binary.
+- **Reference server for tests only.** Mojang's server runs in continuous integration, or locally in an
+  isolated test folder after EULA acceptance, as the reference for differential tests. It is never committed,
+  never part of a release, and never part of the Harpas binary.
 - **Order of work**, from the easiest to compare to the hardest:
   1. world generation: same seed, compared block by block, biome by biome;
   2. block behavior and redstone: scripted circuits compared tick by tick;
@@ -235,3 +249,5 @@ Vanilla is the specification. Every behavior is ported one to one and checked ag
    https://minecraft.wiki/w/Java_Edition_26.1.2
 7. minecraft.wiki, "Java Edition level format" (26.1 world folder layout, `level.dat`, `level.dat_new` and
    `level.dat_old`). https://minecraft.wiki/w/Java_Edition_level_format
+8. minecraft.wiki, "Data Generators" (server data generator and the registry report).
+   https://minecraft.wiki/w/Minecraft_Wiki:Projects/wiki.vg_merge/Data_Generators

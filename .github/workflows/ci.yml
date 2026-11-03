@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
   # Started by dependabot-notices.yml after it commits to a Dependabot branch.
   workflow_dispatch:
@@ -35,7 +35,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS hosted runners often never start, so macOS runs only for release branches
+        # (docs/releases.md#release-process).
+        os: ${{ fromJSON(startsWith(github.base_ref || github.ref_name, 'release/')
+          && '["ubuntu-latest", "windows-latest", "macos-latest"]'
+          || '["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

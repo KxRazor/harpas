@@ -94,7 +94,8 @@ subsections. A release moves `Unreleased` under its version and date.
 1. **Freeze:** create the release branch `release/<version>`; only fixes land on it.
 2. **Beta:** publish `-beta.N` builds from the branch until no blocking issue remains.
 3. **Checks, all required:**
-   - build and tests on Linux, Windows and macOS;
+   - build and tests on Linux, Windows and macOS; CI runs macOS only for `release/*` branches and pull requests
+     into them;
    - fuzzing smoke runs of every decoder;
    - parity harnesses against vanilla ([world.md](world.md#parity-strategy));
    - plugin compatibility suite against Paper ([jvm.md](jvm.md#validation));

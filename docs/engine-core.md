@@ -4,10 +4,10 @@ Scope: how the Rust engine runs the game in normal mode: the tick loop and its o
 parallel, how threads are laid out, how the world and entities are stored, and how plugins are called from
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
-Status: in progress. The logic thread, tick skeleton, players, chunk sections and loading and sending existing
-overworld chunks are implemented; block entity updates, saving and the remaining entity logic are still in
-progress. Facts about vanilla cite their source in [References](#references); everything else is a design
-decision of this project.
+Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
+overworld chunks, and asynchronous chunk saving are implemented. Live block changes, saving other world and
+player data, and the remaining entity logic are still in progress. Facts about vanilla cite their source in
+[References](#references); everything else is a design decision of this project.
 
 ---
 
@@ -57,7 +57,8 @@ This order is observable (redstone timing, farms, entity interactions), so Harpa
 **Implemented skeleton:** the server starts one logic thread with a 50 ms tick target. It catches up after
 short delays and resets the target after a delay over two seconds. The tick has phases for functions,
 dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. The dimension
-phase applies completed chunk reads; connection and player work is implemented. The other phases remain
+phase applies completed chunk reads and saves, and schedules unloading; the autosave phase queues immutable
+chunk snapshots without waiting for disk. Connection and player work is implemented. The other phases remain
 placeholders.
 
 Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting

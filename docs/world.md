@@ -8,7 +8,8 @@ Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla gam
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
 Region files, chunk sections, `level.dat` and player data are read and written. Existing overworld chunks are
 loaded and sent within each player's view, with block states, biomes, heightmaps, saved light and block entity
-data checked against vanilla. Generation, live block changes and the rest of world saving remain in progress.
+data checked against vanilla. Changed chunks can be saved asynchronously; generation, live block changes and
+saving other world and player data during play remain in progress.
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -92,11 +93,17 @@ block changes are part of gameplay work.
 
 - Saves happen when vanilla saves: the periodic autosave every 6,000 ticks [2], when chunks unload, and on
   shutdown.
-- At a save point the logic thread only takes a **snapshot** of the changed sections and entities; worker
-  threads serialize, compress and write them. The tick does not wait for disk.
+- At a save point the logic thread shares immutable **snapshots** of changed chunks with a bounded save queue,
+  taking the remaining snapshots as space becomes available. A worker serializes, compresses and writes them;
+  the tick does not wait for disk. Changes made while a snapshot is being written remain dirty. An unloaded
+  chunk stays resident until its latest changes are saved, and shutdown waits for pending saves. A save error
+  stops the server and is reported.
 - Writes are atomic per region file, so a crash never leaves a half-written region: a region is saved whole
   under a temporary name and renamed into place, after the `.mcc` files of its large chunks. A chunk whose
-  region entry cannot be read is reported when it is read, without hiding the region's other chunks.
+  region entry cannot be read is reported when it is read, without hiding the region's other chunks. A save
+  refuses to overwrite a region with an unreadable entry unless that entry is explicitly replaced or removed.
+  The region and its external `.mcc` files are not one atomic transaction: an interruption between their
+  renames can leave a previously external chunk with newer contents than the region file.
 
 ---
 

@@ -238,9 +238,17 @@ and the owner **accepts it once**:
     `concentric_rings` placements, the four frequency reduction methods and exclusion zones. The
     `structure_placement_parity` harness compares this with vanilla's own `ChunkGeneratorStructureState`, loaded
     with real registries and tags, for 5 seeds in 2,048×2,048 chunks at the origin and smaller areas far from it.
-    Nothing generates structures yet: the chunk generator does not use this, and a start still depends on the
-    biome and the terrain at that chunk. Ring positions search biomes starting without a last result, whereas
-    vanilla's depends on its worker threads, so a tie may resolve differently in a vanilla world.
+    `StructureState::starts_in_chunk` then decides which structures start in a chunk: it picks a set's
+    structure by weight, finds the generation point from the terrain height of the noise
+    (`NoiseBasedChunkGenerator::base_height`, one noise column as vanilla's `iterateNoiseColumn` reads it), checks
+    the biome there and makes the pieces. `references_in_chunk` lists the starts within 8 chunks whose bounding
+    boxes reach a chunk. Only buried treasure, desert pyramids, jungle temples and swamp huts are made so far; sets
+    with other structure types are skipped. The `structure_start_parity` harness compares base heights at 1,764
+    columns, and the starts, pieces and references of 4 seeds in 512×512 chunks, with vanilla's own
+    `createStructures` and `createReferences`. The chunk generator does not use any of this yet, and references
+    compute the starts of every chunk in range again, so they need a cache before generation uses them. Ring
+    positions and the biome checks of starts search biomes starting without a last result, whereas vanilla's
+    depends on its worker threads, so a tie may resolve differently in a vanilla world.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with

@@ -1,4 +1,5 @@
-//! Where structures may start: vanilla's `StructurePlacement` and `ChunkGeneratorStructureState`.
+//! Where structures start: vanilla's `StructurePlacement`, `ChunkGeneratorStructureState` and, in [`start`], the
+//! structures themselves.
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
@@ -11,6 +12,10 @@ use crate::data::{
     WorldgenDataError,
 };
 use crate::generator::NoiseBasedChunkGenerator;
+
+mod start;
+
+pub use start::{BoundingBox, Direction, StructurePiece, StructureReference, StructureStart};
 
 /// Salt of `StructurePlacement.legacyArbitrarySaltProbabilityReducer`.
 const LEGACY_TYPE_2_SALT: i32 = 10_387_320;
@@ -336,7 +341,7 @@ mod tests {
             ),
             (
                 "data/minecraft/worldgen/structure/s.json",
-                r##"{"biomes": ["minecraft:plains"]}"##,
+                r##"{"type": "minecraft:swamp_hut", "biomes": ["minecraft:plains"]}"##,
             ),
         ])
         .unwrap();
@@ -359,5 +364,7 @@ mod tests {
         assert_eq!(b.common.locate_offset, [9, 0, 9]);
         assert_eq!(b.common.exclusion_zone.as_ref().unwrap().chunk_count, 10);
         assert_eq!(data.structures["minecraft:s"].biomes, ["minecraft:plains"]);
+        assert_eq!(data.structures["minecraft:s"].kind, "minecraft:swamp_hut");
+        assert_eq!(data.structures["minecraft:s"].terrain_adaptation, "none");
     }
 }

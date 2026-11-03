@@ -268,8 +268,12 @@ pub struct BlockTagDef {
 /// Parsed contents of a `worldgen/structure/<name>.json` file relevant to structure placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructureDef {
+    /// The structure type, such as `minecraft:desert_pyramid`.
+    pub kind: String,
     /// Biome IDs and `#`-prefixed tags where the structure may generate.
     pub biomes: Vec<String>,
+    /// How the structure changes the terrain around it, such as `none` or `beard_thin`.
+    pub terrain_adaptation: String,
 }
 
 /// Parsed contents of a `worldgen/structure_set/<name>.json` file.
@@ -706,7 +710,19 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
         .get("biomes")
         .ok_or_else(|| invalid_def(context, "structure has no biomes"))?;
     Ok(StructureDef {
+        kind: json
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_def(context, "structure has no type"))?
+            .to_string(),
         biomes: parse_biome_selector(context, biomes)?,
+        terrain_adaptation: match json.get("terrain_adaptation") {
+            Some(value) => value
+                .as_str()
+                .ok_or_else(|| invalid_def(context, "terrain_adaptation must be a string"))?
+                .to_string(),
+            None => "none".to_string(),
+        },
     })
 }
 

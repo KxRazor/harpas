@@ -673,7 +673,6 @@ impl NoiseBasedChunkGenerator {
         let first_block_x = chunk.chunk_x() * 16;
         let first_block_z = chunk.chunk_z() * 16;
         let first_cell_y = self.sampling.min_y.div_euclid(cell_height as i32);
-        let final_density_node = self.router.final_density;
 
         noise_chunk.initialize_for_first_cell_x();
         for cell_x in 0..cell_count_xz {
@@ -701,30 +700,11 @@ impl NoiseBasedChunkGenerator {
                                 let delta_z = (in_cell_z as f64) / (cell_width as f64);
                                 noise_chunk.update_for_z(in_cell_z, delta_z);
 
-                                let final_density = noise_chunk.eval_node(final_density_node);
-                                let state = match aquifer.compute_substance(
+                                let state = self.terrain_state(
                                     noise_chunk,
-                                    block_x,
-                                    block_y,
-                                    block_z,
-                                    final_density,
-                                ) {
-                                    Some(fluid_or_air) => fluid_or_air,
-                                    None => {
-                                        if let Some(ore_veinifier) = &self.ore_veinifier
-                                            && let Some(vein_state) = ore_veinifier.compute(
-                                                noise_chunk,
-                                                block_x,
-                                                block_y,
-                                                block_z,
-                                            )
-                                        {
-                                            vein_state
-                                        } else {
-                                            self.default_block
-                                        }
-                                    }
-                                };
+                                    aquifer,
+                                    [block_x, block_y, block_z],
+                                );
 
                                 if state != self.air_state {
                                     chunk.set_block_state(local_x, block_y, local_z, state);
@@ -748,6 +728,77 @@ impl NoiseBasedChunkGenerator {
             noise_chunk.swap_slices();
         }
         noise_chunk.stop_interpolation();
+    }
+
+    /// The terrain block at the interpolated position of `noise_chunk`: the aquifer's fluid or air, an ore vein or
+    /// the default block (`NoiseChunk.getInterpolatedState`).
+    fn terrain_state(
+        &self,
+        noise_chunk: &mut NoiseChunk<'_>,
+        aquifer: &mut Aquifer,
+        [block_x, block_y, block_z]: [i32; 3],
+    ) -> u32 {
+        let final_density = noise_chunk.eval_node(self.router.final_density);
+        match aquifer.compute_substance(noise_chunk, block_x, block_y, block_z, final_density) {
+            Some(fluid_or_air) => fluid_or_air,
+            None => self
+                .ore_veinifier
+                .as_ref()
+                .and_then(|veinifier| veinifier.compute(noise_chunk, block_x, block_y, block_z))
+                .unwrap_or(self.default_block),
+        }
+    }
+
+    /// One above the highest block of a column that `kind` counts, from the noise alone, before surface rules and
+    /// carvers (`NoiseBasedChunkGenerator.getBaseHeight`). It is the minimum Y if no block counts.
+    pub fn base_height(&self, block_x: i32, block_z: i32, kind: HeightmapType) -> i32 {
+        let cell_width = self.sampling.cell_width();
+        let cell_height = self.sampling.cell_height();
+        let first_cell_y = self.sampling.min_y.div_euclid(cell_height);
+        let in_cell_x = block_x.rem_euclid(cell_width);
+        let in_cell_z = block_z.rem_euclid(cell_width);
+        let mut noise_chunk = NoiseChunk::with_cells(
+            &self.graph,
+            &self.router,
+            self.sampling,
+            1,
+            block_x - in_cell_x,
+            block_z - in_cell_z,
+        );
+        let mut aquifer = self.create_aquifer(block_x >> 4, block_z >> 4);
+        noise_chunk.initialize_for_first_cell_x();
+        noise_chunk.advance_cell_x(0);
+        for cell_y in (0..self.sampling.cell_count_y()).rev() {
+            noise_chunk.select_cell_yz(cell_y, 0);
+            for in_cell_y in (0..cell_height).rev() {
+                let block_y = (first_cell_y + cell_y as i32) * cell_height + in_cell_y;
+                noise_chunk.update_for_y(
+                    in_cell_y as usize,
+                    f64::from(in_cell_y) / f64::from(cell_height),
+                );
+                noise_chunk.update_for_x(
+                    in_cell_x as usize,
+                    f64::from(in_cell_x) / f64::from(cell_width),
+                );
+                noise_chunk.update_for_z(
+                    in_cell_z as usize,
+                    f64::from(in_cell_z) / f64::from(cell_width),
+                );
+                let state =
+                    self.terrain_state(&mut noise_chunk, &mut aquifer, [block_x, block_y, block_z]);
+                if kind.matches(state) {
+                    noise_chunk.stop_interpolation();
+                    return block_y + 1;
+                }
+            }
+        }
+        noise_chunk.stop_interpolation();
+        self.sampling.min_y
+    }
+
+    /// The sea level of the noise settings.
+    pub const fn sea_level(&self) -> i32 {
+        self.sea_level
     }
 
     /// Applies surface rules, eroded badlands pillars, and frozen ocean icebergs to `chunk`

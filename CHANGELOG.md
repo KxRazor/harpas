@@ -70,6 +70,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Where structures may start: structure sets, structures and biome tags are loaded, with vanilla's random spread
   and concentric ring placements, frequency reduction and exclusion zones, checked against Minecraft 26.1. The
   generator does not place structures yet (`harpas-worldgen`).
+- Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with the
+  terrain heights and biome checks that every structure uses, checked against Minecraft 26.1. The generator does
+  not use them yet (`harpas-worldgen`).
 
 ### Changed
 

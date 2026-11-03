@@ -39,7 +39,9 @@ pub use noise_chunk::NoiseChunk;
 pub use ore_vein::{OreVeinifier, VeinType};
 pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
-pub use structure::StructureState;
+pub use structure::{
+    BoundingBox, Direction, StructurePiece, StructureReference, StructureStart, StructureState,
+};
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
     SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,

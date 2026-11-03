@@ -5,8 +5,8 @@
 //! than 255 sectors is stored in its own `c.x.z.mcc` file, and the region keeps only the compression byte with
 //! 128 added. Harpas writes zlib, as vanilla does, and reads gzip, zlib and uncompressed chunks.
 //!
-//! Individual chunks can be read without loading their whole region. A region is saved whole: the new file is
-//! written under a temporary name and renamed over the old one (`docs/world.md#saving`).
+//! Individual chunks can be read without loading their whole region. A region is saved whole, together with the
+//! `.mcc` files of its large chunks, as one transaction through a journal (`docs/world.md#saving`).
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -18,7 +18,7 @@ use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::ZlibEncoder;
 use harpas_core::nbt::{Compound, Nbt};
 
-use crate::file::write_atomically;
+use crate::journal::{self, Journal};
 
 const SECTOR: usize = 4096;
 const CHUNKS: usize = 1024;
@@ -38,9 +38,16 @@ pub fn region_of(chunk_x: i32, chunk_z: i32) -> (i32, i32) {
     (chunk_x >> 5, chunk_z >> 5)
 }
 
-/// Reads one chunk from `dir` without reading the rest of its region. A missing region or entry is `None`.
+/// Reads one chunk from `dir` without reading the rest of its region. A missing region or entry is `None`. A region
+/// whose last save was interrupted after its commit is an error until [`Region::open`] or
+/// [`recover`](crate::recover) completes that save, so the chunk is never read half old and half new.
 pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Compound>> {
     let (region_x, region_z) = region_of(chunk_x, chunk_z);
+    if journal::pending(dir, region_x, region_z)? {
+        return Err(invalid(format!(
+            "r.{region_x}.{region_z}.mca has an interrupted save to complete first"
+        )));
+    }
     let path = dir.join(format!("r.{region_x}.{region_z}.mca"));
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
@@ -90,6 +97,7 @@ pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<C
 
 /// What a region holds for one chunk.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
 enum Slot {
     Empty,
     Stored {
@@ -105,6 +113,7 @@ enum Slot {
 
 /// A region file, `r.x.z.mca`, read whole into memory.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
 pub struct Region {
     dir: PathBuf,
     x: i32,
@@ -116,8 +125,11 @@ pub struct Region {
 
 impl Region {
     /// Reads region `x`, `z` from the folder `dir`; a missing file is an empty region. Chunks whose entry cannot
-    /// be read are reported when they are read, so one damaged chunk does not hide the others.
+    /// be read are reported when they are read, so one damaged chunk does not hide the others. A save of the
+    /// region interrupted after its commit is completed first, so no other thread may read or save the region
+    /// meanwhile.
     pub fn open(dir: &Path, x: i32, z: i32) -> io::Result<Self> {
+        journal::complete(dir, x, z)?;
         let mut region = Self {
             dir: dir.to_owned(),
             x,
@@ -185,14 +197,22 @@ impl Region {
 
     /// `r.x.z.mca` in the region's folder.
     pub fn path(&self) -> PathBuf {
-        self.dir.join(format!("r.{}.{}.mca", self.x, self.z))
+        self.dir.join(self.name())
+    }
+
+    fn name(&self) -> String {
+        format!("r.{}.{}.mca", self.x, self.z)
     }
 
     /// `c.x.z.mcc` for the chunk at `index`, named by its chunk coordinates.
-    fn external_path(&self, index: usize) -> PathBuf {
+    fn external_name(&self, index: usize) -> String {
         let x = self.x * 32 + (index % 32) as i32;
         let z = self.z * 32 + (index / 32) as i32;
-        self.dir.join(format!("c.{x}.{z}.mcc"))
+        format!("c.{x}.{z}.mcc")
+    }
+
+    fn external_path(&self, index: usize) -> PathBuf {
+        self.dir.join(self.external_name(index))
     }
 
     fn index(&self, chunk_x: i32, chunk_z: i32) -> usize {
@@ -253,9 +273,16 @@ impl Region {
     }
 
     /// Writes the region file and the `.mcc` files of its large chunks, and removes `.mcc` files it no longer
-    /// needs. An unreadable entry must first be explicitly replaced or removed, so another chunk's save cannot
-    /// silently discard it.
+    /// needs, as one transaction: an interruption at any point leaves either the previous files or, once the
+    /// next open completes the save, the new ones. An unreadable entry must first be explicitly replaced or
+    /// removed, so another chunk's save cannot silently discard it.
     pub fn save(&mut self) -> io::Result<()> {
+        self.save_with(&mut || Ok(()))
+    }
+
+    /// [`Region::save`], running `step` before each change to the disk. An error from `step` stops the save
+    /// where it is, as a crash would.
+    fn save_with(&mut self, step: &mut dyn FnMut() -> io::Result<()>) -> io::Result<()> {
         if let Some((index, reason)) = self.slots.iter().enumerate().find_map(|(index, slot)| {
             if let Slot::Corrupt(reason) = slot {
                 Some((index, reason))
@@ -271,6 +298,9 @@ impl Region {
             )));
         }
         fs::create_dir_all(&self.dir)?;
+        // A previous save of this region that failed after its commit is completed before staging anew.
+        journal::complete(&self.dir, self.x, self.z)?;
+        let mut journal = Journal::default();
         let mut file = vec![0; 2 * SECTOR];
         let mut external = vec![false; CHUNKS];
         for (index, slot) in self.slots.iter().enumerate() {
@@ -284,7 +314,8 @@ impl Region {
             };
             let offset = file.len() / SECTOR;
             if (data.len() + 5).div_ceil(SECTOR) > MAX_SECTORS {
-                write_atomically(&self.external_path(index), data)?;
+                step()?;
+                journal.stage(&self.dir, self.external_name(index), data)?;
                 external[index] = true;
                 file.extend_from_slice(&1u32.to_be_bytes());
                 file.push(compression | EXTERNAL);
@@ -303,14 +334,12 @@ impl Region {
             file[SECTOR + index * 4..SECTOR + index * 4 + 4]
                 .copy_from_slice(&timestamp.to_be_bytes());
         }
-        write_atomically(&self.path(), &file)?;
-        let stale = (0..CHUNKS).filter(|&index| self.external[index] && !external[index]);
-        for index in stale {
-            match fs::remove_file(self.external_path(index)) {
-                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-                _ => {}
-            }
+        step()?;
+        journal.stage(&self.dir, self.name(), &file)?;
+        for index in (0..CHUNKS).filter(|&index| self.external[index] && !external[index]) {
+            journal.remove(self.external_name(index));
         }
+        journal.commit(&self.dir, self.x, self.z, step)?;
         self.external = external;
         Ok(())
     }
@@ -374,6 +403,7 @@ mod tests {
     use flate2::write::GzEncoder;
 
     use super::*;
+    use crate::{Recovery, recover};
 
     /// A world folder that is removed when dropped.
     struct Folder(PathBuf);
@@ -653,5 +683,171 @@ mod tests {
     fn chunks_outside_the_region_are_refused() {
         let folder = Folder::new();
         let _ = Region::open(&folder.0, 0, 0).unwrap().chunk(32, 0);
+    }
+
+    /// A chunk of `version`, made too large for its region when `large`.
+    fn versioned(x: i32, z: i32, version: i32, large: bool) -> Compound {
+        let mut chunk = chunk(x, z);
+        chunk.insert("Version", version);
+        if large {
+            chunk.insert("Noise", Nbt::ByteArray(noise(1_100_000)));
+        }
+        chunk
+    }
+
+    /// Chunks 0..4, 0 before and after the save: one stays external with new contents, one becomes external,
+    /// one stops being external and one stays in the region.
+    fn generation(version: i32) -> Vec<((i32, i32), Compound)> {
+        let new = version == 2;
+        vec![
+            ((0, 0), versioned(0, 0, version, true)),
+            ((1, 0), versioned(1, 0, version, new)),
+            ((2, 0), versioned(2, 0, version, !new)),
+            ((3, 0), versioned(3, 0, version, false)),
+        ]
+    }
+
+    fn file_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Which generation the chunks of region 0, 0 read as, checking that they all agree.
+    fn read_generation(dir: &Path, generations: &[Vec<((i32, i32), Compound)>; 2]) -> usize {
+        let region = Region::open(dir, 0, 0).unwrap();
+        let matching: Vec<usize> = (0..2)
+            .filter(|&index| {
+                generations[index].iter().all(|((x, z), chunk)| {
+                    region.chunk(*x, *z).unwrap().as_ref() == Some(chunk)
+                        && read_chunk(dir, *x, *z).unwrap().as_ref() == Some(chunk)
+                })
+            })
+            .collect();
+        assert_eq!(matching.len(), 1, "the chunks mix generations");
+        matching[0] + 1
+    }
+
+    #[test]
+    fn a_save_interrupted_at_any_step_leaves_the_old_or_the_new_region() {
+        let generations = [generation(1), generation(2)];
+        // The old files and the region about to save the new chunks, compressed once for every stop.
+        let template = Folder::new();
+        let mut staged = Region::open(&template.0, 0, 0).unwrap();
+        for ((x, z), chunk) in &generations[0] {
+            staged.set_chunk(*x, *z, chunk);
+        }
+        staged.save().unwrap();
+        assert_eq!(
+            file_names(&template.0),
+            ["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
+        );
+        for ((x, z), chunk) in &generations[1] {
+            staged.set_chunk(*x, *z, chunk);
+        }
+
+        let mut new_from = None;
+        for stop in 0.. {
+            let folder = Folder::new();
+            let dir = folder.0.join("region");
+            fs::create_dir_all(&dir).unwrap();
+            for name in file_names(&template.0) {
+                fs::copy(template.0.join(&name), dir.join(&name)).unwrap();
+            }
+            let mut region = staged.clone();
+            region.dir = dir.clone();
+
+            let journal = dir.join("r.0.0.mca.journal");
+            let mut steps = 0;
+            // Whether the save reached its commit, which may be followed by the journal's removal.
+            let mut committed = false;
+            let result = region.save_with(&mut || {
+                committed |= journal.exists();
+                steps += 1;
+                if steps > stop {
+                    Err(io::Error::other("crash"))
+                } else {
+                    Ok(())
+                }
+            });
+            let new = committed || result.is_ok();
+            let pending = journal.exists();
+            if pending {
+                assert!(read_chunk(&dir, 0, 0).is_err(), "stop {stop}");
+            }
+
+            // Recovery happens either for the whole folder or when the region is next opened.
+            if stop % 2 == 0 {
+                let recovery = recover(&dir).unwrap();
+                assert_eq!(recovery.completed.len(), usize::from(pending));
+                assert_eq!(
+                    file_names(&dir),
+                    if new {
+                        ["c.0.0.mcc", "c.1.0.mcc", "r.0.0.mca"]
+                    } else {
+                        ["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
+                    },
+                    "stop {stop}"
+                );
+            }
+            let version = read_generation(&dir, &generations);
+            assert_eq!(version == 2, new, "stop {stop}");
+            match new_from {
+                None if version == 2 => new_from = Some(stop),
+                Some(_) => assert_eq!(version, 2, "stop {stop}: back to the old chunks"),
+                None => {}
+            }
+
+            // Saving again leaves no trace of the interruption.
+            let mut region = Region::open(&dir, 0, 0).unwrap();
+            region.set_chunk(3, 0, &versioned(3, 0, 3, false));
+            region.save().unwrap();
+            recover(&dir).unwrap();
+            let expected: &[&str] = if version == 2 {
+                &["c.0.0.mcc", "c.1.0.mcc", "r.0.0.mca"]
+            } else {
+                &["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
+            };
+            assert_eq!(file_names(&dir), expected, "stop {stop}");
+
+            if result.is_ok() {
+                assert!(new_from.unwrap() > 0, "every stop completed the save");
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_discards_uncommitted_files_and_refuses_damaged_journals() {
+        let folder = Folder::new();
+        assert_eq!(
+            recover(&folder.0.join("missing")).unwrap(),
+            Recovery::default()
+        );
+
+        let mut region = Region::open(&folder.0, 0, 0).unwrap();
+        region.set_chunk(0, 0, &chunk(0, 0));
+        region.save().unwrap();
+        for name in ["r.0.0.mca.tmp", "c.5.5.mcc.tmp", "r.0.0.mca.journal.tmp"] {
+            fs::write(folder.0.join(name), b"staged").unwrap();
+        }
+        fs::write(folder.0.join("notes.tmp"), b"not ours").unwrap();
+        let recovery = recover(&folder.0).unwrap();
+        assert_eq!(recovery.completed, Vec::<PathBuf>::new());
+        assert_eq!(recovery.discarded.len(), 3);
+        assert_eq!(file_names(&folder.0), ["notes.tmp", "r.0.0.mca"]);
+
+        // A journal Harpas cannot read stops the region from opening rather than being guessed at.
+        fs::write(folder.0.join("r.0.0.mca.journal"), b"install r.0.0.mca\n").unwrap();
+        for error in [
+            Region::open(&folder.0, 0, 0).unwrap_err(),
+            recover(&folder.0).unwrap_err(),
+            read_chunk(&folder.0, 0, 0).unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
     }
 }

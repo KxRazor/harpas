@@ -98,12 +98,21 @@ block changes are part of gameplay work.
   the tick does not wait for disk. Changes made while a snapshot is being written remain dirty. An unloaded
   chunk stays resident until its latest changes are saved, and shutdown waits for pending saves. A save error
   stops the server and is reported.
-- Writes are atomic per region file, so a crash never leaves a half-written region: a region is saved whole
-  under a temporary name and renamed into place, after the `.mcc` files of its large chunks. A chunk whose
-  region entry cannot be read is reported when it is read, without hiding the region's other chunks. A save
-  refuses to overwrite a region with an unreadable entry unless that entry is explicitly replaced or removed.
-  The region and its external `.mcc` files are not one atomic transaction: an interruption between their
-  renames can leave a previously external chunk with newer contents than the region file.
+- A region and the `.mcc` files of its large chunks are saved as one transaction, so a crash never leaves a
+  half-written region or a chunk newer than the region that points to it. Every new file is written whole and
+  synced under a staged name (`<name>.tmp`); then a journal, `r.x.z.mca.journal`, listing the files to install
+  and the `.mcc` files to remove, is synced and renamed into place, which commits the save; then the staged
+  files are renamed over the current ones, stale `.mcc` files removed and the journal removed. The folder is
+  synced between these steps, on Unix, so they reach the disk in this order.
+- On start, before any chunk is read, the server completes the committed saves it finds and removes the files
+  of saves interrupted before their commit, with a warning for each. Opening a region completes its own
+  committed save, and reading one chunk of a region with a committed save still pending is an error instead
+  of a mix of old and new data. Vanilla ignores the journal, so a world should be started once with Harpas
+  after a crash before it is opened with vanilla. Tests interrupt a save before each change it makes to the
+  disk and check that the region reads entirely as before or entirely as after.
+- A chunk whose region entry cannot be read is reported when it is read, without hiding the region's other
+  chunks. A save refuses to overwrite a region with an unreadable entry unless that entry is explicitly
+  replaced or removed.
 
 ---
 

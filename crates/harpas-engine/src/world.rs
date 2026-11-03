@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 
-use harpas_anvil::{Chunk, Region, VersionError, dimension_dir, read_chunk, region_of};
+use harpas_anvil::{Chunk, Region, VersionError, dimension_dir, read_chunk, recover, region_of};
 use log::{error, warn};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -150,6 +150,14 @@ impl World {
             ));
         }
         let region_dir = dimension_dir(world_dir, "minecraft:overworld").join("region");
+        // Saves interrupted by a crash are completed or discarded before any worker reads the regions.
+        let recovery = recover(&region_dir)?;
+        for path in &recovery.completed {
+            warn!("Completed the interrupted save of {}", path.display());
+        }
+        for path in &recovery.discarded {
+            warn!("Discarded {}, left by an interrupted save", path.display());
+        }
         let source_dir = region_dir.clone();
         let biomes: Arc<Vec<String>> =
             Arc::new(biomes.iter().map(|name| (*name).to_owned()).collect());
@@ -726,6 +734,31 @@ mod tests {
         );
         assert!(matches!(world.chunk(missing), Some(ChunkState::Missing)));
         assert!(matches!(world.chunk(corrupt), Some(ChunkState::Failed(_))));
+    }
+
+    #[test]
+    fn opening_completes_interrupted_saves_before_reading() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 1, z: 2 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        // A save that crashed right after its commit: the new region is still staged under its journal.
+        let dir = folder.region_dir();
+        fs::rename(dir.join("r.0.0.mca"), dir.join("r.0.0.mca.tmp")).unwrap();
+        fs::write(
+            dir.join("r.0.0.mca.journal"),
+            "harpas region journal 1\ninstall r.0.0.mca\nend\n",
+        )
+        .unwrap();
+        fs::write(dir.join("c.5.5.mcc.tmp"), b"uncommitted").unwrap();
+
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        let mut names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["r.0.0.mca"]);
     }
 
     #[test]

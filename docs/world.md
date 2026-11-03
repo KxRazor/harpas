@@ -228,7 +228,13 @@ and the owner **accepts it once**:
     jigsaw blocks in each rotation, in vanilla's block order, and the palette vanilla picks for a position. The
     `worldgen/template_pool` definitions are loaded with their weighted elements. The `template_parity` harness
     compares all 1,202 templates in every rotation at two positions, and all 188 pools with a shuffled order,
-    with vanilla's own `StructureTemplate` and template pool registry. Jigsaw structures do not use them yet.
+    with vanilla's own `StructureTemplate` and template pool registry.
+  - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
+    `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
+    free space a piece may still use, which is a box with the placed pieces taken out. A location with no
+    template, which one ancient city pool names, is an empty template as in vanilla. Each piece keeps its
+    junctions, which terrain adaptation will need. Villages, pillager outposts, ancient cities and trail ruins
+    are laid out; trial chambers, which rename pools and start at a random height, are not yet.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by
@@ -248,14 +254,14 @@ and the owner **accepts it once**:
     weight, finds the generation point from the terrain height of the noise
     (`NoiseBasedChunkGenerator::base_height`, one noise column as vanilla's `iterateNoiseColumn` reads it), checks
     the biome there and makes the pieces. `references_in_chunk` lists the starts within 8 chunks whose bounding
-    boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts and strongholds are made so
-    far, a stronghold with vanilla's piece layout; sets with other structure types are skipped. The
-    `structure_start_parity` harness compares base heights at 1,764 columns, the starts, pieces and references of 4
-    seeds in 512×512 chunks, and the strongholds at all 128 ring positions of each seed, with vanilla's own
-    `createStructures` and `createReferences`. The chunk generator does not use any of this yet, and references
-    compute the starts of every chunk in range again, so they need a cache before generation uses them. Ring
-    positions and the biome checks of starts search biomes starting without a last result, whereas vanilla's
-    depends on its worker threads, so a tie may resolve differently in a vanilla world.
+    boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts, strongholds and the jigsaw
+    structures below are made so far; sets with other structure types are skipped. The `structure_start_parity`
+    harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,
+    and the strongholds at all 128 ring positions of each seed, with vanilla's own `createStructures` and
+    `createReferences`. The chunk generator does not use any of this yet, and references compute the starts of every
+    chunk in range again, so they need a cache before generation uses them. Ring positions and the biome checks of
+    starts search biomes starting without a last result, whereas vanilla's depends on its worker threads, so a tie
+    may resolve differently in a vanilla world.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with

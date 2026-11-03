@@ -1271,7 +1271,10 @@ fn compile_condition(
     }
 }
 
-fn parse_vertical_anchor(ctx: &str, json: &Value) -> Result<VerticalAnchor, WorldgenDataError> {
+pub(crate) fn parse_vertical_anchor(
+    ctx: &str,
+    json: &Value,
+) -> Result<VerticalAnchor, WorldgenDataError> {
     let obj = json
         .as_object()
         .ok_or_else(|| invalid(ctx, "vertical anchor must be a JSON object"))?;

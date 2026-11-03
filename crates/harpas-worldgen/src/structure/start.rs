@@ -3,9 +3,10 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::{StructureState, stronghold};
-use crate::data::{StructureSetEntryDef, WorldgenData, WorldgenDataError};
+use super::{StructureState, jigsaw, stronghold};
+use crate::data::{JigsawDef, StructureDef, StructureSetEntryDef, WorldgenData, WorldgenDataError};
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
+use crate::template::StructureTemplates;
 
 /// How far the bounding box of a structure that adapts the terrain reaches past its pieces
 /// (`Structure.adjustBoundingBox`).
@@ -105,6 +106,19 @@ pub struct StructurePiece {
     pub orientation: Option<Direction>,
     /// How many pieces lie between this one and the first.
     pub gen_depth: i32,
+    /// Where a jigsaw piece connects to its neighbors, which the terrain blends towards.
+    pub junctions: Vec<JigsawJunction>,
+}
+
+/// Where a jigsaw piece connects to another (`JigsawJunction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JigsawJunction {
+    /// The X, ground Y and Z of the connection.
+    pub source: [i32; 3],
+    /// How much higher the other piece is.
+    pub delta_y: i32,
+    /// Whether the other piece is rigid rather than terrain matching.
+    pub destination_rigid: bool,
 }
 
 /// A structure that starts in a chunk (`StructureStart`).
@@ -130,9 +144,10 @@ pub struct StructureReference {
 }
 
 /// A structure type whose starts Harpas can make.
-enum StructureKind {
+enum StructureKind<'d> {
     BuriedTreasure,
     Stronghold,
+    Jigsaw(&'d JigsawDef),
     /// Single pieces of a fixed size: desert pyramids, jungle temples and swamp huts.
     ScatteredFeature {
         piece: &'static str,
@@ -144,8 +159,8 @@ enum StructureKind {
     },
 }
 
-impl StructureKind {
-    fn from_type(kind: &str) -> Option<Self> {
+impl<'d> StructureKind<'d> {
+    fn of(structure: &'d StructureDef) -> Option<Self> {
         let scattered = |piece, width, height, depth, above_sea| Self::ScatteredFeature {
             piece,
             width,
@@ -153,8 +168,12 @@ impl StructureKind {
             depth,
             above_sea,
         };
-        Some(match kind {
+        Some(match structure.kind.as_str() {
             "minecraft:buried_treasure" => Self::BuriedTreasure,
+            "minecraft:jigsaw" => match &structure.jigsaw {
+                Some(jigsaw) if jigsaw::is_supported(jigsaw) => Self::Jigsaw(jigsaw),
+                _ => return None,
+            },
             "minecraft:stronghold" => Self::Stronghold,
             "minecraft:desert_pyramid" => scattered("minecraft:tedp", 21, 15, 21, true),
             "minecraft:jungle_temple" => scattered("minecraft:tejp", 12, 10, 15, true),
@@ -171,7 +190,7 @@ impl StructureState {
             set.structures.iter().all(|entry| {
                 data.structures
                     .get(&entry.structure)
-                    .is_some_and(|structure| StructureKind::from_type(&structure.kind).is_some())
+                    .is_some_and(|structure| StructureKind::of(structure).is_some())
             })
         })
     }
@@ -182,6 +201,7 @@ impl StructureState {
         &self,
         generator: &NoiseBasedChunkGenerator,
         data: &WorldgenData,
+        templates: &StructureTemplates,
         chunk_x: i32,
         chunk_z: i32,
     ) -> Result<Vec<StructureStart>, WorldgenDataError> {
@@ -195,6 +215,7 @@ impl StructureState {
                 starts.extend(try_generate(
                     generator,
                     data,
+                    templates,
                     self.level_seed,
                     entry,
                     chunk_x,
@@ -216,9 +237,15 @@ impl StructureState {
                     })
                     .unwrap_or(options.len());
                 let selected = options[index];
-                if let Some(start) =
-                    try_generate(generator, data, self.level_seed, selected, chunk_x, chunk_z)?
-                {
+                if let Some(start) = try_generate(
+                    generator,
+                    data,
+                    templates,
+                    self.level_seed,
+                    selected,
+                    chunk_x,
+                    chunk_z,
+                )? {
                     starts.push(start);
                     break;
                 }
@@ -230,18 +257,31 @@ impl StructureState {
     }
 
     /// The starts of the chunks within reach whose bounding boxes overlap a chunk (`ChunkGenerator.createReferences`).
+    /// This makes the starts of every chunk in reach again; [`Self::references_from`] takes them from elsewhere.
     pub fn references_in_chunk(
         &self,
         generator: &NoiseBasedChunkGenerator,
         data: &WorldgenData,
+        templates: &StructureTemplates,
         chunk_x: i32,
         chunk_z: i32,
+    ) -> Result<Vec<StructureReference>, WorldgenDataError> {
+        Self::references_from(chunk_x, chunk_z, |x, z| {
+            self.starts_in_chunk(generator, data, templates, x, z)
+        })
+    }
+
+    /// The references of a chunk, with the starts of each chunk in reach from `starts_of`.
+    pub fn references_from(
+        chunk_x: i32,
+        chunk_z: i32,
+        mut starts_of: impl FnMut(i32, i32) -> Result<Vec<StructureStart>, WorldgenDataError>,
     ) -> Result<Vec<StructureReference>, WorldgenDataError> {
         let (min_x, min_z) = (chunk_x * 16, chunk_z * 16);
         let mut references = Vec::new();
         for source_x in chunk_x - REFERENCE_RANGE..=chunk_x + REFERENCE_RANGE {
             for source_z in chunk_z - REFERENCE_RANGE..=chunk_z + REFERENCE_RANGE {
-                for start in self.starts_in_chunk(generator, data, source_x, source_z)? {
+                for start in starts_of(source_x, source_z)? {
                     if start
                         .bounding_box
                         .intersects_columns(min_x, min_z, min_x + 15, min_z + 15)
@@ -260,26 +300,43 @@ impl StructureState {
 
 /// `ChunkGenerator.tryGenerateStructure` and `Structure.generate`: finds the structure's generation point, checks
 /// the biome there and makes its pieces.
+#[allow(clippy::too_many_arguments)]
 fn try_generate(
     generator: &NoiseBasedChunkGenerator,
     data: &WorldgenData,
+    templates: &StructureTemplates,
     level_seed: i64,
     entry: &StructureSetEntryDef,
     chunk_x: i32,
     chunk_z: i32,
 ) -> Result<Option<StructureStart>, WorldgenDataError> {
     let structure = &data.structures[&entry.structure];
-    let kind = StructureKind::from_type(&structure.kind).ok_or_else(|| {
-        WorldgenDataError::InvalidDefinition {
+    let kind =
+        StructureKind::of(structure).ok_or_else(|| WorldgenDataError::InvalidDefinition {
             context: entry.structure.clone(),
             message: format!("unsupported structure type `{}`", structure.kind),
-        }
-    })?;
+        })?;
     let mut random = WorldgenRandom::new(LegacyRandom::new(0));
     random.set_large_feature_seed(level_seed, chunk_x, chunk_z);
     let (min_x, min_z) = (chunk_x * 16, chunk_z * 16);
     let first_occupied = |x, z, heightmap| generator.base_height(x, z, heightmap) - 1;
+    let mut jigsaw_start = None;
     let position = match kind {
+        StructureKind::Jigsaw(jigsaw) => {
+            let Some(start) = jigsaw::start(
+                generator,
+                data,
+                templates,
+                jigsaw,
+                &mut random,
+                chunk_x,
+                chunk_z,
+            )?
+            else {
+                return Ok(None);
+            };
+            jigsaw_start.insert(start).position
+        }
         StructureKind::BuriedTreasure => [
             min_x + 8,
             first_occupied(min_x + 8, min_z + 8, HeightmapType::OceanFloorWg),
@@ -315,6 +372,7 @@ fn try_generate(
         return Ok(None);
     }
     let pieces = match kind {
+        StructureKind::Jigsaw(_) => jigsaw_start.expect("a jigsaw start").pieces(&mut random)?,
         StructureKind::BuriedTreasure => vec![StructurePiece {
             kind: "minecraft:btp",
             bounding_box: BoundingBox {
@@ -323,6 +381,7 @@ fn try_generate(
             },
             orientation: None,
             gen_depth: 0,
+            junctions: Vec::new(),
         }],
         StructureKind::Stronghold => stronghold::pieces(
             level_seed,
@@ -350,6 +409,7 @@ fn try_generate(
                 ),
                 orientation: Some(orientation),
                 gen_depth: 0,
+                junctions: Vec::new(),
             }]
         }
     };

@@ -163,6 +163,15 @@ pub struct StructureTemplate {
 }
 
 impl StructureTemplate {
+    /// The template vanilla creates for a location with no template: no blocks and a size of zero
+    /// (`StructureTemplateManager.getOrCreate`).
+    pub const fn empty() -> Self {
+        Self {
+            size: [0, 0, 0],
+            palettes: Vec::new(),
+        }
+    }
+
     /// Reads a template from its NBT (`StructureTemplate.load`).
     pub fn from_nbt(context: &str, root: &Compound) -> Result<Self, WorldgenDataError> {
         let invalid = |message: &str| WorldgenDataError::InvalidDefinition {
@@ -228,6 +237,9 @@ impl StructureTemplate {
     /// The jigsaw blocks when placed at `position` with `rotation`, from the palette vanilla picks for that position
     /// (`StructureTemplate.getJigsaws`).
     pub fn jigsaws(&self, position: [i32; 3], rotation: Rotation) -> Vec<JigsawBlock> {
+        if self.palettes.is_empty() {
+            return Vec::new();
+        }
         self.palettes[self.palette_index(position)]
             .iter()
             .map(|jigsaw| {

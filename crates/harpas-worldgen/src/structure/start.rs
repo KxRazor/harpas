@@ -3,7 +3,7 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::StructureState;
+use super::{StructureState, stronghold};
 use crate::data::{StructureSetEntryDef, WorldgenData, WorldgenDataError};
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
 
@@ -89,7 +89,7 @@ impl Direction {
     }
 
     /// `StructurePiece.getRandomHorizontalDirection`.
-    fn random(random: &mut impl RandomSource) -> Self {
+    pub(super) fn random(random: &mut impl RandomSource) -> Self {
         Self::HORIZONTAL[random.next_int_bounded(4) as usize]
     }
 }
@@ -132,6 +132,7 @@ pub struct StructureReference {
 /// A structure type whose starts Harpas can make.
 enum StructureKind {
     BuriedTreasure,
+    Stronghold,
     /// Single pieces of a fixed size: desert pyramids, jungle temples and swamp huts.
     ScatteredFeature {
         piece: &'static str,
@@ -154,6 +155,7 @@ impl StructureKind {
         };
         Some(match kind {
             "minecraft:buried_treasure" => Self::BuriedTreasure,
+            "minecraft:stronghold" => Self::Stronghold,
             "minecraft:desert_pyramid" => scattered("minecraft:tedp", 21, 15, 21, true),
             "minecraft:jungle_temple" => scattered("minecraft:tejp", 12, 10, 15, true),
             "minecraft:swamp_hut" => scattered("minecraft:tesh", 7, 7, 9, false),
@@ -277,26 +279,18 @@ fn try_generate(
     random.set_large_feature_seed(level_seed, chunk_x, chunk_z);
     let (min_x, min_z) = (chunk_x * 16, chunk_z * 16);
     let first_occupied = |x, z, heightmap| generator.base_height(x, z, heightmap) - 1;
-    let (position, pieces) = match kind {
-        StructureKind::BuriedTreasure => {
-            let y = first_occupied(min_x + 8, min_z + 8, HeightmapType::OceanFloorWg);
-            let piece = StructurePiece {
-                kind: "minecraft:btp",
-                bounding_box: BoundingBox {
-                    min: [min_x + 9, 90, min_z + 9],
-                    max: [min_x + 9, 90, min_z + 9],
-                },
-                orientation: None,
-                gen_depth: 0,
-            };
-            ([min_x + 8, y, min_z + 8], vec![piece])
-        }
+    let position = match kind {
+        StructureKind::BuriedTreasure => [
+            min_x + 8,
+            first_occupied(min_x + 8, min_z + 8, HeightmapType::OceanFloorWg),
+            min_z + 8,
+        ],
+        StructureKind::Stronghold => [min_x, 0, min_z],
         StructureKind::ScatteredFeature {
-            piece,
             width,
-            height,
             depth,
             above_sea,
+            ..
         } => {
             if above_sea {
                 let lowest = [(0, 0), (0, depth), (width, 0), (width, depth)]
@@ -310,9 +304,42 @@ fn try_generate(
                     return Ok(None);
                 }
             }
-            let y = first_occupied(min_x + 8, min_z + 8, HeightmapType::WorldSurfaceWg);
+            [
+                min_x + 8,
+                first_occupied(min_x + 8, min_z + 8, HeightmapType::WorldSurfaceWg),
+                min_z + 8,
+            ]
+        }
+    };
+    if !is_valid_biome(generator, data, &structure.biomes, position)? {
+        return Ok(None);
+    }
+    let pieces = match kind {
+        StructureKind::BuriedTreasure => vec![StructurePiece {
+            kind: "minecraft:btp",
+            bounding_box: BoundingBox {
+                min: [min_x + 9, 90, min_z + 9],
+                max: [min_x + 9, 90, min_z + 9],
+            },
+            orientation: None,
+            gen_depth: 0,
+        }],
+        StructureKind::Stronghold => stronghold::pieces(
+            level_seed,
+            chunk_x,
+            chunk_z,
+            generator.sea_level(),
+            generator.min_y(),
+        ),
+        StructureKind::ScatteredFeature {
+            piece,
+            width,
+            height,
+            depth,
+            ..
+        } => {
             let orientation = Direction::random(&mut random);
-            let piece = StructurePiece {
+            vec![StructurePiece {
                 kind: piece,
                 bounding_box: BoundingBox::oriented(
                     [min_x, 64, min_z],
@@ -323,13 +350,9 @@ fn try_generate(
                 ),
                 orientation: Some(orientation),
                 gen_depth: 0,
-            };
-            ([min_x + 8, y, min_z + 8], vec![piece])
+            }]
         }
     };
-    if !is_valid_biome(generator, data, &structure.biomes, position)? {
-        return Ok(None);
-    }
     let mut bounding_box = pieces[0].bounding_box;
     for piece in &pieces[1..] {
         bounding_box.encapsulate(&piece.bounding_box);

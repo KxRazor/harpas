@@ -120,6 +120,7 @@ vanilla for the same seed.
         reduction and exclusion zones, in `harpas-worldgen`.
   - [x] Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with
         the noise heights and biome checks every structure uses.
+  - [x] Stronghold starts: the stronghold piece layout, including the retries until it has a portal room.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla in CI.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

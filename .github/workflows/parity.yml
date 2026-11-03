@@ -46,4 +46,5 @@ jobs:
           cargo test -p harpas-worldgen --test vanilla_parity -- --nocapture
           cargo test --release -p harpas-worldgen --test chunk_parity -- --nocapture
           cargo test --release -p harpas-worldgen --test structure_placement_parity -- --nocapture
+          cargo test --release -p harpas-worldgen --test structure_start_parity -- --nocapture
           cargo test -p harpas-server --test world_loading a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available -- --nocapture

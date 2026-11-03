@@ -29,16 +29,7 @@ public final class StructurePlacementProbe {
         Bootstrap.bootStrap();
         long seed = Long.parseLong(args[1]);
         int radius = Integer.parseInt(args[2]);
-        var packs = new WorldLoader.PackConfig(
-            ServerPacksSource.createVanillaTrustedRepository(), WorldDataConfiguration.DEFAULT, false, false);
-        var init = new WorldLoader.InitConfig(packs, Commands.CommandSelection.DEDICATED,
-            net.minecraft.server.permissions.LevelBasedPermissionSet.OWNER);
-        RegistryAccess.Frozen registries = WorldLoader.<Void, RegistryAccess.Frozen>load(init,
-            context -> new WorldLoader.DataLoadOutput<>(null, context.datapackDimensions()),
-            (resources, reloadable, layers, cookie) -> {
-                resources.close();
-                return layers.compositeAccess();
-            }, Util.backgroundExecutor(), Runnable::run).get();
+        RegistryAccess.Frozen registries = loadRegistries();
 
         var generator = WorldPresets.getNormalOverworld(registries).generator();
         var random = RandomState.create(registries, NoiseGeneratorSettings.OVERWORLD, seed);
@@ -66,6 +57,20 @@ public final class StructurePlacementProbe {
             }
         }
         Util.shutdownExecutors();
+    }
+
+    /** The registries a dedicated server loads from the vanilla data pack, with their tags. */
+    static RegistryAccess.Frozen loadRegistries() throws Exception {
+        var packs = new WorldLoader.PackConfig(
+            ServerPacksSource.createVanillaTrustedRepository(), WorldDataConfiguration.DEFAULT, false, false);
+        var init = new WorldLoader.InitConfig(packs, Commands.CommandSelection.DEDICATED,
+            net.minecraft.server.permissions.LevelBasedPermissionSet.OWNER);
+        return WorldLoader.<Void, RegistryAccess.Frozen>load(init,
+            context -> new WorldLoader.DataLoadOutput<>(null, context.datapackDimensions()),
+            (resources, reloadable, layers, cookie) -> {
+                resources.close();
+                return layers.compositeAccess();
+            }, Util.backgroundExecutor(), Runnable::run).get();
     }
 
     static void writeStarts(PrintWriter out, String name, net.minecraft.world.level.chunk.ChunkGeneratorStructureState state,

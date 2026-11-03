@@ -193,12 +193,30 @@ impl<'a> NoiseChunk<'a> {
         chunk_x: i32,
         chunk_z: i32,
     ) -> Self {
+        Self::with_cells(
+            graph,
+            router,
+            settings,
+            settings.cell_count_xz(),
+            chunk_x * 16,
+            chunk_z * 16,
+        )
+    }
+
+    /// Creates a `NoiseChunk` of `cell_count_xz` cells along X and Z starting at a cell-aligned block position, as
+    /// vanilla does with one cell to find the height of a single column (`NoiseBasedChunkGenerator.iterateNoiseColumn`).
+    pub fn with_cells(
+        graph: &'a CompiledDensityGraph,
+        router: &'a CompiledNoiseRouter,
+        settings: NoiseSamplingSettings,
+        cell_count_xz: usize,
+        first_block_x: i32,
+        first_block_z: i32,
+    ) -> Self {
         let cell_width = settings.cell_width();
         let cell_height = settings.cell_height();
-        let cell_count_xz = settings.cell_count_xz();
         let cell_count_y = settings.cell_count_y();
-        let first_block_x = chunk_x * 16;
-        let first_block_z = chunk_z * 16;
+        let (chunk_x, chunk_z) = (first_block_x >> 4, first_block_z >> 4);
         let first_cell_x = first_block_x.div_euclid(cell_width);
         let first_cell_y = settings.min_y.div_euclid(cell_height);
         let first_cell_z = first_block_z.div_euclid(cell_width);

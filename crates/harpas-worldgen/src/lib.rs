@@ -2,12 +2,20 @@
 //!
 //! Design: `docs/world.md`.
 
+pub mod aquifer;
 pub mod biome;
 pub mod data;
 pub mod density;
+pub mod generator;
 pub mod noise_chunk;
+pub mod ore_vein;
 pub mod spline;
+pub mod surface;
 
+pub use aquifer::{
+    Aquifer, FluidStatus, GlobalFluidPicker, NoiseBasedAquifer, WAY_BELOW_MIN_Y, clamped_map, map,
+    quantize, similarity,
+};
 pub use biome::{
     BiomeManager, MultiNoiseBiomeSource, Parameter, ParameterPoint, RTree, TargetPoint,
     nether_biome_parameters, overworld_biome_parameters, quantize_coord, unquantize_coord,
@@ -19,10 +27,16 @@ pub use data::{
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
-    DensityOp, MarkerKind, NodeId, NoiseRouterDef, RarityValueMapper, UnaryOp,
+    DensityOp, MarkerKind, NodeId, NoiseRouterDef, PositionalRandom, RarityValueMapper, UnaryOp,
 };
+pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
 pub use noise_chunk::NoiseChunk;
+pub use ore_vein::{OreVeinifier, VeinType};
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
+pub use surface::{
+    BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
+    SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,
+};
 
 #[cfg(test)]
 mod tests {
@@ -196,6 +210,65 @@ mod tests {
         biome_source.fill_section_biomes(&mut section, 0, 4, 0, &mut noise_chunk, &mut last_result);
         let biome_id = section.biome(0, 0, 0);
         assert!(data.biome_name(biome_id).is_some());
+
+        // Compile surface rules for all 7 noise_settings definitions in 26.1.zip.
+        for (name, ns) in &data.noise_settings {
+            let (ns_graph, _) = CompiledDensityGraph::compile_router(
+                123_456_789,
+                ns.legacy_random_source,
+                &ns.noise_router,
+                &data.noises,
+                &data.density_functions,
+            )
+            .unwrap_or_else(|e| panic!("compile router for {name}: {e}"));
+            SurfaceRule::compile(&ns.surface_rule, &ns_graph, &data)
+                .unwrap_or_else(|e| panic!("compile surface_rule for {name}: {e}"));
+        }
+
+        // Generate a full Overworld chunk (0, 0) up to the surface stage.
+        let generator = NoiseBasedChunkGenerator::overworld(123_456_789, &data)
+            .expect("overworld chunk generator");
+        let generated = generator.generate_chunk_surface(0, 0, &data);
+        let states = harpas_core::block::block_states();
+        let bedrock = states.default_state("minecraft:bedrock").unwrap();
+        let deepslate = states.default_state("minecraft:deepslate").unwrap();
+        let air = states.default_state("minecraft:air").unwrap();
+
+        for lz in 0..16 {
+            for lx in 0..16 {
+                // y = -64 is always 100% bedrock in Overworld.
+                assert_eq!(generated.block_state(lx, -64, lz), bedrock);
+                // Surface heightmap is within valid Overworld range and above y = -60.
+                let surf_y = generated
+                    .heightmaps()
+                    .get(HeightmapType::WorldSurfaceWg, lx, lz);
+                assert!(
+                    (-50..=320).contains(&surf_y),
+                    "unexpected surface height {surf_y} at ({lx}, {lz})"
+                );
+                // Above WORLD_SURFACE_WG is air.
+                if surf_y < 320 {
+                    assert_eq!(generated.block_state(lx, surf_y, lz), air);
+                }
+            }
+        }
+        // Check that deepslate replaces stone below y = 0.
+        let mut deepslate_count = 0;
+        for lz in 0..16 {
+            for lx in 0..16 {
+                if generated.block_state(lx, -32, lz) == deepslate {
+                    deepslate_count += 1;
+                }
+            }
+        }
+        assert!(deepslate_count > 100, "expected deepslate at y = -32");
+        assert_eq!(
+            generated
+                .heightmaps()
+                .pack(HeightmapType::MotionBlocking)
+                .len(),
+            37
+        );
     }
 
     #[test]
@@ -365,5 +438,296 @@ mod tests {
         chunk.stop_interpolation();
         let direct_val = chunk.eval_point(router.final_density, 2, 3, 1);
         assert_eq!(cached_val.to_bits(), direct_val.to_bits());
+    }
+
+    #[test]
+    fn synthetic_generator_aquifer_veins_and_surface_rules() {
+        let noise_entry = r#"{"firstOctave": -4, "amplitudes": [1.0, 1.0]}"#;
+        let entries = [
+            (
+                "data/minecraft/worldgen/noise/clay_bands_offset.json",
+                noise_entry,
+            ),
+            ("data/minecraft/worldgen/noise/surface.json", noise_entry),
+            (
+                "data/minecraft/worldgen/noise/surface_secondary.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/noise/badlands_pillar.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/noise/badlands_pillar_roof.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/noise/badlands_surface.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/noise/iceberg_pillar.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/noise/iceberg_pillar_roof.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/noise/iceberg_surface.json",
+                noise_entry,
+            ),
+            (
+                "data/minecraft/worldgen/biome/eroded_badlands.json",
+                r#"{"has_precipitation": false, "temperature": 2.0, "downfall": 0.0}"#,
+            ),
+            (
+                "data/minecraft/worldgen/biome/frozen_ocean.json",
+                r#"{"has_precipitation": false, "temperature": 0.0, "temperature_modifier": "frozen", "downfall": 0.5}"#,
+            ),
+            (
+                "data/minecraft/worldgen/biome/deep_frozen_ocean.json",
+                r#"{"has_precipitation": false, "temperature": 0.5, "temperature_modifier": "frozen", "downfall": 0.5}"#,
+            ),
+            (
+                "data/minecraft/worldgen/biome/swamp.json",
+                r#"{"has_precipitation": true, "temperature": 0.8, "downfall": 0.9}"#,
+            ),
+            (
+                "data/minecraft/worldgen/biome/snowy_plains.json",
+                r#"{"has_precipitation": true, "temperature": 0.0, "downfall": 0.5}"#,
+            ),
+            (
+                "data/minecraft/worldgen/multi_noise_biome_source_parameter_list/test_biomes.json",
+                r#"{
+                    "biomes": [
+                        {
+                            "biome": "minecraft:eroded_badlands",
+                            "parameters": {
+                                "temperature": [0.5, 1.0],
+                                "humidity": 0.0,
+                                "continentalness": 0.0,
+                                "erosion": 0.0,
+                                "depth": 0.0,
+                                "weirdness": 0.0,
+                                "offset": 0.0
+                            }
+                        },
+                        {
+                            "biome": "minecraft:frozen_ocean",
+                            "parameters": {
+                                "temperature": [-1.0, -0.5],
+                                "humidity": 0.0,
+                                "continentalness": 0.0,
+                                "erosion": 0.0,
+                                "depth": 0.0,
+                                "weirdness": 0.0,
+                                "offset": 0.0
+                            }
+                        },
+                        {
+                            "biome": "minecraft:swamp",
+                            "parameters": {
+                                "temperature": [-0.5, 0.0],
+                                "humidity": 0.0,
+                                "continentalness": 0.0,
+                                "erosion": 0.0,
+                                "depth": 0.0,
+                                "weirdness": 0.0,
+                                "offset": 0.0
+                            }
+                        },
+                        {
+                            "biome": "minecraft:snowy_plains",
+                            "parameters": {
+                                "temperature": [0.0, 0.5],
+                                "humidity": 0.0,
+                                "continentalness": 0.0,
+                                "erosion": 0.0,
+                                "depth": 0.0,
+                                "weirdness": 0.0,
+                                "offset": 0.0
+                            }
+                        }
+                    ]
+                }"#,
+            ),
+            (
+                "data/minecraft/worldgen/noise_settings/test_overworld.json",
+                r#"{
+                    "sea_level": 0,
+                    "disable_mob_generation": false,
+                    "aquifers_enabled": true,
+                    "ore_veins_enabled": true,
+                    "legacy_random_source": false,
+                    "default_block": { "Name": "minecraft:stone" },
+                    "default_fluid": { "Name": "minecraft:water", "Properties": { "level": "0" } },
+                    "noise": {
+                        "min_y": -64,
+                        "height": 128,
+                        "size_horizontal": 1,
+                        "size_vertical": 2
+                    },
+                    "noise_router": {
+                        "barrier": 0.0,
+                        "fluid_level_floodedness": 0.5,
+                        "fluid_level_spread": 0.0,
+                        "lava": -1.0,
+                        "temperature": { "type": "minecraft:shifted_noise", "noise": "minecraft:surface", "xz_scale": 0.25, "y_scale": 0.0, "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0 },
+                        "vegetation": 0.0,
+                        "continents": 0.0,
+                        "erosion": 0.0,
+                        "depth": { "type": "minecraft:y_clamped_gradient", "from_y": -64, "to_y": 64, "from_value": 1.5, "to_value": -1.5 },
+                        "ridges": 0.0,
+                        "preliminary_surface_level": -8.0,
+                        "final_density": {
+                            "type": "minecraft:add",
+                            "argument1": { "type": "minecraft:y_clamped_gradient", "from_y": -64, "to_y": 32, "from_value": 1.0, "to_value": -1.0 },
+                            "argument2": { "type": "minecraft:noise", "noise": "minecraft:surface", "xz_scale": 1.0, "y_scale": 1.0 }
+                        },
+                        "vein_toggle": 0.55,
+                        "vein_ridged": -0.5,
+                        "vein_gap": 0.5
+                    },
+                    "spawn_target": [],
+                    "surface_rule": {
+                        "type": "minecraft:sequence",
+                        "sequence": [
+                            {
+                                "type": "minecraft:condition",
+                                "if_true": {
+                                    "type": "minecraft:vertical_gradient",
+                                    "random_name": "minecraft:bedrock_floor",
+                                    "true_at_and_below": { "above_bottom": 0 },
+                                    "false_at_and_above": { "above_bottom": 5 }
+                                },
+                                "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:bedrock" } }
+                            },
+                            {
+                                "type": "minecraft:condition",
+                                "if_true": {
+                                    "type": "minecraft:not",
+                                    "invert": {
+                                        "type": "minecraft:vertical_gradient",
+                                        "random_name": "minecraft:bedrock_roof",
+                                        "true_at_and_below": { "below_top": 5 },
+                                        "false_at_and_above": { "below_top": 0 }
+                                    }
+                                },
+                                "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:bedrock" } }
+                            },
+                            {
+                                "type": "minecraft:condition",
+                                "if_true": { "type": "minecraft:above_preliminary_surface" },
+                                "then_run": {
+                                    "type": "minecraft:sequence",
+                                    "sequence": [
+                                        {
+                                            "type": "minecraft:condition",
+                                            "if_true": {
+                                                "type": "minecraft:stone_depth",
+                                                "offset": 0,
+                                                "add_surface_depth": false,
+                                                "secondary_depth_range": 0,
+                                                "surface_type": "floor"
+                                            },
+                                            "then_run": {
+                                                "type": "minecraft:sequence",
+                                                "sequence": [
+                                                    {
+                                                        "type": "minecraft:condition",
+                                                        "if_true": { "type": "minecraft:biome", "biome_is": ["minecraft:eroded_badlands"] },
+                                                        "then_run": { "type": "minecraft:bandlands" }
+                                                    },
+                                                    {
+                                                        "type": "minecraft:condition",
+                                                        "if_true": { "type": "minecraft:hole" },
+                                                        "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:coarse_dirt" } }
+                                                    },
+                                                    {
+                                                        "type": "minecraft:condition",
+                                                        "if_true": { "type": "minecraft:steep" },
+                                                        "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:calcite" } }
+                                                    },
+                                                    {
+                                                        "type": "minecraft:condition",
+                                                        "if_true": { "type": "minecraft:temperature" },
+                                                        "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:snow_block" } }
+                                                    },
+                                                    {
+                                                        "type": "minecraft:condition",
+                                                        "if_true": {
+                                                            "type": "minecraft:water",
+                                                            "offset": -1,
+                                                            "surface_depth_multiplier": 0,
+                                                            "add_stone_depth": false
+                                                        },
+                                                        "then_run": {
+                                                            "type": "minecraft:condition",
+                                                            "if_true": {
+                                                                "type": "minecraft:y_above",
+                                                                "anchor": { "absolute": -16 },
+                                                                "surface_depth_multiplier": 0,
+                                                                "add_stone_depth": false
+                                                            },
+                                                            "then_run": {
+                                                                "type": "minecraft:condition",
+                                                                "if_true": {
+                                                                    "type": "minecraft:noise_threshold",
+                                                                    "noise": "minecraft:surface",
+                                                                    "min_threshold": -2.0,
+                                                                    "max_threshold": 2.0
+                                                                },
+                                                                "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:grass_block", "Properties": { "snowy": "false" } } }
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        },
+                                        {
+                                            "type": "minecraft:condition",
+                                            "if_true": {
+                                                "type": "minecraft:stone_depth",
+                                                "offset": 0,
+                                                "add_surface_depth": true,
+                                                "secondary_depth_range": 6,
+                                                "surface_type": "ceiling"
+                                            },
+                                            "then_run": { "type": "minecraft:block", "result_state": { "Name": "minecraft:sandstone" } }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }"#,
+            ),
+        ];
+
+        let data = WorldgenData::from_json_entries(entries).expect("load synthetic worldgen data");
+        let generator = NoiseBasedChunkGenerator::new(
+            12345,
+            "minecraft:test_overworld",
+            &data.parameter_lists["minecraft:test_biomes"],
+            &data,
+        )
+        .expect("build synthetic generator");
+
+        let mut chunk = generator.generate_chunk_surface(0, 0, &data);
+        let states = harpas_core::block::block_states();
+        let bedrock = states.default_state("minecraft:bedrock").unwrap();
+        // Bottom y = -64 must have bedrock placed by vertical_gradient.
+        assert_eq!(chunk.block_state(0, -64, 0), bedrock);
+
+        // Check heightmap packing and recomputation.
+        let packed = chunk.heightmaps().pack(HeightmapType::WorldSurfaceWg);
+        assert!(!packed.is_empty());
+        let old_surface = chunk.heightmaps().get(HeightmapType::WorldSurface, 4, 4);
+        chunk.recompute_heightmaps();
+        assert_eq!(
+            chunk.heightmaps().get(HeightmapType::WorldSurface, 4, 4),
+            old_surface
+        );
     }
 }

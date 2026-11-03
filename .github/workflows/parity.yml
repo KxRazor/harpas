@@ -41,4 +41,6 @@ jobs:
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
-        run: cargo test -p harpas-server --test block_entity_parity -- --nocapture
+        run: |
+          cargo test -p harpas-server --test block_entity_parity -- --nocapture
+          cargo test -p harpas-worldgen --test vanilla_parity -- --nocapture

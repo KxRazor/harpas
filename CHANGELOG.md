@@ -53,6 +53,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   evaluation, `NoiseChunk` `4×8×4` trilinear cell interpolation and caching, 7D `Climate` R-tree with
   `OverworldBiomeBuilder`, `MultiNoiseBiomeSource` section biome filling and `BiomeManager` 3D Voronoi zoom,
   checked bit for bit against Java 25 (`harpas-worldgen`).
+- Base terrain generation (`NoiseBasedChunkGenerator::fill_from_noise` and `Heightmaps`), localized 3D aquifers
+  (`NoiseBasedAquifer` with 4-nearest cell lookup, deep dark suppression, barrier pressure and lava/water
+  flooding), copper-granite and iron-tuff ore veins (`OreVeinifier`), and `SurfaceSystem` with all 4 surface
+  rule types, all 11 condition types, eroded badlands pillars, 192-layer terracotta bands and frozen ocean
+  icebergs. Sampled terrain and surface chunks, fluid updates, aquifers, ore veins and surface calculations
+  are checked against Minecraft 26.1; parity for complete generated worlds remains to be verified
+  (`harpas-worldgen`).
 
 ### Changed
 

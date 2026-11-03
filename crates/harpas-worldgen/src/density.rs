@@ -701,23 +701,46 @@ enum PreSlotKey {
     Spline(CubicSpline),
 }
 
-enum AnyPositionalFactory {
+/// Positional random factory (`PositionalRandomFactory`) used by `RandomState`, `NoiseBasedAquifer`,
+/// `OreVeinifier`, and `SurfaceSystem`.
+#[derive(Debug, Clone)]
+pub enum PositionalRandom {
+    /// Xoroshiro128++ positional factory (`legacy_random_source == false`).
     Xoroshiro(XoroshiroPositionalRandom),
+    /// 48-bit LCG positional factory (`legacy_random_source == true`).
     Legacy(LegacyPositionalRandom),
 }
 
-impl AnyPositionalFactory {
-    fn fork_from_hash_of(&self, name: &str) -> Box<dyn RandomSource> {
+impl PositionalRandom {
+    /// Creates the root `RandomState` positional random factory from `world_seed` and `legacy_random_source`.
+    pub fn from_world_seed(world_seed: i64, legacy_random_source: bool) -> Self {
+        if legacy_random_source {
+            Self::Legacy(LegacyRandom::new(world_seed).fork_positional())
+        } else {
+            Self::Xoroshiro(XoroshiroRandom::new(world_seed).fork_positional())
+        }
+    }
+
+    /// Forks a `RandomSource` from `name` using the factory's hash (`PositionalRandomFactory.fromHashOf`).
+    pub fn fork_from_hash_of(&self, name: &str) -> Box<dyn RandomSource> {
         match self {
             Self::Xoroshiro(f) => Box::new(f.from_hash_of(name)),
             Self::Legacy(f) => Box::new(f.from_hash_of(name)),
+        }
+    }
+
+    /// Forks a child `PositionalRandom` from `name` (`fromHashOf(name).forkPositional()`).
+    pub fn fork_positional_from_hash_of(&self, name: &str) -> Self {
+        match self {
+            Self::Xoroshiro(f) => Self::Xoroshiro(f.from_hash_of(name).fork_positional()),
+            Self::Legacy(f) => Self::Legacy(f.from_hash_of(name).fork_positional()),
         }
     }
 }
 
 struct GraphCompiler<'a> {
     graph: CompiledDensityGraph,
-    positional: AnyPositionalFactory,
+    positional: PositionalRandom,
     noise_defs: &'a IndexMap<String, NoiseParameters>,
     df_defs: &'a IndexMap<String, DensityFunctionDef>,
     named_nodes: HashMap<String, NodeId>,
@@ -732,11 +755,7 @@ impl<'a> GraphCompiler<'a> {
         noise_defs: &'a IndexMap<String, NoiseParameters>,
         df_defs: &'a IndexMap<String, DensityFunctionDef>,
     ) -> Self {
-        let positional = if legacy_random_source {
-            AnyPositionalFactory::Legacy(LegacyRandom::new(world_seed).fork_positional())
-        } else {
-            AnyPositionalFactory::Xoroshiro(XoroshiroRandom::new(world_seed).fork_positional())
-        };
+        let positional = PositionalRandom::from_world_seed(world_seed, legacy_random_source);
         Self {
             graph: CompiledDensityGraph {
                 world_seed,
@@ -1356,6 +1375,58 @@ impl CompiledDensityGraph {
     /// Whether `LegacyRandom` seeding was used.
     pub const fn legacy_random_source(&self) -> bool {
         self.legacy_random_source
+    }
+
+    /// Root `PositionalRandomFactory` (`RandomState.random`) seeded from `world_seed`.
+    pub fn positional_random(&self) -> PositionalRandom {
+        PositionalRandom::from_world_seed(self.world_seed, self.legacy_random_source)
+    }
+
+    /// `RandomState.aquiferRandom()` (`random.fromHashOf("minecraft:aquifer").forkPositional()`).
+    pub fn aquifer_random(&self) -> PositionalRandom {
+        self.positional_random()
+            .fork_positional_from_hash_of("minecraft:aquifer")
+    }
+
+    /// `RandomState.oreRandom()` (`random.fromHashOf("minecraft:ore").forkPositional()`).
+    pub fn ore_veins_random(&self) -> PositionalRandom {
+        self.positional_random()
+            .fork_positional_from_hash_of("minecraft:ore")
+    }
+
+    /// Instantiates a [`NormalNoise`] by `name` using `RandomState.getOrCreateNoise` seeding rules.
+    pub fn instantiate_noise(
+        &self,
+        name: &str,
+        noise_defs: &IndexMap<String, NoiseParameters>,
+    ) -> Result<NormalNoise, WorldgenDataError> {
+        if let Some(existing) = self.noise_by_name(name) {
+            return Ok(existing.clone());
+        }
+        if self.legacy_random_source {
+            if name == "minecraft:temperature" {
+                let mut rng = LegacyRandom::new(self.world_seed);
+                return Ok(NormalNoise::new(&mut rng, -7, &[1.0, 1.0]));
+            }
+            if name == "minecraft:vegetation" {
+                let mut rng = LegacyRandom::new(self.world_seed.wrapping_add(1));
+                return Ok(NormalNoise::new(&mut rng, -7, &[1.0, 1.0]));
+            }
+            if name == "minecraft:offset" {
+                let mut rng = XoroshiroRandom::new(0)
+                    .fork_positional()
+                    .from_hash_of("minecraft:offset");
+                return Ok(NormalNoise::new(&mut rng, 0, &[0.0]));
+            }
+        }
+        let params = noise_defs
+            .get(name)
+            .ok_or_else(|| WorldgenDataError::InvalidDefinition {
+                context: name.to_string(),
+                message: format!("unknown noise parameter `{name}`"),
+            })?;
+        let mut rng = self.positional_random().fork_from_hash_of(name);
+        Ok(NormalNoise::from_parameters(&mut *rng, params))
     }
 
     /// All compiled nodes in topological order (children precede parents).

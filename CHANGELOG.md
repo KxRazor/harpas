@@ -44,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   positional seeding, `RandomSequence` and `WorldgenRandom`) and Java math helpers (`floorDiv`/`floorMod`,
   masked shifts, `Math.round`, deterministic `ln`, interpolation and the 65,536-entry `f32` sine table),
   checked bit for bit against Java 25 (`harpas-core`).
+- Vanilla-exact gradient and simplex noise samplers (`ImprovedNoise`, `PerlinNoise`, `NormalNoise`,
+  `BlendedNoise`, `SimplexNoise` and `PerlinSimplexNoise`), preserving modern positional and legacy sequential
+  octave seeding, `2^25` coordinate wrapping and `(double) 1.0e-7f` vertical smearing, checked bit for bit
+  against Java 25 (`harpas-core`).
 
 ### Changed
 

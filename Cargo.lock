@@ -1084,6 +1084,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "harpas-worldgen"
+version = "0.1.0"
+dependencies = [
+ "harpas-core",
+ "indexmap",
+ "serde_json",
+ "sha2 0.11.1",
+ "zip",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

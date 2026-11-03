@@ -78,8 +78,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Structure templates and template pools are read from the vanilla data: template sizes, bounding boxes,
   palettes and jigsaw blocks in every rotation, and pool elements with their weights, checked against Minecraft
   26.1 (`harpas-worldgen`).
-- Jigsaw structure starts for villages, pillager outposts, ancient cities and trail ruins, with their pieces and
-  junctions, checked against Minecraft 26.1. The generator does not use them yet (`harpas-worldgen`).
+- Jigsaw structure starts for villages, pillager outposts, ancient cities, trail ruins and trial chambers, with
+  their pieces, elements and junctions, checked against Minecraft 26.1. The generator does not use them yet
+  (`harpas-worldgen`).
 
 ### Changed
 

@@ -287,18 +287,56 @@ pub struct JigsawDef {
     pub start_jigsaw_name: Option<String>,
     /// How many pieces deep the structure may grow (`size`).
     pub max_depth: i32,
-    /// The Y of the start position, or `None` when it is not a constant height.
-    pub start_height: Option<crate::surface::VerticalAnchor>,
+    /// The Y of the start position, or `None` for a height provider Harpas does not support.
+    pub start_height: Option<StartHeightDef>,
     /// Whether pieces reserve room above for taller children (`use_expansion_hack`).
     pub use_expansion_hack: bool,
     /// The heightmap the first piece stands on, if any, such as `WORLD_SURFACE_WG`.
     pub project_start_to_heightmap: Option<String>,
     /// How far pieces may reach from the center horizontally and vertically.
     pub max_distance_from_center: (i32, i32),
-    /// Whether the structure renames pools (`pool_aliases`), which Harpas does not support yet.
-    pub has_pool_aliases: bool,
+    /// Pools the structure renames for each start (`pool_aliases`).
+    pub pool_aliases: Vec<PoolAliasDef>,
     /// Blocks kept free below and above the structure (`dimension_padding`).
     pub dimension_padding: (i32, i32),
+}
+
+/// The height a jigsaw structure starts at (`HeightProvider`), for the providers jigsaw structures use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartHeightDef {
+    /// `minecraft:constant`, or an anchor on its own.
+    Constant(crate::surface::VerticalAnchor),
+    /// `minecraft:uniform`: any height in a range, both ends included.
+    Uniform {
+        /// The lowest height.
+        min_inclusive: crate::surface::VerticalAnchor,
+        /// The highest height.
+        max_inclusive: crate::surface::VerticalAnchor,
+    },
+}
+
+/// A pool renaming of a jigsaw structure (`PoolAliasBinding`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolAliasDef {
+    /// `minecraft:direct`: always the same pool.
+    Direct {
+        /// The pool name jigsaws use.
+        alias: String,
+        /// The pool used instead.
+        target: String,
+    },
+    /// `minecraft:random`: one of several pools, by weight.
+    Random {
+        /// The pool name jigsaws use.
+        alias: String,
+        /// The pools to choose from, with their weights.
+        targets: Vec<(String, i32)>,
+    },
+    /// `minecraft:random_group`: one of several groups of renamings, by weight.
+    RandomGroup {
+        /// The groups to choose from, with their weights.
+        groups: Vec<(Vec<PoolAliasDef>, i32)>,
+    },
 }
 
 /// Parsed contents of a `worldgen/template_pool/<name>.json` file (`StructureTemplatePool`).
@@ -846,17 +884,23 @@ fn parse_jigsaw(context: &str, json: &Value) -> Result<JigsawDef, WorldgenDataEr
     let start_height = json
         .get("start_height")
         .ok_or_else(|| invalid_def(context, "jigsaw has no start_height"))?;
-    let start_height = match start_height.get("type").and_then(Value::as_str) {
-        None => Some(crate::surface::parse_vertical_anchor(
-            context,
-            start_height,
-        )?),
-        Some("minecraft:constant") => Some(crate::surface::parse_vertical_anchor(
+    let anchor = |key: &str| {
+        crate::surface::parse_vertical_anchor(
             context,
             start_height
-                .get("value")
-                .ok_or_else(|| invalid_def(context, "constant height has no value"))?,
-        )?),
+                .get(key)
+                .ok_or_else(|| invalid_def(context, format!("height provider has no `{key}`")))?,
+        )
+    };
+    let start_height = match start_height.get("type").and_then(Value::as_str) {
+        None => Some(StartHeightDef::Constant(
+            crate::surface::parse_vertical_anchor(context, start_height)?,
+        )),
+        Some("minecraft:constant") => Some(StartHeightDef::Constant(anchor("value")?)),
+        Some("minecraft:uniform") => Some(StartHeightDef::Uniform {
+            min_inclusive: anchor("min_inclusive")?,
+            max_inclusive: anchor("max_inclusive")?,
+        }),
         Some(_) => None,
     };
     let max_distance = json
@@ -909,11 +953,66 @@ fn parse_jigsaw(context: &str, json: &Value) -> Result<JigsawDef, WorldgenDataEr
             .and_then(Value::as_str)
             .map(str::to_string),
         max_distance_from_center,
-        has_pool_aliases: json
-            .get("pool_aliases")
-            .and_then(Value::as_array)
-            .is_some_and(|aliases| !aliases.is_empty()),
+        pool_aliases: match json.get("pool_aliases") {
+            Some(aliases) => aliases
+                .as_array()
+                .ok_or_else(|| invalid_def(context, "pool_aliases must be an array"))?
+                .iter()
+                .map(|alias| parse_pool_alias(context, alias))
+                .collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        },
         dimension_padding,
+    })
+}
+
+fn parse_pool_alias(context: &str, json: &Value) -> Result<PoolAliasDef, WorldgenDataError> {
+    let string = |value: Option<&Value>, what: &str| {
+        value
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| invalid_def(context, format!("pool alias has no `{what}`")))
+    };
+    let weighted = |key: &str| {
+        json.get(key)
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid_def(context, format!("pool alias has no `{key}` array")))
+    };
+    let weight = |entry: &Value| {
+        entry
+            .get("weight")
+            .and_then(Value::as_i64)
+            .and_then(|weight| i32::try_from(weight).ok())
+            .ok_or_else(|| invalid_def(context, "pool alias entry has no weight"))
+    };
+    Ok(match json.get("type").and_then(Value::as_str) {
+        Some("minecraft:direct") => PoolAliasDef::Direct {
+            alias: string(json.get("alias"), "alias")?,
+            target: string(json.get("target"), "target")?,
+        },
+        Some("minecraft:random") => PoolAliasDef::Random {
+            alias: string(json.get("alias"), "alias")?,
+            targets: weighted("targets")?
+                .iter()
+                .map(|entry| Ok((string(entry.get("data"), "data")?, weight(entry)?)))
+                .collect::<Result<_, WorldgenDataError>>()?,
+        },
+        Some("minecraft:random_group") => PoolAliasDef::RandomGroup {
+            groups: weighted("groups")?
+                .iter()
+                .map(|entry| {
+                    let bindings = entry
+                        .get("data")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| invalid_def(context, "pool alias group has no data"))?
+                        .iter()
+                        .map(|binding| parse_pool_alias(context, binding))
+                        .collect::<Result<_, _>>()?;
+                    Ok((bindings, weight(entry)?))
+                })
+                .collect::<Result<_, WorldgenDataError>>()?,
+        },
+        _ => return Err(invalid_def(context, "unknown pool alias type")),
     })
 }
 

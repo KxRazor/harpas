@@ -123,8 +123,8 @@ vanilla for the same seed.
   - [x] Stronghold starts: the stronghold piece layout, including the retries until it has a portal room.
   - [x] Structure templates and template pools: sizes, bounding boxes, palettes and jigsaw blocks in every
         rotation, and pool elements with their weights.
-  - [x] Jigsaw structure starts for villages, pillager outposts, ancient cities and trail ruins, with their
-        pieces' junctions. Trial chambers, which rename pools, come next.
+  - [x] Jigsaw structure starts for villages, pillager outposts, ancient cities, trail ruins and trial chambers,
+        with their pieces' elements and junctions, pool aliases and random start heights.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla in CI.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

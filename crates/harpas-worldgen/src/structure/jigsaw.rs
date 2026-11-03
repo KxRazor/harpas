@@ -5,8 +5,11 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::start::{BoundingBox, JigsawJunction, StructurePiece};
-use crate::data::{JigsawDef, PoolElementDef, Projection, WorldgenData, WorldgenDataError};
+use super::start::{BoundingBox, JigsawJunction, JigsawPiece, StructurePiece};
+use crate::data::{
+    JigsawDef, PoolAliasDef, PoolElementDef, Projection, StartHeightDef, WorldgenData,
+    WorldgenDataError,
+};
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
 use crate::template::{
     Facing, JigsawBlock, JointType, Rotation, StructureTemplate, StructureTemplates,
@@ -76,6 +79,8 @@ struct Context<'d> {
     data: &'d WorldgenData,
     templates: &'d StructureTemplates,
     max_sizes: HashMap<&'d str, i32>,
+    /// The pools this start renames (`PoolAliasLookup`).
+    aliases: HashMap<&'d str, &'d str>,
 }
 
 impl<'d> Context<'d> {
@@ -176,11 +181,70 @@ impl<'d> Context<'d> {
         Ok(size)
     }
 
+    /// The pool a jigsaw's pool name stands for in this start.
+    fn alias<'n>(&self, pool: &'n str) -> &'n str
+    where
+        'd: 'n,
+    {
+        self.aliases.get(pool).copied().unwrap_or(pool)
+    }
+
     /// A pool that exists and is usable: not empty unless it is the empty pool.
     fn usable_pool(&self, name: &str) -> Option<&'d crate::data::TemplatePoolDef> {
         let pool = self.data.template_pools.get(name)?;
         (!pool.elements.is_empty() || name == EMPTY_POOL).then_some(pool)
     }
+}
+
+/// `PoolAliasLookup.create`: resolves the renamings with a random generator for the start position.
+fn resolve_aliases(
+    bindings: &[PoolAliasDef],
+    level_seed: i64,
+    [x, y, z]: [i32; 3],
+) -> HashMap<&str, &str> {
+    let mut aliases = HashMap::new();
+    if bindings.is_empty() {
+        return aliases;
+    }
+    let mut random = LegacyRandom::new(level_seed).fork_positional().at(x, y, z);
+    for binding in bindings {
+        resolve_alias(binding, &mut random, &mut aliases);
+    }
+    aliases
+}
+
+/// `PoolAliasBinding.forEachResolved`.
+fn resolve_alias<'d>(
+    binding: &'d PoolAliasDef,
+    random: &mut impl RandomSource,
+    aliases: &mut HashMap<&'d str, &'d str>,
+) {
+    match binding {
+        PoolAliasDef::Direct { alias, target } => {
+            aliases.insert(alias, target);
+        }
+        PoolAliasDef::Random { alias, targets } => {
+            aliases.insert(alias, weighted(targets, random));
+        }
+        PoolAliasDef::RandomGroup { groups } => {
+            for binding in weighted(groups, random) {
+                resolve_alias(binding, random, aliases);
+            }
+        }
+    }
+}
+
+/// `WeightedList.getRandomOrThrow`.
+fn weighted<'a, T>(entries: &'a [(T, i32)], random: &mut impl RandomSource) -> &'a T {
+    let total = entries.iter().map(|(_, weight)| weight).sum();
+    let mut selection = random.next_int_bounded(total);
+    for (entry, weight) in entries {
+        selection -= weight;
+        if selection < 0 {
+            return entry;
+        }
+    }
+    unreachable!("a selection below the total weight")
 }
 
 /// `Util.shuffle`.
@@ -236,10 +300,9 @@ fn heightmap(name: &str) -> Option<HeightmapType> {
     })
 }
 
-/// Whether Harpas can lay out a jigsaw structure: it renames no pools and starts at a constant height.
+/// Whether Harpas can lay out a jigsaw structure: one whose start height and heightmap it knows.
 pub(super) fn is_supported(jigsaw: &JigsawDef) -> bool {
-    !jigsaw.has_pool_aliases
-        && jigsaw.start_height.is_some()
+    jigsaw.start_height.is_some()
         && jigsaw
             .project_start_to_heightmap
             .as_deref()
@@ -256,34 +319,50 @@ pub(super) struct Start<'d> {
 }
 
 /// `JigsawStructure.findGenerationPoint` and the first half of `JigsawPlacement.addPieces`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn start<'d>(
     generator: &'d NoiseBasedChunkGenerator,
     data: &'d WorldgenData,
     templates: &'d StructureTemplates,
     jigsaw: &'d JigsawDef,
+    level_seed: i64,
     random: &mut WorldgenRandom<LegacyRandom>,
     chunk_x: i32,
     chunk_z: i32,
 ) -> Result<Option<Start<'d>>, WorldgenDataError> {
+    let height = 384;
+    let start_y = match jigsaw.start_height.expect("a supported start height") {
+        StartHeightDef::Constant(anchor) => anchor.resolve(generator.min_y(), height),
+        StartHeightDef::Uniform {
+            min_inclusive,
+            max_inclusive,
+        } => {
+            let min = min_inclusive.resolve(generator.min_y(), height);
+            let max = max_inclusive.resolve(generator.min_y(), height);
+            if min > max {
+                min
+            } else {
+                random.next_int_bounded(max - min + 1) + min
+            }
+        }
+    };
+    let position = [chunk_x * 16, start_y, chunk_z * 16];
     let context = Context {
         generator,
         data,
         templates,
         max_sizes: HashMap::new(),
+        aliases: resolve_aliases(&jigsaw.pool_aliases, level_seed, position),
     };
-    let height = 384;
-    let start_y = jigsaw
-        .start_height
-        .expect("a supported start height")
-        .resolve(generator.min_y(), height);
-    let position = [chunk_x * 16, start_y, chunk_z * 16];
     let rotation = Rotation::ALL[random.next_int_bounded(4) as usize];
-    let pool = data.template_pools.get(&jigsaw.start_pool).ok_or_else(|| {
-        WorldgenDataError::InvalidDefinition {
+    let pool = data
+        .template_pools
+        .get(context.alias(&jigsaw.start_pool))
+        .or_else(|| data.template_pools.get(&jigsaw.start_pool))
+        .ok_or_else(|| WorldgenDataError::InvalidDefinition {
             context: jigsaw.start_pool.clone(),
             message: "unknown template pool".to_string(),
-        }
-    })?;
+        })?;
     let templates_list = pool.templates();
     let element = if templates_list.is_empty() {
         &PoolElementDef::Empty
@@ -404,6 +483,12 @@ impl<'d> Start<'d> {
                 orientation: None,
                 gen_depth: 0,
                 junctions: piece.junctions,
+                jigsaw: Some(JigsawPiece {
+                    element: piece.element.clone(),
+                    position: piece.position,
+                    rotation: piece.rotation,
+                    ground_level_delta: piece.ground_level_delta,
+                }),
             })
             .collect())
     }
@@ -450,7 +535,10 @@ impl<'d> Placer<'_, 'd> {
             ];
             let source_jigsaw_local_y = source_jigsaw.pos[1] - source_box_y;
             let mut source_jigsaw_base_height = None;
-            let Some(target_pool) = self.context.usable_pool(&source_jigsaw.pool) else {
+            let Some(target_pool) = self
+                .context
+                .usable_pool(self.context.alias(&source_jigsaw.pool))
+            else {
                 continue;
             };
             let Some(fallback) = self.context.usable_pool(&target_pool.fallback) else {
@@ -502,7 +590,7 @@ impl<'d> Placer<'_, 'd> {
                             if !inside(&hack_box, front) {
                                 continue;
                             }
-                            let pool = &target_jigsaw.pool;
+                            let pool = self.context.alias(&target_jigsaw.pool);
                             let Some((name, child)) =
                                 self.context.data.template_pools.get_key_value(pool)
                             else {
@@ -673,6 +761,41 @@ mod tests {
         assert!(!free.fits(&at([4, 0, 0], [9, 4, 4])));
         assert!(!free.fits(&at([5, 0, 0], [10, 4, 4])));
         assert!(!free.fits(&at([-1, 5, 5], [3, 9, 9])));
+    }
+
+    #[test]
+    fn weighted_choices_follow_the_cumulative_weights() {
+        let entries = [("a", 1), ("b", 3)];
+        let mut random = LegacyRandom::new(42);
+        let mut expected = LegacyRandom::new(42);
+        for _ in 0..20 {
+            let selection = expected.next_int_bounded(4);
+            let chosen = *weighted(&entries, &mut random);
+            assert_eq!(chosen, if selection < 1 { "a" } else { "b" });
+        }
+    }
+
+    #[test]
+    fn aliases_resolve_groups_and_keep_unknown_pools() {
+        let bindings = vec![
+            PoolAliasDef::Direct {
+                alias: "x".to_string(),
+                target: "y".to_string(),
+            },
+            PoolAliasDef::RandomGroup {
+                groups: vec![(
+                    vec![PoolAliasDef::Direct {
+                        alias: "p".to_string(),
+                        target: "q".to_string(),
+                    }],
+                    1,
+                )],
+            },
+        ];
+        let aliases = resolve_aliases(&bindings, 0, [0, 0, 0]);
+        assert_eq!(aliases.get("x"), Some(&"y"));
+        assert_eq!(aliases.get("p"), Some(&"q"));
+        assert!(resolve_aliases(&[], 0, [0, 0, 0]).is_empty());
     }
 
     #[test]

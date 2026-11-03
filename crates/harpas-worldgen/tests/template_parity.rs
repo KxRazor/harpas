@@ -6,46 +6,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use harpas_core::random::LegacyRandom;
-use harpas_worldgen::{
-    JointType, PoolElementDef, Projection, Rotation, StructureTemplates, WorldgenData,
-};
+use harpas_worldgen::{JointType, Rotation, StructureTemplates, WorldgenData};
 use reference::Reference;
 
 /// Positions the templates are placed at, as in `TemplateProbe.POSITIONS`.
 const POSITIONS: [[i32; 3]; 2] = [[10, 64, -7], [1234, -20, 5678]];
-
-fn describe(element: &PoolElementDef) -> String {
-    let projection = |projection: &Projection| match projection {
-        Projection::Rigid => "rigid",
-        Projection::TerrainMatching => "terrain_matching",
-    };
-    match element {
-        PoolElementDef::Single {
-            location,
-            processors,
-            projection: p,
-            legacy,
-        } => format!(
-            "minecraft:{}single_pool_element {location} {} {}",
-            if *legacy { "legacy_" } else { "" },
-            processors.as_deref().unwrap_or("inline"),
-            projection(p)
-        ),
-        PoolElementDef::Feature {
-            feature,
-            projection: p,
-        } => format!("minecraft:feature_pool_element {feature} {}", projection(p)),
-        PoolElementDef::List {
-            elements,
-            projection: p,
-        } => format!(
-            "minecraft:list_pool_element {} [{}]",
-            projection(p),
-            elements.iter().map(describe).collect::<Vec<_>>().join(", ")
-        ),
-        PoolElementDef::Empty => "minecraft:empty_pool_element".to_string(),
-    }
-}
 
 #[test]
 fn templates_and_pools_match_vanilla() {
@@ -111,12 +76,15 @@ fn templates_and_pools_match_vanilla() {
             pool.templates().len()
         ));
         for (element, weight) in &pool.elements {
-            expected.push(format!("element {weight} {}", describe(element)));
+            expected.push(format!(
+                "element {weight} {}",
+                reference::describe_element(element)
+            ));
         }
         let shuffled: Vec<_> = pool
             .shuffled_templates(&mut LegacyRandom::new(7))
             .into_iter()
-            .map(describe)
+            .map(reference::describe_element)
             .collect();
         expected.push(format!("shuffled {}", shuffled.join(" | ")));
     }

@@ -499,6 +499,7 @@ pub(super) fn pieces(
                     orientation: Some(piece.orientation),
                     gen_depth: piece.gen_depth,
                     junctions: Vec::new(),
+                    jigsaw: None,
                 })
                 .collect();
         }

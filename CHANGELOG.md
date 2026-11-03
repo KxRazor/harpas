@@ -42,6 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Moving pistons in loaded chunks now send their moving block and animation data to Java clients
+  (`harpas-server`).
+
 ### Removed
 
 ### Security

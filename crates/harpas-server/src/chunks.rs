@@ -135,6 +135,7 @@ fn update_tag(name: &str, entity: &Compound) -> Option<Nbt> {
             "Delay",
             "MinSpawnDelay",
         ],
+        "minecraft:piston" => &["blockState", "facing", "progress", "source", "extending"],
         "minecraft:shelf" => &["align_items_to_bottom", "Items"],
         "minecraft:skull" => &["profile", "note_block_sound"],
         "minecraft:structure_block" => &[
@@ -562,6 +563,51 @@ mod tests {
         };
         assert!(text.get("messages").is_some());
         assert!(text.get("private_nested").is_none());
+    }
+
+    #[test]
+    fn moving_piston_updates_include_its_moving_block() {
+        let registry =
+            crate::block_entity_registry::Registry::synthetic(&[("minecraft:piston", 91)]);
+        let mut moved_block = Compound::new();
+        moved_block.insert("Name", "minecraft:stone");
+        let mut piston = Compound::new();
+        piston.insert("id", "minecraft:piston");
+        piston.insert("x", -1);
+        piston.insert("y", 65);
+        piston.insert("z", 2);
+        piston.insert("blockState", moved_block.clone());
+        piston.insert("facing", 5_i8);
+        piston.insert("progress", 0.5_f32);
+        piston.insert("source", 0_i8);
+        piston.insert("extending", 1_i8);
+        piston.insert("private_storage", "not a client update");
+        let mut rest = Compound::new();
+        rest.insert("block_entities", Nbt::List(List::Compound(vec![piston])));
+        let chunk = Chunk {
+            sections: Vec::new(),
+            rest,
+        };
+        let entities = block_entities(&chunk, -1, 0, &registry);
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].kind, 91);
+        assert_eq!(
+            (
+                entities[0].position.x,
+                entities[0].position.z,
+                entities[0].y
+            ),
+            (15, 2, 65)
+        );
+        let Some(Nbt::Compound(data)) = &entities[0].data else {
+            panic!("expected moving piston data");
+        };
+        assert_eq!(data.get("blockState"), Some(&Nbt::Compound(moved_block)));
+        assert_eq!(data.get("facing"), Some(&Nbt::Byte(5)));
+        assert_eq!(data.get("progress"), Some(&Nbt::Float(0.5)));
+        assert_eq!(data.get("source"), Some(&Nbt::Byte(0)));
+        assert_eq!(data.get("extending"), Some(&Nbt::Byte(1)));
+        assert!(data.get("private_storage").is_none());
     }
 
     #[test]

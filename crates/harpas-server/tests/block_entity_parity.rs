@@ -1,5 +1,6 @@
 //! Compares block entity chunk updates with an owner-provided, EULA-accepted Minecraft 26.1 server.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -11,6 +12,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_java::{FrameReader, write_frame};
 use harpas_protocol_java::{
     codec,
@@ -118,6 +120,34 @@ impl Server {
         writeln!(input, "{command}").unwrap();
         input.flush().unwrap();
     }
+
+    fn wait_for_moving_piston(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            self.command(
+                "execute if block 2 65 6 minecraft:moving_piston run say harpas-piston-ready",
+            );
+            let retry = Instant::now() + Duration::from_millis(200);
+            while let Some(wait) = retry.checked_duration_since(Instant::now()) {
+                match self.lines.recv_timeout(wait) {
+                    Ok(line) => {
+                        self.log.push_str(&line);
+                        self.log.push('\n');
+                        if line.contains("harpas-piston-ready") {
+                            return;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "reference server exited before moving the piston: {}",
+                self.log
+            );
+        }
+        panic!("reference piston did not move: {}", self.log);
+    }
 }
 
 impl Drop for Server {
@@ -143,6 +173,62 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+fn assert_variant_fixtures(world: &Path) {
+    let region = world.join("dimensions/minecraft/overworld/region");
+    let chunk = harpas_anvil::read_chunk(&region, 0, 0)
+        .unwrap()
+        .expect("fixture chunk was not saved");
+    let Some(Nbt::List(List::Compound(entities))) = chunk.get("block_entities") else {
+        panic!("fixture chunk has no block entities");
+    };
+    for (x, z, field) in [
+        (1, 1, "front_text"),
+        (2, 1, "Items"),
+        (3, 1, "SpawnData"),
+        (1, 2, "front_text"),
+        (2, 2, "primary_effect"),
+        (3, 2, "profile"),
+        (3, 2, "note_block_sound"),
+        (4, 2, "sherds"),
+        (4, 2, "item"),
+        (5, 2, "exit_portal"),
+        (6, 2, "item"),
+        (7, 2, "Items"),
+        (8, 2, "components"),
+        (1, 8, "RecordItem"),
+        (2, 8, "Book"),
+        (3, 8, "Command"),
+        (4, 8, "server_data"),
+        (5, 8, "Items"),
+        (6, 8, "Items"),
+        (7, 8, "bees"),
+        (8, 8, "name"),
+        (9, 8, "SpawnPotentials"),
+        (10, 8, "back_text"),
+        (11, 8, "Items"),
+        (12, 8, "Items"),
+        (13, 8, "Items"),
+        (14, 8, "spawn_data"),
+    ] {
+        let entity = entities
+            .iter()
+            .find(|entity: &&Compound| {
+                entity.get("x") == Some(&Nbt::Int(x))
+                    && entity.get("y") == Some(&Nbt::Int(65))
+                    && entity.get("z") == Some(&Nbt::Int(z))
+            })
+            .unwrap_or_else(|| panic!("missing fixture at {x}, 65, {z}"));
+        let valid = match entity.get(field) {
+            None | Some(Nbt::List(List::Empty)) => false,
+            Some(Nbt::List(List::Compound(values))) => !values.is_empty(),
+            Some(Nbt::Compound(value)) => !value.is_empty(),
+            Some(Nbt::String(value)) => !value.is_empty(),
+            Some(_) => true,
+        };
+        assert!(valid, "fixture at {x}, 65, {z} has no {field}");
+    }
+}
+
 fn send(client: &mut TcpStream, encode: impl FnOnce(&mut Vec<u8>)) {
     let mut frame = Vec::new();
     write_frame(&mut frame, encode);
@@ -161,7 +247,7 @@ fn next(client: &mut TcpStream, frames: &mut FrameReader) -> Vec<u8> {
     }
 }
 
-fn capture(port: u16) -> Vec<play::ChunkBlockEntity> {
+fn capture(port: u16, filtered: bool) -> Vec<play::ChunkBlockEntity> {
     let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(30)))
@@ -175,7 +261,12 @@ fn capture(port: u16) -> Vec<play::ChunkBlockEntity> {
     }
     .into();
     let login: login::serverbound::Packet = login::serverbound::LoginStart {
-        name: "ParityTest".into(),
+        name: if filtered {
+            "FilteredTest"
+        } else {
+            "ParityTest"
+        }
+        .into(),
         player_uuid: 0,
     }
     .into();
@@ -191,7 +282,7 @@ fn capture(port: u16) -> Vec<play::ChunkBlockEntity> {
     send(&mut client, |b| {
         codec::write_varint(b, 0); // Client Information
         codec::write_string(b, "en_us");
-        b.extend_from_slice(&[2, 0, 1, 127, 1, 0, 1, 0]);
+        b.extend_from_slice(&[2, 0, 1, 127, 1, u8::from(filtered), 1, 0]);
     });
     loop {
         let frame = next(&mut client, &mut frames);
@@ -238,6 +329,34 @@ fn capture(port: u16) -> Vec<play::ChunkBlockEntity> {
         }
     }
     panic!("did not receive chunk 0, 0");
+}
+
+fn assert_updates_match(expected: &[play::ChunkBlockEntity], actual: &[play::ChunkBlockEntity]) {
+    assert_eq!(
+        expected.len(),
+        actual.len(),
+        "different numbers of block entities"
+    );
+    let mut differences = Vec::new();
+    for entity in expected {
+        let received = actual
+            .iter()
+            .find(|received| received.position == entity.position && received.y == entity.y)
+            .expect("Harpas omitted a block entity");
+        if received.kind != entity.kind || received.data != entity.data {
+            differences.push(format!(
+                "at {:?}: expected {entity:?}, received {received:?}",
+                entity.position
+            ));
+        }
+        if (entity.position.x, entity.position.z, entity.y) == (2, 1, 65) {
+            assert!(
+                received.data.is_none(),
+                "a chest's inventory must not be sent"
+            );
+        }
+    }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
 }
 
 #[test]
@@ -291,12 +410,11 @@ fn saved_block_entities_match_vanilla_chunk_updates() {
         "vanilla data installation failed: {}",
         String::from_utf8_lossy(&install.stderr)
     );
-    assert!(
-        harpas
-            .join(".harpas/vanilla-data/26.1-block-entity-types.json")
-            .is_file(),
-        "Java did not generate the registry"
-    );
+    let registry_path = harpas.join(".harpas/vanilla-data/26.1-block-entity-types.json");
+    let registry: serde_json::Value = serde_json::from_slice(
+        &fs::read(&registry_path).expect("Java did not generate the registry"),
+    )
+    .unwrap();
 
     let mut reference = Server::start(
         OsStr::new("java"),
@@ -373,24 +491,70 @@ fn saved_block_entities_match_vanilla_chunk_updates() {
         let z = index / 14 + 3;
         reference.command(&format!("setblock {x} 65 {z} minecraft:{block}"));
     }
+    // A moving piston entity must be created by a real piston movement, not setblock.
     reference.command("tick freeze");
+    for command in [
+        r#"setblock 1 65 8 minecraft:jukebox[has_record=true]{RecordItem:{id:"minecraft:music_disc_13",count:1}}"#,
+        r#"setblock 2 65 8 minecraft:lectern[has_book=true]{Book:{id:"minecraft:writable_book",count:1,components:{"minecraft:writable_book_content":{pages:["private page"]}}}}"#,
+        r#"setblock 3 65 8 minecraft:command_block{Command:"say SECRET_COMMAND",CustomName:"operator name"}"#,
+        r#"setblock 4 65 8 minecraft:vault{shared_data:{display_item:{id:"minecraft:diamond",count:2},connected_particles_range:8.0d},server_data:{items_to_eject:[{id:"minecraft:netherite_ingot",count:1}],rewarded_players:[[I;1,2,3,4]]}}"#,
+        r#"setblock 5 65 8 minecraft:campfire{Items:[{Slot:0b,id:"minecraft:salmon",count:1,components:{"minecraft:custom_data":{note:"visible item"}}}],CookingTimes:[I;23,0,0,0],CookingTotalTimes:[I;1000,0,0,0]}"#,
+        r#"setblock 6 65 8 minecraft:chiseled_bookshelf[slot_0_occupied=true]{Items:[{Slot:0b,id:"minecraft:writable_book",count:1}]}"#,
+        r#"setblock 7 65 8 minecraft:beehive{bees:[{entity_data:{id:"minecraft:bee"},ticks_in_hive:10,min_ticks_in_hive:200}]}"#,
+        r#"setblock 8 65 8 minecraft:structure_block{name:"minecraft:parity_test",mode:"SAVE",posX:1,integrity:0.75f,seed:42L}"#,
+        r#"setblock 9 65 8 minecraft:spawner{SpawnData:{entity:{id:"minecraft:pig"}},SpawnPotentials:[{weight:1,data:{entity:{id:"minecraft:pig"}}}],Delay:15s}"#,
+        r#"setblock 10 65 8 minecraft:oak_sign{front_text:{messages:[{text:"front"},{text:""},{text:""},{text:""}]},back_text:{messages:[{text:"back"},{text:""},{text:""},{text:""}]}}"#,
+        r#"setblock 11 65 8 minecraft:shulker_box{Items:[{Slot:0b,id:"minecraft:diamond",count:1}]}"#,
+        r#"setblock 12 65 8 minecraft:brewing_stand{Items:[{Slot:0b,id:"minecraft:potion",count:1}]}"#,
+        r#"setblock 13 65 8 minecraft:furnace{Items:[{Slot:0b,id:"minecraft:iron_ore",count:1}],cooking_time_spent:12s}"#,
+        r#"setblock 14 65 8 minecraft:trial_spawner{spawn_data:{entity:{id:"minecraft:zombie"}}}"#,
+    ] {
+        reference.command(command);
+    }
+    reference.command("setblock 1 65 6 minecraft:piston[facing=east]");
+    reference.command("setblock 2 65 6 minecraft:stone");
+    reference.command("setblock 0 65 6 minecraft:redstone_block");
+    reference.command("tick step 1");
+    reference.wait_for("Stepping 1 tick(s)");
+    reference.wait_for_moving_piston();
     reference.command("save-all flush");
     reference.wait_for("Saved the game");
+    assert_variant_fixtures(&vanilla.join("world"));
     copy_tree(&vanilla.join("world"), &harpas.join("world"));
 
     let mut server = Server::start(OsStr::new(env!("CARGO_BIN_EXE_harpas")), &[], &harpas);
     server.wait_for("Done (");
-    let expected = capture(vanilla_port);
-    let actual = capture(harpas_port);
-    assert!(expected.len() >= 40, "reference fixtures were not created");
-    println!("Comparing {} reference block entities", expected.len());
+    let expected = capture(vanilla_port, false);
+    let actual = capture(harpas_port, false);
+    let kinds: HashSet<_> = expected.iter().map(|entity| entity.kind).collect();
+    let missing: Vec<_> = registry["entries"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter_map(|(name, id)| {
+            let id = i32::try_from(id.as_i64().unwrap()).unwrap();
+            (!kinds.contains(&id)).then_some(name.as_str())
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "untested block entity types: {missing:?}"
+    );
+    println!(
+        "Comparing {} block entities covering {} types",
+        expected.len(),
+        kinds.len()
+    );
     let sign = expected
         .iter()
         .find(|entity| (entity.position.x, entity.position.z, entity.y) == (1, 1, 65))
         .expect("reference sign was not created");
     assert!(matches!(
         &sign.data,
-        Some(harpas_core::nbt::Nbt::Compound(data)) if data.get("front_text").is_some()
+        Some(Nbt::Compound(data)) if matches!(
+            data.get("front_text"),
+            Some(Nbt::Compound(text)) if text.get("filtered_messages").is_some()
+        )
     ));
     let chest = expected
         .iter()
@@ -400,29 +564,67 @@ fn saved_block_entities_match_vanilla_chunk_updates() {
         chest.data.is_none(),
         "vanilla must not send a chest's inventory"
     );
-    assert_eq!(
-        expected.len(),
-        actual.len(),
-        "different numbers of block entities"
-    );
-    let mut differences = Vec::new();
-    for entity in expected {
-        let received = actual
+    for (x, description) in [
+        (1, "jukebox record"),
+        (2, "lectern book"),
+        (3, "command block"),
+        (6, "bookshelf contents"),
+        (7, "beehive occupants"),
+        (11, "shulker inventory"),
+        (12, "brewing stand inventory"),
+        (13, "furnace inventory"),
+    ] {
+        let entity = expected
             .iter()
-            .find(|received| received.position == entity.position && received.y == entity.y)
-            .expect("Harpas omitted a block entity");
-        if received.kind != entity.kind || received.data != entity.data {
-            differences.push(format!(
-                "at {:?}: expected {entity:?}, received {received:?}",
-                entity.position
-            ));
-        }
-        if (entity.position.x, entity.position.z, entity.y) == (2, 1, 65) {
-            assert!(
-                received.data.is_none(),
-                "a chest's inventory must not be sent"
-            );
-        }
+            .find(|entity| (entity.position.x, entity.position.z, entity.y) == (x, 8, 65))
+            .unwrap_or_else(|| panic!("missing reference {description}"));
+        assert!(
+            entity.data.is_none(),
+            "vanilla sent {description} in a chunk"
+        );
     }
-    assert!(differences.is_empty(), "{}", differences.join("\n"));
+    let vault = expected
+        .iter()
+        .find(|entity| (entity.position.x, entity.position.z, entity.y) == (4, 8, 65))
+        .expect("missing reference vault");
+    let Some(Nbt::Compound(vault)) = &vault.data else {
+        panic!("reference vault did not send its visible data");
+    };
+    assert!(matches!(
+        vault.get("shared_data"),
+        Some(Nbt::Compound(shared)) if shared.get("display_item").is_some()
+    ));
+    assert!(vault.get("server_data").is_none());
+    let spawner = expected
+        .iter()
+        .find(|entity| (entity.position.x, entity.position.z, entity.y) == (9, 8, 65))
+        .expect("missing reference spawner");
+    let Some(Nbt::Compound(spawner)) = &spawner.data else {
+        panic!("reference spawner did not send its visible data");
+    };
+    assert!(spawner.get("SpawnData").is_some());
+    assert!(spawner.get("SpawnPotentials").is_none());
+    let sign = expected
+        .iter()
+        .find(|entity| (entity.position.x, entity.position.z, entity.y) == (10, 8, 65))
+        .expect("missing reference sign");
+    let Some(Nbt::Compound(sign)) = &sign.data else {
+        panic!("reference sign did not send its text");
+    };
+    assert!(sign.get("front_text").is_some());
+    assert!(sign.get("back_text").is_some());
+    for x in [2, 3] {
+        let piston = expected
+            .iter()
+            .find(|entity| (entity.position.x, entity.position.z, entity.y) == (x, 6, 65))
+            .expect("missing reference moving piston");
+        assert!(matches!(
+            &piston.data,
+            Some(Nbt::Compound(data)) if data.get("blockState").is_some()
+        ));
+    }
+    assert_updates_match(&expected, &actual);
+    let filtered_expected = capture(vanilla_port, true);
+    let filtered_actual = capture(harpas_port, true);
+    assert_updates_match(&filtered_expected, &filtered_actual);
 }

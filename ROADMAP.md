@@ -116,6 +116,8 @@ vanilla for the same seed.
   - [x] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
         `harpas-engine`.
 - [ ] Features and structures.
+  - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
+        reduction and exclusion zones, in `harpas-worldgen`.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla in CI.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

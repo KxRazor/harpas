@@ -4,7 +4,10 @@
 //! `OverworldBiomeBuilder`'s 7,593 parameter boxes), section `4×4×4` biome container filling, and
 //! `BiomeManager`'s SHA-256 seed obfuscation and 3D Voronoi zoom (`docs/world.md#24-biomes-and-surface-rules`).
 
+use std::collections::HashSet;
+
 use harpas_core::chunk::Section;
+use harpas_core::random::RandomSource;
 use sha2::{Digest, Sha256};
 
 use crate::data::{MultiNoiseParameterListDef, WorldgenData, WorldgenDataError};
@@ -336,6 +339,13 @@ impl<T: Clone> RTree<T> {
     }
 }
 
+impl<T> RTree<T> {
+    /// The values of all leaves, in the order they were given.
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.leaves.iter().map(|leaf| &leaf.value)
+    }
+}
+
 impl<T: Clone + PartialEq> RTree<T> {
     /// The value closest to `target`, or `None` if equally close leaves disagree, when vanilla's answer depends on
     /// its last result.
@@ -529,6 +539,41 @@ impl MultiNoiseBiomeSource {
                 Ok(Self::from_entries(entries))
             }
         }
+    }
+
+    /// The biome IDs this source can produce (`BiomeSource.possibleBiomes`).
+    pub fn possible_biomes(&self) -> HashSet<u32> {
+        self.tree.values().copied().collect()
+    }
+
+    /// Chooses a random position among those within `radius` blocks of `(block_x, block_z)` at the quart height of
+    /// `block_y` whose biome is `allowed`, returning its block X and Z (`BiomeSource.findBiomeHorizontal`).
+    pub fn find_biome_horizontal(
+        &self,
+        noise_chunk: &mut NoiseChunk<'_>,
+        [block_x, block_y, block_z]: [i32; 3],
+        radius: i32,
+        allowed: &HashSet<u32>,
+        random: &mut impl RandomSource,
+    ) -> Option<(i32, i32)> {
+        let (quart_x, quart_y, quart_z) = (block_x >> 2, block_y >> 2, block_z >> 2);
+        let quart_radius = radius >> 2;
+        let mut last_result = None;
+        let mut result = None;
+        let mut found = 0;
+        for dz in -quart_radius..=quart_radius {
+            for dx in -quart_radius..=quart_radius {
+                let (x, z) = (quart_x + dx, quart_z + dz);
+                let target = noise_chunk.sample_climate(x, quart_y, z);
+                if allowed.contains(&self.get_noise_biome(target, &mut last_result)) {
+                    if result.is_none() || random.next_int_bounded(found + 1) == 0 {
+                        result = Some((x << 2, z << 2));
+                    }
+                    found += 1;
+                }
+            }
+        }
+        result
     }
 
     /// Queries the biome ID for a sampled [`TargetPoint`].

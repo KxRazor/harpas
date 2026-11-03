@@ -233,6 +233,14 @@ and the owner **accepts it once**:
     uses another Overworld generator or enables unsupported data packs, its existing chunks can still load but
     missing chunks are not generated. A new world's initial spawn is the surface at the origin, pending the
     vanilla spawn-selection work.
+  - `StructureState` loads `worldgen/structure_set`, `worldgen/structure` and biome tags, keeps the structure sets
+    that the biome source allows, and decides where a set's structures may start: `random_spread` and
+    `concentric_rings` placements, the four frequency reduction methods and exclusion zones. The
+    `structure_placement_parity` harness compares this with vanilla's own `ChunkGeneratorStructureState`, loaded
+    with real registries and tags, for 5 seeds in 2,048×2,048 chunks at the origin and smaller areas far from it.
+    Nothing generates structures yet: the chunk generator does not use this, and a start still depends on the
+    biome and the terrain at that chunk. Ring positions search biomes starting without a last result, whereas
+    vanilla's depends on its worker threads, so a tie may resolve differently in a vanilla world.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with

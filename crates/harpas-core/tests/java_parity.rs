@@ -42,6 +42,22 @@ fn mix(hash: &mut u64, word: u64) {
     *hash = (*hash ^ word).wrapping_mul(FNV_PRIME);
 }
 
+fn canonical_f32_bits(value: f32) -> u32 {
+    if value.is_nan() {
+        0x7fc0_0000
+    } else {
+        value.to_bits()
+    }
+}
+
+fn canonical_f64_bits(value: f64) -> u64 {
+    if value.is_nan() {
+        0x7ff8_0000_0000_0000
+    } else {
+        value.to_bits()
+    }
+}
+
 const JAVA_PROBE: &str = r#"
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -248,7 +264,7 @@ public final class Probe {
             h = mix(h, Math.round(v));
             h = mix(h, mthFloor(v));
             h = mix(h, mthCeil(v));
-            h = mix(h, Float.floatToRawIntBits(wrapDegrees(v)));
+            h = mix(h, Float.floatToIntBits(wrapDegrees(v)));
         }
         Random sweep = new Random(2026L);
         for (int i = 0; i < 2000; i++) {
@@ -256,8 +272,8 @@ public final class Probe {
             h = mix(h, Math.round(v));
             h = mix(h, mthFloor(v));
             h = mix(h, mthCeil(v));
-            h = mix(h, Float.floatToRawIntBits(v - (float) mthFloor(v)));
-            h = mix(h, Float.floatToRawIntBits(wrapDegrees(v)));
+            h = mix(h, Float.floatToIntBits(v - (float) mthFloor(v)));
+            h = mix(h, Float.floatToIntBits(wrapDegrees(v)));
         }
         emit("float_math", h);
 
@@ -276,7 +292,7 @@ public final class Probe {
             h = mix(h, mthFloor(v));
             h = mix(h, mthLfloor(v));
             h = mix(h, mthCeil(v));
-            h = mix(h, Double.doubleToRawLongBits(wrapDegrees(v)));
+            h = mix(h, Double.doubleToLongBits(wrapDegrees(v)));
         }
         for (int i = 0; i < 2000; i++) {
             double v = (sweep.nextDouble() - 0.5) * Math.scalb(1.0, i % 66);
@@ -284,8 +300,8 @@ public final class Probe {
             h = mix(h, mthFloor(v));
             h = mix(h, mthLfloor(v));
             h = mix(h, mthCeil(v));
-            h = mix(h, Double.doubleToRawLongBits(v - (double) mthLfloor(v)));
-            h = mix(h, Double.doubleToRawLongBits(wrapDegrees(v)));
+            h = mix(h, Double.doubleToLongBits(v - (double) mthLfloor(v)));
+            h = mix(h, Double.doubleToLongBits(wrapDegrees(v)));
         }
         emit("double_math", h);
 
@@ -298,8 +314,8 @@ public final class Probe {
             float rad = i * 0.1234567f;
             float s = sinTable[(int) (rad * 10430.378f) & 0xffff];
             float c = sinTable[(int) (rad * 10430.378f + 16384.0f) & 0xffff];
-            h = mix(h, Float.floatToRawIntBits(s));
-            h = mix(h, Float.floatToRawIntBits(c));
+            h = mix(h, Float.floatToIntBits(s));
+            h = mix(h, Float.floatToIntBits(c));
         }
         for (int x : new int[] { -100_000, -17, 0, 17, 100_000 }) {
             for (int y : new int[] { -64, 0, 64, 319 }) {
@@ -322,8 +338,8 @@ public final class Probe {
                 h = mix(h, r.nextInt());
                 h = mix(h, r.nextLong());
                 h = mix(h, r.nextBoolean() ? 1L : 0L);
-                h = mix(h, Float.floatToRawIntBits(r.nextFloat()));
-                h = mix(h, Double.doubleToRawLongBits(r.nextDouble()));
+                h = mix(h, Float.floatToIntBits(r.nextFloat()));
+                h = mix(h, Double.doubleToLongBits(r.nextDouble()));
                 for (int b : bounds) {
                     h = mix(h, r.nextInt(b));
                 }
@@ -342,8 +358,8 @@ public final class Probe {
                 h = mix(h, x.nextInt());
                 h = mix(h, x.nextLong());
                 h = mix(h, x.nextBoolean() ? 1L : 0L);
-                h = mix(h, Float.floatToRawIntBits(x.nextFloat()));
-                h = mix(h, Double.doubleToRawLongBits(x.nextDouble()));
+                h = mix(h, Float.floatToIntBits(x.nextFloat()));
+                h = mix(h, Double.doubleToLongBits(x.nextDouble()));
                 for (int b : bounds) {
                     h = mix(h, x.nextInt(b));
                 }
@@ -374,7 +390,11 @@ fn run_java_probe() -> Option<BTreeMap<String, u64>> {
     let source = dir.0.join("Probe.java");
     fs::write(&source, JAVA_PROBE).expect("write Probe.java");
 
-    let javac = match Command::new("javac").arg(&source).output() {
+    let javac = match Command::new("javac")
+        .args(["-encoding", "UTF-8"])
+        .arg(&source)
+        .output()
+    {
         Ok(output) => output,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && !require_java => {
             eprintln!("Skipping Java parity check: `javac` is not on PATH");
@@ -548,7 +568,7 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
         mix(&mut h, i64::from(math::ceil_f32(v)) as u64);
         mix(
             &mut h,
-            i64::from(math::wrap_degrees_f32(v).to_bits() as i32) as u64,
+            i64::from(canonical_f32_bits(math::wrap_degrees_f32(v)) as i32) as u64,
         );
     }
     let mut sweep = LegacyRandom::new(2026);
@@ -558,10 +578,13 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
         mix(&mut h, i64::from(math::round_f32(v)) as u64);
         mix(&mut h, i64::from(math::floor_f32(v)) as u64);
         mix(&mut h, i64::from(math::ceil_f32(v)) as u64);
-        mix(&mut h, i64::from(math::frac_f32(v).to_bits() as i32) as u64);
         mix(
             &mut h,
-            i64::from(math::wrap_degrees_f32(v).to_bits() as i32) as u64,
+            i64::from(canonical_f32_bits(math::frac_f32(v)) as i32) as u64,
+        );
+        mix(
+            &mut h,
+            i64::from(canonical_f32_bits(math::wrap_degrees_f32(v)) as i32) as u64,
         );
     }
     assert_eq!(h, expected["float_math"], "float_math mismatch");
@@ -596,7 +619,7 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
         mix(&mut h, i64::from(math::floor_f64(v)) as u64);
         mix(&mut h, math::lfloor(v) as u64);
         mix(&mut h, i64::from(math::ceil_f64(v)) as u64);
-        mix(&mut h, math::wrap_degrees_f64(v).to_bits());
+        mix(&mut h, canonical_f64_bits(math::wrap_degrees_f64(v)));
     }
     for i in 0..2000_u32 {
         let exp_bits = (1023_u64 + u64::from(i % 66)) << 52;
@@ -605,8 +628,8 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
         mix(&mut h, i64::from(math::floor_f64(v)) as u64);
         mix(&mut h, math::lfloor(v) as u64);
         mix(&mut h, i64::from(math::ceil_f64(v)) as u64);
-        mix(&mut h, math::frac_f64(v).to_bits());
-        mix(&mut h, math::wrap_degrees_f64(v).to_bits());
+        mix(&mut h, canonical_f64_bits(math::frac_f64(v)));
+        mix(&mut h, canonical_f64_bits(math::wrap_degrees_f64(v)));
     }
     assert_eq!(h, expected["double_math"], "double_math mismatch");
 
@@ -615,11 +638,11 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
         let rad = (i as f32) * 0.123_456_7_f32;
         mix(
             &mut h,
-            i64::from(math::sin_f32(rad).to_bits() as i32) as u64,
+            i64::from(canonical_f32_bits(math::sin_f32(rad)) as i32) as u64,
         );
         mix(
             &mut h,
-            i64::from(math::cos_f32(rad).to_bits() as i32) as u64,
+            i64::from(canonical_f32_bits(math::cos_f32(rad)) as i32) as u64,
         );
     }
     for x in [-100_000, -17, 0, 17, 100_000] {
@@ -657,8 +680,11 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
             mix(&mut h, i64::from(r.next_int()) as u64);
             mix(&mut h, r.next_long() as u64);
             mix(&mut h, u64::from(r.next_bool()));
-            mix(&mut h, i64::from(r.next_float().to_bits() as i32) as u64);
-            mix(&mut h, r.next_double().to_bits());
+            mix(
+                &mut h,
+                i64::from(canonical_f32_bits(r.next_float()) as i32) as u64,
+            );
+            mix(&mut h, canonical_f64_bits(r.next_double()));
             for b in bounds {
                 mix(&mut h, i64::from(r.next_int_bounded(b)) as u64);
             }
@@ -677,8 +703,11 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
             mix(&mut h, i64::from(x.next_int()) as u64);
             mix(&mut h, x.next_long() as u64);
             mix(&mut h, u64::from(x.next_bool()));
-            mix(&mut h, i64::from(x.next_float().to_bits() as i32) as u64);
-            mix(&mut h, x.next_double().to_bits());
+            mix(
+                &mut h,
+                i64::from(canonical_f32_bits(x.next_float()) as i32) as u64,
+            );
+            mix(&mut h, canonical_f64_bits(x.next_double()));
             for b in bounds {
                 mix(&mut h, i64::from(x.next_int_bounded(b)) as u64);
             }

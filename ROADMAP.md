@@ -96,12 +96,12 @@ vanilla for the same seed.
 - [ ] Chunk loading, saving and sending on worker threads; non-blocking autosave.
   - [x] Load the chunk occupied by each player from an existing overworld on worker threads, and apply the
         result on the logic thread.
-  - [ ] Load and send the chunks within each player's view distance.
+  - [x] Load and send existing chunks within each player's view distance.
     - [x] Send existing block states, biomes, heightmaps and saved light in bounded batches.
     - [x] Generate 26.1 block entity type IDs locally and send updates for types compared against vanilla.
           Provisionally, generation needs Java 25 on `PATH`; if neither Java nor the generated registry is
           present, the server starts without sending block entities.
-    - [ ] Verify remaining block entity update cases against vanilla.
+    - [x] Verify all 49 block entity types and representative update data against vanilla 26.1.
   - [ ] Save chunk snapshots on workers, including non-blocking autosave, unloading and shutdown.
 - [ ] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.

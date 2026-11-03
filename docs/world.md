@@ -8,9 +8,9 @@ Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla gam
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
 Region files, chunk sections, `level.dat` and player data are read and written. Existing overworld chunks are
 loaded and sent within each player's view, with block states, biomes, heightmaps, saved light and block entity
-updates for types checked against vanilla. Generation, the remaining block entity cases, and the rest of world
-loading and saving remain in progress. Facts about vanilla cite their source in [References](#references);
-everything else is a design decision of this project.
+data checked against vanilla. Generation, live block changes and the rest of world saving remain in progress.
+Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
+project.
 
 ---
 
@@ -83,8 +83,10 @@ are logged separately, and an incompatible data version stops the server even if
 read was in progress. Chunks outside every view are released and other stale results discarded. When the local
 block entity registry is available, their positions and types are sent with the client update fields checked
 against 26.1: for example, sign text is visible while a chest's saved inventory is not sent in the chunk.
-Other block entity types currently receive no update data until their fields are verified. If the registry is
-missing, the server warns and omits block entities until it is generated.
+The differential fixture covers all 49 registered block entity types, including moving pistons and examples
+with non-default data, for clients with and without text filtering. It does not cover every possible saved
+value. If the registry is missing, the server warns and omits block entities until it is generated; later live
+block changes are part of gameplay work.
 
 ### Saving
 

@@ -223,6 +223,12 @@ and the owner **accepts it once**:
     result, which on a real server depends on what that worker generated before. Harpas fills each chunk's biomes
     starting without a last result, and the parity harness makes vanilla do the same, so the comparison is
     repeatable. Such a tie at the start of a chunk may resolve differently in a vanilla world.
+  - `StructureTemplates` reads the structure templates under `data/<namespace>/structure/` of the vanilla data,
+    which must be at data version 4786 since Harpas has no data fixers: their size, palettes, bounding box and
+    jigsaw blocks in each rotation, in vanilla's block order, and the palette vanilla picks for a position. The
+    `worldgen/template_pool` definitions are loaded with their weighted elements. The `template_parity` harness
+    compares all 1,202 templates in every rotation at two positions, and all 188 pools with a shuffled order,
+    with vanilla's own `StructureTemplate` and template pool registry. Jigsaw structures do not use them yet.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by

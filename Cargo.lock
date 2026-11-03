@@ -1089,6 +1089,7 @@ dependencies = [
 name = "harpas-worldgen"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "harpas-core",
  "indexmap",
  "serde_json",

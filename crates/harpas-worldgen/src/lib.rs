@@ -14,6 +14,7 @@ pub mod seed;
 pub mod spline;
 pub mod structure;
 pub mod surface;
+pub mod template;
 
 pub use aquifer::{
     Aquifer, FluidStatus, GlobalFluidPicker, NoiseBasedAquifer, WAY_BELOW_MIN_Y, clamped_map, map,
@@ -26,9 +27,10 @@ pub use biome::{
 pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
     ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod,
-    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, StructureDef,
-    StructurePlacementCommon, StructurePlacementDef, StructurePlacementKind, StructureSetDef,
-    StructureSetEntryDef, TemperatureModifier, WorldPresetDef, WorldgenData, WorldgenDataError,
+    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, PoolElementDef,
+    Projection, StructureDef, StructurePlacementCommon, StructurePlacementDef,
+    StructurePlacementKind, StructureSetDef, StructureSetEntryDef, TemperatureModifier,
+    TemplatePoolDef, WorldPresetDef, WorldgenData, WorldgenDataError,
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
@@ -45,6 +47,9 @@ pub use structure::{
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
     SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,
+};
+pub use template::{
+    Facing, JigsawBlock, JointType, Rotation, StructureTemplate, StructureTemplates,
 };
 
 #[cfg(test)]

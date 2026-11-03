@@ -16,6 +16,8 @@ public final class WorldgenReferenceProbe {
         net.minecraft.world.level.LevelHeightAccessor height;
         net.minecraft.world.level.chunk.PalettedContainerFactory factory;
         java.util.Map<Long, net.minecraft.world.level.chunk.ChunkAccess> chunks;
+        net.minecraft.world.level.biome.BiomeManager biomes;
+        net.minecraft.world.level.ChunkPos center;
         long seed;
         TestRegion() { super(null, null, null, null); }
         static TestRegion create(net.minecraft.core.RegistryAccess access,
@@ -28,9 +30,11 @@ public final class WorldgenReferenceProbe {
             var region = (TestRegion)unsafeClass.getMethod("allocateInstance", Class.class).invoke(unsafe, TestRegion.class);
             region.access = access; region.height = height; region.factory = factory; region.seed = seed;
             region.chunks = new java.util.HashMap<>();
-            var pos = target.getPos(); region.chunks.put(((long)pos.x() << 32) ^ (pos.z() & 0xffffffffL), target);
+            var pos = target.getPos(); region.center = pos; region.chunks.put(((long)pos.x() << 32) ^ (pos.z() & 0xffffffffL), target);
             return region;
         }
+        @Override public net.minecraft.world.level.biome.BiomeManager getBiomeManager() { return biomes; }
+        @Override public net.minecraft.world.level.ChunkPos getCenter() { return center; }
         @Override public boolean isOldChunkAround(net.minecraft.world.level.ChunkPos pos, int radius) { return false; }
         @Override public int getMinY() { return height.getMinY(); }
         @Override public int getHeight() { return height.getHeight(); }

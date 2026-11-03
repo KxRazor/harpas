@@ -235,6 +235,8 @@ pub trait SurfaceChunkAccess {
     fn block_state(&self, local_x: usize, block_y: i32, local_z: usize) -> u32;
     /// Sets the block state ID at local column `(local_x, block_y, local_z)`.
     fn set_block_state(&mut self, local_x: usize, block_y: i32, local_z: usize, state: u32);
+    /// Records that the fluid a surface rule placed at `(local_x, block_y, local_z)` needs postprocessing.
+    fn mark_fluid_postprocessing(&mut self, local_x: usize, block_y: i32, local_z: usize);
     /// Returns the `WORLD_SURFACE_WG` height (one above the highest non-air block, or `min_y` if empty) at `(local_x, local_z)`.
     fn world_surface_wg(&self, local_x: usize, local_z: usize) -> i32;
     /// Returns the stored biome ID at quart coordinates `(quart_x, quart_y, quart_z)`.
@@ -375,7 +377,6 @@ impl SurfaceSystem {
         above_has_fluid: bool,
     ) -> Option<u32> {
         let [bx, by, bz] = position;
-        let mut last_rtree_node = None;
         let mut context = SurfaceContext {
             system: self,
             chunk,
@@ -383,7 +384,6 @@ impl SurfaceSystem {
             biome_source,
             noise_chunk,
             biomes,
-            last_rtree_node: &mut last_rtree_node,
             min_y: chunk.min_y(),
             height: chunk.height(),
             bx,
@@ -422,7 +422,6 @@ impl SurfaceSystem {
         let min_y = chunk.min_y();
         let height = chunk.height();
         let max_y_exclusive = min_y + height;
-        let mut last_rtree_node: Option<usize> = None;
 
         for local_x in 0..16_usize {
             for local_z in 0..16_usize {
@@ -435,7 +434,6 @@ impl SurfaceSystem {
                     biome_manager,
                     biome_source,
                     noise_chunk,
-                    &mut last_rtree_node,
                     bx,
                     (top_y + 1).max(min_y),
                     bz,
@@ -490,7 +488,6 @@ impl SurfaceSystem {
                             biome_source,
                             noise_chunk,
                             biomes,
-                            last_rtree_node: &mut last_rtree_node,
                             min_y,
                             height,
                             bx,
@@ -509,6 +506,9 @@ impl SurfaceSystem {
                         };
                         if let Some(new_state) = rule.try_apply(&mut ctx) {
                             chunk.set_block_state(local_x, by, local_z, new_state);
+                            if self.is_fluid_state(new_state) {
+                                chunk.mark_fluid_postprocessing(local_x, by, local_z);
+                            }
                         }
                     }
                 }
@@ -522,14 +522,22 @@ impl SurfaceSystem {
                             self.temperature_sampler.height_adjusted_temperature(
                                 b,
                                 bx,
-                                top_y.max(min_y),
+                                self.sea_level,
                                 bz,
                                 self.sea_level,
                             )
                         })
                         .unwrap_or(0.0);
+                    let min_surface_level = min_surface_level(noise_chunk, bx, bz, surface_depth);
                     self.frozen_ocean_extension(
-                        chunk, local_x, local_z, bx, bz, biome_temp, min_y, height,
+                        chunk,
+                        local_x,
+                        local_z,
+                        bx,
+                        bz,
+                        biome_temp,
+                        min_surface_level,
+                        top_y + 1,
                     );
                 }
             }
@@ -599,8 +607,8 @@ impl SurfaceSystem {
         bx: i32,
         bz: i32,
         biome_temp: f32,
-        min_y: i32,
-        height: i32,
+        min_surface_level: i32,
+        start_height: i32,
     ) {
         let pillar =
             self.iceberg_pillar_noise
@@ -635,8 +643,7 @@ impl SurfaceSystem {
         } else {
             (0, 0.0)
         };
-        let max_y = (top_height as i32 + 1).min(min_y + height - 1);
-        let min_loop_y = bottom_y.max(min_y);
+        let max_y = start_height.max(top_height as i32 + 1);
 
         match &self.noise_random {
             PositionalRandom::Xoroshiro(f) => {
@@ -649,7 +656,7 @@ impl SurfaceSystem {
                     &mut rng,
                     local_x,
                     local_z,
-                    min_loop_y,
+                    min_surface_level,
                     max_y,
                     bottom_y,
                     top_height,
@@ -668,7 +675,7 @@ impl SurfaceSystem {
                     &mut rng,
                     local_x,
                     local_z,
-                    min_loop_y,
+                    min_surface_level,
                     max_y,
                     bottom_y,
                     top_height,
@@ -687,7 +694,7 @@ impl SurfaceSystem {
         rng: &mut impl RandomSource,
         local_x: usize,
         local_z: usize,
-        min_loop_y: i32,
+        min_surface_level: i32,
         max_y: i32,
         bottom_y: i32,
         top_height: f64,
@@ -695,7 +702,7 @@ impl SurfaceSystem {
         snow_start: i32,
         snow_depth: &mut i32,
     ) {
-        for y in (min_loop_y..=max_y).rev() {
+        for y in (min_surface_level..=max_y).rev() {
             let state = chunk.block_state(local_x, y, local_z);
             let is_air_above =
                 self.is_air_state(state) && y < (top_height as i32) && rng.next_double() > 0.01;
@@ -736,7 +743,6 @@ impl SurfaceSystem {
         biome_manager: &BiomeManager,
         biome_source: Option<&MultiNoiseBiomeSource>,
         noise_chunk: &mut NoiseChunk<'_>,
-        last_rtree_node: &mut Option<usize>,
         bx: i32,
         by: i32,
         bz: i32,
@@ -755,8 +761,7 @@ impl SurfaceSystem {
             {
                 chunk.get_noise_biome(qx, cy, qz)
             } else if let Some(source) = biome_source {
-                let target = noise_chunk.sample_climate(qx, cy, qz);
-                source.get_noise_biome(target, last_rtree_node)
+                source.neighbor_biome(noise_chunk, qx, cy, qz, min_q_y, max_q_y)
             } else {
                 chunk.get_noise_biome(
                     qx.clamp(chunk_q_min_x, chunk_q_min_x + 3),
@@ -768,6 +773,27 @@ impl SurfaceSystem {
     }
 }
 
+/// The lowest Y that surface rules and icebergs reach in a column (`SurfaceRules.Context.getMinSurfaceLevel`).
+fn min_surface_level(
+    noise_chunk: &mut NoiseChunk<'_>,
+    bx: i32,
+    bz: i32,
+    surface_depth: i32,
+) -> i32 {
+    let cell_x = bx >> 4;
+    let cell_z = bz >> 4;
+    let d00 = f64::from(noise_chunk.preliminary_surface_level(cell_x << 4, cell_z << 4));
+    let d10 = f64::from(noise_chunk.preliminary_surface_level((cell_x + 1) << 4, cell_z << 4));
+    let d01 = f64::from(noise_chunk.preliminary_surface_level(cell_x << 4, (cell_z + 1) << 4));
+    let d11 =
+        f64::from(noise_chunk.preliminary_surface_level((cell_x + 1) << 4, (cell_z + 1) << 4));
+    let fx = f64::from(bx & 15) / 16.0;
+    let fz = f64::from(bz & 15) / 16.0;
+    let top0 = d00 + fx * (d10 - d00);
+    let top1 = d01 + fx * (d11 - d01);
+    (top0 + fz * (top1 - top0)).floor() as i32 + surface_depth - 8
+}
+
 struct SurfaceContext<'a, 'b, C: SurfaceChunkAccess> {
     system: &'a SurfaceSystem,
     chunk: &'a C,
@@ -775,7 +801,6 @@ struct SurfaceContext<'a, 'b, C: SurfaceChunkAccess> {
     biome_source: Option<&'a MultiNoiseBiomeSource>,
     noise_chunk: &'a mut NoiseChunk<'b>,
     biomes: &'a IndexMap<String, BiomeDef>,
-    last_rtree_node: &'a mut Option<usize>,
     min_y: i32,
     height: i32,
     bx: i32,
@@ -807,30 +832,7 @@ impl<C: SurfaceChunkAccess> SurfaceContext<'_, '_, C> {
         if let Some(v) = self.cached_min_surface_level {
             return v;
         }
-        let cell_x = self.bx >> 4;
-        let cell_z = self.bz >> 4;
-        let d00 = f64::from(
-            self.noise_chunk
-                .preliminary_surface_level(cell_x << 4, cell_z << 4),
-        );
-        let d10 = f64::from(
-            self.noise_chunk
-                .preliminary_surface_level((cell_x + 1) << 4, cell_z << 4),
-        );
-        let d01 = f64::from(
-            self.noise_chunk
-                .preliminary_surface_level(cell_x << 4, (cell_z + 1) << 4),
-        );
-        let d11 = f64::from(
-            self.noise_chunk
-                .preliminary_surface_level((cell_x + 1) << 4, (cell_z + 1) << 4),
-        );
-        let fx = f64::from(self.bx & 15) / 16.0;
-        let fz = f64::from(self.bz & 15) / 16.0;
-        let top0 = d00 + fx * (d10 - d00);
-        let top1 = d01 + fx * (d11 - d01);
-        let interp = (top0 + fz * (top1 - top0)).floor() as i32;
-        let level = interp + self.surface_depth - 8;
+        let level = min_surface_level(self.noise_chunk, self.bx, self.bz, self.surface_depth);
         self.cached_min_surface_level = Some(level);
         level
     }
@@ -865,7 +867,6 @@ impl<C: SurfaceChunkAccess> SurfaceContext<'_, '_, C> {
             self.biome_manager,
             self.biome_source,
             self.noise_chunk,
-            self.last_rtree_node,
             self.bx,
             self.by,
             self.bz,

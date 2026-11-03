@@ -211,11 +211,18 @@ and the owner **accepts it once**:
     condition types (`biome`, `noise_threshold`, `vertical_gradient`, `y_above`, `water`, `temperature`, `steep`,
     `not`, `hole`, `above_preliminary_surface`, `stone_depth` for both `floor` and `ceiling`), plus eroded
     badlands hoodoo pillars, the 192-layer terracotta band table (`minecraft:clay_bands`) and frozen ocean
-    icebergs. The vanilla parity harness compares hashes of base terrain and surface blocks across several
-    chunks, including eroded badlands and frozen ocean, along with fluid postprocessing, aquifer samples, ore
-    veins, surface depth and bands. The same harness compares the six packed heightmaps, carver decisions,
-    paths and masks, and complete carver output against vanilla. It does not establish parity for every seed,
-    biome or generated-world stage.
+    icebergs.
+  - Two vanilla parity harnesses check this. `vanilla_parity` compares intermediate results (aquifer samples,
+    ore veins, surface depth and bands, carver decisions and paths) across several chunks. `chunk_parity` runs
+    vanilla's own generator and compares the finished result of 1,621 chunks in 5 seeds, including the far edges
+    of the world and all 54 Overworld biomes: every block and biome, the carving mask, fluid postprocessing and
+    the six heightmaps. It also compares the 7,593 climate parameter points. Vanilla's chunks have no structures,
+    as with `generate-structures=false`, and stop after carvers, so structures' effect on terrain, features and
+    light are not compared yet. This does not establish parity for every seed.
+  - A climate point can be equally close to several parameter points, and vanilla then keeps the thread's last
+    result, which on a real server depends on what that worker generated before. Harpas fills each chunk's biomes
+    starting without a last result, and the parity harness makes vanilla do the same, so the comparison is
+    repeatable. Such a tie at the start of a chunk may resolve differently in a vanilla world.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by

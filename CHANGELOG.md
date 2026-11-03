@@ -64,6 +64,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   chunk workers. New worlds preserve `level-seed`, while existing worlds retain their saved seed; generated
   chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, structures and
   lighting remain separate roadmap tasks (`harpas-worldgen`, `harpas-engine`, `harpas-anvil`, `harpas-server`).
+- A parity harness in CI that generates whole Overworld chunks with Mojang's server and compares every block,
+  biome, carving mask, fluid update and heightmap, in 1,621 chunks of 5 seeds covering all 54 biomes, along with
+  the climate parameter points (`harpas-worldgen`).
 
 ### Changed
 
@@ -74,6 +77,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A crash while saving a region no longer leaves a large chunk's `.mcc` file newer than the region that points
   to it: a region and its `.mcc` files are saved as one transaction through a journal, which the server
   completes or discards on start (`harpas-anvil`, `harpas-engine`).
+- World generation differences from vanilla that the new parity harness found: pale gardens generated as dark
+  forests in part of their climate range; ties between biomes resolved differently because the climate search
+  tree ordered its branches differently; fluids placed by surface rules, such as swamp water, were not marked
+  for postprocessing; and frozen ocean icebergs covered the wrong height range and melted at the wrong
+  temperature, missing packed ice in caves under them (`harpas-worldgen`).
 - Moving pistons in loaded chunks now send their moving block and animation data to Java clients
   (`harpas-server`).
 - Truncated region headers and damaged world-generation backups are no longer treated as missing data, and

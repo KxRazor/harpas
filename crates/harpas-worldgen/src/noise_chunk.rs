@@ -180,6 +180,7 @@ pub struct NoiseChunk<'a> {
     cache_all_in_cell: Vec<CacheAllInCellState>,
     interpolators: Vec<InterpolatorState>,
     preliminary_surface_level_cache: HashMap<i64, i32>,
+    neighbor_biomes: HashMap<(i32, i32), Vec<u32>>,
 }
 
 impl<'a> NoiseChunk<'a> {
@@ -256,6 +257,7 @@ impl<'a> NoiseChunk<'a> {
             cache_all_in_cell,
             interpolators,
             preliminary_surface_level_cache: HashMap::new(),
+            neighbor_biomes: HashMap::new(),
         };
 
         chunk.populate_flat_caches();
@@ -511,6 +513,16 @@ impl<'a> NoiseChunk<'a> {
     #[inline]
     pub fn eval_point(&mut self, node: NodeId, block_x: i32, block_y: i32, block_z: i32) -> f64 {
         self.eval_internal(node, block_x, block_y, block_z, false)
+    }
+
+    /// The biomes kept for another chunk by [`Self::keep_neighbor_biomes`].
+    pub(crate) fn neighbor_biomes(&self, chunk: (i32, i32)) -> Option<&[u32]> {
+        self.neighbor_biomes.get(&chunk).map(Vec::as_slice)
+    }
+
+    /// Keeps the biomes filled for another chunk while this chunk generates.
+    pub(crate) fn keep_neighbor_biomes(&mut self, chunk: (i32, i32), biomes: Vec<u32>) {
+        self.neighbor_biomes.insert(chunk, biomes);
     }
 
     /// Computes and caches the preliminary surface level (`NoiseChunk.preliminarySurfaceLevel(blockX, blockZ)`)

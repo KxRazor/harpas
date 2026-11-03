@@ -1,4 +1,4 @@
-//! Files written whole: atomic writes, and gzip NBT files kept with a backup as vanilla keeps them
+//! Files written whole: synced writes, and gzip NBT files kept with a backup as vanilla keeps them
 //!
 //! Vanilla saves `level.dat` and player data by writing the new file next to the current one, then moving the
 //! current one to `<name>_old` and the new one into place. A crash at any point leaves either the current
@@ -22,14 +22,8 @@ pub enum Source {
     Backup,
 }
 
-/// Writes `path` under a temporary name and renames it into place.
-pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temporary = with_suffix(path, ".tmp");
-    write_synced(&temporary, bytes)?;
-    fs::rename(&temporary, path)
-}
-
-fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Writes `path` whole and syncs it to the disk.
+pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()

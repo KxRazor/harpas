@@ -47,6 +47,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Saving a region no longer silently drops unreadable neighboring entries or overwrites a truncated header
   (`harpas-anvil`).
+- A crash while saving a region no longer leaves a large chunk's `.mcc` file newer than the region that points
+  to it: a region and its `.mcc` files are saved as one transaction through a journal, which the server
+  completes or discards on start (`harpas-anvil`, `harpas-engine`).
 - Moving pistons in loaded chunks now send their moving block and animation data to Java clients
   (`harpas-server`).
 

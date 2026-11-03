@@ -103,7 +103,7 @@ vanilla for the same seed.
           present, the server starts without sending block entities.
     - [x] Verify all 49 block entity types and representative update data against vanilla 26.1.
   - [x] Save chunk snapshots on workers, including non-blocking autosave, unloading and shutdown.
-- [ ] Make saves crash-consistent across region files and external `.mcc` chunks, including recovery and tests
+- [x] Make saves crash-consistent across region files and external `.mcc` chunks, including recovery and tests
       for interruptions during each write stage.
 - [ ] Vanilla-exact random generators and Java math semantics.
 - [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.

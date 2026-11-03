@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 indexmap = "2.14.2"
+md-5 = "0.11.0"
 
 [lints]
 workspace = true

@@ -993,6 +993,7 @@ name = "harpas-core"
 version = "0.1.0"
 dependencies = [
  "indexmap",
+ "md-5",
 ]
 
 [[package]]

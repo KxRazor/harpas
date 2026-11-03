@@ -5,8 +5,9 @@ parallel, how threads are laid out, how the world and entities are stored, and h
 the tick. Modded mode uses Mojang's server instead and is covered in [mod-support.md](mod-support.md).
 
 Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
-overworld chunks, and asynchronous chunk saving are implemented. Live block changes, saving other world and
-player data, and the remaining entity logic are still in progress. Facts about vanilla cite their source in
+overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators and Java math
+helpers are implemented. World generation, live block changes, saving other world and player data, and the
+remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -170,10 +171,20 @@ Harpas uses its own storage:
 
 ### 7. Determinism
 
-- **Random number generators identical to vanilla's**, bit for bit, and consumed in the same order. World
-  generation, mob spawning, loot and many behaviors depend on them.
-- **Java's math semantics** where results differ from Rust's defaults (floating-point and integer edge cases),
-  so computed values match vanilla's.
+- **Random number generators identical to vanilla's** (`harpas_core::random`), bit for bit, and consumed in
+  the same order:
+  - Java's 48-bit linear congruential generator [7] (`LegacyRandom`) and Blackman and Vigna's
+    `xoroshiro128++` 1.0 [8] (`XoroshiroRandom`), seeded through silver/golden ratio expansion, Stafford's
+    `Mix13` avalanche mixer and UTF-8 MD5 digests [9], with Lemire's bounded 32-bit interval draw on
+    `XoroshiroRandom` and Marsaglia's polar Gaussian on both;
+  - positional factories (`at(x, y, z)`, `from_hash_of`, `from_seed`), persisted named sequences
+    (`RandomSequence`), and `WorldgenRandom` seeding for chunk decorations, placed features, carvers,
+    regional structures and slime chunks [9].
+- **Java's math semantics** (`harpas_core::math`) where results differ from Rust's defaults: wrapping
+  `MIN / -1` division, `Math.floorDiv` and `Math.floorMod` with negative divisors [7], masked shift counts
+  and logical `>>>`, `Math.round` ties toward `+∞` without `x + 0.5` double-rounding [7], a cross-platform
+  1-ULP natural logarithm, Java-ordered interpolation and `Mth` floor/ceil/angle helpers, vanilla's
+  65,536-entry `f32` sine table, `position_seed` and UTF-16 `String.hashCode`.
 - Parallel work never consumes the logic's random sequences.
 
 ---
@@ -211,3 +222,11 @@ Harpas uses its own storage:
    https://minecraft.wiki/w/Chunk_format
 6. minecraft.wiki, "Java Edition protocol/Chunk format" (paletted containers on the wire, bits per entry,
    index order). https://minecraft.wiki/w/Java_Edition_protocol/Chunk_format
+7. Java SE 25 API Specification, `java.util.Random` and `java.lang.Math` (48-bit LCG, `nextLong` sign
+   extension, Marsaglia polar Gaussian, `floorDiv`/`floorMod`, `round`).
+   https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/Random.html
+8. David Blackman and Sebastiano Vigna, "Scrambled Linear Pseudorandom Number Generators" (`xoroshiro128++`
+   1.0, 2019). https://prng.di.unimi.it/xoroshiro128plusplus.c
+9. minecraft.wiki, "Random" and "Seed (level generation)" (`XoroshiroRandomSource`, Stafford `Mix13`, MD5
+   positional seeding, decoration, feature, carver, structure and slime-chunk seeds).
+   https://minecraft.wiki/w/Random, https://minecraft.wiki/w/Seed_(level_generation)

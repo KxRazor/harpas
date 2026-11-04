@@ -752,6 +752,37 @@ impl NoiseBasedChunkGenerator {
     /// One above the highest block of a column that `kind` counts, from the noise alone, before surface rules and
     /// carvers (`NoiseBasedChunkGenerator.getBaseHeight`). It is the minimum Y if no block counts.
     pub fn base_height(&self, block_x: i32, block_z: i32, kind: HeightmapType) -> i32 {
+        let mut height = self.sampling.min_y;
+        self.iterate_noise_column(block_x, block_z, |block_y, state| {
+            let found = kind.matches(state);
+            if found {
+                height = block_y + 1;
+            }
+            found
+        });
+        height
+    }
+
+    /// The blocks of a column from the noise alone, from the minimum Y up, before surface rules and carvers
+    /// (`NoiseBasedChunkGenerator.getBaseColumn`).
+    pub fn base_column(&self, block_x: i32, block_z: i32) -> Vec<u32> {
+        let height = self.sampling.cell_count_y() * self.sampling.cell_height() as usize;
+        let mut column = vec![0; height];
+        self.iterate_noise_column(block_x, block_z, |block_y, state| {
+            column[(block_y - self.sampling.min_y) as usize] = state;
+            false
+        });
+        column
+    }
+
+    /// Visits the blocks of a column from the top down until `visit` returns true
+    /// (`NoiseBasedChunkGenerator.iterateNoiseColumn`).
+    fn iterate_noise_column(
+        &self,
+        block_x: i32,
+        block_z: i32,
+        mut visit: impl FnMut(i32, u32) -> bool,
+    ) {
         let cell_width = self.sampling.cell_width();
         let cell_height = self.sampling.cell_height();
         let first_cell_y = self.sampling.min_y.div_euclid(cell_height);
@@ -786,14 +817,13 @@ impl NoiseBasedChunkGenerator {
                 );
                 let state =
                     self.terrain_state(&mut noise_chunk, &mut aquifer, [block_x, block_y, block_z]);
-                if kind.matches(state) {
+                if visit(block_y, state) {
                     noise_chunk.stop_interpolation();
-                    return block_y + 1;
+                    return;
                 }
             }
         }
         noise_chunk.stop_interpolation();
-        self.sampling.min_y
     }
 
     /// The lowest Y of the noise settings.

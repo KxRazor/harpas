@@ -280,6 +280,36 @@ pub struct StructureDef {
     pub is_beached: bool,
     /// The settings of a `minecraft:ocean_ruin` structure.
     pub ocean_ruin: Option<OceanRuinDef>,
+    /// The ways a `minecraft:ruined_portal` structure may be placed (`setups`).
+    pub ruined_portal_setups: Vec<RuinedPortalSetupDef>,
+}
+
+/// Where a ruined portal is placed (`RuinedPortalPiece.VerticalPlacement`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuinedPortalPlacement {
+    /// On the surface of the land.
+    OnLandSurface,
+    /// Sunk into the surface of the land.
+    PartlyBuried,
+    /// On the floor of the ocean.
+    OnOceanFloor,
+    /// In a mountain, above Y 70.
+    InMountain,
+    /// Below the surface.
+    Underground,
+    /// In the Nether.
+    InNether,
+}
+
+/// One way to place a `minecraft:ruined_portal` structure (`RuinedPortalStructure.Setup`), as far as its start needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RuinedPortalSetupDef {
+    /// Where the portal goes.
+    pub placement: RuinedPortalPlacement,
+    /// The chance of an air pocket around the portal.
+    pub air_pocket_probability: f32,
+    /// How likely this setup is, relative to the others.
+    pub weight: f32,
 }
 
 /// The settings of a `minecraft:ocean_ruin` structure (`OceanRuinStructure`).
@@ -894,7 +924,46 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
             Some("minecraft:ocean_ruin") => Some(parse_ocean_ruin(context, json)?),
             _ => None,
         },
+        ruined_portal_setups: match json.get("type").and_then(Value::as_str) {
+            Some("minecraft:ruined_portal") => parse_ruined_portal_setups(context, json)?,
+            _ => Vec::new(),
+        },
     })
+}
+
+fn parse_ruined_portal_setups(
+    context: &str,
+    json: &Value,
+) -> Result<Vec<RuinedPortalSetupDef>, WorldgenDataError> {
+    let setups = json
+        .get("setups")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_def(context, "ruined portal has no setups"))?;
+    setups
+        .iter()
+        .map(|setup| {
+            let number = |key: &str| {
+                setup
+                    .get(key)
+                    .and_then(Value::as_f64)
+                    .map(|value| value as f32)
+                    .ok_or_else(|| invalid_def(context, format!("`{key}` must be a number")))
+            };
+            Ok(RuinedPortalSetupDef {
+                placement: match setup.get("placement").and_then(Value::as_str) {
+                    Some("on_land_surface") => RuinedPortalPlacement::OnLandSurface,
+                    Some("partly_buried") => RuinedPortalPlacement::PartlyBuried,
+                    Some("on_ocean_floor") => RuinedPortalPlacement::OnOceanFloor,
+                    Some("in_mountain") => RuinedPortalPlacement::InMountain,
+                    Some("underground") => RuinedPortalPlacement::Underground,
+                    Some("in_nether") => RuinedPortalPlacement::InNether,
+                    _ => return Err(invalid_def(context, "unknown ruined portal placement")),
+                },
+                air_pocket_probability: number("air_pocket_probability")?,
+                weight: number("weight")?,
+            })
+        })
+        .collect()
 }
 
 fn parse_ocean_ruin(context: &str, json: &Value) -> Result<OceanRuinDef, WorldgenDataError> {

@@ -148,6 +148,7 @@ public final class StructureStartProbe {
                 var pivot = template.placeSettings().getRotationPivot();
                 out.println("template " + Identifier.parse((String) name.get(template)) + " " + position.getX() + " "
                     + position.getY() + " " + position.getZ() + " " + template.getRotation().ordinal() + " "
+                    + template.placeSettings().getMirror().name() + " "
                     + pivot.getX() + " " + pivot.getY() + " " + pivot.getZ());
             }
             if (piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece pool) {

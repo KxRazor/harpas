@@ -83,6 +83,25 @@ impl Rotation {
     }
 }
 
+/// A reflection of a template, of the two that structures use (`Mirror`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mirror {
+    /// No reflection.
+    None,
+    /// Reflected across the Z axis, which negates X.
+    FrontBack,
+}
+
+impl Mirror {
+    /// Reflects a position around the origin, before it turns (`StructureTemplate.transform`).
+    pub const fn apply(self, [x, y, z]: [i32; 3]) -> [i32; 3] {
+        match self {
+            Self::None => [x, y, z],
+            Self::FrontBack => [-x, y, z],
+        }
+    }
+}
+
 /// One of the six directions (`Direction`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Facing {
@@ -224,19 +243,21 @@ impl StructureTemplate {
     /// The blocks the template covers when placed at `position` with `rotation`
     /// (`StructureTemplate.getBoundingBox`).
     pub fn bounding_box(&self, position: [i32; 3], rotation: Rotation) -> BoundingBox {
-        self.bounding_box_around(position, rotation, [0, 0, 0])
+        self.bounding_box_around(position, rotation, Mirror::None, [0, 0, 0])
     }
 
-    /// The blocks the template covers when placed at `position`, turned around `pivot`
+    /// The blocks the template covers when placed at `position`, reflected and turned around `pivot`
     /// (`StructureTemplate.getBoundingBox`).
     pub fn bounding_box_around(
         &self,
         [x, y, z]: [i32; 3],
         rotation: Rotation,
+        mirror: Mirror,
         pivot: [i32; 3],
     ) -> BoundingBox {
-        let a = rotation.transform_around([0, 0, 0], pivot);
-        let b = rotation.transform_around(self.size.map(|value| value - 1), pivot);
+        let a = rotation.transform_around(mirror.apply([0, 0, 0]), pivot);
+        let far_corner = self.size.map(|value| value - 1);
+        let b = rotation.transform_around(mirror.apply(far_corner), pivot);
         BoundingBox {
             min: [a[0].min(b[0]) + x, a[1].min(b[1]) + y, a[2].min(b[2]) + z],
             max: [a[0].max(b[0]) + x, a[1].max(b[1]) + y, a[2].max(b[2]) + z],
@@ -460,6 +481,27 @@ mod tests {
             assert_eq!(rotation.transform_around([1, 2, 3], pivot), expected);
             assert_eq!(rotation.transform_around(pivot, pivot), pivot);
         }
+    }
+
+    #[test]
+    fn a_mirrored_box_reflects_along_x_before_it_turns() {
+        let template = StructureTemplate {
+            size: [10, 5, 4],
+            palettes: Vec::new(),
+        };
+        let pivot = [5, 0, 2];
+        let plain = template.bounding_box_around([0, 0, 0], Rotation::None, Mirror::None, pivot);
+        assert_eq!((plain.min, plain.max), ([0, 0, 0], [9, 4, 3]));
+        let mirrored =
+            template.bounding_box_around([0, 0, 0], Rotation::None, Mirror::FrontBack, pivot);
+        assert_eq!((mirrored.min, mirrored.max), ([-9, 0, 0], [0, 4, 3]));
+        let turned = template.bounding_box_around(
+            [0, 0, 0],
+            Rotation::Clockwise90,
+            Mirror::FrontBack,
+            pivot,
+        );
+        assert_eq!((turned.min, turned.max), ([4, 0, -12], [7, 4, -3]));
     }
 
     #[test]

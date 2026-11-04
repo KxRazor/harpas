@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use harpas_worldgen::{
-    HeightmapType, NoiseBasedChunkGenerator, Rotation, StructureStart, StructureState,
+    HeightmapType, Mirror, NoiseBasedChunkGenerator, Rotation, StructureStart, StructureState,
     StructureTemplates, WorldgenData,
 };
 use reference::Reference;
@@ -68,8 +68,12 @@ fn start_lines(start: &StructureStart) -> Vec<String> {
                 .iter()
                 .position(|r| *r == template.rotation)
                 .expect("a rotation");
+            let mirror = match template.mirror {
+                Mirror::None => "NONE",
+                Mirror::FrontBack => "FRONT_BACK",
+            };
             lines.push(format!(
-                "template {} {x} {y} {z} {rotation} {px} {py} {pz}",
+                "template {} {x} {y} {z} {rotation} {mirror} {px} {py} {pz}",
                 template.template
             ));
         }

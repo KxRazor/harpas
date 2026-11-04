@@ -3,10 +3,10 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::{StructureState, jigsaw, stronghold, templated};
+use super::{StructureState, jigsaw, ruined_portal, stronghold, templated};
 use crate::data::{
-    JigsawDef, OceanRuinDef, PoolElementDef, StructureDef, StructureSetEntryDef, WorldgenData,
-    WorldgenDataError,
+    JigsawDef, OceanRuinDef, PoolElementDef, RuinedPortalSetupDef, StructureDef,
+    StructureSetEntryDef, WorldgenData, WorldgenDataError,
 };
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
 use crate::template::StructureTemplates;
@@ -134,6 +134,8 @@ pub struct TemplatePiece {
     pub position: [i32; 3],
     /// How it is turned.
     pub rotation: crate::template::Rotation,
+    /// How it is reflected.
+    pub mirror: crate::template::Mirror,
     /// The point it is turned around.
     pub pivot: [i32; 3],
 }
@@ -194,6 +196,7 @@ enum StructureKind<'d> {
         beached: bool,
     },
     OceanRuin(OceanRuinDef),
+    RuinedPortal(&'d [RuinedPortalSetupDef]),
     /// Single pieces of a fixed size: desert pyramids, jungle temples and swamp huts.
     ScatteredFeature {
         piece: &'static str,
@@ -226,6 +229,9 @@ impl<'d> StructureKind<'d> {
                 beached: structure.is_beached,
             },
             "minecraft:ocean_ruin" => Self::OceanRuin(structure.ocean_ruin?),
+            "minecraft:ruined_portal" if !structure.ruined_portal_setups.is_empty() => {
+                Self::RuinedPortal(&structure.ruined_portal_setups)
+            }
             "minecraft:desert_pyramid" => scattered("minecraft:tedp", 21, 15, 21, true),
             "minecraft:jungle_temple" => scattered("minecraft:tejp", 12, 10, 15, true),
             "minecraft:swamp_hut" => scattered("minecraft:tesh", 7, 7, 9, false),
@@ -372,6 +378,7 @@ fn try_generate(
     let (min_x, min_z) = (chunk_x * 16, chunk_z * 16);
     let first_occupied = |x, z, heightmap| generator.base_height(x, z, heightmap) - 1;
     let mut jigsaw_start = None;
+    let mut portal_piece = None;
     let position = match kind {
         StructureKind::Jigsaw(jigsaw) => {
             let Some(start) = jigsaw::start(
@@ -395,6 +402,12 @@ fn try_generate(
             min_z + 8,
         ],
         StructureKind::Stronghold => [min_x, 0, min_z],
+        StructureKind::RuinedPortal(setups) => {
+            let (position, piece) =
+                ruined_portal::start(generator, templates, setups, &mut random, min_x, min_z)?;
+            portal_piece = Some(piece);
+            position
+        }
         StructureKind::Igloo | StructureKind::Shipwreck { beached: true } => [
             min_x + 8,
             first_occupied(min_x + 8, min_z + 8, HeightmapType::WorldSurfaceWg),
@@ -461,6 +474,7 @@ fn try_generate(
         StructureKind::OceanRuin(ruin) => {
             templated::ocean_ruin(templates, &mut random, ruin, min_x, min_z)?
         }
+        StructureKind::RuinedPortal(_) => vec![portal_piece.expect("a ruined portal piece")],
         StructureKind::ScatteredFeature {
             piece,
             width,

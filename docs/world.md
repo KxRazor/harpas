@@ -265,10 +265,21 @@ and the owner **accepts it once**:
     refuses them. The `structure_start_parity`
     harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,
     and the strongholds at all 128 ring positions of each seed, with vanilla's own `createStructures` and
-    `createReferences`. The chunk generator does not use any of this yet, and references compute the starts of every
-    chunk in range again, so they need a cache before generation uses them. Ring positions and the biome checks of
+    `createReferences`. References compute the starts of every chunk in range again, so they need a cache before
+    the engine's workers use them. Ring positions and the biome checks of
     starts search biomes starting without a last result, whereas vanilla's depends on its worker threads, so a tie
     may resolve differently in a vanilla world.
+  - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
+    their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
+    `beard_box` and `encapsulate`, including jigsaw ground-level offsets and junctions on terrain-matching pieces.
+    Its `24×24×24` float kernel is calculated once from a formula, without storing extracted game data.
+    `NoiseChunk` adds this density after noise interpolation and before the aquifer picks a block;
+    `generate_chunk_carved_with_beardifier` exposes the complete terrain/surface/carvers pipeline with it.
+    `beardifier_parity` checks 4,160,772 density samples bit for bit against vanilla, including chunk boundaries,
+    ground-level offsets, all adjustment modes and overlapping structures. `chunk_parity` additionally compares
+    terrain around villages, ancient cities, trail ruins and trial chambers, through carvers, in two seeds.
+    These tests cache starts and compute references. The engine's normal worker pipeline still generates without
+    structures: caching starts, persisting starts/references and placing structure blocks remain pending.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with

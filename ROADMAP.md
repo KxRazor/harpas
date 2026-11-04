@@ -132,10 +132,15 @@ vanilla for the same seed.
         surface in badlands.
   - [x] Ocean monument starts: the surrounding biome volume, the saved building piece and its references.
         Internal rooms follow with block placement.
+  - [x] Structure terrain adaptation (`Beardifier`): rigid pieces, jigsaw junctions and all five adjustment
+        modes, connected to chunk generation and compared against vanilla. Worker integration, with cached
+        starts and saved references, follows separately.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
         comparison as they are ported.
+  - [x] Whole chunks through carvers with terrain adaptation around villages, ancient cities, trail ruins and
+        trial chambers, including neighboring chunks; structure blocks are not placed yet.
 - [x] Run the parity harnesses in CI: a reduced sample on pull requests and the full one on `main`
       ([docs/parity.md](docs/parity.md#running-the-comparisons)).
 - [x] Make `parity against vanilla` a required check.

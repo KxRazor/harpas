@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::beardifier::Beardifier;
 use crate::biome::{TargetPoint, quantize_coord};
 use crate::data::NoiseSamplingSettings;
 use crate::density::{
@@ -181,6 +182,7 @@ pub struct NoiseChunk<'a> {
     interpolators: Vec<InterpolatorState>,
     preliminary_surface_level_cache: HashMap<i64, i32>,
     neighbor_biomes: HashMap<(i32, i32), Vec<u32>>,
+    beardifier: Beardifier,
 }
 
 impl<'a> NoiseChunk<'a> {
@@ -276,10 +278,26 @@ impl<'a> NoiseChunk<'a> {
             interpolators,
             preliminary_surface_level_cache: HashMap::new(),
             neighbor_biomes: HashMap::new(),
+            beardifier: Beardifier::default(),
         };
 
         chunk.populate_flat_caches();
         chunk
+    }
+
+    /// Attaches the structure density to this chunk, before terrain filling. It is added to final noise
+    /// at each block, outside the interpolated graph, as in vanilla's `fullNoiseDensity`.
+    pub fn with_beardifier(mut self, beardifier: Beardifier) -> Self {
+        self.beardifier = beardifier;
+        self
+    }
+
+    /// Final interpolated noise plus structure adaptation (`NoiseChunk.getInterpolatedDensity`).
+    pub fn interpolated_density(&mut self) -> f64 {
+        self.eval_node(self.router.final_density)
+            + self
+                .beardifier
+                .compute(self.block_x(), self.block_y(), self.block_z())
     }
 
     fn populate_flat_caches(&mut self) {

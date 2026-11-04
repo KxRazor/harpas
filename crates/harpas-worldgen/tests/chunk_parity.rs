@@ -2,7 +2,7 @@
 
 mod reference;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -10,8 +10,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_worldgen::{
-    GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, WorldgenData,
-    overworld_biome_parameters,
+    Beardifier, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureStart,
+    StructureState, StructureTemplates, WorldgenData, overworld_biome_parameters,
 };
 use reference::Reference;
 
@@ -240,6 +240,7 @@ fn compare_seed(
     seed: i64,
     output: &Path,
     positions: &[(i32, i32)],
+    beardifiers: Option<&HashMap<(i32, i32), Beardifier>>,
 ) -> (Vec<String>, BTreeSet<String>) {
     let mut input = Input(BufReader::new(File::open(output).unwrap()));
     let biome_names: Vec<_> = (0..input.int()).map(|_| input.string()).collect();
@@ -259,8 +260,12 @@ fn compare_seed(
             scope.spawn(|| {
                 while let Some(chunk) = expected.get(next.fetch_add(1, Ordering::Relaxed)) {
                     let (cx, cz) = chunk.position;
+                    let beardifier = beardifiers
+                        .and_then(|all| all.get(&(cx, cz)))
+                        .cloned()
+                        .unwrap_or_default();
                     let generated = generator
-                        .generate_chunk_carved(cx, cz, data)
+                        .generate_chunk_carved_with_beardifier(cx, cz, data, beardifier)
                         .expect("generate a chunk");
                     let found = differences(&generated, chunk, &biome_names, data);
                     let mut results = results.lock().unwrap();
@@ -316,7 +321,7 @@ fn generated_chunks_match_vanilla_block_by_block() {
         let mut args = vec![output.display().to_string(), seed.to_string()];
         args.extend(positions.iter().map(|(x, z)| format!("{x},{z}")));
         reference.java("ChunkParityProbe", args);
-        let (found, met) = compare_seed(&data, seed, &output, &positions);
+        let (found, met) = compare_seed(&data, seed, &output, &positions, None);
         differences.extend(found);
         biomes.extend(met);
         std::fs::remove_file(&output).unwrap();
@@ -342,6 +347,132 @@ fn generated_chunks_match_vanilla_block_by_block() {
         differences.len(),
         differences[..differences.len().min(SHOWN_DIFFERENCES)].join("\n")
     );
+}
+
+/// Terrain around one actual start of every Overworld terrain-adaptation mode, including adjacent chunks.
+/// Positions are discovered from the seed instead of pinning coordinates or committing vanilla data.
+#[test]
+fn structure_terrain_matches_vanilla_block_by_block() {
+    let Some(reference) = Reference::from_env() else {
+        eprintln!("Skipping structure terrain: HARPAS_VANILLA_SERVER_DIR is not set");
+        return;
+    };
+    let data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    let templates = StructureTemplates::from_zip_path(&reference.server_jar).unwrap();
+    reference.compile(&[
+        (
+            "WorldgenReferenceProbe.java",
+            include_str!("WorldgenReferenceProbe.java"),
+        ),
+        (
+            "ChunkParityProbe.java",
+            include_str!("ChunkParityProbe.java"),
+        ),
+        (
+            "StructurePlacementProbe.java",
+            include_str!("StructurePlacementProbe.java"),
+        ),
+        (
+            "StructureTerrainProbe.java",
+            include_str!("StructureTerrainProbe.java"),
+        ),
+    ]);
+    for &seed in reference::sampled_seeds(&[0, -4_172_144_997_902_289_642]) {
+        let generator = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
+        let state = StructureState::new(seed, &data, &generator).unwrap();
+        let mut known = HashMap::new();
+        let mut examples = HashMap::<String, StructureStart>::new();
+        // Only possible start chunks need height and biome checks. Scan outward to find nearby examples.
+        'search: for radius in 0_i32..256 {
+            for x in -radius..=radius {
+                for z in -radius..=radius {
+                    if x.abs().max(z.abs()) != radius {
+                        continue;
+                    }
+                    let starts = state
+                        .starts_in_chunk(&generator, &data, &templates, x, z)
+                        .unwrap();
+                    for start in &starts {
+                        let mode = &data.structures[&start.structure].terrain_adaptation;
+                        if mode != "none" {
+                            examples
+                                .entry(mode.clone())
+                                .or_insert_with(|| start.clone());
+                        }
+                    }
+                    known.insert((x, z), starts);
+                    if examples.len() == 4 {
+                        break 'search;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            examples.len(),
+            4,
+            "seed {seed} must exercise all four adapting modes, found {:?}",
+            examples.keys().collect::<Vec<_>>()
+        );
+        let mut positions = BTreeSet::new();
+        for (mode, start) in &examples {
+            let piece = &start.pieces[0];
+            let cx = piece.bounding_box.min[0] >> 4;
+            let cz = piece.bounding_box.min[2] >> 4;
+            eprintln!(
+                "Seed {seed}, {mode}: {} near chunk ({cx}, {cz})",
+                start.structure
+            );
+            for x in cx - 1..=cx + 1 {
+                for z in cz - 1..=cz + 1 {
+                    positions.insert((x, z));
+                }
+            }
+        }
+        let positions: Vec<_> = positions.into_iter().collect();
+        let mut beardifiers = HashMap::new();
+        for &(cx, cz) in &positions {
+            let references = StructureState::references_from(cx, cz, |x, z| {
+                if let Some(starts) = known.get(&(x, z)) {
+                    return Ok(starts.clone());
+                }
+                let starts = state.starts_in_chunk(&generator, &data, &templates, x, z)?;
+                known.insert((x, z), starts.clone());
+                Ok(starts)
+            })
+            .unwrap();
+            let starts: Vec<_> = references
+                .iter()
+                .map(|reference| {
+                    known[&reference.source]
+                        .iter()
+                        .find(|s| s.structure == reference.structure)
+                        .unwrap()
+                })
+                .collect();
+            let beardifier = Beardifier::for_starts(cx, cz, &data, starts).unwrap();
+            beardifiers.insert((cx, cz), beardifier);
+        }
+        let output = reference.temp.0.join("structure-chunks.bin");
+        let mut args = vec![output.display().to_string(), seed.to_string()];
+        args.extend(positions.iter().map(|(x, z)| format!("{x},{z}")));
+        reference.java("StructureTerrainProbe", args);
+        let (found, _) = compare_seed(&data, seed, &output, &positions, Some(&beardifiers));
+        assert!(
+            found.is_empty(),
+            "{} differences:\n{}",
+            found.len(),
+            found
+                .iter()
+                .take(SHOWN_DIFFERENCES)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        eprintln!(
+            "Compared {} chunks with structure terrain for seed {seed}",
+            positions.len()
+        );
+    }
 }
 
 /// Reaches every entry, including the rare ones that chunks are unlikely to meet.

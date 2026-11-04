@@ -1,8 +1,8 @@
 # World
 
 Scope: how Harpas stores worlds, where it gets vanilla's game data (world generation, recipes, loot tables,
-tags, structures), how it generates and saves chunks, and how it reaches and checks parity with vanilla. The
-tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
+tags, structures), and how it generates and saves chunks. Parity with vanilla is covered in
+[parity.md](parity.md). The tick loop and in-memory storage are covered in [engine-core.md](engine-core.md).
 
 Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla game data](#vanilla-game-data)
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
@@ -297,18 +297,8 @@ in `harpas.toml`:
 
 ## Parity strategy
 
-Vanilla is the specification. Every behavior is ported one to one and checked against vanilla itself.
-
-- **Reference server for tests only.** Mojang's server runs in continuous integration, or locally in an
-  isolated test folder after EULA acceptance, as the reference for differential tests. It is never committed,
-  never part of a release, and never part of the Harpas binary.
-- **Order of work**, from the easiest to compare to the hardest:
-  1. world generation: same seed, compared block by block, biome by biome;
-  2. block behavior and redstone: scripted circuits compared tick by tick;
-  3. entities and mobs: movement, collisions, AI, spawning;
-  4. items, inventories, crafting and loot.
-- **Coverage report:** each subsystem has a parity status (not started, partial, matching) published with
-  every release, and known differences are documented.
+World generation and saved worlds are checked against Mojang's server like every other subsystem:
+[parity.md](parity.md) describes how, and how far each one has come.
 
 ---
 

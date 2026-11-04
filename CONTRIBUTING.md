@@ -36,7 +36,8 @@ extracted on the server owner's machine, never committed ([docs/world.md](docs/w
 - **Behavior changes need tests.** Every pull request that adds or changes behavior includes tests that fail
   without the change. A fix includes a test that reproduces the bug.
 - **Vanilla behavior is checked against vanilla.** Ported behavior gets a parity test where a harness exists
-  ([docs/world.md](docs/world.md#parity-strategy)).
+  ([docs/parity.md](docs/parity.md)). `cargo test` skips the comparisons with Mojang's server unless
+  `HARPAS_VANILLA_SERVER_DIR` is set; the Parity workflow runs them on pull requests that change code.
 - Refactors, documentation and build changes need no new tests, but must keep the existing ones passing.
 
 ## Checks

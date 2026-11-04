@@ -64,7 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   chunk workers. New worlds preserve `level-seed`, while existing worlds retain their saved seed; generated
   chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, structures and
   lighting remain separate roadmap tasks (`harpas-worldgen`, `harpas-engine`, `harpas-anvil`, `harpas-server`).
-- A parity harness in CI that generates whole Overworld chunks with Mojang's server and compares every block,
+- A parity harness that generates whole Overworld chunks with Mojang's server and compares every block,
   biome, carving mask, fluid update and heightmap, in 1,621 chunks of 5 seeds covering all 54 biomes, along with
   the climate parameter points (`harpas-worldgen`).
 - Where structures may start: structure sets, structures and biome tags are loaded, with vanilla's random spread

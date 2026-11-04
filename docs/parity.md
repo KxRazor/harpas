@@ -139,9 +139,9 @@ repository's permissions next to untrusted code, which is not worth it for a che
 ## Adding a harness
 
 1. Put it in the `tests/` folder of the crate it checks, in a file named `<name>_parity.rs`. **The workflow only runs
-   test files with that name**, so a harness named otherwise never compares in CI and still looks like it passes. Read
-   `HARPAS_VANILLA_SERVER_DIR`, and without it print why the test is skipped and return. If it takes more than a
-   moment, make it compare less with the reduced sample.
+   test files with that name**, and fails if another file reads `HARPAS_VANILLA_SERVER_DIR` or calls
+   `Reference::from_env`. Read one of them, and without it print why the test is skipped and return. If it takes more
+   than a moment, make it compare less with the reduced sample.
 2. Make the vanilla side repeatable. When vanilla depends on something like its thread history, the probe fixes that
    state and the document says so, as with [biome ties](#known-differences).
 3. **Prove that it can fail.** Break the Harpas side on purpose and check that the harness notices, and say so in the

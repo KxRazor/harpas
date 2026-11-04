@@ -3,7 +3,7 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::{StructureState, jigsaw, ruined_portal, stronghold, templated};
+use super::{StructureState, jigsaw, mineshaft, ruined_portal, stronghold, templated};
 use crate::data::{
     JigsawDef, OceanRuinDef, PoolElementDef, RuinedPortalSetupDef, StructureDef,
     StructureSetEntryDef, WorldgenData, WorldgenDataError,
@@ -59,7 +59,26 @@ impl BoundingBox {
         self.max[0] >= min_x && self.min[0] <= max_x && self.max[2] >= min_z && self.min[2] <= max_z
     }
 
-    fn encapsulate(&mut self, other: &Self) {
+    /// Whether two boxes share a block (`BoundingBox.intersects`).
+    pub(super) const fn intersects(&self, other: &Self) -> bool {
+        self.max[0] >= other.min[0]
+            && self.min[0] <= other.max[0]
+            && self.max[1] >= other.min[1]
+            && self.min[1] <= other.max[1]
+            && self.max[2] >= other.min[2]
+            && self.min[2] <= other.max[2]
+    }
+
+    /// The block at the middle of the box (`BoundingBox.getCenter`).
+    pub(super) const fn center(&self) -> [i32; 3] {
+        [
+            self.min[0] + (self.max[0] - self.min[0] + 1) / 2,
+            self.min[1] + (self.max[1] - self.min[1] + 1) / 2,
+            self.min[2] + (self.max[2] - self.min[2] + 1) / 2,
+        ]
+    }
+
+    pub(super) fn encapsulate(&mut self, other: &Self) {
         for axis in 0..3 {
             self.min[axis] = self.min[axis].min(other.min[axis]);
             self.max[axis] = self.max[axis].max(other.max[axis]);
@@ -72,6 +91,23 @@ impl BoundingBox {
             max: self.max.map(|value| value + by),
         }
     }
+}
+
+/// How far to move pieces so that they end below the sea level, by `margin` blocks at least
+/// (`StructurePiecesBuilder.moveBelowSeaLevel`).
+pub(super) fn below_sea_level_offset(
+    bounds: &BoundingBox,
+    random: &mut impl RandomSource,
+    sea_level: i32,
+    min_y: i32,
+    margin: i32,
+) -> i32 {
+    let max_y = sea_level - margin;
+    let mut top = bounds.max[1] - bounds.min[1] + 1 + min_y + 1;
+    if top < max_y {
+        top += random.next_int_bounded(max_y - top);
+    }
+    top - bounds.max[1]
 }
 
 /// A horizontal direction, as vanilla lists them in `Direction.Plane.HORIZONTAL`.
@@ -197,6 +233,9 @@ enum StructureKind<'d> {
     },
     OceanRuin(OceanRuinDef),
     RuinedPortal(&'d [RuinedPortalSetupDef]),
+    Mineshaft {
+        mesa: bool,
+    },
     /// Single pieces of a fixed size: desert pyramids, jungle temples and swamp huts.
     ScatteredFeature {
         piece: &'static str,
@@ -229,6 +268,9 @@ impl<'d> StructureKind<'d> {
                 beached: structure.is_beached,
             },
             "minecraft:ocean_ruin" => Self::OceanRuin(structure.ocean_ruin?),
+            "minecraft:mineshaft" => Self::Mineshaft {
+                mesa: structure.is_mesa_mineshaft,
+            },
             "minecraft:ruined_portal" if !structure.ruined_portal_setups.is_empty() => {
                 Self::RuinedPortal(&structure.ruined_portal_setups)
             }
@@ -378,7 +420,8 @@ fn try_generate(
     let (min_x, min_z) = (chunk_x * 16, chunk_z * 16);
     let first_occupied = |x, z, heightmap| generator.base_height(x, z, heightmap) - 1;
     let mut jigsaw_start = None;
-    let mut portal_piece = None;
+    // The pieces of structures that make them while finding their generation point.
+    let mut made_pieces = None;
     let position = match kind {
         StructureKind::Jigsaw(jigsaw) => {
             let Some(start) = jigsaw::start(
@@ -405,7 +448,12 @@ fn try_generate(
         StructureKind::RuinedPortal(setups) => {
             let (position, piece) =
                 ruined_portal::start(generator, templates, setups, &mut random, min_x, min_z)?;
-            portal_piece = Some(piece);
+            made_pieces = Some(vec![piece]);
+            position
+        }
+        StructureKind::Mineshaft { mesa } => {
+            let (position, pieces) = mineshaft::start(generator, &mut random, mesa, min_x, min_z);
+            made_pieces = Some(pieces);
             position
         }
         StructureKind::Igloo | StructureKind::Shipwreck { beached: true } => [
@@ -474,7 +522,9 @@ fn try_generate(
         StructureKind::OceanRuin(ruin) => {
             templated::ocean_ruin(templates, &mut random, ruin, min_x, min_z)?
         }
-        StructureKind::RuinedPortal(_) => vec![portal_piece.expect("a ruined portal piece")],
+        StructureKind::RuinedPortal(_) | StructureKind::Mineshaft { .. } => {
+            made_pieces.expect("pieces made with the generation point")
+        }
         StructureKind::ScatteredFeature {
             piece,
             width,

@@ -2,7 +2,7 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::start::{BoundingBox, Direction, StructurePiece};
+use super::start::{BoundingBox, Direction, StructurePiece, below_sea_level_offset};
 
 /// Pieces deeper than this get no children (`StrongholdPieces.MAX_DEPTH`).
 const MAX_DEPTH: i32 = 50;
@@ -160,10 +160,6 @@ fn orient_box(
     BoundingBox { min, max }
 }
 
-fn intersects(a: &BoundingBox, b: &BoundingBox) -> bool {
-    (0..3).all(|axis| a.max[axis] >= b.min[axis] && a.min[axis] <= b.max[axis])
-}
-
 struct Layout<'r> {
     random: &'r mut WorldgenRandom<LegacyRandom>,
     pieces: Vec<Piece>,
@@ -179,7 +175,7 @@ impl Layout<'_> {
     fn collides(&self, bounding_box: &BoundingBox) -> Option<&Piece> {
         self.pieces
             .iter()
-            .find(|piece| intersects(&piece.bounding_box, bounding_box))
+            .find(|piece| piece.bounding_box.intersects(bounding_box))
     }
 
     /// `randomSmallDoor`: the entry door type, which only the placed blocks use.
@@ -296,7 +292,7 @@ impl Layout<'_> {
         }
         let length = (1..=2).rev().find(|&length| {
             let bounding_box = orient_box(foot, [-1, -1, 0], [5, 5, length], direction);
-            !intersects(&collision.bounding_box, &bounding_box)
+            !collision.bounding_box.intersects(&bounding_box)
         })?;
         let bounding_box = orient_box(foot, [-1, -1, 0], [5, 5, length + 1], direction);
         (bounding_box.min[1] > 1)
@@ -514,22 +510,11 @@ fn move_below_sea_level(
     sea_level: i32,
     min_y: i32,
 ) {
-    let max_y = sea_level - BELOW_SEA_LEVEL;
-    let lowest = pieces
-        .iter()
-        .map(|piece| piece.bounding_box.min[1])
-        .min()
-        .expect("a start");
-    let highest = pieces
-        .iter()
-        .map(|piece| piece.bounding_box.max[1])
-        .max()
-        .expect("a start");
-    let mut top = highest - lowest + 1 + min_y + 1;
-    if top < max_y {
-        top += random.next_int_bounded(max_y - top);
+    let mut bounds = pieces[0].bounding_box;
+    for piece in &pieces[1..] {
+        bounds.encapsulate(&piece.bounding_box);
     }
-    let dy = top - highest;
+    let dy = below_sea_level_offset(&bounds, random, sea_level, min_y, BELOW_SEA_LEVEL);
     for piece in pieces {
         piece.bounding_box.min[1] += dy;
         piece.bounding_box.max[1] += dy;

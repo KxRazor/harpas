@@ -1,9 +1,8 @@
 name: CodeQL
 
-# Code scanning for Rust, the GitHub Actions workflows and the Java bridge example. This replaces GitHub's
-# default setup, which analyzes every language on every pull request. The Rust analysis takes about four
-# minutes and does not block merging, so it runs only on pushes to main, the weekly run and manual runs.
-# Pull requests analyze Actions and Java when they change those files.
+# Code scanning for Rust, the GitHub Actions workflows and the Java sources. This replaces GitHub's default setup.
+# Every run analyzes all three languages: code scanning compares a pull request with the configurations on main,
+# and it cannot tell which alerts a pull request introduces if the pull request skips one of them.
 
 on:
   push:
@@ -21,34 +20,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  languages:
-    name: select languages
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    outputs:
-      languages: ${{ steps.select.outputs.languages }}
-    steps:
-      - id: select
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then
-            echo 'languages=["rust","actions","java-kotlin"]' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-          languages=()
-          grep -qE '^\.github/' <<< "$files" && languages+=('"actions"')
-          grep -qE '\.(java|kt)$' <<< "$files" && languages+=('"java-kotlin"')
-          echo "languages=[$(IFS=,; echo "${languages[*]}")]" >> "$GITHUB_OUTPUT"
-
   analyze:
     name: Analyze (${{ matrix.language }})
-    needs: languages
-    if: needs.languages.outputs.languages != '[]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ${{ fromJSON(needs.languages.outputs.languages) }}
+        language: [rust, actions, java-kotlin]
     steps:
       - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v4

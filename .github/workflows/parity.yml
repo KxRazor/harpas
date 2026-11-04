@@ -83,9 +83,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
-      # Every harness compares when this variable is set, so a new harness needs no change here.
+      # CI already runs the other tests. A new harness needs no change here if its name ends in `_parity`
+      # (docs/parity.md#adding-a-harness).
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
           HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || 'full' }}
-        run: cargo test --release --workspace --locked
+        run: cargo test --release --workspace --locked --test '*_parity' --test world_loading

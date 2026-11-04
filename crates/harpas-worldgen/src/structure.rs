@@ -21,6 +21,7 @@ mod ruined_portal;
 mod start;
 mod storage;
 mod stronghold;
+mod swamp_hut;
 mod templated;
 
 pub use start::{

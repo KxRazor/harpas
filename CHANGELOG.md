@@ -94,6 +94,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Buried treasure blocks on chunk workers, including surrounding fill, chest orientation, loot table and seed,
   and final saved piece bounds. Placement, worker generation, Anvil reloads and vanilla resumption are compared
   against Minecraft 26.1; other structure blocks and features remain pending (`harpas-worldgen`, `harpas-engine`).
+- Swamp hut blocks on chunk workers, including average ground height, all four orientations, roof corners,
+  support columns and fence postprocessing. Placement, saved pieces across chunk boundaries, Anvil reloads and
+  repeated placement are checked against Minecraft 26.1. Witch and cat spawning remains for M4; their saved
+  flags are preserved so vanilla can spawn them later (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
 

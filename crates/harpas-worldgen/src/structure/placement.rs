@@ -1,4 +1,4 @@
-//! Structure block placement after carvers. Only buried treasure is implemented so far.
+//! Structure block placement after carvers: buried treasure and swamp huts.
 
 use harpas_core::block::block_states;
 use harpas_core::nbt::Compound;
@@ -11,6 +11,15 @@ impl StructureStart {
     /// Places implemented pieces in the target chunk, updates their saved bounds, and returns newly created
     /// block entities. Other structure types are left for vanilla's later generation stages.
     pub fn place_in_chunk(&mut self, chunk: &mut GeneratedChunk, seed: i64) -> Vec<Compound> {
+        if self.structure == "minecraft:swamp_hut" {
+            for piece in &mut self.pieces {
+                if piece.kind == "minecraft:tesh" {
+                    super::swamp_hut::place(piece, chunk);
+                }
+            }
+            self.update_bounds();
+            return Vec::new();
+        }
         if self.structure != "minecraft:buried_treasure" {
             return Vec::new();
         }
@@ -102,13 +111,17 @@ impl StructureStart {
                 break;
             }
         }
+        self.update_bounds();
+        entities
+    }
+
+    fn update_bounds(&mut self) {
         if let Some(first) = self.pieces.first() {
             self.bounding_box = first.bounding_box;
             for piece in &self.pieces[1..] {
                 self.bounding_box.encapsulate(&piece.bounding_box);
             }
         }
-        entities
     }
 }
 

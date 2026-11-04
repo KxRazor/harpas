@@ -293,12 +293,25 @@ and the owner **accepts it once**:
     The treasure's one-block shell fits in its source chunk. `buried_treasure_parity` compares every block,
     heightmaps, chest NBT and saved starts in 38 synthetic cases and four actual chunks per seed in two seeds
     (one seed on pull requests), checks worker saves and Anvil reloads, and has vanilla reload and place the
-    treasure again to check resumption. Other structure types remain unplaced.
+    treasure again to check resumption.
+  - Chunk workers also place swamp hut blocks: average `MOTION_BLOCKING_NO_LEAVES` ground height saved as
+    `HPos`, oriented walls and roof corners, support columns through replaceable blocks and fence positions
+    marked for postprocessing. Unwritten interior blocks and the saved `Witch`/`Cat` flags stay unchanged;
+    spawning those entities belongs to M4. New huts fit inside their source chunk. A saved, height-adjusted
+    piece crossing a boundary also places its intersection in neighboring chunks without copying its start.
+    `swamp_hut_parity` compares every block, all six heightmaps, saved starts and postprocessing in 92 synthetic
+    cases covering all orientations, terrain, supports and four-chunk pieces. It also compares two actual
+    worker chunks per seed in two seeds (one seed on pull requests), checks Anvil reloads and a saved neighbor,
+    and compares repeated placement after vanilla reloads the records. Below zero, vanilla's negative `HPos`
+    sentinel intentionally causes another ground adjustment on each pass; these cases compare both passes.
+    The vanilla probe suppresses entity spawning while observing blocks and restores the original flags.
+    Other structure types remain unplaced.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
   status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure placement can be repeated
-  by vanilla without replacing its chest or loot metadata in the compared cases. Features, other structure
+  by vanilla without replacing its chest or loot metadata in the compared cases. Swamp hut blocks and their
+  saved height can also be resumed; their witch and cat are left for vanilla or M4. Features, other structure
   blocks and lighting remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).

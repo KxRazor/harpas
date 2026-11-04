@@ -45,7 +45,7 @@ pub fn parse_level_seed(value: &str) -> Option<i64> {
     match parsed.flatten() {
         Some(magnitude) if negative => Some((-(magnitude as i128)) as i64),
         Some(magnitude) => Some(magnitude as i64),
-        None => Some(i64::from(java_string_hash(value)) + 1),
+        None => Some(i64::from(java_string_hash(value))),
     }
 }
 

@@ -99,4 +99,4 @@ jobs:
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
           HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || 'full' }}
-        run: cargo test --release --workspace --locked --no-fail-fast --test '*_parity' --test world_loading
+        run: cargo test --release --workspace --locked --test '*_parity' --test world_loading

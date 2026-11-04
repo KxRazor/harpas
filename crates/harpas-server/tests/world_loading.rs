@@ -331,7 +331,8 @@ fn install_vanilla_data(folder: &Folder, reference: Option<&PathBuf>) -> bool {
         .unwrap();
     assert!(
         output.status.success(),
-        "could not install test data: {}",
+        "could not install test data: {}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     true
@@ -344,11 +345,11 @@ fn a_text_seed_starts_a_normal_world_that_keeps_it_when_reopened() {
     }
     let reference = std::env::var_os("HARPAS_VANILLA_SERVER_DIR").map(PathBuf::from);
     let folder = Folder::new();
+    fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
     if !install_vanilla_data(&folder, reference.as_ref()) {
         eprintln!("Skipping a new world: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
     }
-    fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
     let properties = "server-ip=127.0.0.1\nserver-port=0\nonline-mode=false\nlevel-seed=hello\n";
     fs::write(folder.0.join("server.properties"), properties).unwrap();
     let log = folder.0.join("logs/latest.log");
@@ -387,11 +388,11 @@ fn a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available() {
     }
     let reference = std::env::var_os("HARPAS_VANILLA_SERVER_DIR").map(PathBuf::from);
     let folder = Folder::new();
+    fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
     if !install_vanilla_data(&folder, reference.as_ref()) {
         eprintln!("Skipping a new world: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
     }
-    fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
     let properties = "server-ip=127.0.0.1\nserver-port=0\nonline-mode=false\nnetwork-compression-threshold=-1\nview-distance=2\nlevel-seed=42\n";
     fs::write(folder.0.join("server.properties"), properties).unwrap();
     let (mut server, address) = start(&folder);

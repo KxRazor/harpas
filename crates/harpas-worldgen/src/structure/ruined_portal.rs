@@ -50,11 +50,8 @@ pub(super) fn start(
     let pivot = [found.size[0] / 2, 0, found.size[2] / 2];
     let bounds = found.bounding_box_around([x, 0, z], rotation, mirror, pivot);
     let kind = heightmap(setup.placement);
-    let surface = generator.base_height(
-        bounds.min[0] + (bounds.max[0] - bounds.min[0] + 1) / 2,
-        bounds.min[2] + (bounds.max[2] - bounds.min[2] + 1) / 2,
-        kind,
-    ) - 1;
+    let [center_x, _, center_z] = bounds.center();
+    let surface = generator.base_height(center_x, center_z, kind) - 1;
     let min_y = generator.min_y() + MIN_Y_MARGIN;
     let span = bounds.max[1] - bounds.min[1] + 1;
     let y = first_y(random, setup.placement, air_pocket, surface, span, min_y);

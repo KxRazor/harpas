@@ -85,6 +85,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`harpas-worldgen`).
 - Ruined portal starts in the Overworld, with their mirrored templates and heights. The generator does not
   use them yet (`harpas-worldgen`).
+- Mineshaft starts of both kinds, with their rooms, corridors, crossings and stairs. The generator does not use them
+  yet (`harpas-worldgen`).
 
 ### Changed
 

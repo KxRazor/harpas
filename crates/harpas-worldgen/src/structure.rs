@@ -14,6 +14,7 @@ use crate::data::{
 use crate::generator::NoiseBasedChunkGenerator;
 
 mod jigsaw;
+mod mineshaft;
 mod ruined_portal;
 mod start;
 mod stronghold;

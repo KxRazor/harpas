@@ -278,6 +278,8 @@ pub struct StructureDef {
     pub jigsaw: Option<JigsawDef>,
     /// Whether a `minecraft:shipwreck` structure is on a beach (`is_beached`).
     pub is_beached: bool,
+    /// Whether a `minecraft:mineshaft` structure is of the mesa kind (`mineshaft_type`).
+    pub is_mesa_mineshaft: bool,
     /// The settings of a `minecraft:ocean_ruin` structure.
     pub ocean_ruin: Option<OceanRuinDef>,
     /// The ways a `minecraft:ruined_portal` structure may be placed (`setups`).
@@ -920,6 +922,7 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
             .get("is_beached")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        is_mesa_mineshaft: json.get("mineshaft_type").and_then(Value::as_str) == Some("mesa"),
         ocean_ruin: match json.get("type").and_then(Value::as_str) {
             Some("minecraft:ocean_ruin") => Some(parse_ocean_ruin(context, json)?),
             _ => None,

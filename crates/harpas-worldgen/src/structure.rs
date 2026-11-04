@@ -13,6 +13,7 @@ use crate::data::{
 };
 use crate::generator::NoiseBasedChunkGenerator;
 
+mod desert_pyramid;
 mod jigsaw;
 mod mineshaft;
 mod monument;

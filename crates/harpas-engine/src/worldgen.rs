@@ -1,5 +1,6 @@
 //! Connecting the terrain generator to the engine's chunk workers and Anvil storage.
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
@@ -34,11 +35,11 @@ pub fn overworld_generator(
         ));
     }
     let generator = NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?;
-    let structures = generate_structures
+    let structure_source = generate_structures
         .then(|| structures::Structures::new(seed, &data, &generator, templates))
         .transpose()?;
     Ok(Arc::new(move |pos, read| {
-        let mut structures = if let Some(structures) = &structures {
+        let mut structures = if let Some(structures) = &structure_source {
             structures.for_chunk(pos, &generator, &data, read)?
         } else {
             structures::ChunkStructures::empty()
@@ -51,12 +52,12 @@ pub fn overworld_generator(
                 std::mem::take(&mut structures.beardifier),
             )
             .map_err(io::Error::other)?;
-        let entities: Vec<_> = structures
-            .starts
-            .iter_mut()
-            .chain(structures.neighbor_huts.iter_mut())
-            .flat_map(|start| start.place_in_chunk(&mut generated, seed))
-            .collect();
+        let terrain_chunks = if let Some(source) = &structure_source {
+            source.terrain_for_placements(&generated, &structures, &generator, &data, read)?
+        } else {
+            HashMap::new()
+        };
+        let entities = structures.place_blocks(&mut generated, seed, &terrain_chunks);
         let mut chunk = into_anvil(generated)?;
         if !entities.is_empty() {
             chunk

@@ -4,10 +4,11 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex};
 
+use harpas_anvil::Chunk;
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_worldgen::{
-    Beardifier, NoiseBasedChunkGenerator, StructureStart, StructureState, StructureTemplates,
-    WorldgenData,
+    Beardifier, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureStart,
+    StructureState, StructureTemplates, WorldgenData,
 };
 
 use crate::world::{ChunkPos, ChunkReader};
@@ -77,7 +78,7 @@ pub(super) struct Structures {
 pub(super) struct ChunkStructures {
     pub beardifier: Beardifier,
     pub starts: Vec<StructureStart>,
-    pub neighbor_huts: Vec<StructureStart>,
+    pub neighbor_pieces: Vec<StructureStart>,
     references: Compound,
 }
 
@@ -86,9 +87,86 @@ impl ChunkStructures {
         Self {
             beardifier: Beardifier::default(),
             starts: Vec::new(),
-            neighbor_huts: Vec::new(),
+            neighbor_pieces: Vec::new(),
             references: Compound::new(),
         }
+    }
+
+    pub(super) fn place_blocks(
+        &mut self,
+        generated: &mut GeneratedChunk,
+        seed: i64,
+        terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
+    ) -> Vec<Compound> {
+        let height_at = |x: i32, z: i32| {
+            terrain_chunks[&crate::world::ChunkPos {
+                x: x >> 4,
+                z: z >> 4,
+            }]
+                .heightmaps()
+                .get(
+                    HeightmapType::MotionBlockingNoLeaves,
+                    (x & 15) as usize,
+                    (z & 15) as usize,
+                )
+        };
+        self.starts
+            .iter_mut()
+            .chain(self.neighbor_pieces.iter_mut())
+            .flat_map(|start| {
+                start.prepare_pyramid_height(
+                    seed,
+                    generated.min_y() + generated.height() - 1,
+                    &mut |x, z| height_at(x, z),
+                );
+                // These chunks remain at CARVERS until the entire feature stage is implemented. Vanilla
+                // clears the chest alcoves on replay; retain the incoming flags so that it recreates the
+                // chests with the same deterministic loot seeds when it resumes FEATURES.
+                let deferred: Vec<_> = if start.structure == "minecraft:desert_pyramid" {
+                    start
+                        .pieces
+                        .iter()
+                        .map(|piece| {
+                            (0..4)
+                                .map(|i| {
+                                    let key = format!("hasPlacedChest{i}");
+                                    let value = piece.save_data.get(&key).cloned();
+                                    (key, value)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let entities = start.place_in_chunk(
+                    generated,
+                    seed,
+                    &mut |x, z| height_at(x, z),
+                    &mut |x, y, z| {
+                        terrain_chunks[&crate::world::ChunkPos {
+                            x: x >> 4,
+                            z: z >> 4,
+                        }]
+                            .block_state(
+                                (x & 15) as usize,
+                                y,
+                                (z & 15) as usize,
+                            )
+                    },
+                );
+                for (piece, flags) in start.pieces.iter_mut().zip(deferred) {
+                    for (key, value) in flags {
+                        if let Some(value) = value {
+                            piece.save_data.insert(key, value);
+                        } else {
+                            piece.save_data.remove(&key);
+                        }
+                    }
+                }
+                entities
+            })
+            .collect()
     }
 
     pub(super) fn into_nbt(self) -> Compound {
@@ -116,6 +194,76 @@ impl Structures {
             templates,
             starts: StartCache::new(4096),
         })
+    }
+
+    pub(super) fn terrain_for_placements(
+        &self,
+        chunk: &GeneratedChunk,
+        placements: &ChunkStructures,
+        generator: &NoiseBasedChunkGenerator,
+        data: &WorldgenData,
+        read: &ChunkReader<'_>,
+    ) -> io::Result<HashMap<ChunkPos, GeneratedChunk>> {
+        let mut terrain_chunks = HashMap::new();
+        // A pyramid's lowest ground height includes its entire footprint, across chunk boundaries.
+        // Resolve those heightmaps before placement so writes cannot influence a later height query.
+        for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
+            if start.structure != "minecraft:desert_pyramid" {
+                continue;
+            }
+            for piece in &start.pieces {
+                for x in (piece.bounding_box.min[0] >> 4)..=(piece.bounding_box.max[0] >> 4) {
+                    for z in (piece.bounding_box.min[2] >> 4)..=(piece.bounding_box.max[2] >> 4) {
+                        let neighbor = crate::world::ChunkPos { x, z };
+                        if terrain_chunks.contains_key(&neighbor) {
+                            continue;
+                        }
+                        if neighbor
+                            == (ChunkPos {
+                                x: chunk.chunk_x(),
+                                z: chunk.chunk_z(),
+                            })
+                        {
+                            terrain_chunks.insert(neighbor, chunk.clone());
+                            continue;
+                        }
+                        if let Some(saved) = read(neighbor)?
+                            && saved.get("sections").is_some()
+                        {
+                            let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+                            let (saved, _) = Chunk::read(saved, &names)?;
+                            let mut terrain = GeneratedChunk::new(
+                                x,
+                                z,
+                                generator.min_y(),
+                                chunk.height(),
+                                data.biomes.len(),
+                            );
+                            for section in saved.sections {
+                                if let Some(blocks) = section.section {
+                                    let index = i32::from(section.y) - terrain.min_section_y();
+                                    if let Some(target) = usize::try_from(index)
+                                        .ok()
+                                        .and_then(|i| terrain.sections_mut().get_mut(i))
+                                    {
+                                        *target = blocks;
+                                    }
+                                }
+                            }
+                            terrain.recompute_heightmaps();
+                            terrain_chunks.insert(neighbor, terrain);
+                            continue;
+                        }
+                        let nearby = self.for_chunk(neighbor, generator, data, read)?;
+                        let terrain = generator
+                            .generate_chunk_carved_with_beardifier(x, z, data, nearby.beardifier)
+                            .map_err(io::Error::other)?;
+                        terrain_chunks.insert(neighbor, terrain);
+                    }
+                }
+            }
+        }
+        Ok(terrain_chunks)
     }
 
     fn starts(
@@ -165,11 +313,17 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // New huts fit in their source chunk. Saved, already height-adjusted pieces can cross a boundary;
-        // place their intersection here without moving or duplicating the source chunk's saved start.
-        let neighbor_huts = referenced
+        // Pyramids span several chunks; saved huts can cross a boundary too.
+        // Place their intersection without moving or duplicating the source chunk's saved start.
+        let neighbor_pieces = referenced
             .iter()
-            .filter(|s| s.chunk != (pos.x, pos.z) && s.structure == "minecraft:swamp_hut")
+            .filter(|s| {
+                s.chunk != (pos.x, pos.z)
+                    && matches!(
+                        s.structure.as_str(),
+                        "minecraft:swamp_hut" | "minecraft:desert_pyramid"
+                    )
+            })
             .map(|s| (*s).clone())
             .collect();
         let mut references = Compound::new();
@@ -185,7 +339,7 @@ impl Structures {
         Ok(ChunkStructures {
             beardifier,
             starts: own.as_ref().clone(),
-            neighbor_huts,
+            neighbor_pieces,
             references,
         })
     }

@@ -181,7 +181,12 @@ fn treasure_blocks_metadata_workers_and_vanilla_resumption_match() {
         let seed = [0, 42, -1, i64::MIN][index % 4];
         let name = format!("synthetic-{index}");
         inputs.insert(name.clone(), input(&chunk, seed, &own));
-        let entities = own[0].place_in_chunk(&mut chunk, seed);
+        let entities = own[0].place_in_chunk(
+            &mut chunk,
+            seed,
+            &mut |_, _| unreachable!("no pyramid"),
+            &mut |_, _, _| unreachable!("no pyramid"),
+        );
         expected.insert(name, snapshot(&chunk, &own, entities));
     }
     // Actual chunk workers: discover starts from each seed and use the independently generated carved

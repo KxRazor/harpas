@@ -98,6 +98,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   support columns and fence postprocessing. Placement, saved pieces across chunk boundaries, Anvil reloads and
   repeated placement are checked against Minecraft 26.1. Witch and cat spawning remains for M4; their saved
   flags are preserved so vanilla can spawn them later (`harpas-worldgen`, `harpas-engine`).
+- Desert pyramid blocks on chunk workers, including shared ground height across chunks, foundations, rotated
+  stairs and decorations, loot chests, the TNT trap and the archaeology cellar with suspicious sand. Placement,
+  saved neighbors, Anvil reloads and vanilla replay of the pyramid pass are compared against Minecraft 26.1.
+  Incoming chest flags are retained while chunks remain at `carvers`, so vanilla recreates the same chest loot
+  on resumption; other features remain pending (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
 

@@ -1004,6 +1004,7 @@ dependencies = [
  "harpas-core",
  "harpas-worldgen",
  "log",
+ "zip",
 ]
 
 [[package]]

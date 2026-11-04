@@ -396,26 +396,4 @@ mod tests {
             17
         );
     }
-
-    #[test]
-    fn initializes_and_reopens_a_normal_world_when_vanilla_data_is_available() {
-        let pack = Path::new("../../test-environment/.harpas/vanilla-data/26.1.zip");
-        if !pack.is_file() {
-            return;
-        }
-        let folder = Folder::new();
-        let props = Properties::parse("level-seed=hello\nlevel-name=world\n");
-        assert!(prepare(&folder.0, &props, pack).unwrap().is_some());
-        assert_eq!(
-            harpas_anvil::read_world_seed(&folder.0).unwrap().unwrap().0,
-            99_162_322
-        );
-        assert!(harpas_anvil::read_level(&folder.0).unwrap().is_some());
-        let changed = Properties::parse("level-seed=999\nlevel-name=world\n");
-        assert!(prepare(&folder.0, &changed, pack).unwrap().is_some());
-        assert_eq!(
-            harpas_anvil::read_world_seed(&folder.0).unwrap().unwrap().0,
-            99_162_322
-        );
-    }
 }

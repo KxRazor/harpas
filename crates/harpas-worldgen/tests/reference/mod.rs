@@ -136,6 +136,32 @@ impl Reference {
     }
 }
 
+/// Vanilla's data files, for a test that needs them without comparing anything. Not every test uses it.
+#[allow(dead_code)]
+pub struct VanillaData {
+    pub path: PathBuf,
+    _reference: Option<Reference>,
+}
+
+#[allow(dead_code)]
+impl VanillaData {
+    /// The reference server's game jar, or else the pack of a local test server, which CI does not have.
+    pub fn find() -> Option<Self> {
+        if let Some(reference) = Reference::from_env() {
+            return Some(Self {
+                path: reference.server_jar.clone(),
+                _reference: Some(reference),
+            });
+        }
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-environment/.harpas/vanilla-data/26.1.zip");
+        pack.is_file().then_some(Self {
+            path: pack,
+            _reference: None,
+        })
+    }
+}
+
 fn unpack_reference(jar: &Path, dir: &Path) -> (PathBuf, Vec<PathBuf>) {
     let mut archive =
         zip::ZipArchive::new(File::open(jar).expect("open server jar")).expect("read server jar");

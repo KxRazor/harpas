@@ -54,6 +54,7 @@ pub fn overworld_generator(
         let entities: Vec<_> = structures
             .starts
             .iter_mut()
+            .chain(structures.neighbor_huts.iter_mut())
             .flat_map(|start| start.place_in_chunk(&mut generated, seed))
             .collect();
         let mut chunk = into_anvil(generated)?;

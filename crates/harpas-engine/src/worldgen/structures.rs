@@ -77,6 +77,7 @@ pub(super) struct Structures {
 pub(super) struct ChunkStructures {
     pub beardifier: Beardifier,
     pub starts: Vec<StructureStart>,
+    pub neighbor_huts: Vec<StructureStart>,
     references: Compound,
 }
 
@@ -85,6 +86,7 @@ impl ChunkStructures {
         Self {
             beardifier: Beardifier::default(),
             starts: Vec::new(),
+            neighbor_huts: Vec::new(),
             references: Compound::new(),
         }
     }
@@ -163,6 +165,13 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
+        // New huts fit in their source chunk. Saved, already height-adjusted pieces can cross a boundary;
+        // place their intersection here without moving or duplicating the source chunk's saved start.
+        let neighbor_huts = referenced
+            .iter()
+            .filter(|s| s.chunk != (pos.x, pos.z) && s.structure == "minecraft:swamp_hut")
+            .map(|s| (*s).clone())
+            .collect();
         let mut references = Compound::new();
         for start in referenced {
             let packed = i64::from(start.chunk.0 as u32) | (i64::from(start.chunk.1 as u32) << 32);
@@ -176,6 +185,7 @@ impl Structures {
         Ok(ChunkStructures {
             beardifier,
             starts: own.as_ref().clone(),
+            neighbor_huts,
             references,
         })
     }

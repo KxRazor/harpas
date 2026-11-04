@@ -138,6 +138,9 @@ vanilla for the same seed.
         starts, Anvil starts/references and piece placement metadata, and worker terrain/persistence parity tests.
   - [x] Buried treasure block placement on chunk workers: foundation search, surrounding fill, chest orientation,
         loot metadata and final piece bounds, with vanilla placement/resumption and Anvil reload comparisons.
+  - [x] Swamp hut block placement on chunk workers: ground height, rotated walls and roof, support columns and
+        fence postprocessing, with vanilla placement/resumption, chunk-boundary and Anvil reload comparisons.
+        Witch and cat spawning follows in M4; their saved flags remain unchanged.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

@@ -356,7 +356,7 @@ impl GeneratedChunk {
         &self.heightmaps
     }
 
-    /// Local X, absolute Y, and local Z of fluid blocks that require postprocessing after generation.
+    /// Local X, absolute Y, and local Z requiring postprocessing after generation (fluids and structure fences).
     pub fn fluid_postprocessing(&self) -> &[(u8, i32, u8)] {
         &self.fluid_postprocessing
     }

@@ -38,16 +38,31 @@ pub fn overworld_generator(
         .then(|| structures::Structures::new(seed, &data, &generator, templates))
         .transpose()?;
     Ok(Arc::new(move |pos, read| {
-        let (beardifier, structures) = if let Some(structures) = &structures {
+        let mut structures = if let Some(structures) = &structures {
             structures.for_chunk(pos, &generator, &data, read)?
         } else {
-            (harpas_worldgen::Beardifier::default(), empty_structures())
+            structures::ChunkStructures::empty()
         };
-        let generated = generator
-            .generate_chunk_carved_with_beardifier(pos.x, pos.z, &data, beardifier)
+        let mut generated = generator
+            .generate_chunk_carved_with_beardifier(
+                pos.x,
+                pos.z,
+                &data,
+                std::mem::take(&mut structures.beardifier),
+            )
             .map_err(io::Error::other)?;
+        let entities: Vec<_> = structures
+            .starts
+            .iter_mut()
+            .flat_map(|start| start.place_in_chunk(&mut generated, seed))
+            .collect();
         let mut chunk = into_anvil(generated)?;
-        chunk.rest.insert("structures", structures);
+        if !entities.is_empty() {
+            chunk
+                .rest
+                .insert("block_entities", List::Compound(entities));
+        }
+        chunk.rest.insert("structures", structures.into_nbt());
         Ok(chunk)
     }))
 }

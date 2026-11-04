@@ -62,14 +62,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`harpas-worldgen`).
 - Normal Overworld generation now applies cave and canyon carvers, heightmaps and fluid postprocessing on
   chunk workers. New worlds preserve `level-seed`, while existing worlds retain their saved seed; generated
-  chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, structure blocks and
+  chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, other structure blocks and
   lighting remain separate roadmap tasks (`harpas-worldgen`, `harpas-engine`, `harpas-anvil`, `harpas-server`).
 - A parity harness that generates whole Overworld chunks with Mojang's server and compares every block,
   biome, carving mask, fluid update and heightmap, in 1,621 chunks of 5 seeds covering all 54 biomes, along with
   the climate parameter points (`harpas-worldgen`).
 - Where structures may start: structure sets, structures and biome tags are loaded, with vanilla's random spread
   and concentric ring placements, frequency reduction and exclusion zones, checked against Minecraft 26.1. The
-  generator does not place structures yet (`harpas-worldgen`).
+  placement decisions are checked independently of structure block placement (`harpas-worldgen`).
 - Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with the
   terrain heights and biome checks that every structure uses, checked against Minecraft 26.1 (`harpas-worldgen`).
 - Stronghold starts with vanilla's piece layout, checked against Minecraft 26.1 at every ring position
@@ -89,12 +89,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   compared with Minecraft 26.1 (`harpas-worldgen`).
 - Chunk workers now adapt terrain around structures, reuse starts through a bounded shared cache and honor
   starts in saved neighbors. Generated proto-chunks keep their starts, references and piece placement metadata
-  in Anvil; generation respects the world's saved `generate_structures` setting. Structure blocks and features
+  in Anvil; generation respects the world's saved `generate_structures` setting. Other structure blocks and features
   remain pending (`harpas-engine`, `harpas-worldgen`, `harpas-server`).
+- Buried treasure blocks on chunk workers, including surrounding fill, chest orientation, loot table and seed,
+  and final saved piece bounds. Placement, worker generation, Anvil reloads and vanilla resumption are compared
+  against Minecraft 26.1; other structure blocks and features remain pending (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
 
 ### Fixed
+
+- `WorldgenRandom` now sums the coordinate products in decoration seeds and uses vanilla's bit sampling with
+  Xoroshiro sources, including its own Gaussian cache. Both source types are checked directly against 26.1
+  (`harpas-core`, `harpas-worldgen`).
 
 - Saving a region no longer silently drops unreadable neighboring entries or overwrites a truncated header
   (`harpas-anvil`).

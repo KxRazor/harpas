@@ -16,6 +16,7 @@ use crate::generator::NoiseBasedChunkGenerator;
 mod jigsaw;
 mod mineshaft;
 mod monument;
+mod placement;
 mod ruined_portal;
 mod start;
 mod storage;

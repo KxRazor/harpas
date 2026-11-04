@@ -136,6 +136,8 @@ vanilla for the same seed.
         modes, connected to chunk generation and compared against vanilla.
   - [x] Structure terrain adaptation on the chunk workers, with a shared bounded cache of starts, saved-neighbor
         starts, Anvil starts/references and piece placement metadata, and worker terrain/persistence parity tests.
+  - [x] Buried treasure block placement on chunk workers: foundation search, surrounding fill, chest orientation,
+        loot metadata and final piece bounds, with vanilla placement/resumption and Anvil reload comparisons.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

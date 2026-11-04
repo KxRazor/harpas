@@ -286,12 +286,20 @@ and the owner **accepts it once**:
     written in the proto-chunk's `structures` compound. The world's saved `generate_structures` switch disables
     both start discovery and terrain adaptation. `generated_chunk_parity` compares the actual workers' terrain,
     biomes, carving masks, fluid postprocessing, heightmaps and structure records against vanilla around all four
-    adapting modes, then saves and reloads the chunks. Structure block placement remains pending.
+    adapting modes, then saves and reloads the chunks.
+  - After carvers, chunk workers place buried treasure: search down from `OCEAN_FLOOR_WG` for its foundation,
+    fill exposed neighbors, orient the chest and save its loot table and decoration-seeded loot seed without
+    rolling any items. Final piece bounds are saved with the start; shared cached starts stay immutable.
+    The treasure's one-block shell fits in its source chunk. `buried_treasure_parity` compares every block,
+    heightmaps, chest NBT and saved starts in 38 synthetic cases and four actual chunks per seed in two seeds
+    (one seed on pull requests), checks worker saves and Anvil reloads, and has vanilla reload and place the
+    treasure again to check resumption. Other structure types remain unplaced.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Features, structure block placement and
-  lighting remain separate roadmap tasks; generated chunks do not yet include them.
+  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure placement can be repeated
+  by vanilla without replacing its chest or loot metadata in the compared cases. Features, other structure
+  blocks and lighting remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline

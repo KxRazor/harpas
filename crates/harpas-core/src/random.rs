@@ -117,13 +117,21 @@ impl MarsagliaGaussian {
 
 /// Interface shared by vanilla's deterministic random generators (`RandomSource`).
 pub trait RandomSource {
+    /// Bit sampling used by `WorldgenRandom.next`: legacy sources advance their 48-bit LCG once; other
+    /// sources take the high bits of one 64-bit draw. This differs from their ordinary integer methods.
+    fn worldgen_bits(&mut self, bits: u32) -> i32 {
+        debug_assert!((1..=32).contains(&bits));
+        ((self.next_long() as u64) >> (64 - bits)) as i32
+    }
+
     /// Splits off an independent generator by drawing its seed from `self`.
     fn fork_source(&mut self) -> AnyRandom;
 
     /// Splits off a positional factory by drawing its seed from `self`.
     fn fork_positional_source(&mut self) -> PositionalRandom;
 
-    /// Reseeds the generator and clears any cached Gaussian sample.
+    /// Reseeds the generator. Base sources clear their Gaussian cache; `WorldgenRandom` preserves its own
+    /// cached sample, as vanilla's override does.
     fn set_seed(&mut self, seed: i64);
 
     /// Uniformly distributed 32-bit signed integer.
@@ -225,6 +233,10 @@ impl LegacyRandom {
 }
 
 impl RandomSource for LegacyRandom {
+    fn worldgen_bits(&mut self, bits: u32) -> i32 {
+        self.next_bits(bits)
+    }
+
     fn fork_source(&mut self) -> AnyRandom {
         AnyRandom::Legacy(self.fork())
     }
@@ -485,6 +497,13 @@ pub enum AnyRandom {
 }
 
 impl RandomSource for AnyRandom {
+    fn worldgen_bits(&mut self, bits: u32) -> i32 {
+        match self {
+            Self::Legacy(rng) => rng.worldgen_bits(bits),
+            Self::Xoroshiro(rng) => rng.worldgen_bits(bits),
+        }
+    }
+
     fn fork_source(&mut self) -> AnyRandom {
         match self {
             Self::Legacy(rng) => rng.fork_source(),
@@ -632,12 +651,16 @@ impl RandomSequence {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldgenRandom<R = LegacyRandom> {
     inner: R,
+    gaussian: MarsagliaGaussian,
 }
 
 impl<R> WorldgenRandom<R> {
     /// Wraps an inner random generator.
     pub const fn new(inner: R) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            gaussian: MarsagliaGaussian::new(),
+        }
     }
 
     /// Unwraps the inner random generator.
@@ -665,6 +688,12 @@ impl WorldgenRandom<LegacyRandom> {
 }
 
 impl<R: RandomSource> WorldgenRandom<R> {
+    fn sample_double(inner: &mut R) -> f64 {
+        let hi = i64::from(inner.worldgen_bits(26)) << 27;
+        let lo = i64::from(inner.worldgen_bits(27));
+        ((hi + lo) as f64) * DOUBLE_UNIT
+    }
+
     /// Seeds decoration generation for a chunk whose minimum block coordinates are `(min_block_x, min_block_z)`,
     /// returning the computed decoration seed.
     pub fn set_decoration_seed(
@@ -676,8 +705,9 @@ impl<R: RandomSource> WorldgenRandom<R> {
         self.set_seed(level_seed);
         let a = self.next_long() | 1;
         let b = self.next_long() | 1;
-        let decoration_seed = (i64::from(min_block_x).wrapping_mul(a)
-            ^ i64::from(min_block_z).wrapping_mul(b))
+        let decoration_seed = i64::from(min_block_x)
+            .wrapping_mul(a)
+            .wrapping_add(i64::from(min_block_z).wrapping_mul(b))
             ^ level_seed;
         self.set_seed(decoration_seed);
         decoration_seed
@@ -719,6 +749,10 @@ impl<R: RandomSource> WorldgenRandom<R> {
 }
 
 impl<R: RandomSource> RandomSource for WorldgenRandom<R> {
+    fn worldgen_bits(&mut self, bits: u32) -> i32 {
+        self.inner.worldgen_bits(bits)
+    }
+
     fn fork_source(&mut self) -> AnyRandom {
         self.inner.fork_source()
     }
@@ -732,31 +766,43 @@ impl<R: RandomSource> RandomSource for WorldgenRandom<R> {
     }
 
     fn next_int(&mut self) -> i32 {
-        self.inner.next_int()
+        self.worldgen_bits(32)
     }
 
     fn next_int_bounded(&mut self, bound: i32) -> i32 {
-        self.inner.next_int_bounded(bound)
+        assert!(bound > 0, "bound must be positive");
+        if (bound & (bound - 1)) == 0 {
+            return ((i64::from(bound) * i64::from(self.worldgen_bits(31))) >> 31) as i32;
+        }
+        loop {
+            let bits = self.worldgen_bits(31);
+            let value = bits % bound;
+            if bits.wrapping_sub(value).wrapping_add(bound - 1) >= 0 {
+                return value;
+            }
+        }
     }
 
     fn next_long(&mut self) -> i64 {
-        self.inner.next_long()
+        let hi = i64::from(self.worldgen_bits(32)) << 32;
+        hi.wrapping_add(i64::from(self.worldgen_bits(32)))
     }
 
     fn next_bool(&mut self) -> bool {
-        self.inner.next_bool()
+        self.worldgen_bits(1) != 0
     }
 
     fn next_float(&mut self) -> f32 {
-        self.inner.next_float()
+        (self.worldgen_bits(24) as f32) * FLOAT_UNIT
     }
 
     fn next_double(&mut self) -> f64 {
-        self.inner.next_double()
+        Self::sample_double(&mut self.inner)
     }
 
     fn next_gaussian(&mut self) -> f64 {
-        self.inner.next_gaussian()
+        let inner = &mut self.inner;
+        self.gaussian.sample(|| Self::sample_double(inner))
     }
 }
 
@@ -849,6 +895,18 @@ mod tests {
 
     #[test]
     fn worldgen_random_decoration_feature_carver_region_and_slime_seeds_work() {
+        // Observed from 26.1's WorldgenRandom, rather than just testing repeatability of our formula.
+        let mut legacy = WorldgenRandom::new(LegacyRandom::new(0));
+        assert_eq!(
+            legacy.set_decoration_seed(0, -32, 48),
+            2_855_170_917_650_857_136
+        );
+        let mut modern = WorldgenRandom::new(XoroshiroRandom::new(0));
+        assert_eq!(
+            modern.set_decoration_seed(0, -32, 48),
+            -3_954_633_760_918_031_152
+        );
+
         let mut slime_zero = WorldgenRandom::seed_slime_chunk(0, 0, 0, 0x3ad8_025f);
         assert_eq!(slime_zero.next_int_bounded(10), 7);
 

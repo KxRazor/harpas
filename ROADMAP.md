@@ -130,6 +130,8 @@ vanilla for the same seed.
         terrain.
   - [x] Mineshaft starts of both kinds: rooms, corridors, crossings and stairs, below the sea level or up to the
         surface in badlands.
+  - [x] Ocean monument starts: the surrounding biome volume, the saved building piece and its references.
+        Internal rooms follow with block placement.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

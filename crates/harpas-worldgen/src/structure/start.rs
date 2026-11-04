@@ -3,7 +3,7 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::{StructureState, jigsaw, mineshaft, ruined_portal, stronghold, templated};
+use super::{StructureState, jigsaw, mineshaft, monument, ruined_portal, stronghold, templated};
 use crate::data::{
     JigsawDef, OceanRuinDef, PoolElementDef, RuinedPortalSetupDef, StructureDef,
     StructureSetEntryDef, WorldgenData, WorldgenDataError,
@@ -226,6 +226,7 @@ pub struct StructureReference {
 enum StructureKind<'d> {
     BuriedTreasure,
     Stronghold,
+    OceanMonument,
     Jigsaw(&'d JigsawDef),
     Igloo,
     Shipwreck {
@@ -263,6 +264,7 @@ impl<'d> StructureKind<'d> {
                 _ => return None,
             },
             "minecraft:stronghold" => Self::Stronghold,
+            "minecraft:ocean_monument" => Self::OceanMonument,
             "minecraft:igloo" => Self::Igloo,
             "minecraft:shipwreck" => Self::Shipwreck {
                 beached: structure.is_beached,
@@ -445,6 +447,16 @@ fn try_generate(
             min_z + 8,
         ],
         StructureKind::Stronghold => [min_x, 0, min_z],
+        StructureKind::OceanMonument => {
+            if !monument::has_valid_surroundings(generator, data, min_x, min_z)? {
+                return Ok(None);
+            }
+            [
+                min_x + 8,
+                first_occupied(min_x + 8, min_z + 8, HeightmapType::OceanFloorWg),
+                min_z + 8,
+            ]
+        }
         StructureKind::RuinedPortal(setups) => {
             let (position, piece) =
                 ruined_portal::start(generator, templates, setups, &mut random, min_x, min_z)?;
@@ -515,6 +527,7 @@ fn try_generate(
             generator.sea_level(),
             generator.min_y(),
         ),
+        StructureKind::OceanMonument => vec![monument::piece(&mut random, min_x, min_z)],
         StructureKind::Igloo => templated::igloo(templates, &mut random, min_x, min_z)?,
         StructureKind::Shipwreck { beached } => {
             templated::shipwreck(templates, &mut random, beached, min_x, min_z)?

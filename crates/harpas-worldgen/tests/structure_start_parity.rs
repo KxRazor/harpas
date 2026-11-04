@@ -14,8 +14,11 @@ use harpas_worldgen::{
 use reference::Reference;
 
 const SEEDS: [i64; 4] = [0, 42, -1, -4_172_144_997_902_289_642];
+
 /// Chunks in each direction around the origin whose starts are compared.
-const RADIUS: i32 = 256;
+fn radius() -> i32 {
+    if reference::reduced_sample() { 64 } else { 256 }
+}
 
 /// Block coordinates whose base heights are compared, as in `StructureStartProbe.heightCoordinates`.
 fn height_coordinates() -> Vec<i32> {
@@ -106,9 +109,10 @@ fn compare_seed(
     let mut known_starts = std::collections::HashMap::new();
     // The chunks each start reaches, and their neighbors, so that references are compared where they exist.
     let mut reference_chunks = BTreeSet::new();
-    let inner = RADIUS - 8;
-    for x in -RADIUS..RADIUS {
-        for z in -RADIUS..RADIUS {
+    let radius = radius();
+    let inner = radius - 8;
+    for x in -radius..radius {
+        for z in -radius..radius {
             let starts = state
                 .starts_in_chunk(&generator, data, templates, x, z)
                 .unwrap();
@@ -171,7 +175,7 @@ fn compare_seed(
     let mut args = vec![
         output.display().to_string(),
         seed.to_string(),
-        RADIUS.to_string(),
+        radius.to_string(),
         chunk_file.display().to_string(),
     ];
     args.extend(sets.iter().cloned());
@@ -220,7 +224,7 @@ fn structure_starts_and_references_match_vanilla() {
             include_str!("StructureStartProbe.java"),
         ),
     ]);
-    for seed in SEEDS {
+    for &seed in reference::sampled_seeds(&SEEDS) {
         let (lines, starts, references) = compare_seed(&reference, &data, &templates, seed);
         eprintln!("Seed {seed}: {lines} lines match, {starts} starts and {references} references");
     }

@@ -8,6 +8,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct TempDir(pub PathBuf);
 
+/// Whether to compare a small sample instead of the full one, as pull requests do with
+/// `HARPAS_PARITY_SAMPLE=reduced`. Not every test uses it.
+#[allow(dead_code)]
+pub fn reduced_sample() -> bool {
+    std::env::var_os("HARPAS_PARITY_SAMPLE").is_some_and(|sample| sample == "reduced")
+}
+
+/// The seeds to compare: in a reduced sample, only the last one, which fills all 64 bits. Not every test uses it.
+#[allow(dead_code)]
+pub fn sampled_seeds(seeds: &[i64]) -> &[i64] {
+    if reduced_sample() {
+        &seeds[seeds.len() - 1..]
+    } else {
+        seeds
+    }
+}
+
 /// A pool element as `TemplateProbe.describe` writes it. Not every test uses it.
 #[allow(dead_code)]
 pub fn describe_element(element: &harpas_worldgen::PoolElementDef) -> String {

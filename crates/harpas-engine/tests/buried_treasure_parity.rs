@@ -191,7 +191,11 @@ fn treasure_blocks_metadata_workers_and_vanilla_resumption_match() {
     }
     // Actual chunk workers: discover starts from each seed and use the independently generated carved
     // terrain as input to vanilla's placement. Terrain/carver parity has its own block-by-block harness.
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // This probe compares treasure placement alone. A shipwreck can occupy the same chunk;
+    // shipwreck_parity covers that composition against vanilla's shipwreck pass separately.
+    data.structure_sets.shift_remove("minecraft:shipwrecks");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
     for &seed in reference::sampled_seeds(&[0, -4_172_144_997_902_289_642]) {

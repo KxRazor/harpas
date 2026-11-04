@@ -1,6 +1,6 @@
 //! Shared structure starts for worker-generated chunks. Saved neighbors take precedence over regeneration.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -73,6 +73,7 @@ pub(super) struct Structures {
     state: StructureState,
     templates: Arc<StructureTemplates>,
     starts: StartCache,
+    shipwreck_heights: StartCache,
 }
 
 pub(super) struct ChunkStructures {
@@ -80,6 +81,7 @@ pub(super) struct ChunkStructures {
     pub starts: Vec<StructureStart>,
     pub neighbor_pieces: Vec<StructureStart>,
     references: Compound,
+    initial_shipwreck_burials: HashSet<String>,
 }
 
 impl ChunkStructures {
@@ -89,6 +91,7 @@ impl ChunkStructures {
             starts: Vec::new(),
             neighbor_pieces: Vec::new(),
             references: Compound::new(),
+            initial_shipwreck_burials: HashSet::new(),
         }
     }
 
@@ -115,6 +118,40 @@ impl ChunkStructures {
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
+                if matches!(
+                    start.structure.as_str(),
+                    "minecraft:shipwreck" | "minecraft:shipwreck_beached"
+                ) {
+                    return start.place_prepared_shipwreck_in_chunk(
+                        generated,
+                        seed,
+                        templates,
+                        &mut |kind, x, z| {
+                            terrain_chunks[&ChunkPos {
+                                x: x >> 4,
+                                z: z >> 4,
+                            }]
+                                .heightmaps()
+                                .get(
+                                    kind,
+                                    (x & 15) as usize,
+                                    (z & 15) as usize,
+                                )
+                        },
+                        &mut |x, y, z| {
+                            terrain_chunks[&ChunkPos {
+                                x: x >> 4,
+                                z: z >> 4,
+                            }]
+                                .block_state(
+                                    (x & 15) as usize,
+                                    y,
+                                    (z & 15) as usize,
+                                )
+                        },
+                        self.initial_shipwreck_burials.contains(&start.structure),
+                    );
+                }
                 if start.structure == "minecraft:igloo" {
                     return start.place_igloo_in_chunk(
                         generated,
@@ -238,7 +275,83 @@ impl Structures {
             state: StructureState::new(seed, data, generator).map_err(io::Error::other)?,
             templates,
             starts: StartCache::new(4096),
+            shipwreck_heights: StartCache::new(4096),
         })
+    }
+
+    pub(super) fn prepare_shipwrecks(
+        &self,
+        placements: &mut ChunkStructures,
+        pos: ChunkPos,
+        seed: i64,
+        terrain: &HashMap<ChunkPos, GeneratedChunk>,
+    ) -> io::Result<()> {
+        let originals: Vec<_> = placements
+            .starts
+            .iter()
+            .chain(&placements.neighbor_pieces)
+            .filter(|s| {
+                matches!(
+                    s.structure.as_str(),
+                    "minecraft:shipwreck" | "minecraft:shipwreck_beached"
+                )
+            })
+            .cloned()
+            .collect();
+        for start in placements
+            .starts
+            .iter_mut()
+            .chain(&mut placements.neighbor_pieces)
+        {
+            if !matches!(
+                start.structure.as_str(),
+                "minecraft:shipwreck" | "minecraft:shipwreck_beached"
+            ) {
+                continue;
+            }
+            let origin = ChunkPos {
+                x: start.chunk.0,
+                z: start.chunk.1,
+            };
+            if origin == pos
+                && start.pieces.iter().any(|p| {
+                    p.save_data.get("isBeached") == Some(&Nbt::Byte(1))
+                        && p.save_data.get("height_adjusted") != Some(&Nbt::Byte(1))
+                })
+            {
+                placements
+                    .initial_shipwreck_burials
+                    .insert(start.structure.clone());
+            }
+            let prepared = self.shipwreck_heights.get(origin, || {
+                let mut ships: Vec<_> = originals
+                    .iter()
+                    .filter(|s| s.chunk == start.chunk)
+                    .cloned()
+                    .collect();
+                for ship in &mut ships {
+                    ship.prepare_shipwreck_height(seed, &self.templates, &mut |kind, x, z| {
+                        terrain[&ChunkPos {
+                            x: x >> 4,
+                            z: z >> 4,
+                        }]
+                            .heightmaps()
+                            .get(
+                                kind,
+                                (x & 15) as usize,
+                                (z & 15) as usize,
+                            )
+                    });
+                }
+                Ok(ships)
+            })?;
+            *start = prepared
+                .iter()
+                .find(|s| s.structure == start.structure)
+                .expect("prepared shipwreck")
+                .clone();
+        }
+        Ok(())
     }
 
     pub(super) fn terrain_for_placements(
@@ -250,13 +363,17 @@ impl Structures {
         read: &ChunkReader<'_>,
     ) -> io::Result<HashMap<ChunkPos, GeneratedChunk>> {
         let mut terrain_chunks = HashMap::new();
-        // Pyramids need heights over their footprint; temple chests and igloo template edges may read
-        // neighboring blocks. Igloo ladders can sample the entrance outside their own footprint.
+        // Pyramids and shipwrecks sample neighboring heights; template edges may read neighboring
+        // blocks. Igloo ladders and rotated shipwrecks can sample outside their piece bounds.
         // Resolve these reads before placing blocks, preferring saved terrain.
         for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
             if !matches!(
                 start.structure.as_str(),
-                "minecraft:desert_pyramid" | "minecraft:jungle_pyramid" | "minecraft:igloo"
+                "minecraft:desert_pyramid"
+                    | "minecraft:jungle_pyramid"
+                    | "minecraft:igloo"
+                    | "minecraft:shipwreck"
+                    | "minecraft:shipwreck_beached"
             ) {
                 continue;
             }
@@ -264,7 +381,13 @@ impl Structures {
                 .pieces
                 .iter()
                 .flat_map(|piece| {
-                    let padding = i32::from(start.structure == "minecraft:igloo");
+                    // Shipwreck edge updates can inspect the neighbors of an existing block just
+                    // outside the template, requiring two columns beyond the piece bounds.
+                    let padding = match start.structure.as_str() {
+                        "minecraft:shipwreck" | "minecraft:shipwreck_beached" => 2,
+                        "minecraft:igloo" => 1,
+                        _ => 0,
+                    };
                     (((piece.bounding_box.min[0] - padding) >> 4)
                         ..=((piece.bounding_box.max[0] + padding) >> 4))
                         .flat_map(move |x| {
@@ -279,6 +402,19 @@ impl Structures {
                     x: x >> 4,
                     z: z >> 4,
                 }));
+            }
+            if matches!(
+                start.structure.as_str(),
+                "minecraft:shipwreck" | "minecraft:shipwreck_beached"
+            ) {
+                neighbors.extend(
+                    start
+                        .shipwreck_height_samples(&self.templates)
+                        .map(|(x, z)| ChunkPos {
+                            x: x >> 4,
+                            z: z >> 4,
+                        }),
+                );
             }
             for neighbor @ ChunkPos { x, z } in neighbors {
                 if terrain_chunks.contains_key(&neighbor) {
@@ -377,7 +513,7 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Pyramids and igloos can span several chunks; saved huts and jungle temples can too.
+        // Template hulls, pyramids and igloos can span several chunks; saved huts and temples can too.
         // Place their intersection without moving or duplicating the source chunk's saved start.
         let neighbor_pieces = referenced
             .iter()
@@ -389,6 +525,8 @@ impl Structures {
                             | "minecraft:desert_pyramid"
                             | "minecraft:jungle_pyramid"
                             | "minecraft:igloo"
+                            | "minecraft:shipwreck"
+                            | "minecraft:shipwreck_beached"
                     )
             })
             .map(|s| (*s).clone())
@@ -408,6 +546,7 @@ impl Structures {
             starts: own.as_ref().clone(),
             neighbor_pieces,
             references,
+            initial_shipwreck_burials: HashSet::new(),
         })
     }
 }

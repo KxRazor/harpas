@@ -264,7 +264,7 @@ fn set(chunk: &mut GeneratedChunk, [x, y, z]: [i32; 3], state: u32) {
     chunk.set_block_state((x & 15) as usize, y, (z & 15) as usize, state);
 }
 
-fn rotate_state(state: u32, rotation: Rotation) -> u32 {
+pub(super) fn rotate_state(state: u32, rotation: Rotation) -> u32 {
     let (name, properties) = block_states().properties(state).unwrap();
     let rotate = |direction: &str| {
         let facing = match direction {

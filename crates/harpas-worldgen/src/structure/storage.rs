@@ -224,10 +224,15 @@ impl StructurePiece {
         } else {
             None
         };
-        let template = if kind == "minecraft:iglu" {
+        let template = if matches!(kind.as_str(), "minecraft:iglu" | "minecraft:shipwreck") {
             let template = string(tag, "Template")?.to_string();
-            let (pivot, _) = super::igloo::settings(&template)
-                .ok_or_else(|| invalid("unknown igloo template"))?;
+            let pivot = if kind == "minecraft:shipwreck" {
+                [4, 0, 15]
+            } else {
+                super::igloo::settings(&template)
+                    .ok_or_else(|| invalid("unknown igloo template"))?
+                    .0
+            };
             Some(TemplatePiece {
                 template,
                 position: [
@@ -507,6 +512,33 @@ mod tests {
             original.compute(-44, 37, 85).to_bits(),
             restored.compute(-44, 37, 85).to_bits()
         );
+    }
+
+    #[test]
+    fn shipwreck_reload_retains_adjusted_origin_and_reconstructs_rotated_bounds() {
+        let templates = StructureTemplates::with_sizes([("test:ship", [9, 9, 28])]);
+        let mut tag = Compound::new();
+        tag.insert("id", "minecraft:shipwreck");
+        tag.insert("BB", Nbt::IntArray(vec![0, 90, 0, 8, 98, 27]));
+        tag.insert("O", 2);
+        tag.insert("GD", 0);
+        tag.insert("Template", "test:ship");
+        tag.insert("TPX", 0);
+        tag.insert("TPY", 46);
+        tag.insert("TPZ", 0);
+        tag.insert("Rot", "CLOCKWISE_90");
+        tag.insert("isBeached", 1_i8);
+        tag.insert("height_adjusted", 1_i8);
+        let loaded = StructurePiece::from_nbt(&tag, &templates).unwrap();
+        assert_eq!(loaded.bounding_box.min, [-8, 46, 11]);
+        assert_eq!(loaded.bounding_box.max, [19, 54, 19]);
+        let template = loaded.template.as_ref().unwrap();
+        assert_eq!(template.position, [0, 46, 0]);
+        assert_eq!(template.pivot, [4, 0, 15]);
+        let saved = loaded.to_nbt();
+        assert_eq!(saved.get("height_adjusted"), Some(&Nbt::Byte(1)));
+        assert_eq!(saved.get("isBeached"), Some(&Nbt::Byte(1)));
+        assert_eq!(saved.get("TPY"), Some(&Nbt::Int(46)));
     }
 
     #[test]

@@ -4,7 +4,7 @@ use harpas_core::random::RandomSource;
 
 use super::start::{BoundingBox, Direction, StructurePiece, TemplatePiece};
 use crate::data::{OceanRuinDef, WorldgenDataError};
-use crate::template::{Rotation, StructureTemplates};
+use crate::template::{Mirror, Rotation, StructureTemplates};
 
 /// The Y these structures are made at, before they are placed on the terrain.
 const START_Y: i32 = 90;
@@ -55,7 +55,7 @@ const BIG_WARM_RUINS: [i32; 4] = [4, 5, 6, 7];
 /// How many small ruins' templates there are of each kind.
 const SMALL_RUINS: i32 = 8;
 
-/// A template piece. These all report facing north, whatever their rotation.
+/// A template piece with no reflection.
 fn piece(
     kind: &'static str,
     templates: &StructureTemplates,
@@ -64,25 +64,45 @@ fn piece(
     rotation: Rotation,
     pivot: [i32; 3],
 ) -> Result<StructurePiece, WorldgenDataError> {
-    let found = templates
-        .get(&template)
-        .ok_or_else(|| WorldgenDataError::InvalidDefinition {
-            context: template.clone(),
-            message: "unknown structure template".to_string(),
-        })?;
+    placed_piece(
+        kind,
+        templates,
+        TemplatePiece {
+            template,
+            position,
+            rotation,
+            mirror: Mirror::None,
+            pivot,
+        },
+    )
+}
+
+/// A template piece. These all report facing north, whatever their rotation.
+pub(super) fn placed_piece(
+    kind: &'static str,
+    templates: &StructureTemplates,
+    placed: TemplatePiece,
+) -> Result<StructurePiece, WorldgenDataError> {
+    let found =
+        templates
+            .get(&placed.template)
+            .ok_or_else(|| WorldgenDataError::InvalidDefinition {
+                context: placed.template.clone(),
+                message: "unknown structure template".to_string(),
+            })?;
     Ok(StructurePiece {
         kind,
-        bounding_box: found.bounding_box_around(position, rotation, pivot),
+        bounding_box: found.bounding_box_around(
+            placed.position,
+            placed.rotation,
+            placed.mirror,
+            placed.pivot,
+        ),
         orientation: Some(Direction::North),
         gen_depth: 0,
         junctions: Vec::new(),
         jigsaw: None,
-        template: Some(TemplatePiece {
-            template,
-            position,
-            rotation,
-            pivot,
-        }),
+        template: Some(placed),
     })
 }
 

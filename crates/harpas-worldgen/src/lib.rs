@@ -28,10 +28,10 @@ pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
     ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod, JigsawDef,
     MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, OceanRuinDef,
-    PoolAliasDef, PoolElementDef, Projection, StartHeightDef, StructureDef,
-    StructurePlacementCommon, StructurePlacementDef, StructurePlacementKind, StructureSetDef,
-    StructureSetEntryDef, TemperatureModifier, TemplatePoolDef, WorldPresetDef, WorldgenData,
-    WorldgenDataError,
+    PoolAliasDef, PoolElementDef, Projection, RuinedPortalPlacement, RuinedPortalSetupDef,
+    StartHeightDef, StructureDef, StructurePlacementCommon, StructurePlacementDef,
+    StructurePlacementKind, StructureSetDef, StructureSetEntryDef, TemperatureModifier,
+    TemplatePoolDef, WorldPresetDef, WorldgenData, WorldgenDataError,
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
@@ -51,7 +51,7 @@ pub use surface::{
     SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,
 };
 pub use template::{
-    Facing, JigsawBlock, JointType, Rotation, StructureTemplate, StructureTemplates,
+    Facing, JigsawBlock, JointType, Mirror, Rotation, StructureTemplate, StructureTemplates,
 };
 
 #[cfg(test)]

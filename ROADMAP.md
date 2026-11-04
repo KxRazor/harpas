@@ -144,6 +144,10 @@ vanilla for the same seed.
   - [x] Desert pyramid block placement on chunk workers: shared lowest ground height, foundations, rotated
         blocks, four loot chests, TNT trap and archaeology cellar, with chunk-boundary, saved-neighbor, Anvil
         reload and vanilla placement/resumption comparisons. Chest flags stay deferred until FEATURES is complete.
+  - [x] Jungle temple block placement on chunk workers: average ground height, rotated cobblestone/mossy
+        blocks, tripwire traps, redstone puzzle, loot chests and dispensers, with vanilla placement/resumption,
+        chunk-boundary, saved-neighbor and Anvil reload comparisons. Container flags stay deferred until
+        FEATURES is complete; mechanism ticking follows in M4.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

@@ -120,20 +120,34 @@ impl ChunkStructures {
                     &mut |x, z| height_at(x, z),
                 );
                 // These chunks remain at CARVERS until the entire feature stage is implemented. Vanilla
-                // clears the chest alcoves on replay; retain the incoming flags so that it recreates the
-                // chests with the same deterministic loot seeds when it resumes FEATURES.
-                let deferred: Vec<_> = if start.structure == "minecraft:desert_pyramid" {
+                // clears container positions on replay; retain the incoming flags so that it recreates the
+                // containers with the same deterministic loot seeds when it resumes FEATURES.
+                let deferred: Vec<_> = if matches!(
+                    start.structure.as_str(),
+                    "minecraft:desert_pyramid" | "minecraft:jungle_pyramid"
+                ) {
                     start
                         .pieces
                         .iter()
                         .map(|piece| {
-                            (0..4)
-                                .map(|i| {
-                                    let key = format!("hasPlacedChest{i}");
-                                    let value = piece.save_data.get(&key).cloned();
-                                    (key, value)
-                                })
-                                .collect::<Vec<_>>()
+                            if piece.kind == "minecraft:tejp" {
+                                [
+                                    "placedMainChest",
+                                    "placedHiddenChest",
+                                    "placedTrap1",
+                                    "placedTrap2",
+                                ]
+                                .map(str::to_owned)
+                                .to_vec()
+                            } else {
+                                (0..4).map(|i| format!("hasPlacedChest{i}")).collect()
+                            }
+                            .into_iter()
+                            .map(|key| {
+                                let value = piece.save_data.get(&key).cloned();
+                                (key, value)
+                            })
+                            .collect::<Vec<_>>()
                         })
                         .collect()
                 } else {
@@ -205,10 +219,13 @@ impl Structures {
         read: &ChunkReader<'_>,
     ) -> io::Result<HashMap<ChunkPos, GeneratedChunk>> {
         let mut terrain_chunks = HashMap::new();
-        // A pyramid's lowest ground height includes its entire footprint, across chunk boundaries.
-        // Resolve those heightmaps before placement so writes cannot influence a later height query.
+        // Pyramids need heightmaps over their entire footprint. Chests in saved temples may also
+        // read neighboring terrain to choose their facing. Resolve these reads before placing blocks.
         for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
-            if start.structure != "minecraft:desert_pyramid" {
+            if !matches!(
+                start.structure.as_str(),
+                "minecraft:desert_pyramid" | "minecraft:jungle_pyramid"
+            ) {
                 continue;
             }
             for piece in &start.pieces {
@@ -313,7 +330,7 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Pyramids span several chunks; saved huts can cross a boundary too.
+        // Pyramids span several chunks; saved huts and jungle temples can cross a boundary too.
         // Place their intersection without moving or duplicating the source chunk's saved start.
         let neighbor_pieces = referenced
             .iter()
@@ -321,7 +338,9 @@ impl Structures {
                 s.chunk != (pos.x, pos.z)
                     && matches!(
                         s.structure.as_str(),
-                        "minecraft:swamp_hut" | "minecraft:desert_pyramid"
+                        "minecraft:swamp_hut"
+                            | "minecraft:desert_pyramid"
+                            | "minecraft:jungle_pyramid"
                     )
             })
             .map(|s| (*s).clone())

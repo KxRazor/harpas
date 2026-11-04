@@ -62,7 +62,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`harpas-worldgen`).
 - Normal Overworld generation now applies cave and canyon carvers, heightmaps and fluid postprocessing on
   chunk workers. New worlds preserve `level-seed`, while existing worlds retain their saved seed; generated
-  chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, structures and
+  chunks are saved at `minecraft:carvers` so vanilla can continue later stages. Features, structure blocks and
   lighting remain separate roadmap tasks (`harpas-worldgen`, `harpas-engine`, `harpas-anvil`, `harpas-server`).
 - A parity harness that generates whole Overworld chunks with Mojang's server and compares every block,
   biome, carving mask, fluid update and heightmap, in 1,621 chunks of 5 seeds covering all 54 biomes, along with
@@ -71,28 +71,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and concentric ring placements, frequency reduction and exclusion zones, checked against Minecraft 26.1. The
   generator does not place structures yet (`harpas-worldgen`).
 - Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with the
-  terrain heights and biome checks that every structure uses, checked against Minecraft 26.1. The generator does
-  not use them yet (`harpas-worldgen`).
-- Stronghold starts with vanilla's piece layout, checked against Minecraft 26.1 at every ring position. The
-  generator does not use them yet (`harpas-worldgen`).
+  terrain heights and biome checks that every structure uses, checked against Minecraft 26.1 (`harpas-worldgen`).
+- Stronghold starts with vanilla's piece layout, checked against Minecraft 26.1 at every ring position
+  (`harpas-worldgen`).
 - Structure templates and template pools are read from the vanilla data: template sizes, bounding boxes,
   palettes and jigsaw blocks in every rotation, and pool elements with their weights, checked against Minecraft
   26.1 (`harpas-worldgen`).
 - Jigsaw structure starts for villages, pillager outposts, ancient cities, trail ruins and trial chambers, with
-  their pieces, elements and junctions, checked against Minecraft 26.1. The generator does not use them yet
-  (`harpas-worldgen`).
-- Igloo, shipwreck and ocean ruin starts, whose pieces are whole templates. The generator does not use them yet
-  (`harpas-worldgen`).
-- Ruined portal starts in the Overworld, with their mirrored templates and heights. The generator does not
-  use them yet (`harpas-worldgen`).
-- Mineshaft starts of both kinds, with their rooms, corridors, crossings and stairs. The generator does not use them
-  yet (`harpas-worldgen`).
+  their pieces, elements and junctions, checked against Minecraft 26.1 (`harpas-worldgen`).
+- Igloo, shipwreck and ocean ruin starts, whose pieces are whole templates (`harpas-worldgen`).
+- Ruined portal starts in the Overworld, with their mirrored templates and heights (`harpas-worldgen`).
+- Mineshaft starts of both kinds, with their rooms, corridors, crossings and stairs (`harpas-worldgen`).
 - Ocean monument starts, with the surrounding biome volume, the saved building piece and its references, checked
   against Minecraft 26.1. Internal rooms and block placement remain pending (`harpas-worldgen`).
 - Structure terrain adaptation (`Beardifier`), with all five modes, rigid pieces and jigsaw junctions added to
   interpolated terrain density before aquifers. Density samples and whole chunks around actual structures are
-  compared with Minecraft 26.1. The generator accepts referenced starts through this sampler; integration with
-  the engine's workers, saving starts/references and placing structure blocks remain pending (`harpas-worldgen`).
+  compared with Minecraft 26.1 (`harpas-worldgen`).
+- Chunk workers now adapt terrain around structures, reuse starts through a bounded shared cache and honor
+  starts in saved neighbors. Generated proto-chunks keep their starts, references and piece placement metadata
+  in Anvil; generation respects the world's saved `generate_structures` setting. Structure blocks and features
+  remain pending (`harpas-engine`, `harpas-worldgen`, `harpas-server`).
 
 ### Changed
 

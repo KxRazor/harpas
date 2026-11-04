@@ -50,13 +50,14 @@ fn all_surrounding_biomes(center: [i32; 3], mut allowed: impl FnMut([i32; 3]) ->
 pub(super) fn piece(random: &mut impl RandomSource, min_x: i32, min_z: i32) -> StructurePiece {
     let orientation = Direction::random(random);
     StructurePiece {
-        kind: "minecraft:omb",
+        kind: "minecraft:omb".to_string(),
         bounding_box: BoundingBox::oriented([min_x - 29, 39, min_z - 29], orientation, 58, 23, 58),
         orientation: Some(orientation),
         gen_depth: 0,
         junctions: Vec::new(),
         jigsaw: None,
         template: None,
+        save_data: Default::default(),
     }
 }
 

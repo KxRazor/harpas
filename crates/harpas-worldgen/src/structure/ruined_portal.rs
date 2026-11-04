@@ -1,5 +1,6 @@
 //! Ruined portals: vanilla's `RuinedPortalStructure`.
 
+use harpas_core::nbt::Compound;
 use harpas_core::random::RandomSource;
 
 use super::start::{StructurePiece, TemplatePiece};
@@ -20,6 +21,7 @@ const CORNERS_ON_TERRAIN: usize = 3;
 /// `RuinedPortalStructure.findGenerationPoint`: the generation point and the portal's piece.
 pub(super) fn start(
     generator: &NoiseBasedChunkGenerator,
+    data: &crate::WorldgenData,
     templates: &StructureTemplates,
     setups: &[RuinedPortalSetupDef],
     random: &mut impl RandomSource,
@@ -66,7 +68,7 @@ pub(super) fn start(
         kind.matches(state)
     });
     let position = [x, y, z];
-    let piece = placed_piece(
+    let mut piece = placed_piece(
         "minecraft:rupo",
         templates,
         TemplatePiece {
@@ -77,6 +79,44 @@ pub(super) fn start(
             pivot,
         },
     )?;
+    let mut properties = Compound::new();
+    let cold = if setup.can_be_cold {
+        let mut noise = generator.create_noise_chunk(x >> 4, z >> 4);
+        let target = noise.sample_climate(x >> 2, y >> 2, z >> 2);
+        let biome = generator.biome_source().get_noise_biome(target, &mut None);
+        let biome = data.biomes.values().nth(biome as usize).expect("biome ID");
+        crate::BiomeTemperatureSampler::new().cold_enough_to_snow(
+            biome,
+            x,
+            y,
+            z,
+            generator.sea_level(),
+        )
+    } else {
+        false
+    };
+    for (key, value) in [
+        ("air_pocket", air_pocket),
+        ("cold", cold),
+        ("overgrown", setup.overgrown),
+        ("vines", setup.vines),
+        ("replace_with_blackstone", setup.replace_with_blackstone),
+    ] {
+        properties.insert(key, i8::from(value));
+    }
+    properties.insert("mossiness", setup.mossiness);
+    piece.save_data.insert("Properties", properties);
+    piece.save_data.insert(
+        "VerticalPlacement",
+        match setup.placement {
+            RuinedPortalPlacement::OnLandSurface => "on_land_surface",
+            RuinedPortalPlacement::PartlyBuried => "partly_buried",
+            RuinedPortalPlacement::OnOceanFloor => "on_ocean_floor",
+            RuinedPortalPlacement::InMountain => "in_mountain",
+            RuinedPortalPlacement::Underground => "underground",
+            RuinedPortalPlacement::InNether => "in_nether",
+        },
+    );
     Ok((position, piece))
 }
 
@@ -186,6 +226,11 @@ mod tests {
         RuinedPortalSetupDef {
             placement,
             air_pocket_probability: 0.5,
+            can_be_cold: false,
+            mossiness: 0.2,
+            overgrown: false,
+            vines: false,
+            replace_with_blackstone: false,
             weight,
         }
     }

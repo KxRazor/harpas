@@ -303,13 +303,23 @@ pub enum RuinedPortalPlacement {
     InNether,
 }
 
-/// One way to place a `minecraft:ruined_portal` structure (`RuinedPortalStructure.Setup`), as far as its start needs.
+/// One way to place a `minecraft:ruined_portal` structure and its saved piece properties (`RuinedPortalStructure.Setup`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RuinedPortalSetupDef {
     /// Where the portal goes.
     pub placement: RuinedPortalPlacement,
     /// The chance of an air pocket around the portal.
     pub air_pocket_probability: f32,
+    /// Whether biome temperature can make the portal cold.
+    pub can_be_cold: bool,
+    /// Fraction of stone that becomes mossy.
+    pub mossiness: f32,
+    /// Whether jungle vegetation surrounds the portal.
+    pub overgrown: bool,
+    /// Whether vines grow on the portal.
+    pub vines: bool,
+    /// Whether blackstone replaces the usual stone.
+    pub replace_with_blackstone: bool,
     /// How likely this setup is, relative to the others.
     pub weight: f32,
 }
@@ -346,6 +356,8 @@ pub struct JigsawDef {
     pub pool_aliases: Vec<PoolAliasDef>,
     /// Blocks kept free below and above the structure (`dimension_padding`).
     pub dimension_padding: (i32, i32),
+    /// Whether templates ignore waterlogging instead of applying it.
+    pub ignore_waterlogging: bool,
 }
 
 /// The height a jigsaw structure starts at (`HeightProvider`), for the providers jigsaw structures use.
@@ -963,6 +975,20 @@ fn parse_ruined_portal_setups(
                     _ => return Err(invalid_def(context, "unknown ruined portal placement")),
                 },
                 air_pocket_probability: number("air_pocket_probability")?,
+                can_be_cold: setup
+                    .get("can_be_cold")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                mossiness: number("mossiness")?,
+                overgrown: setup
+                    .get("overgrown")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                vines: setup.get("vines").and_then(Value::as_bool).unwrap_or(false),
+                replace_with_blackstone: setup
+                    .get("replace_with_blackstone")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 weight: number("weight")?,
             })
         })
@@ -1057,6 +1083,8 @@ fn parse_jigsaw(context: &str, json: &Value) -> Result<JigsawDef, WorldgenDataEr
             .map(str::to_string),
         max_depth: integer(json.get("size"), "size")?,
         start_height,
+        ignore_waterlogging: json.get("liquid_settings").and_then(Value::as_str)
+            == Some("ignore_waterlogging"),
         use_expansion_hack: json
             .get("use_expansion_hack")
             .and_then(Value::as_bool)

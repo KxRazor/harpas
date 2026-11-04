@@ -1,6 +1,7 @@
 //! Which structures start in a chunk and the pieces they start with: vanilla's `ChunkGenerator.createStructures`,
 //! `Structure.generate` and the pieces of each structure type.
 
+use harpas_core::nbt::Compound;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
 use super::{StructureState, jigsaw, mineshaft, monument, ruined_portal, stronghold, templated};
@@ -143,10 +144,10 @@ impl Direction {
 }
 
 /// One piece of a structure, as saved in its start (`StructurePiece`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructurePiece {
     /// The piece type, such as `minecraft:tedp` for a desert pyramid.
-    pub kind: &'static str,
+    pub kind: String,
     /// The blocks the piece covers.
     pub bounding_box: BoundingBox,
     /// The direction the piece faces, if it has one.
@@ -159,6 +160,8 @@ pub struct StructurePiece {
     pub jigsaw: Option<JigsawPiece>,
     /// What a piece made of one template places and where (`TemplateStructurePiece`).
     pub template: Option<TemplatePiece>,
+    /// Piece-specific NBT needed to resume placement, including unknown fields of saved pieces.
+    pub save_data: Compound,
 }
 
 /// The template a piece places, and where.
@@ -201,12 +204,14 @@ pub struct JigsawJunction {
 }
 
 /// A structure that starts in a chunk (`StructureStart`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructureStart {
     /// The structure's resource location.
     pub structure: String,
     /// The chunk it starts in.
     pub chunk: (i32, i32),
+    /// How many locator references have been claimed (not the number of chunks it overlaps).
+    pub references: i32,
     /// Its pieces, in the order they were made.
     pub pieces: Vec<StructurePiece>,
     /// The blocks its pieces cover, widened for structures that adapt the terrain (`StructureStart.getBoundingBox`).
@@ -458,8 +463,15 @@ fn try_generate(
             ]
         }
         StructureKind::RuinedPortal(setups) => {
-            let (position, piece) =
-                ruined_portal::start(generator, templates, setups, &mut random, min_x, min_z)?;
+            let (position, piece) = ruined_portal::start(
+                generator,
+                data,
+                templates,
+                setups,
+                &mut random,
+                min_x,
+                min_z,
+            )?;
             made_pieces = Some(vec![piece]);
             position
         }
@@ -509,7 +521,7 @@ fn try_generate(
     let pieces = match kind {
         StructureKind::Jigsaw(_) => jigsaw_start.expect("a jigsaw start").pieces(&mut random)?,
         StructureKind::BuriedTreasure => vec![StructurePiece {
-            kind: "minecraft:btp",
+            kind: "minecraft:btp".to_string(),
             bounding_box: BoundingBox {
                 min: [min_x + 9, 90, min_z + 9],
                 max: [min_x + 9, 90, min_z + 9],
@@ -519,6 +531,7 @@ fn try_generate(
             junctions: Vec::new(),
             jigsaw: None,
             template: None,
+            save_data: Default::default(),
         }],
         StructureKind::Stronghold => stronghold::pieces(
             level_seed,
@@ -546,8 +559,36 @@ fn try_generate(
             ..
         } => {
             let orientation = Direction::random(&mut random);
+            let mut save_data = Compound::new();
+            for (key, value) in [
+                ("Width", width),
+                ("Height", height),
+                ("Depth", depth),
+                ("HPos", -1),
+            ] {
+                save_data.insert(key, value);
+            }
+            let flags: &[&str] = match piece {
+                "minecraft:tedp" => &[
+                    "hasPlacedChest0",
+                    "hasPlacedChest1",
+                    "hasPlacedChest2",
+                    "hasPlacedChest3",
+                ],
+                "minecraft:tejp" => &[
+                    "placedMainChest",
+                    "placedHiddenChest",
+                    "placedTrap1",
+                    "placedTrap2",
+                ],
+                "minecraft:tesh" => &["Witch", "Cat"],
+                _ => &[],
+            };
+            for flag in flags {
+                save_data.insert(*flag, 0_i8);
+            }
             vec![StructurePiece {
-                kind: piece,
+                kind: piece.to_string(),
                 bounding_box: BoundingBox::oriented(
                     [min_x, 64, min_z],
                     orientation,
@@ -560,6 +601,7 @@ fn try_generate(
                 junctions: Vec::new(),
                 jigsaw: None,
                 template: None,
+                save_data,
             }]
         }
     };
@@ -573,6 +615,7 @@ fn try_generate(
     Ok(Some(StructureStart {
         structure: entry.structure.clone(),
         chunk: (chunk_x, chunk_z),
+        references: 0,
         pieces,
         bounding_box,
     }))

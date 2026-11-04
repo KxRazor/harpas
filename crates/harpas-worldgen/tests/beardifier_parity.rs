@@ -19,7 +19,7 @@ fn piece(
     delta: i32,
 ) -> StructurePiece {
     StructurePiece {
-        kind: "test:piece",
+        kind: "test:piece".to_string(),
         bounding_box: BoundingBox { min, max },
         orientation: None,
         gen_depth: 0,
@@ -36,6 +36,7 @@ fn piece(
             ground_level_delta: delta,
         }),
         template: None,
+        save_data: Default::default(),
     }
 }
 
@@ -70,6 +71,7 @@ fn fixture(mode: &str) -> StructureStart {
     StructureStart {
         structure: format!("test:{mode}"),
         chunk: (0, 0),
+        references: 0,
         pieces,
         bounding_box: BoundingBox {
             min: [-29, -32, -29],

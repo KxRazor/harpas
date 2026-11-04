@@ -1,7 +1,7 @@
 // Test driver only: runs the owner-provided server's own createStructures and createReferences and writes their
 // starts and references.
 //
-// Arguments: <output> <seed> <radius in chunks> <file of reference chunks, "x z" per line> <structure set>...
+// Arguments: <output> <seed> <radius in chunks> <file of reference chunks, "x z" per line> <Harpas saved starts NBT> <structure set>...
 // Writes the base heights of a grid of columns, then the starts of each chunk around the origin, then those of
 // every ring position of the concentric ring sets, then the references of the listed chunks.
 // Only the given structure sets are possible, so that structures Harpas cannot make yet are left out.
@@ -36,11 +36,16 @@ import net.minecraft.world.level.levelgen.structure.StructureStart;
 import net.minecraft.world.level.levelgen.structure.placement.ConcentricRingsStructurePlacement;
 
 public final class StructureStartProbe {
+    static net.minecraft.nbt.CompoundTag saved;
+    static net.minecraft.world.level.levelgen.structure.pieces.StructurePieceSerializationContext serialization;
+    static final java.util.Set<String> checked = new java.util.HashSet<>();
+    static long seed;
+    static final ArrayList<String> failures = new ArrayList<>();
     public static void main(String[] args) throws Exception {
         Locale.setDefault(Locale.ROOT);
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
-        long seed = Long.parseLong(args[1]);
+        seed = Long.parseLong(args[1]);
         int radius = Integer.parseInt(args[2]);
         var server = StructurePlacementProbe.loadServer();
         var registries = server.registries();
@@ -49,12 +54,14 @@ public final class StructureStartProbe {
             .createDefault(Path.of("probe-worlds")).createAccess("probe");
         var templates = new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager(
             server.resources(), storage, net.minecraft.util.datafix.DataFixers.getDataFixer(), BuiltInRegistries.BLOCK);
+        saved = net.minecraft.nbt.NbtIo.read(Path.of(args[4]));
+        serialization = new net.minecraft.world.level.levelgen.structure.pieces.StructurePieceSerializationContext(server.resources(), registries, templates);
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var sets = registries.lookupOrThrow(Registries.STRUCTURE_SET);
         var generator = WorldPresets.getNormalOverworld(registries).generator();
         var random = RandomState.create(registries, NoiseGeneratorSettings.OVERWORLD, seed);
         var chosen = new ArrayList<net.minecraft.core.Holder<net.minecraft.world.level.levelgen.structure.StructureSet>>();
-        for (int index = 4; index < args.length; index++) {
+        for (int index = 5; index < args.length; index++) {
             chosen.add(sets.getOrThrow(ResourceKey.create(Registries.STRUCTURE_SET, Identifier.parse(args[index]))));
         }
         // A normal world's state, with the level seed for concentric rings, but only with the given sets.
@@ -114,6 +121,12 @@ public final class StructureStartProbe {
                 references.forEach(out::println);
             }
         }
+        if (!failures.isEmpty()) throw new AssertionError(String.join("\n", failures));
+        if (!checked.equals(saved.keySet())) throw new AssertionError("not every saved start was checked");
+        System.out.println("Compared and loaded " + checked.size() + " saved starts");
+        storage.close();
+        server.resources().close();
+        net.minecraft.util.Util.shutdownExecutors();
     }
 
     /** Block coordinates whose base heights are compared, as in `structure_start_parity.rs`. */
@@ -129,8 +142,32 @@ public final class StructureStartProbe {
         return ((long) x << 32) ^ (z & 0xffffffffL);
     }
 
+    static String difference(net.minecraft.nbt.Tag vanilla, net.minecraft.nbt.Tag harpas, String path) {
+        if (java.util.Objects.equals(vanilla, harpas)) return null;
+        if (vanilla instanceof net.minecraft.nbt.CompoundTag a && harpas instanceof net.minecraft.nbt.CompoundTag b) {
+            var keys = new java.util.TreeSet<>(a.keySet()); keys.addAll(b.keySet());
+            for (String key : keys) { String diff = difference(a.get(key), b.get(key), path + "." + key); if (diff != null) return diff; }
+        } else if (vanilla instanceof net.minecraft.nbt.ListTag a && harpas instanceof net.minecraft.nbt.ListTag b && a.size() == b.size()) {
+            for (int i = 0; i < a.size(); i++) { String diff = difference(a.get(i), b.get(i), path + "[" + i + "]"); if (diff != null) return diff; }
+        }
+        return path + ": vanilla " + vanilla + ", Harpas " + harpas;
+    }
+
     static void write(PrintWriter out, String structure, StructureStart start) throws Exception {
         var chunk = start.getChunkPos();
+        String key = structure + ":" + chunk.x() + "," + chunk.z();
+        if (saved.contains(key)) {
+            var sample = saved.getCompoundOrEmpty(key);
+            var tag = sample.getCompoundOrEmpty("generated");
+            var vanilla = start.createTag(serialization, chunk);
+            String diff = difference(vanilla, tag, key);
+            if (diff != null && failures.size() < 20) failures.add(diff);
+            var loaded = StructureStart.loadStaticStart(serialization, tag, seed);
+            if (loaded == null || !loaded.isValid()) throw new AssertionError("vanilla could not load " + key);
+            String reloaded = difference(loaded.createTag(serialization, chunk), sample.getCompoundOrEmpty("reloaded"), key + " after vanilla reload");
+            if (reloaded != null && failures.size() < 20) failures.add(reloaded);
+            checked.add(key);
+        }
         var box = start.getBoundingBox();
         out.println("start " + structure + " " + chunk.x() + " " + chunk.z() + " " + box.minX() + " " + box.minY() + " "
             + box.minZ() + " " + box.maxX() + " " + box.maxY() + " " + box.maxZ());

@@ -7,6 +7,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+use harpas_core::nbt::{Compound, Nbt};
+
 use harpas_worldgen::{
     HeightmapType, Mirror, NoiseBasedChunkGenerator, Rotation, StructureStart, StructureState,
     StructureTemplates, WorldgenData,
@@ -125,6 +127,8 @@ fn compare_seed(
         }
     }
     let mut start_count = 0;
+    let mut saved = Compound::new();
+    let mut saved_counts = BTreeMap::<String, usize>::new();
     // How many starts of each structure were compared, to see that the sample reaches them.
     let mut structures = BTreeMap::<String, usize>::new();
     // Starts of the whole area, so that references do not lay out each structure again for every chunk it reaches.
@@ -150,6 +154,7 @@ fn compare_seed(
                         }
                     }
                 }
+                sample_saved(&start, data, templates, &mut saved, &mut saved_counts);
                 expected.extend(start_lines(&start));
             }
         }
@@ -165,6 +170,7 @@ fn compare_seed(
                 .unwrap()
             {
                 start_count += 1;
+                sample_saved(&start, data, templates, &mut saved, &mut saved_counts);
                 expected.extend(start_lines(&start));
             }
         }
@@ -198,12 +204,17 @@ fn compare_seed(
         .map(|(x, z)| format!("{x} {z}"))
         .collect();
     std::fs::write(&chunk_file, chunk_list.join("\n") + "\n").unwrap();
+    let saved_file = reference.temp.0.join("saved-starts.nbt");
+    let mut bytes = Vec::new();
+    Nbt::Compound(saved).write_named("", &mut bytes);
+    std::fs::write(&saved_file, bytes).unwrap();
     let output = reference.temp.0.join("starts.txt");
     let mut args = vec![
         output.display().to_string(),
         seed.to_string(),
         radius.to_string(),
         chunk_file.display().to_string(),
+        saved_file.display().to_string(),
     ];
     args.extend(sets.iter().cloned());
     reference.java("StructureStartProbe", args);
@@ -218,6 +229,31 @@ fn compare_seed(
     );
     eprintln!("Seed {seed}: {structures:?}");
     (expected.len(), start_count, reference_count)
+}
+
+fn sample_saved(
+    start: &StructureStart,
+    data: &WorldgenData,
+    templates: &StructureTemplates,
+    saved: &mut Compound,
+    counts: &mut BTreeMap<String, usize>,
+) {
+    let count = counts.entry(start.structure.clone()).or_default();
+    if *count >= 8 {
+        return;
+    }
+    *count += 1;
+    let tag = start.to_nbt();
+    let loaded = StructureStart::from_nbt(&tag, data, templates)
+        .unwrap()
+        .unwrap();
+    let mut sample = Compound::new();
+    sample.insert("generated", tag);
+    sample.insert("reloaded", loaded.to_nbt());
+    saved.insert(
+        format!("{}:{},{}", start.structure, start.chunk.0, start.chunk.1),
+        sample,
+    );
 }
 
 fn read_lines(path: &Path) -> Vec<String> {

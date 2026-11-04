@@ -43,6 +43,9 @@ pub(crate) fn prepare(
         ));
     }
     let data = Arc::new(WorldgenData::from_zip_path(pack).map_err(io::Error::other)?);
+    let templates = Arc::new(
+        harpas_worldgen::StructureTemplates::from_zip_path(pack).map_err(io::Error::other)?,
+    );
     let (root, seed) = if let Some((root, source)) = saved {
         if source == harpas_anvil::Source::Backup {
             warn!(
@@ -99,6 +102,8 @@ pub(crate) fn prepare(
         harpas_engine::worldgen::overworld_generator(
             proposed,
             Arc::clone(&data),
+            Arc::clone(&templates),
+            structures_enabled(&template)?,
             harpas_java::biome_names(),
         )?;
         let (root, seed, _) =
@@ -111,14 +116,36 @@ pub(crate) fn prepare(
             "the normal world preset has an unsupported Overworld",
         ));
     }
-    let generator =
-        harpas_engine::worldgen::overworld_generator(seed, data, harpas_java::biome_names())?;
+    let generator = harpas_engine::worldgen::overworld_generator(
+        seed,
+        data,
+        templates,
+        structures_enabled(&root)?,
+        harpas_java::biome_names(),
+    )?;
     if level.is_none() {
         let spawn_y = spawn_height(Arc::clone(&generator))?;
         harpas_anvil::write_level(world, &new_level(properties, spawn_y))?;
     }
     info!("Prepared Overworld terrain generation for seed {seed}");
     Ok(Some(generator))
+}
+
+fn structures_enabled(root: &Compound) -> io::Result<bool> {
+    let Some(Nbt::Compound(data)) = root.get("data") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "world generation settings have no data",
+        ));
+    };
+    match data.get("generate_structures") {
+        Some(Nbt::Byte(value)) => Ok(*value != 0),
+        None => Ok(true),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid generate_structures setting",
+        )),
+    }
 }
 
 fn seed_from_root(root: &Compound) -> io::Result<i64> {
@@ -236,7 +263,7 @@ fn settings_template(preset: &WorldPresetDef, structures: bool) -> io::Result<Co
 fn spawn_height(generator: Arc<ChunkGenerator>) -> io::Result<i32> {
     let chunk = std::thread::Builder::new()
         .name("harpas-spawn-generation".into())
-        .spawn(move || generator(harpas_engine::world::ChunkPos { x: 0, z: 0 }))?
+        .spawn(move || generator(harpas_engine::world::ChunkPos { x: 0, z: 0 }, &|_| Ok(None)))?
         .join()
         .map_err(|_| io::Error::other("spawn generation worker panicked"))??;
     let Some(Nbt::Int(section_y)) = chunk.rest.get("yPos") else {
@@ -346,6 +373,21 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn saved_structure_setting_controls_generation() {
+        let mut data = Compound::new();
+        data.insert("generate_structures", 0_i8);
+        let mut root = Compound::new();
+        root.insert("data", data.clone());
+        assert!(!structures_enabled(&root).unwrap());
+        data.insert("generate_structures", 1_i8);
+        root.insert("data", data.clone());
+        assert!(structures_enabled(&root).unwrap());
+        data.insert("generate_structures", "false");
+        root.insert("data", data);
+        assert!(structures_enabled(&root).is_err());
     }
 
     #[test]

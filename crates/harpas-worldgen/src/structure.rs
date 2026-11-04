@@ -18,6 +18,7 @@ mod mineshaft;
 mod monument;
 mod ruined_portal;
 mod start;
+mod storage;
 mod stronghold;
 mod templated;
 

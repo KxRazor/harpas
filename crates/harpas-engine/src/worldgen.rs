@@ -5,14 +5,20 @@ use std::sync::Arc;
 
 use harpas_anvil::{Chunk, ChunkSection, DATA_VERSION};
 use harpas_core::nbt::{Compound, List, Nbt};
-use harpas_worldgen::{GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, WorldgenData};
+use harpas_worldgen::{
+    GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData,
+};
 
 use crate::world::ChunkGenerator;
+
+mod structures;
 
 /// Compiles an Overworld generator whose biome IDs match the registry used to read and send chunks.
 pub fn overworld_generator(
     seed: i64,
     data: Arc<WorldgenData>,
+    templates: Arc<StructureTemplates>,
+    generate_structures: bool,
     biomes: &[&str],
 ) -> io::Result<Arc<ChunkGenerator>> {
     if data.biomes.len() != biomes.len()
@@ -28,11 +34,21 @@ pub fn overworld_generator(
         ));
     }
     let generator = NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?;
-    Ok(Arc::new(move |pos| {
-        let chunk = generator
-            .generate_chunk_carved(pos.x, pos.z, &data)
+    let structures = generate_structures
+        .then(|| structures::Structures::new(seed, &data, &generator, templates))
+        .transpose()?;
+    Ok(Arc::new(move |pos, read| {
+        let (beardifier, structures) = if let Some(structures) = &structures {
+            structures.for_chunk(pos, &generator, &data, read)?
+        } else {
+            (harpas_worldgen::Beardifier::default(), empty_structures())
+        };
+        let generated = generator
+            .generate_chunk_carved_with_beardifier(pos.x, pos.z, &data, beardifier)
             .map_err(io::Error::other)?;
-        into_anvil(chunk)
+        let mut chunk = into_anvil(generated)?;
+        chunk.rest.insert("structures", structures);
+        Ok(chunk)
     }))
 }
 
@@ -48,6 +64,13 @@ pub fn into_anvil(chunk: GeneratedChunk) -> io::Result<Chunk> {
         })?
         .to_raw_data();
     into_anvil_with_mask(chunk, mask)
+}
+
+fn empty_structures() -> Compound {
+    let mut tag = Compound::new();
+    tag.insert("starts", Compound::new());
+    tag.insert("References", Compound::new());
+    tag
 }
 
 fn into_anvil_with_mask(chunk: GeneratedChunk, mask: Vec<i64>) -> io::Result<Chunk> {
@@ -102,7 +125,7 @@ fn into_anvil_with_mask(chunk: GeneratedChunk, mask: Vec<i64>) -> io::Result<Chu
     for key in ["block_entities", "entities", "block_ticks", "fluid_ticks"] {
         rest.insert(key, Nbt::List(List::Empty));
     }
-    rest.insert("structures", Compound::new());
+    rest.insert("structures", empty_structures());
     let sections = chunk
         .into_sections()
         .into_iter()

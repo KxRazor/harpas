@@ -1,5 +1,6 @@
 //! The pieces of a stronghold start: vanilla's `StrongholdStructure.generatePieces` and `StrongholdPieces`.
 
+use harpas_core::nbt::Compound;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
 use super::start::{BoundingBox, Direction, StructurePiece, below_sea_level_offset};
@@ -109,9 +110,61 @@ struct Piece {
     /// `FiveCrossing`'s `leftLow`, `leftHigh`, `rightLow` and `rightHigh`, or `Straight`'s `leftChild` and
     /// `rightChild` in the first two.
     children: [bool; 4],
+    entry_door: &'static str,
+    room_type: i32,
 }
 
 impl Piece {
+    fn save_data(&self) -> Compound {
+        let mut tag = Compound::new();
+        tag.insert("EntryDoor", self.entry_door);
+        match self.kind {
+            Kind::Start | Kind::StairsDown => {
+                tag.insert("Source", i8::from(self.is_source));
+            }
+            Kind::Straight => {
+                tag.insert("Left", i8::from(self.children[0]));
+                tag.insert("Right", i8::from(self.children[1]));
+            }
+            Kind::FiveCrossing => {
+                for (key, value) in ["leftLow", "leftHigh", "rightLow", "rightHigh"]
+                    .into_iter()
+                    .zip(self.children)
+                {
+                    tag.insert(key, i8::from(value));
+                }
+            }
+            Kind::RoomCrossing => {
+                tag.insert("Type", self.room_type);
+            }
+            Kind::ChestCorridor => {
+                tag.insert("Chest", 0_i8);
+            }
+            Kind::Library => {
+                tag.insert(
+                    "Tall",
+                    i8::from(self.bounding_box.max[1] - self.bounding_box.min[1] + 1 > 6),
+                );
+            }
+            Kind::PortalRoom => {
+                tag.insert("Mob", 0_i8);
+            }
+            Kind::FillerCorridor => {
+                let axis = if matches!(self.orientation, Direction::North | Direction::South) {
+                    2
+                } else {
+                    0
+                };
+                tag.insert(
+                    "Steps",
+                    self.bounding_box.max[axis] - self.bounding_box.min[axis] + 1,
+                );
+            }
+            _ => {}
+        }
+        tag
+    }
+
     fn new(kind: Kind, bounding_box: BoundingBox, orientation: Direction, gen_depth: i32) -> Self {
         Self {
             kind,
@@ -120,6 +173,8 @@ impl Piece {
             gen_depth,
             is_source: false,
             children: [false; 4],
+            entry_door: "OPENING",
+            room_type: 0,
         }
     }
 }
@@ -179,8 +234,13 @@ impl Layout<'_> {
     }
 
     /// `randomSmallDoor`: the entry door type, which only the placed blocks use.
-    fn small_door(&mut self) {
-        self.random.next_int_bounded(5);
+    fn small_door(&mut self) -> &'static str {
+        match self.random.next_int_bounded(5) {
+            0 | 1 => "OPENING",
+            2 => "WOOD_DOOR",
+            3 => "GRATES",
+            _ => "IRON_DOOR",
+        }
     }
 
     /// `findAndCreatePieceFactory` and each piece's `createPiece`.
@@ -218,7 +278,7 @@ impl Layout<'_> {
         }
         let mut piece = Piece::new(kind, bounding_box, direction, depth);
         if kind != Kind::PortalRoom {
-            self.small_door();
+            piece.entry_door = self.small_door();
         }
         match kind {
             Kind::FiveCrossing => {
@@ -228,7 +288,7 @@ impl Layout<'_> {
                 piece.children[3] = self.random.next_int_bounded(3) > 0;
             }
             Kind::RoomCrossing => {
-                self.random.next_int_bounded(5);
+                piece.room_type = self.random.next_int_bounded(5);
             }
             Kind::Straight => {
                 piece.children[0] = self.random.next_int_bounded(2) == 0;
@@ -490,13 +550,14 @@ pub(super) fn pieces(
             return pieces
                 .into_iter()
                 .map(|piece| StructurePiece {
-                    kind: piece.kind.id(),
+                    kind: piece.kind.id().to_string(),
                     bounding_box: piece.bounding_box,
                     orientation: Some(piece.orientation),
                     gen_depth: piece.gen_depth,
                     junctions: Vec::new(),
                     jigsaw: None,
                     template: None,
+                    save_data: piece.save_data(),
                 })
                 .collect();
         }

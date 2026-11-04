@@ -1,5 +1,6 @@
 //! Mineshafts: vanilla's `MineshaftStructure` and the layout of `MineshaftPieces`.
 
+use harpas_core::nbt::{List, Nbt};
 use harpas_core::random::RandomSource;
 
 use super::start::{BoundingBox, Direction, StructurePiece, below_sea_level_offset};
@@ -57,6 +58,17 @@ pub(super) fn start(
         )
     };
     for piece in &mut pieces {
+        piece.save_data.insert("MST", i32::from(mesa));
+        if let Some(Nbt::List(List::IntArray(mut entrances))) = piece.save_data.remove("Entrances")
+        {
+            for bounds in &mut entrances {
+                bounds[1] += dy;
+                bounds[4] += dy;
+            }
+            piece
+                .save_data
+                .insert("Entrances", List::IntArray(entrances));
+        }
         piece.bounding_box.min[1] += dy;
         piece.bounding_box.max[1] += dy;
     }
@@ -68,7 +80,7 @@ fn layout(random: &mut impl RandomSource, x: i32, z: i32) -> Vec<StructurePiece>
     let max_x = x + 7 + random.next_int_bounded(6);
     let max_y = 54 + random.next_int_bounded(6);
     let max_z = z + 7 + random.next_int_bounded(6);
-    let room = piece(
+    let mut room = piece(
         "minecraft:msroom",
         BoundingBox {
             min: [x, START_Y, z],
@@ -77,6 +89,8 @@ fn layout(random: &mut impl RandomSource, x: i32, z: i32) -> Vec<StructurePiece>
         None,
         0,
     );
+    room.save_data
+        .insert("Entrances", List::IntArray(Vec::new()));
     let mut layout = Layout {
         random,
         pieces: vec![room],
@@ -86,20 +100,21 @@ fn layout(random: &mut impl RandomSource, x: i32, z: i32) -> Vec<StructurePiece>
     layout.pieces
 }
 
-const fn piece(
+fn piece(
     kind: &'static str,
     bounding_box: BoundingBox,
     orientation: Option<Direction>,
     gen_depth: i32,
 ) -> StructurePiece {
     StructurePiece {
-        kind,
+        kind: kind.to_string(),
         bounding_box,
         orientation,
         gen_depth,
         junctions: Vec::new(),
         jigsaw: None,
         template: None,
+        save_data: Default::default(),
     }
 }
 
@@ -177,7 +192,9 @@ impl<R: RandomSource> Layout<'_, R> {
             };
             let bounding_box = crossing_box(direction, foot, top);
             self.is_free(&bounding_box).then(|| {
-                let crossing = piece("minecraft:mscrossing", bounding_box, None, gen_depth);
+                let mut crossing = piece("minecraft:mscrossing", bounding_box, None, gen_depth);
+                crossing.save_data.insert("D", direction.data_value() as i8);
+                crossing.save_data.insert("tf", i8::from(top > 2));
                 (crossing, Shape::Crossing(direction))
             })
         } else if selection >= 70 {
@@ -193,15 +210,25 @@ impl<R: RandomSource> Layout<'_, R> {
             })
         } else {
             let bounding_box = self.corridor_box(foot, direction)?;
-            // Whether the corridor has rails, and if not whether it has spiders. Placing it will need these.
-            if self.random.next_int_bounded(3) != 0 {
-                self.random.next_int_bounded(23);
-            }
-            let corridor = piece(
+            let rails = self.random.next_int_bounded(3) == 0;
+            let spiders = !rails && self.random.next_int_bounded(23) == 0;
+            let mut corridor = piece(
                 "minecraft:mscorridor",
                 bounding_box,
                 Some(direction),
                 gen_depth,
+            );
+            corridor.save_data.insert("hr", i8::from(rails));
+            corridor.save_data.insert("sc", i8::from(spiders));
+            corridor.save_data.insert("hps", 0_i8);
+            let axis = if matches!(direction, Direction::North | Direction::South) {
+                2
+            } else {
+                0
+            };
+            corridor.save_data.insert(
+                "Num",
+                (bounding_box.max[axis] - bounding_box.min[axis] + 1) / 5,
             );
             Some((corridor, Shape::Corridor))
         }
@@ -227,7 +254,7 @@ impl<R: RandomSource> Layout<'_, R> {
         let (bounds, depth) = (piece.bounding_box, piece.gen_depth);
         let orientation = piece.orientation;
         match shape {
-            Shape::Room => self.room_children(&bounds, depth),
+            Shape::Room => self.room_children(index, &bounds, depth),
             Shape::Corridor => {
                 self.corridor_children(&bounds, orientation.expect("a corridor faces"), depth);
             }
@@ -248,7 +275,7 @@ impl<R: RandomSource> Layout<'_, R> {
     }
 
     /// `MineShaftRoom.addChildren`: exits along each wall, in the order north, south, west and east.
-    fn room_children(&mut self, bounds: &BoundingBox, depth: i32) {
+    fn room_children(&mut self, index: usize, bounds: &BoundingBox, depth: i32) {
         let [min_x, min_y, min_z] = bounds.min;
         let [max_x, max_y, max_z] = bounds.max;
         let height_space = (max_y - min_y + 1 - 3 - 1).max(1);
@@ -272,7 +299,38 @@ impl<R: RandomSource> Layout<'_, R> {
                     Direction::West => [min_x - 1, y, min_z + position],
                     Direction::East => [max_x + 1, y, min_z + position],
                 };
+                let first = self.pieces.len();
                 self.add(foot, direction, depth);
+                if let Some(child) = self.pieces.get(first) {
+                    let mut entrance = child.bounding_box;
+                    match direction {
+                        Direction::North => {
+                            entrance.min[2] = min_z;
+                            entrance.max[2] = min_z + 1;
+                        }
+                        Direction::South => {
+                            entrance.min[2] = max_z - 1;
+                            entrance.max[2] = max_z;
+                        }
+                        Direction::West => {
+                            entrance.min[0] = min_x;
+                            entrance.max[0] = min_x + 1;
+                        }
+                        Direction::East => {
+                            entrance.min[0] = max_x - 1;
+                            entrance.max[0] = max_x;
+                        }
+                    }
+                    let Some(Nbt::List(List::IntArray(mut entrances))) =
+                        self.pieces[index].save_data.remove("Entrances")
+                    else {
+                        unreachable!()
+                    };
+                    entrances.push(entrance.min.into_iter().chain(entrance.max).collect());
+                    self.pieces[index]
+                        .save_data
+                        .insert("Entrances", List::IntArray(entrances));
+                }
                 position += 4;
             }
         }

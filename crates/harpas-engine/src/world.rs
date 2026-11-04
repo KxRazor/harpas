@@ -85,7 +85,10 @@ pub enum ChunkState {
 }
 
 /// Generates a previously missing chunk on a chunk worker, outside the logic thread.
-pub type ChunkGenerator = dyn Fn(ChunkPos) -> io::Result<Chunk> + Send + Sync;
+pub type ChunkGenerator = dyn Fn(ChunkPos, &ChunkReader<'_>) -> io::Result<Chunk> + Send + Sync;
+
+/// Reads a saved neighbor under the same region locks as the chunk workers and saver.
+pub type ChunkReader<'a> = dyn Fn(ChunkPos) -> io::Result<Option<harpas_core::nbt::Compound>> + 'a;
 
 type Loaded = io::Result<Option<(Chunk, Vec<String>, bool)>>;
 type Load = dyn Fn(ChunkPos) -> Loaded + Send + Sync;
@@ -265,7 +268,21 @@ impl World {
                 return match generator.as_ref() {
                     Some(generate) => {
                         generation_safety.check(&source_dir, &read_locks, pos)?;
-                        generate(pos).map(|chunk| Some((chunk, Vec::new(), true)))
+                        let read = |source: ChunkPos| {
+                            let (rx, rz) = region_of(source.x, source.z);
+                            let _guard = read_locks
+                                .for_region(rx, rz)
+                                .read()
+                                .unwrap_or_else(|e| e.into_inner());
+                            let chunk = read_chunk(&source_dir, source.x, source.z)?;
+                            if let Some(nbt) = &chunk {
+                                check_chunk(nbt).map_err(|error| {
+                                    io::Error::new(io::ErrorKind::InvalidData, error)
+                                })?;
+                            }
+                            Ok(chunk)
+                        };
+                        generate(pos, &read).map(|chunk| Some((chunk, Vec::new(), true)))
                     }
                     None => Ok(None),
                 };
@@ -903,7 +920,9 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let generator = {
             let calls = Arc::clone(&calls);
-            Arc::new(move |pos| {
+            Arc::new(move |pos, read: &ChunkReader<'_>| {
+                let saved = read(existing)?.expect("the saved neighbor is available to generation");
+                assert_eq!(saved.get("xPos"), Some(&Nbt::Int(existing.x)));
                 let thread = thread::current();
                 assert!(thread.name().unwrap().starts_with("harpas-chunk-"));
                 calls.lock().unwrap().push(pos);
@@ -997,7 +1016,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let generator = {
             let calls = Arc::clone(&calls);
-            Arc::new(move |pos| {
+            Arc::new(move |pos, _: &ChunkReader<'_>| {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Ok(chunk(pos, DATA_VERSION))
             })

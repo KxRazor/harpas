@@ -133,8 +133,9 @@ vanilla for the same seed.
   - [x] Ocean monument starts: the surrounding biome volume, the saved building piece and its references.
         Internal rooms follow with block placement.
   - [x] Structure terrain adaptation (`Beardifier`): rigid pieces, jigsaw junctions and all five adjustment
-        modes, connected to chunk generation and compared against vanilla. Worker integration, with cached
-        starts and saved references, follows separately.
+        modes, connected to chunk generation and compared against vanilla.
+  - [x] Structure terrain adaptation on the chunk workers, with a shared bounded cache of starts, saved-neighbor
+        starts, Anvil starts/references and piece placement metadata, and worker terrain/persistence parity tests.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

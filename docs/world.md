@@ -330,7 +330,24 @@ and the owner **accepts it once**:
     Harpas records. Cases cover every rotation and container flag, slopes, water, negative coordinates,
     four-chunk pieces, negative `HPos` resumption and both vertical world limits. Two natural worker chunks
     across two seeds, worker-pass replay, Anvil reloads and a saved neighbor with altered terrain are also
-    checked. Pull requests use one seed. Other structure types remain unplaced.
+    checked. Pull requests use one seed.
+  - Igloo blocks run on chunk workers using the owner's template palettes, blocks and block entity NBT.
+    Each piece samples the top's rotated entrance at `WORLD_SURFACE_WG`, temporarily shifts its template
+    position, and saves the adjusted bounds while retaining its original template position. Reloading rebuilds
+    those original bounds, as vanilla does. The top seals its ladder hole with snow only over non-air,
+    non-ladder terrain. Furnace, bed, sign and brewing stand data are retained; the chest marker saves its
+    loot table with the second decoration-seeded draw, without rolling items. Template placement updates
+    snowy ground before the top's separate snow seal. Template edge connections read
+    saved neighboring terrain when present; workers clip writes to their own chunk, including the snow seal
+    that vanilla may write outside the target bounds. These comparisons use pre-placement neighboring terrain;
+    feature-stage scheduling and general block shape updates remain for later stages.
+    `igloo_parity` compares every block, all six heightmaps, saved records and block entity NBT in 126 synthetic
+    chunks across two seeds and their replays after vanilla reloads Harpas records. Cases cover all rotations,
+    igloos with and without basements, both shaft-depth extremes, slopes, water, negative coordinates, chunk
+    boundaries and both vertical world limits. Four natural igloos across two seeds also run through workers,
+    Anvil reloads and repeated placement. A saved neighbor with an altered entrance column checks that saved
+    terrain controls height. Pull requests use one seed. Entity spawning remains for M4; other structure types
+    remain unplaced.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
@@ -341,6 +358,8 @@ and the owner **accepts it once**:
   so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API
   still updates the flags as vanilla does. Jungle temple workers likewise retain all four incoming chest and
   dispenser flags: a repeated temple pass clears those positions and must recreate the same loot containers.
+  Igloo pass replays also match vanilla, including its height changing when the existing roof raises the
+  entrance's `WORLD_SURFACE_WG` height. This is not a complete FEATURES-stage round trip.
   Full feature-stage resumption, other structure blocks and lighting
   remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined

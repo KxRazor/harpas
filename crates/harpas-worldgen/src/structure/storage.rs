@@ -4,7 +4,10 @@ use std::io;
 
 use harpas_core::nbt::{Compound, List, Nbt};
 
-use super::{BoundingBox, Direction, JigsawJunction, JigsawPiece, StructurePiece, StructureStart};
+use super::{
+    BoundingBox, Direction, JigsawJunction, JigsawPiece, StructurePiece, StructureStart,
+    TemplatePiece,
+};
 use crate::{
     PoolElementDef, Projection, Rotation, StructureTemplate, StructureTemplates, WorldgenData,
 };
@@ -221,7 +224,35 @@ impl StructurePiece {
         } else {
             None
         };
-        let bounding_box = if let Some(jigsaw) = &jigsaw {
+        let template = if kind == "minecraft:iglu" {
+            let template = string(tag, "Template")?.to_string();
+            let (pivot, _) = super::igloo::settings(&template)
+                .ok_or_else(|| invalid("unknown igloo template"))?;
+            Some(TemplatePiece {
+                template,
+                position: [
+                    integer(tag, "TPX")?,
+                    integer(tag, "TPY")?,
+                    integer(tag, "TPZ")?,
+                ],
+                rotation: rotation(string(tag, "Rot")?)?,
+                mirror: crate::Mirror::None,
+                pivot,
+            })
+        } else {
+            None
+        };
+        let bounding_box = if let Some(template) = &template {
+            templates
+                .get(&template.template)
+                .unwrap_or(&StructureTemplate::empty())
+                .bounding_box_around(
+                    template.position,
+                    template.rotation,
+                    template.mirror,
+                    template.pivot,
+                )
+        } else if let Some(jigsaw) = &jigsaw {
             // Vanilla reconstructs the template bounds, dropping the placement expansion hack's reservation.
             element_bounds(&jigsaw.element, jigsaw.position, jigsaw.rotation, templates)?
         } else {
@@ -237,7 +268,7 @@ impl StructurePiece {
             gen_depth: integer(tag, "GD")?,
             junctions,
             jigsaw,
-            template: None,
+            template,
             save_data: tag.clone(),
         })
     }
@@ -476,6 +507,30 @@ mod tests {
             original.compute(-44, 37, 85).to_bits(),
             restored.compute(-44, 37, 85).to_bits()
         );
+    }
+
+    #[test]
+    fn igloo_reload_rebuilds_template_bounds_from_its_original_position() {
+        let templates = StructureTemplates::with_sizes([("minecraft:igloo/top", [7, 5, 8])]);
+        let mut tag = Compound::new();
+        tag.insert("id", "minecraft:iglu");
+        tag.insert("BB", Nbt::IntArray(vec![0, 69, 0, 6, 73, 7]));
+        tag.insert("O", 2);
+        tag.insert("GD", 0);
+        tag.insert("Template", "minecraft:igloo/top");
+        tag.insert("TPX", 0);
+        tag.insert("TPY", 90);
+        tag.insert("TPZ", 0);
+        tag.insert("Rot", "NONE");
+        let loaded = StructurePiece::from_nbt(&tag, &templates).unwrap();
+        assert_eq!(loaded.bounding_box.min, [0, 90, 0]);
+        assert_eq!(loaded.bounding_box.max, [6, 94, 7]);
+        let template = loaded.template.as_ref().unwrap();
+        assert_eq!(template.pivot, [3, 5, 5]);
+        assert_eq!(template.position, [0, 90, 0]);
+        assert_eq!(loaded.to_nbt().get("TPY"), Some(&Nbt::Int(90)));
+        tag.insert("Template", "minecraft:igloo/unknown");
+        assert!(StructurePiece::from_nbt(&tag, &templates).is_err());
     }
 
     #[test]

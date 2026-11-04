@@ -14,6 +14,7 @@ use crate::data::{
 use crate::generator::NoiseBasedChunkGenerator;
 
 mod desert_pyramid;
+mod igloo;
 mod jigsaw;
 mod jungle_temple;
 mod mineshaft;

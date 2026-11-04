@@ -148,6 +148,10 @@ vanilla for the same seed.
         blocks, tripwire traps, redstone puzzle, loot chests and dispensers, with vanilla placement/resumption,
         chunk-boundary, saved-neighbor and Anvil reload comparisons. Container flags stay deferred until
         FEATURES is complete; mechanism ticking follows in M4.
+  - [x] Igloo block placement on chunk workers: rotated templates, entrance height, ladder shafts, basement
+        blocks, block entity data and chest loot metadata, with vanilla placement/replay, chunk-boundary,
+        saved-neighbor and Anvil reload comparisons. Entity spawning follows in M4; full FEATURES resumption
+        remains pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

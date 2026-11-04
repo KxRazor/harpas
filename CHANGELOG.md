@@ -107,6 +107,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   stone, tripwire traps, the redstone puzzle and chest/dispenser loot metadata. Placement, saved neighbors,
   Anvil reloads and vanilla replay are compared against Minecraft 26.1. Incoming container flags are retained
   at `carvers` for resumption; mechanism ticking remains for M4 (`harpas-worldgen`, `harpas-engine`).
+- Igloo blocks on chunk workers, including rotated templates, entrance height, ladder shafts and basement,
+  furnace/bed/sign/brewing stand data and chest loot metadata. Placement, chunk boundaries, saved neighbors,
+  Anvil reloads and repeated placement are compared against Minecraft 26.1. Entity spawning remains for M4;
+  repeating the igloo pass at `carvers` can change its height, as in vanilla, so full feature-stage resumption
+  remains pending (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
 

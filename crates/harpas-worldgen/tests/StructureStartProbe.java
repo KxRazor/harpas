@@ -129,7 +129,7 @@ public final class StructureStartProbe {
         return ((long) x << 32) ^ (z & 0xffffffffL);
     }
 
-    static void write(PrintWriter out, String structure, StructureStart start) {
+    static void write(PrintWriter out, String structure, StructureStart start) throws Exception {
         var chunk = start.getChunkPos();
         var box = start.getBoundingBox();
         out.println("start " + structure + " " + chunk.x() + " " + chunk.z() + " " + box.minX() + " " + box.minY() + " "
@@ -140,6 +140,16 @@ public final class StructureStartProbe {
             out.println("piece " + BuiltInRegistries.STRUCTURE_PIECE.getKey(piece.getType()) + " " + bb.minX() + " "
                 + bb.minY() + " " + bb.minZ() + " " + bb.maxX() + " " + bb.maxY() + " " + bb.maxZ() + " "
                 + (orientation == null ? -1 : orientation.get2DDataValue()) + " " + piece.getGenDepth());
+            if (piece instanceof net.minecraft.world.level.levelgen.structure.TemplateStructurePiece template) {
+                var name = net.minecraft.world.level.levelgen.structure.TemplateStructurePiece.class
+                    .getDeclaredField("templateName");
+                name.setAccessible(true);
+                var position = template.templatePosition();
+                var pivot = template.placeSettings().getRotationPivot();
+                out.println("template " + Identifier.parse((String) name.get(template)) + " " + position.getX() + " "
+                    + position.getY() + " " + position.getZ() + " " + template.getRotation().ordinal() + " "
+                    + pivot.getX() + " " + pivot.getY() + " " + pivot.getZ());
+            }
             if (piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece pool) {
                 var position = pool.getPosition();
                 out.println("element " + TemplateProbe.describe(pool.getElement()) + " " + position.getX() + " "

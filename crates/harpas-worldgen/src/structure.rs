@@ -16,10 +16,11 @@ use crate::generator::NoiseBasedChunkGenerator;
 mod jigsaw;
 mod start;
 mod stronghold;
+mod templated;
 
 pub use start::{
     BoundingBox, Direction, JigsawJunction, JigsawPiece, StructurePiece, StructureReference,
-    StructureStart,
+    StructureStart, TemplatePiece,
 };
 
 /// Salt of `StructurePlacement.legacyArbitrarySaltProbabilityReducer`.

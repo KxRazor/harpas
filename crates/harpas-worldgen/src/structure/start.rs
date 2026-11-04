@@ -3,9 +3,10 @@
 
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::{StructureState, jigsaw, stronghold};
+use super::{StructureState, jigsaw, stronghold, templated};
 use crate::data::{
-    JigsawDef, PoolElementDef, StructureDef, StructureSetEntryDef, WorldgenData, WorldgenDataError,
+    JigsawDef, OceanRuinDef, PoolElementDef, StructureDef, StructureSetEntryDef, WorldgenData,
+    WorldgenDataError,
 };
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
 use crate::template::StructureTemplates;
@@ -26,6 +27,14 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
+    /// The box between two opposite corners (`BoundingBox.fromCorners`).
+    pub(super) fn from_corners(a: [i32; 3], b: [i32; 3]) -> Self {
+        Self {
+            min: [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])],
+            max: [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])],
+        }
+    }
+
     /// A box from `x, y, z` facing `orientation`, `width` across, `height` up and `depth` along the direction it
     /// faces (`StructurePiece.makeBoundingBox`).
     pub fn oriented(
@@ -112,6 +121,21 @@ pub struct StructurePiece {
     pub junctions: Vec<JigsawJunction>,
     /// What a jigsaw piece places and where (`PoolElementStructurePiece`).
     pub jigsaw: Option<JigsawPiece>,
+    /// What a piece made of one template places and where (`TemplateStructurePiece`).
+    pub template: Option<TemplatePiece>,
+}
+
+/// The template a piece places, and where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplatePiece {
+    /// The template's resource location.
+    pub template: String,
+    /// Where its origin is placed.
+    pub position: [i32; 3],
+    /// How it is turned.
+    pub rotation: crate::template::Rotation,
+    /// The point it is turned around.
+    pub pivot: [i32; 3],
 }
 
 /// The pool element a jigsaw piece places, and where.
@@ -165,6 +189,11 @@ enum StructureKind<'d> {
     BuriedTreasure,
     Stronghold,
     Jigsaw(&'d JigsawDef),
+    Igloo,
+    Shipwreck {
+        beached: bool,
+    },
+    OceanRuin(OceanRuinDef),
     /// Single pieces of a fixed size: desert pyramids, jungle temples and swamp huts.
     ScatteredFeature {
         piece: &'static str,
@@ -192,6 +221,11 @@ impl<'d> StructureKind<'d> {
                 _ => return None,
             },
             "minecraft:stronghold" => Self::Stronghold,
+            "minecraft:igloo" => Self::Igloo,
+            "minecraft:shipwreck" => Self::Shipwreck {
+                beached: structure.is_beached,
+            },
+            "minecraft:ocean_ruin" => Self::OceanRuin(structure.ocean_ruin?),
             "minecraft:desert_pyramid" => scattered("minecraft:tedp", 21, 15, 21, true),
             "minecraft:jungle_temple" => scattered("minecraft:tejp", 12, 10, 15, true),
             "minecraft:swamp_hut" => scattered("minecraft:tesh", 7, 7, 9, false),
@@ -361,6 +395,16 @@ fn try_generate(
             min_z + 8,
         ],
         StructureKind::Stronghold => [min_x, 0, min_z],
+        StructureKind::Igloo | StructureKind::Shipwreck { beached: true } => [
+            min_x + 8,
+            first_occupied(min_x + 8, min_z + 8, HeightmapType::WorldSurfaceWg),
+            min_z + 8,
+        ],
+        StructureKind::Shipwreck { beached: false } | StructureKind::OceanRuin(_) => [
+            min_x + 8,
+            first_occupied(min_x + 8, min_z + 8, HeightmapType::OceanFloorWg),
+            min_z + 8,
+        ],
         StructureKind::ScatteredFeature {
             width,
             depth,
@@ -401,6 +445,7 @@ fn try_generate(
             gen_depth: 0,
             junctions: Vec::new(),
             jigsaw: None,
+            template: None,
         }],
         StructureKind::Stronghold => stronghold::pieces(
             level_seed,
@@ -409,6 +454,13 @@ fn try_generate(
             generator.sea_level(),
             generator.min_y(),
         ),
+        StructureKind::Igloo => templated::igloo(templates, &mut random, min_x, min_z)?,
+        StructureKind::Shipwreck { beached } => {
+            templated::shipwreck(templates, &mut random, beached, min_x, min_z)?
+        }
+        StructureKind::OceanRuin(ruin) => {
+            templated::ocean_ruin(templates, &mut random, ruin, min_x, min_z)?
+        }
         StructureKind::ScatteredFeature {
             piece,
             width,
@@ -430,6 +482,7 @@ fn try_generate(
                 gen_depth: 0,
                 junctions: Vec::new(),
                 jigsaw: None,
+                template: None,
             }]
         }
     };

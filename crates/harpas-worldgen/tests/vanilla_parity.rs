@@ -765,7 +765,7 @@ fn terrain_aquifers_veins_and_surface_samples_match_vanilla() {
         "WorldgenReferenceProbe.java",
         include_str!("WorldgenReferenceProbe.java"),
     )]);
-    for seed in [123_456_789, 42, -1] {
+    for &seed in reference::sampled_seeds(&[123_456_789, 42, -1]) {
         let output = reference.temp.0.join("results.txt");
         reference.java(
             "WorldgenReferenceProbe",

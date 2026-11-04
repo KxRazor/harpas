@@ -5,6 +5,7 @@ name: Parity
 # Maintainers accept the Minecraft EULA for CI by setting the repository variable MOJANG_EULA_ACCEPTED to "true".
 # Without it the job fails, so that a comparison that never ran cannot look like one that passed. Only pull
 # requests from forks, which do not receive repository variables, skip instead: they are compared once merged.
+# Pull requests compare a reduced sample for a quick answer, and every other run compares the full one.
 
 on:
   push:
@@ -86,4 +87,5 @@ jobs:
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
+          HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || 'full' }}
         run: cargo test --release --workspace --locked

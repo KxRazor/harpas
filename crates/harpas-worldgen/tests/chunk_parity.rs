@@ -32,8 +32,9 @@ fn chunks(seed: i64) -> Vec<(i32, i32)> {
             chunks.push((x, z));
         }
     }
-    for x in -8..8 {
-        for z in -8..8 {
+    let lattice = if reference::reduced_sample() { 2 } else { 8 };
+    for x in -lattice..lattice {
+        for z in -lattice..lattice {
             chunks.push((x * 97 + 13, z * 97 - 29));
         }
     }
@@ -307,7 +308,8 @@ fn generated_chunks_match_vanilla_block_by_block() {
     let mut compared = 0;
     let mut differences = Vec::new();
     let mut biomes = BTreeSet::new();
-    for seed in SEEDS {
+    let seeds = reference::sampled_seeds(&SEEDS);
+    for &seed in seeds {
         let positions = chunks(seed);
         compared += positions.len();
         let output = reference.temp.0.join("chunks.bin");
@@ -321,7 +323,7 @@ fn generated_chunks_match_vanilla_block_by_block() {
     }
     eprintln!(
         "Compared {compared} chunks in {} seeds, meeting {} biomes",
-        SEEDS.len(),
+        seeds.len(),
         biomes.len()
     );
     let missing: BTreeSet<_> = overworld_biome_parameters()
@@ -329,7 +331,11 @@ fn generated_chunks_match_vanilla_block_by_block() {
         .map(|(_, biome)| biome)
         .filter(|biome| !biomes.contains(*biome))
         .collect();
-    assert!(missing.is_empty(), "no chunk has {missing:?}");
+    // A reduced sample has too few chunks to meet every biome.
+    assert!(
+        missing.is_empty() || reference::reduced_sample(),
+        "no chunk has {missing:?}"
+    );
     assert!(
         differences.is_empty(),
         "{} differences from vanilla, the first {SHOWN_DIFFERENCES}:\n{}",

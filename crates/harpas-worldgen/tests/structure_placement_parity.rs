@@ -11,7 +11,13 @@ use reference::Reference;
 
 const SEEDS: [i64; 5] = [0, 42, -1, 123_456_789, -4_172_144_997_902_289_642];
 /// Chunks in each direction around the origin.
-const RADIUS: i32 = 1024;
+fn radius() -> i32 {
+    if reference::reduced_sample() {
+        128
+    } else {
+        1024
+    }
+}
 /// Centers of smaller areas, far from the origin, near the edges of the world and where regions wrap.
 const WINDOWS: [(i32, i32); 3] = [
     (1_874_900, -1_874_900),
@@ -48,7 +54,7 @@ fn compare_seed(data: &WorldgenData, seed: i64, output: &Path) -> usize {
         for (x, z) in state.ring_positions(set).unwrap_or_default() {
             check(format!("ring {set} {x} {z}"));
         }
-        for line in starts(&state, set, (0, 0), RADIUS) {
+        for line in starts(&state, set, (0, 0), radius()) {
             check(line);
         }
         for window in WINDOWS {
@@ -73,12 +79,12 @@ fn structure_starts_match_vanilla() {
         "StructurePlacementProbe.java",
         include_str!("StructurePlacementProbe.java"),
     )]);
-    for seed in SEEDS {
+    for &seed in reference::sampled_seeds(&SEEDS) {
         let output = reference.temp.0.join("placement.txt");
         let mut args = vec![
             output.display().to_string(),
             seed.to_string(),
-            RADIUS.to_string(),
+            radius().to_string(),
         ];
         args.extend(WINDOWS.iter().map(|(x, z)| format!("{x},{z}")));
         reference.java("StructurePlacementProbe", args);

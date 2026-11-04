@@ -1,5 +1,5 @@
-//! Structure templates: vanilla's `StructureTemplate`, read from `data/<namespace>/structure/**/*.nbt`, as far as
-//! laying out jigsaw structures needs them.
+//! Structure templates from the owner's `data/<namespace>/structure/**/*.nbt`: palettes, blocks and block
+//! entity data for placement, plus the jigsaw metadata used to lay out structures.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -7,6 +7,7 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 use flate2::read::GzDecoder;
+use harpas_core::block::block_states;
 use harpas_core::math::position_seed;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_core::random::{LegacyRandom, RandomSource};
@@ -183,12 +184,21 @@ pub struct JigsawBlock {
 }
 
 /// A structure template (`StructureTemplate`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructureTemplate {
     /// Its size in blocks along X, Y and Z.
     pub size: [i32; 3],
     /// The jigsaw blocks of each palette, in vanilla's block order.
     palettes: Vec<Vec<JigsawBlock>>,
+    /// Blocks and block entity data, retained from the owner's templates for placement.
+    block_palettes: Vec<Vec<TemplateBlock>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TemplateBlock {
+    pub pos: [i32; 3],
+    pub state: u32,
+    pub nbt: Option<Compound>,
 }
 
 impl StructureTemplate {
@@ -198,6 +208,7 @@ impl StructureTemplate {
         Self {
             size: [0, 0, 0],
             palettes: Vec::new(),
+            block_palettes: Vec::new(),
         }
     }
 
@@ -233,11 +244,28 @@ impl StructureTemplate {
             Some(Nbt::List(List::Empty)) | None => &[],
             _ => return Err(invalid("template blocks must be compounds")),
         };
+        let block_palettes = palettes
+            .iter()
+            .map(|states| blocks_of(states, blocks, &invalid))
+            .collect::<Result<_, _>>()?;
         let palettes = palettes
             .into_iter()
             .map(|states| jigsaws_of(states, blocks, &invalid))
             .collect::<Result<_, _>>()?;
-        Ok(Self { size, palettes })
+        Ok(Self {
+            size,
+            palettes,
+            block_palettes,
+        })
+    }
+
+    pub(crate) fn blocks(&self, position: [i32; 3]) -> &[TemplateBlock] {
+        if self.block_palettes.is_empty() {
+            return &[];
+        }
+        self.block_palettes
+            .get(self.palette_index(position))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The blocks the template covers when placed at `position` with `rotation`
@@ -299,6 +327,61 @@ impl StructureTemplate {
             })
             .collect()
     }
+}
+
+fn blocks_of(
+    states: &[Compound],
+    blocks: &[Compound],
+    invalid: &impl Fn(&str) -> WorldgenDataError,
+) -> Result<Vec<TemplateBlock>, WorldgenDataError> {
+    let states = states
+        .iter()
+        .map(|state| {
+            let Some(Nbt::String(name)) = state.get("Name") else {
+                return Err(invalid("block state has no name"));
+            };
+            let properties = match state.get("Properties") {
+                Some(Nbt::Compound(properties)) => properties
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        if let Nbt::String(value) = value {
+                            Some((key, value.as_str()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+            block_states()
+                .state(name, properties)
+                .map(|(id, _)| id)
+                .ok_or_else(|| invalid("unknown block state"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut result = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let index = match block.get("state") {
+            Some(Nbt::Int(i)) => *i as usize,
+            _ => 0,
+        };
+        let Some(&state) = states.get(index) else {
+            continue;
+        };
+        let pos = match block.get("pos") {
+            Some(Nbt::List(List::Int(pos))) if pos.len() == 3 => [pos[0], pos[1], pos[2]],
+            _ => return Err(invalid("block has no position")),
+        };
+        result.push(TemplateBlock {
+            pos,
+            state,
+            nbt: match block.get("nbt") {
+                Some(Nbt::Compound(tag)) => Some(tag.clone()),
+                _ => None,
+            },
+        });
+    }
+    Ok(result)
 }
 
 /// `StructureTemplate.getJointType`: the saved joint, or by default aligned for a jigsaw facing sideways.
@@ -379,6 +462,18 @@ pub struct StructureTemplates {
 }
 
 impl StructureTemplates {
+    #[cfg(test)]
+    pub(crate) fn with_nbt(id: &str, root: &Compound) -> Self {
+        Self {
+            templates: [(
+                id.to_string(),
+                StructureTemplate::from_nbt(id, root).unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+        }
+    }
+
     /// Reads every template under `data/<namespace>/structure/` of a `.zip` archive on disk.
     pub fn from_zip_path(path: impl AsRef<Path>) -> Result<Self, WorldgenDataError> {
         Self::from_zip_reader(File::open(path)?)
@@ -422,6 +517,7 @@ impl StructureTemplates {
                     let template = StructureTemplate {
                         size,
                         palettes: Vec::new(),
+                        block_palettes: Vec::new(),
                     };
                     (id.to_string(), template)
                 })
@@ -488,6 +584,7 @@ mod tests {
         let template = StructureTemplate {
             size: [10, 5, 4],
             palettes: Vec::new(),
+            block_palettes: Vec::new(),
         };
         let pivot = [5, 0, 2];
         let plain = template.bounding_box_around([0, 0, 0], Rotation::None, Mirror::None, pivot);

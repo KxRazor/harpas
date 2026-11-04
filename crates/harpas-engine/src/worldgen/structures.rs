@@ -97,6 +97,7 @@ impl ChunkStructures {
         generated: &mut GeneratedChunk,
         seed: i64,
         terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
+        templates: &StructureTemplates,
     ) -> Vec<Compound> {
         let height_at = |x: i32, z: i32| {
             terrain_chunks[&crate::world::ChunkPos {
@@ -114,6 +115,36 @@ impl ChunkStructures {
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
+                if start.structure == "minecraft:igloo" {
+                    return start.place_igloo_in_chunk(
+                        generated,
+                        seed,
+                        templates,
+                        &mut |x, z| {
+                            terrain_chunks[&ChunkPos {
+                                x: x >> 4,
+                                z: z >> 4,
+                            }]
+                                .heightmaps()
+                                .get(
+                                    HeightmapType::WorldSurfaceWg,
+                                    (x & 15) as usize,
+                                    (z & 15) as usize,
+                                )
+                        },
+                        &mut |x, y, z| {
+                            terrain_chunks[&ChunkPos {
+                                x: x >> 4,
+                                z: z >> 4,
+                            }]
+                                .block_state(
+                                    (x & 15) as usize,
+                                    y,
+                                    (z & 15) as usize,
+                                )
+                        },
+                    );
+                }
                 start.prepare_pyramid_height(
                     seed,
                     generated.min_y() + generated.height() - 1,
@@ -219,65 +250,81 @@ impl Structures {
         read: &ChunkReader<'_>,
     ) -> io::Result<HashMap<ChunkPos, GeneratedChunk>> {
         let mut terrain_chunks = HashMap::new();
-        // Pyramids need heightmaps over their entire footprint. Chests in saved temples may also
-        // read neighboring terrain to choose their facing. Resolve these reads before placing blocks.
+        // Pyramids need heights over their footprint; temple chests and igloo template edges may read
+        // neighboring blocks. Igloo ladders can sample the entrance outside their own footprint.
+        // Resolve these reads before placing blocks, preferring saved terrain.
         for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
             if !matches!(
                 start.structure.as_str(),
-                "minecraft:desert_pyramid" | "minecraft:jungle_pyramid"
+                "minecraft:desert_pyramid" | "minecraft:jungle_pyramid" | "minecraft:igloo"
             ) {
                 continue;
             }
-            for piece in &start.pieces {
-                for x in (piece.bounding_box.min[0] >> 4)..=(piece.bounding_box.max[0] >> 4) {
-                    for z in (piece.bounding_box.min[2] >> 4)..=(piece.bounding_box.max[2] >> 4) {
-                        let neighbor = crate::world::ChunkPos { x, z };
-                        if terrain_chunks.contains_key(&neighbor) {
-                            continue;
-                        }
-                        if neighbor
-                            == (ChunkPos {
-                                x: chunk.chunk_x(),
-                                z: chunk.chunk_z(),
-                            })
-                        {
-                            terrain_chunks.insert(neighbor, chunk.clone());
-                            continue;
-                        }
-                        if let Some(saved) = read(neighbor)?
-                            && saved.get("sections").is_some()
-                        {
-                            let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
-                            let (saved, _) = Chunk::read(saved, &names)?;
-                            let mut terrain = GeneratedChunk::new(
-                                x,
-                                z,
-                                generator.min_y(),
-                                chunk.height(),
-                                data.biomes.len(),
-                            );
-                            for section in saved.sections {
-                                if let Some(blocks) = section.section {
-                                    let index = i32::from(section.y) - terrain.min_section_y();
-                                    if let Some(target) = usize::try_from(index)
-                                        .ok()
-                                        .and_then(|i| terrain.sections_mut().get_mut(i))
-                                    {
-                                        *target = blocks;
-                                    }
-                                }
-                            }
-                            terrain.recompute_heightmaps();
-                            terrain_chunks.insert(neighbor, terrain);
-                            continue;
-                        }
-                        let nearby = self.for_chunk(neighbor, generator, data, read)?;
-                        let terrain = generator
-                            .generate_chunk_carved_with_beardifier(x, z, data, nearby.beardifier)
-                            .map_err(io::Error::other)?;
-                        terrain_chunks.insert(neighbor, terrain);
-                    }
+            let mut neighbors: Vec<_> = start
+                .pieces
+                .iter()
+                .flat_map(|piece| {
+                    let padding = i32::from(start.structure == "minecraft:igloo");
+                    (((piece.bounding_box.min[0] - padding) >> 4)
+                        ..=((piece.bounding_box.max[0] + padding) >> 4))
+                        .flat_map(move |x| {
+                            (((piece.bounding_box.min[2] - padding) >> 4)
+                                ..=((piece.bounding_box.max[2] + padding) >> 4))
+                                .map(move |z| ChunkPos { x, z })
+                        })
+                })
+                .collect();
+            if start.structure == "minecraft:igloo" {
+                neighbors.extend(start.igloo_height_samples().map(|(x, z)| ChunkPos {
+                    x: x >> 4,
+                    z: z >> 4,
+                }));
+            }
+            for neighbor @ ChunkPos { x, z } in neighbors {
+                if terrain_chunks.contains_key(&neighbor) {
+                    continue;
                 }
+                if neighbor
+                    == (ChunkPos {
+                        x: chunk.chunk_x(),
+                        z: chunk.chunk_z(),
+                    })
+                {
+                    terrain_chunks.insert(neighbor, chunk.clone());
+                    continue;
+                }
+                if let Some(saved) = read(neighbor)?
+                    && saved.get("sections").is_some()
+                {
+                    let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+                    let (saved, _) = Chunk::read(saved, &names)?;
+                    let mut terrain = GeneratedChunk::new(
+                        x,
+                        z,
+                        generator.min_y(),
+                        chunk.height(),
+                        data.biomes.len(),
+                    );
+                    for section in saved.sections {
+                        if let Some(blocks) = section.section {
+                            let index = i32::from(section.y) - terrain.min_section_y();
+                            if let Some(target) = usize::try_from(index)
+                                .ok()
+                                .and_then(|i| terrain.sections_mut().get_mut(i))
+                            {
+                                *target = blocks;
+                            }
+                        }
+                    }
+                    terrain.recompute_heightmaps();
+                    terrain_chunks.insert(neighbor, terrain);
+                    continue;
+                }
+                let nearby = self.for_chunk(neighbor, generator, data, read)?;
+                let terrain = generator
+                    .generate_chunk_carved_with_beardifier(x, z, data, nearby.beardifier)
+                    .map_err(io::Error::other)?;
+                terrain_chunks.insert(neighbor, terrain);
             }
         }
         Ok(terrain_chunks)
@@ -330,7 +377,7 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Pyramids span several chunks; saved huts and jungle temples can cross a boundary too.
+        // Pyramids and igloos can span several chunks; saved huts and jungle temples can too.
         // Place their intersection without moving or duplicating the source chunk's saved start.
         let neighbor_pieces = referenced
             .iter()
@@ -341,6 +388,7 @@ impl Structures {
                         "minecraft:swamp_hut"
                             | "minecraft:desert_pyramid"
                             | "minecraft:jungle_pyramid"
+                            | "minecraft:igloo"
                     )
             })
             .map(|s| (*s).clone())

@@ -36,7 +36,7 @@ pub fn overworld_generator(
     }
     let generator = NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?;
     let structure_source = generate_structures
-        .then(|| structures::Structures::new(seed, &data, &generator, templates))
+        .then(|| structures::Structures::new(seed, &data, &generator, Arc::clone(&templates)))
         .transpose()?;
     Ok(Arc::new(move |pos, read| {
         let mut structures = if let Some(structures) = &structure_source {
@@ -57,7 +57,7 @@ pub fn overworld_generator(
         } else {
             HashMap::new()
         };
-        let entities = structures.place_blocks(&mut generated, seed, &terrain_chunks);
+        let entities = structures.place_blocks(&mut generated, seed, &terrain_chunks, &templates);
         let mut chunk = into_anvil(generated)?;
         if !entities.is_empty() {
             chunk

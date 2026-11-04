@@ -137,7 +137,11 @@ fn block_heightmap_flags() -> &'static [u8] {
                         | "minecraft:red_mushroom"
                         | "minecraft:snow"
                         | "minecraft:powder_snow"
-                );
+                        | "minecraft:ladder"
+                        | "minecraft:redstone_torch"
+                        | "minecraft:wall_torch"
+                        | "minecraft:potted_cactus"
+                ) || name.ends_with("_carpet");
                 let mut f = FLAG_NOT_AIR;
                 if has_fluid {
                     f |= FLAG_HAS_FLUID;

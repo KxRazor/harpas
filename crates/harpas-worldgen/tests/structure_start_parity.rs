@@ -2,7 +2,7 @@
 
 mod reference;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -61,6 +61,18 @@ fn start_lines(start: &StructureStart) -> Vec<String> {
                 jigsaw.ground_level_delta
             ));
         }
+        if let Some(template) = &piece.template {
+            let [x, y, z] = template.position;
+            let [px, py, pz] = template.pivot;
+            let rotation = Rotation::ALL
+                .iter()
+                .position(|r| *r == template.rotation)
+                .expect("a rotation");
+            lines.push(format!(
+                "template {} {x} {y} {z} {rotation} {px} {py} {pz}",
+                template.template
+            ));
+        }
         for junction in &piece.junctions {
             let [x, y, z] = junction.source;
             let projection = if junction.destination_rigid {
@@ -105,6 +117,8 @@ fn compare_seed(
         }
     }
     let mut start_count = 0;
+    // How many starts of each structure were compared, to see that the sample reaches them.
+    let mut structures = BTreeMap::<String, usize>::new();
     // Starts of the whole area, so that references do not lay out each structure again for every chunk it reaches.
     let mut known_starts = std::collections::HashMap::new();
     // The chunks each start reaches, and their neighbors, so that references are compared where they exist.
@@ -119,6 +133,7 @@ fn compare_seed(
             known_starts.insert((x, z), starts.clone());
             for start in starts {
                 start_count += 1;
+                *structures.entry(start.structure.clone()).or_default() += 1;
                 let b = start.bounding_box;
                 for cx in (b.min[0] >> 4) - 1..=(b.max[0] >> 4) + 1 {
                     for cz in (b.min[2] >> 4) - 1..=(b.max[2] >> 4) + 1 {
@@ -189,6 +204,7 @@ fn compare_seed(
         expected.len(),
         "number of lines for seed {seed}"
     );
+    eprintln!("Seed {seed}: {structures:?}");
     (expected.len(), start_count, reference_count)
 }
 

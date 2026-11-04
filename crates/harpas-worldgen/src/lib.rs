@@ -27,10 +27,11 @@ pub use biome::{
 pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
     ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod, JigsawDef,
-    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, PoolAliasDef,
-    PoolElementDef, Projection, StartHeightDef, StructureDef, StructurePlacementCommon,
-    StructurePlacementDef, StructurePlacementKind, StructureSetDef, StructureSetEntryDef,
-    TemperatureModifier, TemplatePoolDef, WorldPresetDef, WorldgenData, WorldgenDataError,
+    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, OceanRuinDef,
+    PoolAliasDef, PoolElementDef, Projection, StartHeightDef, StructureDef,
+    StructurePlacementCommon, StructurePlacementDef, StructurePlacementKind, StructureSetDef,
+    StructureSetEntryDef, TemperatureModifier, TemplatePoolDef, WorldPresetDef, WorldgenData,
+    WorldgenDataError,
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
@@ -43,7 +44,7 @@ pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
 pub use structure::{
     BoundingBox, Direction, JigsawJunction, JigsawPiece, StructurePiece, StructureReference,
-    StructureStart, StructureState,
+    StructureStart, StructureState, TemplatePiece,
 };
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,

@@ -500,6 +500,7 @@ pub(super) fn pieces(
                     gen_depth: piece.gen_depth,
                     junctions: Vec::new(),
                     jigsaw: None,
+                    template: None,
                 })
                 .collect();
         }

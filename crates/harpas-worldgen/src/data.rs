@@ -266,7 +266,7 @@ pub struct BlockTagDef {
 }
 
 /// Parsed contents of a `worldgen/structure/<name>.json` file relevant to structure placement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructureDef {
     /// The structure type, such as `minecraft:desert_pyramid`.
     pub kind: String,
@@ -276,6 +276,21 @@ pub struct StructureDef {
     pub terrain_adaptation: String,
     /// The settings of a `minecraft:jigsaw` structure.
     pub jigsaw: Option<JigsawDef>,
+    /// Whether a `minecraft:shipwreck` structure is on a beach (`is_beached`).
+    pub is_beached: bool,
+    /// The settings of a `minecraft:ocean_ruin` structure.
+    pub ocean_ruin: Option<OceanRuinDef>,
+}
+
+/// The settings of a `minecraft:ocean_ruin` structure (`OceanRuinStructure`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OceanRuinDef {
+    /// Whether the ruins are of the cold kind rather than warm (`biome_temp`).
+    pub cold: bool,
+    /// The chance of a large ruin.
+    pub large_probability: f32,
+    /// The chance of small ruins around a large one.
+    pub cluster_probability: f32,
 }
 
 /// The settings of a `minecraft:jigsaw` structure (`JigsawStructure`).
@@ -871,6 +886,32 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
             Some("minecraft:jigsaw") => Some(parse_jigsaw(context, json)?),
             _ => None,
         },
+        is_beached: json
+            .get("is_beached")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        ocean_ruin: match json.get("type").and_then(Value::as_str) {
+            Some("minecraft:ocean_ruin") => Some(parse_ocean_ruin(context, json)?),
+            _ => None,
+        },
+    })
+}
+
+fn parse_ocean_ruin(context: &str, json: &Value) -> Result<OceanRuinDef, WorldgenDataError> {
+    let probability = |key: &str| {
+        json.get(key)
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+            .ok_or_else(|| invalid_def(context, format!("`{key}` must be a number")))
+    };
+    Ok(OceanRuinDef {
+        cold: match json.get("biome_temp").and_then(Value::as_str) {
+            Some("cold") => true,
+            Some("warm") => false,
+            _ => return Err(invalid_def(context, "biome_temp must be cold or warm")),
+        },
+        large_probability: probability("large_probability")?,
+        cluster_probability: probability("cluster_probability")?,
     })
 }
 

@@ -255,8 +255,10 @@ and the owner **accepts it once**:
     weight, finds the generation point from the terrain height of the noise
     (`NoiseBasedChunkGenerator::base_height`, one noise column as vanilla's `iterateNoiseColumn` reads it), checks
     the biome there and makes the pieces. `references_in_chunk` lists the starts within 8 chunks whose bounding
-    boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts, strongholds and the jigsaw
-    structures below are made so far; sets with other structure types are skipped. The `structure_start_parity`
+    boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts, igloos, shipwrecks, ocean ruins,
+    strongholds and the jigsaw structures below are made so far; sets with other structure types are skipped. Vanilla
+    places shipwrecks wider or taller than 32 blocks by another rule, which none of its templates reaches, so Harpas
+    refuses them. The `structure_start_parity`
     harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,
     and the strongholds at all 128 ring positions of each seed, with vanilla's own `createStructures` and
     `createReferences`. The chunk generator does not use any of this yet, and references compute the starts of every

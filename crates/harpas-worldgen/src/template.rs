@@ -39,13 +39,23 @@ impl Rotation {
         Self::Counterclockwise90,
     ];
 
+    /// `Rotation.getRandom`.
+    pub(crate) fn random(random: &mut impl RandomSource) -> Self {
+        Self::ALL[random.next_int_bounded(4) as usize]
+    }
+
     /// Rotates a position around the origin (`StructureTemplate.transform` with no mirror and pivot).
-    pub const fn transform(self, [x, y, z]: [i32; 3]) -> [i32; 3] {
+    pub const fn transform(self, position: [i32; 3]) -> [i32; 3] {
+        self.transform_around(position, [0, 0, 0])
+    }
+
+    /// Rotates a position around a pivot, whose Y does not matter (`StructureTemplate.transform` with no mirror).
+    pub const fn transform_around(self, [x, y, z]: [i32; 3], [px, _, pz]: [i32; 3]) -> [i32; 3] {
         match self {
             Self::None => [x, y, z],
-            Self::Clockwise90 => [-z, y, x],
-            Self::Clockwise180 => [-x, y, -z],
-            Self::Counterclockwise90 => [z, y, -x],
+            Self::Clockwise90 => [px + pz - z, y, pz - px + x],
+            Self::Clockwise180 => [px + px - x, y, pz + pz - z],
+            Self::Counterclockwise90 => [px - pz + z, y, px + pz - x],
         }
     }
 
@@ -213,9 +223,20 @@ impl StructureTemplate {
 
     /// The blocks the template covers when placed at `position` with `rotation`
     /// (`StructureTemplate.getBoundingBox`).
-    pub fn bounding_box(&self, [x, y, z]: [i32; 3], rotation: Rotation) -> BoundingBox {
-        let a = rotation.transform([0, 0, 0]);
-        let b = rotation.transform(self.size.map(|value| value - 1));
+    pub fn bounding_box(&self, position: [i32; 3], rotation: Rotation) -> BoundingBox {
+        self.bounding_box_around(position, rotation, [0, 0, 0])
+    }
+
+    /// The blocks the template covers when placed at `position`, turned around `pivot`
+    /// (`StructureTemplate.getBoundingBox`).
+    pub fn bounding_box_around(
+        &self,
+        [x, y, z]: [i32; 3],
+        rotation: Rotation,
+        pivot: [i32; 3],
+    ) -> BoundingBox {
+        let a = rotation.transform_around([0, 0, 0], pivot);
+        let b = rotation.transform_around(self.size.map(|value| value - 1), pivot);
         BoundingBox {
             min: [a[0].min(b[0]) + x, a[1].min(b[1]) + y, a[2].min(b[2]) + z],
             max: [a[0].max(b[0]) + x, a[1].max(b[1]) + y, a[2].max(b[2]) + z],
@@ -370,6 +391,23 @@ impl StructureTemplates {
         Ok(Self { templates })
     }
 
+    /// Templates of the given sizes with no blocks.
+    #[cfg(test)]
+    pub(crate) fn with_sizes<'a>(sizes: impl IntoIterator<Item = (&'a str, [i32; 3])>) -> Self {
+        Self {
+            templates: sizes
+                .into_iter()
+                .map(|(id, size)| {
+                    let template = StructureTemplate {
+                        size,
+                        palettes: Vec::new(),
+                    };
+                    (id.to_string(), template)
+                })
+                .collect(),
+        }
+    }
+
     /// The template with a resource location such as `minecraft:village/plains/houses/plains_small_house_1`.
     pub fn get(&self, id: &str) -> Option<&StructureTemplate> {
         self.templates.get(id)
@@ -407,6 +445,21 @@ mod tests {
             Facing::West
         );
         assert_eq!(Rotation::Clockwise180.rotate(Facing::Up), Facing::Up);
+    }
+
+    #[test]
+    fn rotations_turn_positions_around_a_pivot() {
+        let pivot = [4, 0, 15];
+        let cases = [
+            (Rotation::None, [1, 2, 3]),
+            (Rotation::Clockwise90, [16, 2, 12]),
+            (Rotation::Clockwise180, [7, 2, 27]),
+            (Rotation::Counterclockwise90, [-8, 2, 18]),
+        ];
+        for (rotation, expected) in cases {
+            assert_eq!(rotation.transform_around([1, 2, 3], pivot), expected);
+            assert_eq!(rotation.transform_around(pivot, pivot), pivot);
+        }
     }
 
     #[test]

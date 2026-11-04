@@ -489,6 +489,7 @@ impl<'d> Start<'d> {
                     rotation: piece.rotation,
                     ground_level_delta: piece.ground_level_delta,
                 }),
+                template: None,
             })
             .collect())
     }

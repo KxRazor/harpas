@@ -81,6 +81,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Jigsaw structure starts for villages, pillager outposts, ancient cities, trail ruins and trial chambers, with
   their pieces, elements and junctions, checked against Minecraft 26.1. The generator does not use them yet
   (`harpas-worldgen`).
+- Igloo, shipwreck and ocean ruin starts, whose pieces are whole templates. The generator does not use them yet
+  (`harpas-worldgen`).
 
 ### Changed
 

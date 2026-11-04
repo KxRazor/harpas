@@ -73,6 +73,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+      # A test that the command below does not select would skip its comparison and still pass.
+      - name: Every test that needs the reference server runs here
+        run: |
+          missed=$(git grep -lE 'HARPAS_VANILLA_SERVER_DIR|Reference::from_env' -- 'crates/*.rs' \
+            | grep -vE '/tests/([a-z0-9_]+_parity|world_loading|reference/mod)\.rs$' || true)
+          if [ -n "$missed" ]; then
+            echo "::error::These files need the reference server, but this workflow does not run them. Name the test file <name>_parity.rs (docs/parity.md#adding-a-harness)."
+            echo "$missed"
+            exit 1
+          fi
       - name: Download Mojang's server
         env:
           MOJANG_EULA_ACCEPTED: ${{ vars.MOJANG_EULA_ACCEPTED }}

@@ -58,7 +58,7 @@ reference server to start a new world, and checks Harpas alone.
 ## Coverage
 
 Each subsystem has a status: not started, partial or matching. Nothing is matching yet. That status needs a
-comparison that covers the subsystem's behavior and runs in CI.
+comparison that covers the subsystem's behavior and runs in CI. The figures are those of the full sample.
 
 | Subsystem | Status | Compared | Not compared yet |
 |---|---|---|---|
@@ -98,6 +98,10 @@ The Parity workflow (`.github/workflows/parity.yml`) runs:
 - on every push to `main`, whatever changed;
 - by hand, with another Minecraft version as input.
 
+Pull requests compare a **reduced sample**, one seed and smaller areas, set by `HARPAS_PARITY_SAMPLE=reduced`, for a
+quick answer. Every other run compares the **full sample**, so a difference that only the full sample shows is found on
+`main` after merging.
+
 It does not run on a schedule. A schedule suits checks whose result changes without any change in the repository,
 like the advisories check. These compare pinned code with a pinned version, so a run at night would only repeat
 the result of the merge, after the change has landed.
@@ -115,7 +119,8 @@ MOJANG_EULA_ACCEPTED=true ci/fetch-vanilla-server.sh 26.1 ~/harpas-vanilla
 HARPAS_VANILLA_SERVER_DIR=~/harpas-vanilla cargo test --release --workspace --locked
 ```
 
-Add `-p <crate> --test <harness>` in place of `--workspace` to run one harness. Java 25 must be on `PATH`.
+This compares the full sample. Add `-p <crate> --test <harness>` in place of `--workspace` to run one harness, and set
+`HARPAS_PARITY_SAMPLE=reduced` for the sample of pull requests. Java 25 must be on `PATH`.
 
 ### Mojang EULA
 
@@ -135,7 +140,8 @@ repository's permissions next to untrusted code, which is not worth it for a che
 ## Adding a harness
 
 1. Put it in the `tests/` folder of the crate it checks. Read `HARPAS_VANILLA_SERVER_DIR`, and without it print why
-   the test is skipped and return. The workflow runs the whole workspace, so it needs no change.
+   the test is skipped and return. The workflow runs the whole workspace, so it needs no change. If it takes more
+   than a moment, make it compare less with the reduced sample.
 2. Make the vanilla side repeatable. When vanilla depends on something like its thread history, the probe fixes that
    state and the document says so, as with [biome ties](#known-differences).
 3. **Prove that it can fail.** Break the Harpas side on purpose and check that the harness notices, and say so in the
@@ -147,8 +153,9 @@ repository's permissions next to untrusted code, which is not worth it for a che
 
 ## Trade-offs
 
-- **Time on every pull request.** Comparing before merging makes pull requests wait for release builds and for the
-  harnesses. That is accepted because a difference found later costs far more, and documentation changes skip it.
+- **Reduced sample on pull requests.** The full comparison is too slow to wait for on every pull request, so they
+  compare less and `main` compares everything. Some differences are therefore found just after merging, on a known
+  commit, rather than before it. Documentation changes skip the comparison.
 - **Sampling, not proof.** Harnesses compare chosen seeds and areas. Passing does not establish parity for every seed.
 - **Release mode.** The workflow runs in release mode for speed, so integer overflow does not panic there. The
   debug `cargo test` in CI covers that, but only for tests that do not need the reference server.
@@ -157,7 +164,7 @@ repository's permissions next to untrusted code, which is not worth it for a che
 
 ## Open questions
 
-1. How long the workflow takes on hosted runners, and whether the harnesses need splitting into a matrix.
+1. Whether the full comparison on `main` needs splitting into a matrix, once it has been timed on hosted runners.
 2. Whether to run the comparisons in debug mode as well, for the overflow checks.
 3. The format of the published parity report, and whether a tool generates it.
 4. How to compare what a vanilla client sees.

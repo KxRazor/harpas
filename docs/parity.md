@@ -6,7 +6,7 @@ subsystem, such as [world.md](world.md) and [engine-core.md](engine-core.md).
 
 Status: in progress. Harnesses exist for random generators, noise, world generation, structures and block entity
 updates. The comparisons with Mojang's server run in CI: the full sample first passed on 2026-11-04, in about 22
-minutes without a build cache, and the reduced sample in about 6. The check is not required yet. Facts about GitHub Actions and Mojang's files cite their source in
+minutes without a build cache, and the reduced sample in about 6. The check `parity against vanilla` is required on `main`. Facts about GitHub Actions and Mojang's files cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -176,7 +176,7 @@ repository's permissions next to untrusted code, which is not worth it for a che
 
 1. **First run:** the workflow passes on a hosted runner, with every harness comparing rather than skipping. Done on
    2026-11-04.
-2. **Required check:** `parity against vanilla` is required on `main`.
+2. **Required check:** `parity against vanilla` is required on `main`. Done on 2026-11-04.
 3. **Failure:** a deliberate difference in a pull request fails the check.
 
 ---

@@ -152,6 +152,10 @@ vanilla for the same seed.
         blocks, block entity data and chest loot metadata, with vanilla placement/replay, chunk-boundary,
         saved-neighbor and Anvil reload comparisons. Entity spawning follows in M4; full FEATURES resumption
         remains pending.
+  - [x] Shipwreck block placement on chunk workers: shared source-first ocean/beached heights, rotated
+        templates and palettes, waterlogging, stair/fence/door shapes and chest loot metadata, with vanilla placement/replay,
+        chunk-boundary, saved-neighbor and Anvil reload comparisons, including a chunk shared with buried
+        treasure. Full FEATURES resumption remains pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

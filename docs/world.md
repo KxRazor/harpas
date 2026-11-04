@@ -348,6 +348,29 @@ and the owner **accepts it once**:
     Anvil reloads and repeated placement. A saved neighbor with an altered entrance column checks that saved
     terrain controls height. Pull requests use one seed. Entity spawning remains for M4; other structure types
     remain unplaced.
+  - Ocean and beached shipwreck blocks run on chunk workers using the owner's 20 templates and their
+    palettes. Height sampling uses the unrotated footprint at the template origin, even when the hull turns
+    around its pivot. Ocean pieces use the average `OCEAN_FLOOR_WG` height; beached pieces use the lowest
+    `WORLD_SURFACE_WG` height, minus half the template height and a bounded burial draw. The adjusted origin
+    and `height_adjusted` flag are saved, so a reloaded piece does not choose its height again. A separate
+    bounded cache shares adjusted starts for up to 4,096 source chunks. Workers choose the height with
+    the source chunk's random stream before placing any intersection, retaining the burial draw in that
+    source chunk's loot stream. Neighboring workers reuse the chosen height and skip that draw, as vanilla
+    does after its first piece pass. This fixes a source-first schedule; a vanilla world that first places
+    another intersecting chunk can choose a different burial offset and loot seeds.
+    Placement retains water and fills liquid containers from source water above or beside them, recomputes
+    stair, fence and door shapes (including existing blocks beside the template), and assigns chest loot tables without rolling
+    items. Workers read saved neighboring terrain before regenerating missing columns, and clip writes to
+    the target chunk. Edge shape comparisons use pre-placement neighbors; general block updates and the
+    complete feature-stage schedule remain for later stages.
+    `shipwreck_parity` compares every block, all six heightmaps, chest NBT, saved records and postprocessing
+    in 656 synthetic chunks across two seeds, plus their replays after vanilla reloads Harpas records.
+    Cases cover every template and rotation, multiple palettes, slopes, water, negative coordinates, chunk
+    boundaries and both vertical world limits. Five natural shipwrecks across two seeds also run through
+    workers, reversed worker request order, Anvil reloads and repeated placement, including a chunk shared
+    with buried treasure. Two saved
+    neighbor cases check altered ocean-floor columns and an already adjusted origin. Pull requests use one
+    seed; the treasure overlap is included in the full sample.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
@@ -359,7 +382,9 @@ and the owner **accepts it once**:
   still updates the flags as vanilla does. Jungle temple workers likewise retain all four incoming chest and
   dispenser flags: a repeated temple pass clears those positions and must recreate the same loot containers.
   Igloo pass replays also match vanilla, including its height changing when the existing roof raises the
-  entrance's `WORLD_SURFACE_WG` height. This is not a complete FEATURES-stage round trip.
+  entrance's `WORLD_SURFACE_WG` height. Shipwreck replays retain their saved height. A beached replay skips
+  the original burial draw, so its chest loot seeds can change, as in vanilla. These comparisons do not
+  establish a complete FEATURES-stage round trip.
   Full feature-stage resumption, other structure blocks and lighting
   remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined

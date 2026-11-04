@@ -21,6 +21,7 @@ mod mineshaft;
 mod monument;
 mod placement;
 mod ruined_portal;
+mod shipwreck;
 mod start;
 mod storage;
 mod stronghold;

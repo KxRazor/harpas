@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Ocean and beached shipwreck blocks generated on chunk workers from the owner's templates, with vanilla's
+  height adjustment shared across workers with a source-first schedule, rotated palettes, waterlogging,
+  block shapes and chest loot metadata. Saved adjusted
+  positions survive Anvil reloads, and placement/replay is compared against vanilla, including chunk edges,
+  saved neighbors and a chunk shared with buried treasure (`harpas-worldgen`, `harpas-engine`).
+
 - Mojang EULA acceptance: the server starts once `eula = true` is in `harpas.toml`, `HARPAS_EULA=true` is
   set or a vanilla `eula.txt` accepts it; an interactive console asks once and saves the answer
   (`harpas-server`).

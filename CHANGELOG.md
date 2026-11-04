@@ -103,6 +103,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   saved neighbors, Anvil reloads and vanilla replay of the pyramid pass are compared against Minecraft 26.1.
   Incoming chest flags are retained while chunks remain at `carvers`, so vanilla recreates the same chest loot
   on resumption; other features remain pending (`harpas-worldgen`, `harpas-engine`).
+- Jungle temple blocks on chunk workers, including average ground height, all four orientations, randomized
+  stone, tripwire traps, the redstone puzzle and chest/dispenser loot metadata. Placement, saved neighbors,
+  Anvil reloads and vanilla replay are compared against Minecraft 26.1. Incoming container flags are retained
+  at `carvers` for resumption; mechanism ticking remains for M4 (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
 

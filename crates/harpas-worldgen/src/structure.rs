@@ -15,6 +15,7 @@ use crate::generator::NoiseBasedChunkGenerator;
 
 mod desert_pyramid;
 mod jigsaw;
+mod jungle_temple;
 mod mineshaft;
 mod monument;
 mod placement;

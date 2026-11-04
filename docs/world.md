@@ -320,7 +320,17 @@ and the owner **accepts it once**:
     chests, saved flags and the bottom of the world, then compares replay after loading Harpas's records in vanilla.
     It also compares eight natural worker chunks across two seeds, their Anvil reloads and pyramid-pass replay,
     and checks a saved source with altered blocks in the neighboring terrain. Pull requests use one seed.
-    Other structure types remain unplaced.
+  - Jungle temple blocks run on chunk workers with average `MOTION_BLOCKING_NO_LEAVES` ground height,
+    saved `HPos`, randomized cobblestone/mossy cobblestone, rotated stairs and mechanisms, tripwire traps,
+    vines and the piston/lever puzzle. Two chests and two dispensers save their loot tables and decoration-seeded
+    loot without rolling items. New temples fit in their source chunk; saved pieces can place intersections
+    across boundaries, reading saved neighboring terrain when orienting chests. Mechanism ticking belongs to M4.
+    `jungle_temple_parity` compares every block, all six heightmaps, block entity NBT, saved starts and
+    postprocessing in 208 synthetic chunks across two seeds, then compares their replays after vanilla loads
+    Harpas records. Cases cover every rotation and container flag, slopes, water, negative coordinates,
+    four-chunk pieces, negative `HPos` resumption and both vertical world limits. Two natural worker chunks
+    across two seeds, worker-pass replay, Anvil reloads and a saved neighbor with altered terrain are also
+    checked. Pull requests use one seed. Other structure types remain unplaced.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
@@ -329,7 +339,9 @@ and the owner **accepts it once**:
   saved height can also be resumed; their witch and cat are left for vanilla or M4. Pyramid workers retain the
   incoming chest flags while saving at `carvers`: vanilla clears the alcoves when it repeats pyramid placement,
   so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API
-  still updates the flags as vanilla does. Full feature-stage resumption, other structure blocks and lighting
+  still updates the flags as vanilla does. Jungle temple workers likewise retain all four incoming chest and
+  dispenser flags: a repeated temple pass clears those positions and must recreate the same loot containers.
+  Full feature-stage resumption, other structure blocks and lighting
   remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).

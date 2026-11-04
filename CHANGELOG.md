@@ -89,6 +89,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   yet (`harpas-worldgen`).
 - Ocean monument starts, with the surrounding biome volume, the saved building piece and its references, checked
   against Minecraft 26.1. Internal rooms and block placement remain pending (`harpas-worldgen`).
+- Structure terrain adaptation (`Beardifier`), with all five modes, rigid pieces and jigsaw junctions added to
+  interpolated terrain density before aquifers. Density samples and whole chunks around actual structures are
+  compared with Minecraft 26.1. The generator accepts referenced starts through this sampler; integration with
+  the engine's workers, saving starts/references and placing structure blocks remain pending (`harpas-worldgen`).
 
 ### Changed
 

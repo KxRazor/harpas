@@ -34,7 +34,7 @@ There are three levels, from the cheapest to the closest to what a player sees:
 | Level | Reference | Harnesses | Runs in |
 |---|---|---|---|
 | **Java semantics** | Java programs written for the test, using only Java SE classes and no Mojang files | `java_parity` in `harpas-core` and `harpas-worldgen` | CI, every pull request, every platform |
-| **Vanilla's classes** | Java probes compiled against the server jar, which call vanilla's own code | `vanilla_parity`, `chunk_parity`, `structure_placement_parity`, `structure_start_parity`, `template_parity` | Parity workflow |
+| **Vanilla's classes** | Java probes compiled against the server jar, which call vanilla's own code | `vanilla_parity`, `chunk_parity`, `beardifier_parity`, `structure_placement_parity`, `structure_start_parity`, `template_parity` | Parity workflow |
 | **Vanilla on the network** | The server itself, started on loopback and spoken to with the protocol codecs | `block_entity_parity` | Parity workflow |
 
 The first level shows that Rust computes what the same algorithm computes in Java, including `int` overflow and
@@ -70,8 +70,8 @@ comparison that covers the subsystem's behavior and runs in CI. The figures are 
 | Subsystem | Status | Compared | Not compared yet |
 |---|---|---|---|
 | Random generators, Java math, noise | Partial | Java semantics (`java_parity`) | Vanilla's classes directly, beyond what world generation exercises |
-| Terrain, aquifers, ore veins, surface, carvers | Partial | Intermediate results, and every block, biome, carving mask, fluid update and heightmap of 1,621 chunks in 5 seeds with all 54 Overworld biomes | Other seeds; the effect of structures on terrain; Nether and End |
-| Structures | Partial | Placements, starts, pieces and references of the structure types made so far, including ocean monuments' saved building piece; all 1,202 templates and 188 pools | Other structure types; ocean monuments' internal rooms; placing structures in chunks |
+| Terrain, aquifers, ore veins, surface, carvers | Partial | Intermediate results, and every block, biome, carving mask, fluid update and heightmap of 1,621 chunks in 5 seeds with all 54 Overworld biomes; additional chunks in 2 seeds around all four structure terrain-adaptation modes | Other seeds; structure block placement; Nether and End |
+| Structures | Partial | Placements, starts, pieces and references of the structure types made so far, including ocean monuments' saved building piece; all 1,202 templates and 188 pools; 4,160,772 terrain-adaptation density samples including all five modes and chunk boundaries | Other structure types; ocean monuments' internal rooms; placing structures in chunks; engine worker integration |
 | Block entity updates | Partial | All 49 types and representative update data, on the network | Live changes |
 | Features | Not started | | |
 | Light | Not started | | |

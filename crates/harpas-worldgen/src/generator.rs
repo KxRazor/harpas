@@ -12,6 +12,7 @@ use harpas_core::chunk::{PalettedContainer, Section, Strategy};
 use harpas_core::random::{LegacyRandom, WorldgenRandom};
 
 use crate::aquifer::{Aquifer, GlobalFluidPicker};
+use crate::beardifier::Beardifier;
 use crate::biome::{BiomeManager, MultiNoiseBiomeSource};
 use crate::carver::{
     CarverConfig, CarverShape, CarvingEnvironment, CarvingMask, CavePart, canyon_should_skip,
@@ -738,7 +739,7 @@ impl NoiseBasedChunkGenerator {
         aquifer: &mut Aquifer,
         [block_x, block_y, block_z]: [i32; 3],
     ) -> u32 {
-        let final_density = noise_chunk.eval_node(self.router.final_density);
+        let final_density = noise_chunk.interpolated_density();
         match aquifer.compute_substance(noise_chunk, block_x, block_y, block_z, final_density) {
             Some(fluid_or_air) => fluid_or_air,
             None => self
@@ -1059,6 +1060,18 @@ impl NoiseBasedChunkGenerator {
         chunk_z: i32,
         data: &WorldgenData,
     ) -> Result<GeneratedChunk, WorldgenDataError> {
+        self.generate_chunk_carved_with_beardifier(chunk_x, chunk_z, data, Beardifier::default())
+    }
+
+    /// Generates through carvers with the structure density collected from the chunk's referenced starts.
+    /// This adjusts terrain only; structure blocks and persistence of starts/references belong to later stages.
+    pub fn generate_chunk_carved_with_beardifier(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        data: &WorldgenData,
+        beardifier: Beardifier,
+    ) -> Result<GeneratedChunk, WorldgenDataError> {
         let mut chunk = GeneratedChunk::new(
             chunk_x,
             chunk_z,
@@ -1066,7 +1079,9 @@ impl NoiseBasedChunkGenerator {
             self.sampling.height,
             data.biomes.len().max(1),
         );
-        let mut noise_chunk = self.create_noise_chunk(chunk_x, chunk_z);
+        let mut noise_chunk = self
+            .create_noise_chunk(chunk_x, chunk_z)
+            .with_beardifier(beardifier);
         let mut aquifer = self.create_aquifer(chunk_x, chunk_z);
         self.populate_biomes(&mut chunk, &mut noise_chunk);
         self.fill_from_noise_with_aquifer(&mut chunk, &mut noise_chunk, &mut aquifer);

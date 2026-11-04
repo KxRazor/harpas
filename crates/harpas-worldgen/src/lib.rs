@@ -3,6 +3,7 @@
 //! Design: `docs/world.md`.
 
 pub mod aquifer;
+pub mod beardifier;
 pub mod biome;
 pub mod carver;
 pub mod data;
@@ -20,6 +21,7 @@ pub use aquifer::{
     Aquifer, FluidStatus, GlobalFluidPicker, NoiseBasedAquifer, WAY_BELOW_MIN_Y, clamped_map, map,
     quantize, similarity,
 };
+pub use beardifier::Beardifier;
 pub use biome::{
     BiomeManager, MultiNoiseBiomeSource, Parameter, ParameterPoint, RTree, TargetPoint,
     nether_biome_parameters, overworld_biome_parameters, quantize_coord, unquantize_coord,

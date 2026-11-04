@@ -180,6 +180,9 @@ Harpas uses its own storage:
   - positional factories (`at(x, y, z)`, `from_hash_of`, `from_seed`), persisted named sequences
     (`RandomSequence`), and `WorldgenRandom` seeding for chunk decorations, placed features, carvers,
     regional structures and slime chunks [9].
+    `WorldgenRandom` samples bits as `BitRandomSource` does, even with a Xoroshiro source: in particular its
+    `nextLong` combines two high-32-bit draws. Its methods and decoration seeds are compared directly with
+    vanilla's wrapper by `worldgen_random_parity`.
 - **Java's math semantics** (`harpas_core::math`) where results differ from Rust's defaults: wrapping
   `MIN / -1` division, `Math.floorDiv` and `Math.floorMod` with negative divisors [7], masked shift counts
   and logical `>>>`, `Math.round` ties toward `+∞` without `x + 0.5` double-rounding [7], a cross-platform

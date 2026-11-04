@@ -74,6 +74,34 @@ pub(super) struct Structures {
     starts: StartCache,
 }
 
+pub(super) struct ChunkStructures {
+    pub beardifier: Beardifier,
+    pub starts: Vec<StructureStart>,
+    references: Compound,
+}
+
+impl ChunkStructures {
+    pub(super) fn empty() -> Self {
+        Self {
+            beardifier: Beardifier::default(),
+            starts: Vec::new(),
+            references: Compound::new(),
+        }
+    }
+
+    pub(super) fn into_nbt(self) -> Compound {
+        let starts: Compound = self
+            .starts
+            .iter()
+            .map(|start| (start.structure.clone(), Nbt::Compound(start.to_nbt())))
+            .collect();
+        let mut tag = Compound::new();
+        tag.insert("starts", starts);
+        tag.insert("References", self.references);
+        tag
+    }
+}
+
 impl Structures {
     pub(super) fn new(
         seed: i64,
@@ -114,7 +142,7 @@ impl Structures {
         generator: &NoiseBasedChunkGenerator,
         data: &WorldgenData,
         read: &ChunkReader<'_>,
-    ) -> io::Result<(Beardifier, Compound)> {
+    ) -> io::Result<ChunkStructures> {
         let own = self.starts(pos, generator, data, read)?;
         let mut nearby = Vec::new();
         for x in pos.x - 8..=pos.x + 8 {
@@ -135,10 +163,6 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        let starts: Compound = own
-            .iter()
-            .map(|start| (start.structure.clone(), Nbt::Compound(start.to_nbt())))
-            .collect();
         let mut references = Compound::new();
         for start in referenced {
             let packed = i64::from(start.chunk.0 as u32) | (i64::from(start.chunk.1 as u32) << 32);
@@ -149,10 +173,11 @@ impl Structures {
             sources.push(packed);
             references.insert(start.structure.clone(), Nbt::LongArray(sources));
         }
-        let mut tag = Compound::new();
-        tag.insert("starts", starts);
-        tag.insert("References", references);
-        Ok((beardifier, tag))
+        Ok(ChunkStructures {
+            beardifier,
+            starts: own.as_ref().clone(),
+            references,
+        })
     }
 }
 

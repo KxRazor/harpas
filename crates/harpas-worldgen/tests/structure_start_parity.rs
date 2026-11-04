@@ -102,6 +102,10 @@ fn compare_seed(
 ) -> (usize, usize, usize) {
     let generator = NoiseBasedChunkGenerator::overworld(seed, data).expect("compile generator");
     let state = StructureState::new(seed, data, &generator).expect("structure state");
+    assert!(
+        state.supports_set(data, "minecraft:ocean_monuments"),
+        "ocean monuments must take part in the comparison"
+    );
     let sets: Vec<_> = state
         .possible_sets()
         .iter()
@@ -150,6 +154,10 @@ fn compare_seed(
             }
         }
     }
+    assert!(
+        structures.get("minecraft:monument").copied().unwrap_or(0) > 0,
+        "the sample must exercise ocean monument starts for seed {seed}"
+    );
     for set in &sets {
         for &(x, z) in state.ring_positions(set).unwrap_or_default() {
             for start in state

@@ -87,6 +87,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   use them yet (`harpas-worldgen`).
 - Mineshaft starts of both kinds, with their rooms, corridors, crossings and stairs. The generator does not use them
   yet (`harpas-worldgen`).
+- Ocean monument starts, with the surrounding biome volume, the saved building piece and its references, checked
+  against Minecraft 26.1. Internal rooms and block placement remain pending (`harpas-worldgen`).
 
 ### Changed
 

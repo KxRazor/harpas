@@ -256,7 +256,11 @@ and the owner **accepts it once**:
     (`NoiseBasedChunkGenerator::base_height`, one noise column as vanilla's `iterateNoiseColumn` reads it), checks
     the biome there and makes the pieces. `references_in_chunk` lists the starts within 8 chunks whose bounding
     boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts, igloos, shipwrecks, ocean ruins,
-    ruined portals, mineshafts, strongholds and the jigsaw structures below are made so far; sets with other structure types are skipped. Vanilla
+    ruined portals, mineshafts, ocean monuments, strongholds and the jigsaw structures above are made so far; sets with
+    other structure types are skipped. Ocean monuments check the full 3D biome volume within 29 blocks of a point
+    9 blocks into the start chunk at sea level, against `required_ocean_monument_surrounding`. The biome at the
+    generation point on the ocean floor is checked separately against the structure's allowed biomes. Their one
+    saved building piece is laid out; internal rooms follow with block placement. Vanilla
     places shipwrecks wider or taller than 32 blocks by another rule, which none of its templates reaches, so Harpas
     refuses them. The `structure_start_parity`
     harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,

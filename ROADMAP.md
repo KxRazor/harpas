@@ -129,8 +129,9 @@ vanilla for the same seed.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
         comparison as they are ported.
-- [ ] Run the parity harnesses in CI on pull requests, as a required check, after the maintainers accept the EULA
-      for CI ([docs/parity.md](docs/parity.md#mojang-eula)).
+- [x] Run the parity harnesses in CI: a reduced sample on pull requests and the full one on `main`
+      ([docs/parity.md](docs/parity.md#running-the-comparisons)).
+- [ ] Make `parity against vanilla` a required check.
 - [ ] Shared Java chunk encoding cache.
 - [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
 - [x] Older and newer world detection with clear errors.

@@ -41,8 +41,16 @@ The first level shows that Rust computes what the same algorithm computes in Jav
 `StrictMath`. It does not show that the algorithm is the one vanilla uses, which is what the other two levels are
 for.
 
-A test can also need vanilla's files without comparing anything: `world_loading` installs the vanilla data from the
-reference server to start a new world, and checks Harpas alone.
+A test can also need vanilla's files without comparing anything. These check Harpas alone, so they say that it can
+use vanilla's data, not that the results match vanilla's, and they add nothing to the [coverage](#coverage):
+
+| Test | Checks |
+|---|---|
+| `datapack_parity` in `harpas-worldgen` | The datapack loads and goes through every stage of generation |
+| `generated_chunk_parity` in `harpas-engine` | The chunk workers generate a chunk, save it and load it back |
+| `world_loading` in `harpas-server` | A real server starts a new world, keeps its seed when reopened, and vanilla opens the world |
+
+They live with the comparisons, and are named like them, so that the Parity workflow runs them.
 
 ### How a probe works
 
@@ -108,7 +116,9 @@ the result of the merge, after the change has landed.
 ### Locally
 
 `cargo test` skips the comparisons with the reference server when `HARPAS_VANILLA_SERVER_DIR` is not set, and those
-tests still report `ok`. A passing `cargo test` says nothing about them.
+tests still report `ok`. A passing `cargo test` says nothing about them. The tests that only need vanilla's files also
+accept the pack of a local test server, `test-environment/.harpas/vanilla-data/26.1.zip`, which is git-ignored and so
+never in CI.
 
 To run them, download the server to a folder outside the repository. Setting `MOJANG_EULA_ACCEPTED=true` means that
 you accept the [Minecraft EULA](https://aka.ms/MinecraftEULA):
@@ -141,7 +151,9 @@ repository's permissions next to untrusted code, which is not worth it for a che
 1. Put it in the `tests/` folder of the crate it checks, in a file named `<name>_parity.rs`. **The workflow only runs
    test files with that name**, so a harness named otherwise never compares in CI and still looks like it passes. Read
    `HARPAS_VANILLA_SERVER_DIR`, and without it print why the test is skipped and return. If it takes more than a
-   moment, make it compare less with the reduced sample.
+   moment, make it compare less with the reduced sample. The same goes for a test that only needs vanilla's files: a
+   unit test in `src/` is outside what the workflow selects, so it would skip there and still pass. `VanillaData` in
+   `crates/harpas-worldgen/tests/reference/mod.rs` finds the files.
 2. Make the vanilla side repeatable. When vanilla depends on something like its thread history, the probe fixes that
    state and the document says so, as with [biome ties](#known-differences).
 3. **Prove that it can fail.** Break the Harpas side on purpose and check that the harness notices, and say so in the

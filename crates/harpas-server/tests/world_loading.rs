@@ -306,42 +306,94 @@ fn server_sends_saved_block_states_over_a_real_connection() {
     }
 }
 
+/// Gives the server in `folder` vanilla's data: a local test server's pack if there is one, which CI does not have,
+/// or else the data of the reference server. Returns false if there is neither.
+fn install_vanilla_data(folder: &Folder, reference: Option<&PathBuf>) -> bool {
+    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-environment/.harpas/vanilla-data/26.1.zip");
+    let installed = folder.0.join(".harpas/vanilla-data/26.1.zip");
+    fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    if pack.is_file() {
+        fs::copy(pack, installed).unwrap();
+        return true;
+    }
+    let Some(reference) = reference else {
+        return false;
+    };
+    let eula = fs::read_to_string(reference.join("eula.txt")).expect("reference EULA");
+    assert!(eula.lines().any(|line| line.trim() == "eula=true"));
+    let output = Command::new(env!("CARGO_BIN_EXE_harpas"))
+        .args(["vanilla-data", "install", "--from"])
+        .arg(reference.join("server.jar"))
+        .current_dir(&folder.0)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "could not install test data: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
+#[test]
+fn a_text_seed_starts_a_normal_world_that_keeps_it_when_reopened() {
+    if !loopback_available() {
+        return;
+    }
+    let reference = std::env::var_os("HARPAS_VANILLA_SERVER_DIR").map(PathBuf::from);
+    let folder = Folder::new();
+    if !install_vanilla_data(&folder, reference.as_ref()) {
+        eprintln!("Skipping a new world: HARPAS_VANILLA_SERVER_DIR is not set");
+        return;
+    }
+    fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
+    let properties = "server-ip=127.0.0.1\nserver-port=0\nonline-mode=false\nlevel-seed=hello\n";
+    fs::write(folder.0.join("server.properties"), properties).unwrap();
+    let log = folder.0.join("logs/latest.log");
+    let prepared = "Prepared Overworld terrain generation for seed 99162322";
+    let world = folder.0.join("world");
+
+    let (mut server, _) = start(&folder);
+    let lines = fs::read_to_string(&log).unwrap();
+    assert!(lines.contains(prepared), "{lines}");
+    assert_eq!(
+        harpas_anvil::read_world_seed(&world).unwrap().unwrap().0,
+        99_162_322
+    );
+    assert!(harpas_anvil::read_level(&world).unwrap().is_some());
+    stop(&mut server);
+
+    fs::write(
+        folder.0.join("server.properties"),
+        properties.replace("level-seed=hello", "level-seed=999"),
+    )
+    .unwrap();
+    let (mut restarted, _) = start(&folder);
+    let lines = fs::read_to_string(&log).unwrap();
+    assert!(lines.contains(prepared), "{lines}");
+    assert_eq!(
+        harpas_anvil::read_world_seed(&world).unwrap().unwrap().0,
+        99_162_322
+    );
+    stop(&mut restarted);
+}
+
 #[test]
 fn a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available() {
     if !loopback_available() {
         return;
     }
-    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-environment/.harpas/vanilla-data/26.1.zip");
     let reference = std::env::var_os("HARPAS_VANILLA_SERVER_DIR").map(PathBuf::from);
-    if !pack.is_file() && reference.is_none() {
+    let folder = Folder::new();
+    if !install_vanilla_data(&folder, reference.as_ref()) {
+        eprintln!("Skipping a new world: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
     }
-    let folder = Folder::new();
     fs::write(folder.0.join("harpas.toml"), "eula = true\n").unwrap();
     let properties = "server-ip=127.0.0.1\nserver-port=0\nonline-mode=false\nnetwork-compression-threshold=-1\nview-distance=2\nlevel-seed=42\n";
     fs::write(folder.0.join("server.properties"), properties).unwrap();
-    let installed = folder.0.join(".harpas/vanilla-data/26.1.zip");
-    fs::create_dir_all(installed.parent().unwrap()).unwrap();
-    if pack.is_file() {
-        fs::copy(pack, installed).unwrap();
-    } else {
-        let reference = reference.as_ref().unwrap();
-        let eula = fs::read_to_string(reference.join("eula.txt")).expect("reference EULA");
-        assert!(eula.lines().any(|line| line.trim() == "eula=true"));
-        let output = Command::new(env!("CARGO_BIN_EXE_harpas"))
-            .args(["vanilla-data", "install", "--from"])
-            .arg(reference.join("server.jar"))
-            .current_dir(&folder.0)
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "could not install test data: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
     let (mut server, address) = start(&folder);
     let world = folder.0.join("world");
     assert_eq!(

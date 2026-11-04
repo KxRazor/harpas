@@ -131,7 +131,7 @@ vanilla for the same seed.
         comparison as they are ported.
 - [x] Run the parity harnesses in CI: a reduced sample on pull requests and the full one on `main`
       ([docs/parity.md](docs/parity.md#running-the-comparisons)).
-- [ ] Make `parity against vanilla` a required check.
+- [x] Make `parity against vanilla` a required check.
 - [ ] Shared Java chunk encoding cache.
 - [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
 - [x] Older and newer world detection with clear errors.

@@ -96,7 +96,7 @@ subsections. A release moves `Unreleased` under its version and date.
 3. **Checks, all required:**
    - build and tests on Linux, Windows and macOS;
    - fuzzing smoke runs of every decoder;
-   - parity harnesses against vanilla ([world.md](world.md#parity-strategy));
+   - parity harnesses against vanilla ([parity.md](parity.md));
    - plugin compatibility suite against Paper ([jvm.md](jvm.md#validation));
    - benchmarks, with no unexplained regression against the previous release.
 4. **Documentation:** move the changelog entries, publish the parity report, regenerate

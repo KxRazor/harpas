@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Downloads Mojang's server jar for parity tests in CI only (docs/world.md#parity-strategy).
+# Downloads Mojang's server jar for parity tests only (docs/parity.md).
 # The jar is never committed, cached, uploaded as an artifact or shipped in a release.
 #
 # Usage: ci/fetch-vanilla-server.sh <minecraft-version> <output-dir>
 # Requires MOJANG_EULA_ACCEPTED=true: the maintainers' acceptance of the Minecraft EULA
-# (https://aka.ms/MinecraftEULA) for running the reference server in CI.
+# (https://aka.ms/MinecraftEULA) for running the reference server.
 set -euo pipefail
 
 version=$1
@@ -12,7 +12,7 @@ out=$2
 manifest=https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
 
 if [[ "${MOJANG_EULA_ACCEPTED:-}" != "true" ]]; then
-    echo "MOJANG_EULA_ACCEPTED is not 'true': the Minecraft EULA has not been accepted for CI." >&2
+    echo "MOJANG_EULA_ACCEPTED is not 'true': the Minecraft EULA has not been accepted." >&2
     exit 1
 fi
 

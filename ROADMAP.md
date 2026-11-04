@@ -37,7 +37,7 @@ are in place.
 - [x] Add `CHANGELOG.md` in the format described in [docs/releases.md](docs/releases.md#changelog).
 - [x] Add automated license reporting for Rust dependencies, feeding `THIRD_PARTY_NOTICES.md`.
 - [x] Set up the parity CI job skeleton: download Mojang's server for tests only, after EULA acceptance in CI
-      ([docs/world.md](docs/world.md#parity-strategy)).
+      ([docs/parity.md](docs/parity.md)).
 
 ## M1 — Risk prototypes
 
@@ -126,9 +126,12 @@ vanilla for the same seed.
   - [x] Jigsaw structure starts for villages, pillager outposts, ancient cities, trail ruins and trial chambers,
         with their pieces' elements and junctions, pool aliases and random start heights.
 - [ ] Light engine port.
-- [x] Parity harness: block-by-block generation comparison against vanilla in CI.
+- [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
         comparison as they are ported.
+- [x] Run the parity harnesses in CI: a reduced sample on pull requests and the full one on `main`
+      ([docs/parity.md](docs/parity.md#running-the-comparisons)).
+- [ ] Make `parity against vanilla` a required check.
 - [ ] Shared Java chunk encoding cache.
 - [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
 - [x] Older and newer world detection with clear errors.
@@ -153,7 +156,7 @@ as shown by the parity report.
       operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
-- [ ] Parity report per subsystem, published with the release ([docs/world.md](docs/world.md#parity-strategy)).
+- [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).
 
 ## M5 — Bukkit plugins by default (0.4.0)
 

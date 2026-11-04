@@ -305,14 +305,32 @@ and the owner **accepts it once**:
     and compares repeated placement after vanilla reloads the records. Below zero, vanilla's negative `HPos`
     sentinel intentionally causes another ground adjustment on each pass; these cases compare both passes.
     The vanilla probe suppresses entity spawning while observing blocks and restores the original flags.
+  - Desert pyramid blocks also run on chunk workers: the lowest `MOTION_BLOCKING_NO_LEAVES` height over the
+    entire footprint, the random burial offset, foundation columns, rotated sandstone blocks and decorations,
+    four chests with decoration-seeded loot, the pressure plate/TNT trap and the archaeology cellar. The cellar
+    uses the region's positional random stream for its stairs and collapsed roof; suspicious sand selection is
+    sorted and shuffled with a separate positional legacy stream and stores loot seeds from block positions.
+    Workers read saved neighbor terrain where available and otherwise generate it through carvers with the same
+    structure adaptation. For new pieces, Harpas fixes the shared height as if vanilla processed the source chunk
+    first, independent of worker order; already saved heights take precedence. The probe uses that same schedule
+    for worker comparisons. A vanilla world that processes another intersecting chunk first may choose a different
+    burial offset. Cached starts remain immutable, and neighbor starts are not copied into the target's records.
+    `desert_pyramid_parity` compares every block, all six heightmaps, chest/brushable NBT and saved starts in 160
+    synthetic chunks across two seeds, including all rotations, slopes, water, negative coordinates, boundary
+    chests, saved flags and the bottom of the world, then compares replay after loading Harpas's records in vanilla.
+    It also compares eight natural worker chunks across two seeds, their Anvil reloads and pyramid-pass replay,
+    and checks a saved source with altered blocks in the neighboring terrain. Pull requests use one seed.
     Other structure types remain unplaced.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
   status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure placement can be repeated
   by vanilla without replacing its chest or loot metadata in the compared cases. Swamp hut blocks and their
-  saved height can also be resumed; their witch and cat are left for vanilla or M4. Features, other structure
-  blocks and lighting remain separate roadmap tasks; generated chunks do not yet include them.
+  saved height can also be resumed; their witch and cat are left for vanilla or M4. Pyramid workers retain the
+  incoming chest flags while saving at `carvers`: vanilla clears the alcoves when it repeats pyramid placement,
+  so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API
+  still updates the flags as vanilla does. Full feature-stage resumption, other structure blocks and lighting
+  remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline

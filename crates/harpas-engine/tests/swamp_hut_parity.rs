@@ -204,7 +204,12 @@ fn hut_blocks_metadata_workers_and_vanilla_resumption_match() {
             }
             let name = format!("boundary-{di}-{i}");
             inputs.insert(name.clone(), input(&chunk, 42, &own));
-            let entities = own[0].place_in_chunk(&mut chunk, 42);
+            let entities = own[0].place_in_chunk(
+                &mut chunk,
+                42,
+                &mut |_, _| unreachable!("no pyramid"),
+                &mut |_, _, _| unreachable!("no pyramid"),
+            );
             expected.insert(name, snapshot(&chunk, &own, entities));
             own[0] = StructureStart::from_nbt(&own[0].to_nbt(), &data, &templates)
                 .unwrap()
@@ -444,9 +449,19 @@ fn fixture(
     expected: &mut Compound,
 ) {
     inputs.insert(name, input(&chunk, 42, &own));
-    let entities = own[0].place_in_chunk(&mut chunk, 42);
+    let entities = own[0].place_in_chunk(
+        &mut chunk,
+        42,
+        &mut |_, _| unreachable!("no pyramid"),
+        &mut |_, _, _| unreachable!("no pyramid"),
+    );
     expected.insert(name, snapshot(&chunk, &own, entities));
-    let entities = own[0].place_in_chunk(&mut chunk, 42);
+    let entities = own[0].place_in_chunk(
+        &mut chunk,
+        42,
+        &mut |_, _| unreachable!("no pyramid"),
+        &mut |_, _, _| unreachable!("no pyramid"),
+    );
     let mut resumed = snapshot(&chunk, &own, entities);
     resumed.remove("PostProcessing");
     let Some(Nbt::Compound(mut input)) = inputs.remove(name) else {
@@ -511,7 +526,12 @@ fn workers_place_saved_neighbor_huts_and_preserve_source_records() {
     };
     let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
     let mut baseline = terrain.generate_chunk_carved(pos.x, pos.z, &data).unwrap();
-    saved.place_in_chunk(&mut baseline, seed);
+    saved.place_in_chunk(
+        &mut baseline,
+        seed,
+        &mut |_, _| unreachable!("no pyramid"),
+        &mut |_, _, _| unreachable!("no pyramid"),
+    );
     let mut expected = harpas_engine::worldgen::into_anvil(baseline).unwrap();
     let mut references = Compound::new();
     references.insert("minecraft:swamp_hut", Nbt::LongArray(vec![0]));

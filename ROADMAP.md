@@ -141,6 +141,9 @@ vanilla for the same seed.
   - [x] Swamp hut block placement on chunk workers: ground height, rotated walls and roof, support columns and
         fence postprocessing, with vanilla placement/resumption, chunk-boundary and Anvil reload comparisons.
         Witch and cat spawning follows in M4; their saved flags remain unchanged.
+  - [x] Desert pyramid block placement on chunk workers: shared lowest ground height, foundations, rotated
+        blocks, four loot chests, TNT trap and archaeology cellar, with chunk-boundary, saved-neighbor, Anvil
+        reload and vanilla placement/resumption comparisons. Chest flags stay deferred until FEATURES is complete.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

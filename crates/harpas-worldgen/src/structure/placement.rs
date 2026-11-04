@@ -1,4 +1,4 @@
-//! Structure block placement after carvers: buried treasure and swamp huts.
+//! Structure block placement after carvers.
 
 use harpas_core::block::block_states;
 use harpas_core::nbt::Compound;
@@ -9,8 +9,43 @@ use crate::{GeneratedChunk, HeightmapType};
 
 impl StructureStart {
     /// Places implemented pieces in the target chunk, updates their saved bounds, and returns newly created
-    /// block entities. Other structure types are left for vanilla's later generation stages.
-    pub fn place_in_chunk(&mut self, chunk: &mut GeneratedChunk, seed: i64) -> Vec<Compound> {
+    /// block entities. `height_at` supplies the pre-feature MOTION_BLOCKING_NO_LEAVES height, including
+    /// neighboring chunks. `block_at` reads existing blocks outside the target chunk. Other structure types
+    /// are left for vanilla's later generation stages.
+    pub fn place_in_chunk(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        seed: i64,
+        height_at: &mut impl FnMut(i32, i32) -> i32,
+        block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+    ) -> Vec<Compound> {
+        if self.structure == "minecraft:desert_pyramid" {
+            let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+            let decoration =
+                random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
+            random.set_feature_seed(decoration, 1, 4);
+            let mut region = XoroshiroRandom::new(seed)
+                .fork_positional()
+                .from_hash_of("minecraft:worldgen_region_random")
+                .fork_positional()
+                .at(chunk.chunk_x() * 16, 0, chunk.chunk_z() * 16);
+            let mut entities = Vec::new();
+            for piece in &mut self.pieces {
+                if piece.kind == "minecraft:tedp" {
+                    entities.extend(super::desert_pyramid::place(
+                        piece,
+                        chunk,
+                        &mut random,
+                        &mut region,
+                        seed,
+                        height_at,
+                        block_at,
+                    ));
+                }
+            }
+            self.update_bounds();
+            return entities;
+        }
         if self.structure == "minecraft:swamp_hut" {
             for piece in &mut self.pieces {
                 if piece.kind == "minecraft:tesh" {
@@ -115,6 +150,33 @@ impl StructureStart {
         entities
     }
 
+    /// Fixes a new pyramid's shared height as if vanilla processed its source chunk first.
+    /// Call before placing its intersections on independent workers; saved heights are retained.
+    pub fn prepare_pyramid_height(
+        &mut self,
+        seed: i64,
+        max_y: i32,
+        height_at: &mut impl FnMut(i32, i32) -> i32,
+    ) {
+        if self.structure != "minecraft:desert_pyramid" {
+            return;
+        }
+        let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+        let decoration = random.set_decoration_seed(seed, self.chunk.0 * 16, self.chunk.1 * 16);
+        random.set_feature_seed(decoration, 1, 4);
+        for piece in &mut self.pieces {
+            if piece.kind == "minecraft:tedp" {
+                super::desert_pyramid::align_height(
+                    piece,
+                    random.next_int_bounded(3),
+                    max_y,
+                    height_at,
+                );
+            }
+        }
+        self.update_bounds();
+    }
+
     fn update_bounds(&mut self) {
         if let Some(first) = self.pieces.first() {
             self.bounding_box = first.bounding_box;
@@ -139,6 +201,10 @@ fn chest_facing(chunk: &GeneratedChunk, x: usize, y: i32, z: usize) -> &'static 
     // North, east, south, west, in Direction.Plane.HORIZONTAL order.
     let neighbors =
         [(x, z - 1), (x + 1, z), (x, z + 1), (x - 1, z)].map(|(x, z)| chunk.block_state(x, y, z));
+    reorient_chest(neighbors)
+}
+
+pub(super) fn reorient_chest(neighbors: [u32; 4]) -> &'static str {
     let states = block_states();
     if neighbors
         .iter()
@@ -206,7 +272,12 @@ mod tests {
         chunk.set_block_state(9, -64, 9, stone);
         chunk.set_block_state(9, 20, 9, deepslate);
         let mut start = start();
-        let entities = start.place_in_chunk(&mut chunk, 42);
+        let entities = start.place_in_chunk(
+            &mut chunk,
+            42,
+            &mut |_, _| unreachable!("no pyramid"),
+            &mut |_, _, _| unreachable!("no pyramid"),
+        );
         assert_eq!(entities.len(), 1);
         assert_eq!(start.bounding_box.min, [-23, -63, 57]);
         assert_eq!(start.pieces[0].bounding_box, start.bounding_box);
@@ -216,7 +287,16 @@ mod tests {
         let chest = chunk.block_state(9, -63, 9);
         let bounds = start.bounding_box;
         let maps = chunk.heightmaps().clone();
-        assert!(start.place_in_chunk(&mut chunk, 42).is_empty());
+        assert!(
+            start
+                .place_in_chunk(
+                    &mut chunk,
+                    42,
+                    &mut |_, _| unreachable!("no pyramid"),
+                    &mut |_, _, _| unreachable!("no pyramid")
+                )
+                .is_empty()
+        );
         assert_eq!(chunk.block_state(9, -63, 9), chest);
         assert_eq!(start.bounding_box, bounds);
         assert_eq!(chunk.heightmaps(), &maps);
@@ -227,7 +307,16 @@ mod tests {
         let mut chunk = GeneratedChunk::new(-2, 3, -64, 384, 1);
         let mut start = start();
         let before = start.clone();
-        assert!(start.place_in_chunk(&mut chunk, 0).is_empty());
+        assert!(
+            start
+                .place_in_chunk(
+                    &mut chunk,
+                    0,
+                    &mut |_, _| unreachable!("no pyramid"),
+                    &mut |_, _, _| unreachable!("no pyramid")
+                )
+                .is_empty()
+        );
         assert_eq!(start, before);
         let mut neighbor = GeneratedChunk::new(-1, 3, -64, 384, 1);
         neighbor.set_block_state(
@@ -237,7 +326,16 @@ mod tests {
             block_states().default_state("minecraft:stone").unwrap(),
         );
         let maps = neighbor.heightmaps().clone();
-        assert!(start.place_in_chunk(&mut neighbor, 0).is_empty());
+        assert!(
+            start
+                .place_in_chunk(
+                    &mut neighbor,
+                    0,
+                    &mut |_, _| unreachable!("no pyramid"),
+                    &mut |_, _, _| unreachable!("no pyramid")
+                )
+                .is_empty()
+        );
         assert_eq!(start, before);
         assert_eq!(neighbor.heightmaps(), &maps);
         assert_eq!(neighbor.block_state(9, 51, 9), 0);

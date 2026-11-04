@@ -57,7 +57,7 @@ fn into_anvil_with_mask(chunk: GeneratedChunk, mask: Vec<i64>) -> io::Result<Chu
     rest.insert("xPos", chunk.chunk_x());
     rest.insert("zPos", chunk.chunk_z());
     rest.insert("yPos", min_section_y);
-    rest.insert("Status", "minecraft:carvers");
+    rest.insert("Status", "minecraft:surface");
     rest.insert("LastUpdate", 0_i64);
     rest.insert("InhabitedTime", 0_i64);
     rest.insert("carving_mask", Nbt::LongArray(mask));

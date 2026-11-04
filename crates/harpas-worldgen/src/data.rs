@@ -598,7 +598,9 @@ impl WorldgenData {
             match category {
                 "noise" => {
                     let params = parse_noise_parameters(&resource_id, &json)?;
-                    data.noises.insert(resource_id, params);
+                    if resource_id != "minecraft:nether_state_selector" {
+                        data.noises.insert(resource_id, params);
+                    }
                 }
                 "density_function" => {
                     let df = parse_density_function(&resource_id, &json)?;

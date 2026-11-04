@@ -115,11 +115,11 @@ you accept the [Minecraft EULA](https://aka.ms/MinecraftEULA):
 
 ```sh
 MOJANG_EULA_ACCEPTED=true ci/fetch-vanilla-server.sh 26.1 ~/harpas-vanilla
-HARPAS_VANILLA_SERVER_DIR=~/harpas-vanilla cargo test --release --workspace --locked
+HARPAS_VANILLA_SERVER_DIR=~/harpas-vanilla cargo test --release --workspace --locked --test '*_parity' --test world_loading
 ```
 
-This compares the full sample. Add `-p <crate> --test <harness>` in place of `--workspace` to run one harness, and set
-`HARPAS_PARITY_SAMPLE=reduced` for the sample of pull requests. Java 25 must be on `PATH`.
+This compares the full sample. Use `-p <crate> --test <harness>` in place of `--workspace` and the patterns to run one
+harness, and set `HARPAS_PARITY_SAMPLE=reduced` for the sample of pull requests. Java 25 must be on `PATH`.
 
 ### Mojang EULA
 
@@ -138,9 +138,10 @@ repository's permissions next to untrusted code, which is not worth it for a che
 
 ## Adding a harness
 
-1. Put it in the `tests/` folder of the crate it checks. Read `HARPAS_VANILLA_SERVER_DIR`, and without it print why
-   the test is skipped and return. The workflow runs the whole workspace, so it needs no change. If it takes more
-   than a moment, make it compare less with the reduced sample.
+1. Put it in the `tests/` folder of the crate it checks, in a file named `<name>_parity.rs`. **The workflow only runs
+   test files with that name**, so a harness named otherwise never compares in CI and still looks like it passes. Read
+   `HARPAS_VANILLA_SERVER_DIR`, and without it print why the test is skipped and return. If it takes more than a
+   moment, make it compare less with the reduced sample.
 2. Make the vanilla side repeatable. When vanilla depends on something like its thread history, the probe fixes that
    state and the document says so, as with [biome ties](#known-differences).
 3. **Prove that it can fail.** Break the Harpas side on purpose and check that the harness notices, and say so in the

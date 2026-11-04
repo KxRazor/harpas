@@ -265,10 +265,11 @@ and the owner **accepts it once**:
     refuses them. The `structure_start_parity`
     harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,
     and the strongholds at all 128 ring positions of each seed, with vanilla's own `createStructures` and
-    `createReferences`. References compute the starts of every chunk in range again, so they need a cache before
-    the engine's workers use them. Ring positions and the biome checks of
-    starts search biomes starting without a last result, whereas vanilla's depends on its worker threads, so a tie
-    may resolve differently in a vanilla world.
+    `createReferences`. It also compares the full saved NBT of up to eight starts of each structure per seed,
+    including every piece's placement state, and compares reading those records with vanilla's own loader.
+    Jigsaw pieces reconstruct their template bounds on reload, as vanilla does, dropping any extra height reserved
+    by the expansion hack. Ring positions and the biome checks of starts search biomes starting without a last
+    result, whereas vanilla's depends on its worker threads, so a tie may resolve differently in a vanilla world.
   - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
     their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
     `beard_box` and `encapsulate`, including jigsaw ground-level offsets and junctions on terrain-matching pieces.
@@ -278,13 +279,19 @@ and the owner **accepts it once**:
     `beardifier_parity` checks 4,160,772 density samples bit for bit against vanilla, including chunk boundaries,
     ground-level offsets, all adjustment modes and overlapping structures. `chunk_parity` additionally compares
     terrain around villages, ancient cities, trail ruins and trial chambers, through carvers, in two seeds.
-    These tests cache starts and compute references. The engine's normal worker pipeline still generates without
-    structures: caching starts, persisting starts/references and placing structure blocks remain pending.
+    The engine's workers use a shared cache of up to 4,096 source chunks, including empty starts. A per-entry lock
+    shares each calculation without blocking unrelated starts. Saved neighbors are read under the region locks
+    used by loading and saving; their starts, including empty ones, take precedence over seed-derived layouts.
+    References reach at most eight chunks in each direction. Starts, piece placement metadata and references are
+    written in the proto-chunk's `structures` compound. The world's saved `generate_structures` switch disables
+    both start discovery and terrain adaptation. `generated_chunk_parity` compares the actual workers' terrain,
+    biomes, carving masks, fluid postprocessing, heightmaps and structure records against vanilla around all four
+    adapting modes, then saves and reloads the chunks. Structure block placement remains pending.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Features, structures and lighting
-  remain separate roadmap tasks; generated chunks do not yet include them.
+  status `minecraft:carvers`, so vanilla can continue the later stages. Features, structure block placement and
+  lighting remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline

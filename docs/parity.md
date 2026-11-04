@@ -34,7 +34,7 @@ There are three levels, from the cheapest to the closest to what a player sees:
 | Level | Reference | Harnesses | Runs in |
 |---|---|---|---|
 | **Java semantics** | Java programs written for the test, using only Java SE classes and no Mojang files | `java_parity` in `harpas-core` and `harpas-worldgen` | CI, every pull request, every platform |
-| **Vanilla's classes** | Java probes compiled against the server jar, which call vanilla's own code | `vanilla_parity`, `chunk_parity`, `beardifier_parity`, `structure_placement_parity`, `structure_start_parity`, `template_parity` | Parity workflow |
+| **Vanilla's classes** | Java probes compiled against the server jar, which call vanilla's own code | `vanilla_parity`, `chunk_parity`, `beardifier_parity`, `structure_placement_parity`, `structure_start_parity`, `template_parity`; `generated_chunk_parity` in `harpas-engine` | Parity workflow |
 | **Vanilla on the network** | The server itself, started on loopback and spoken to with the protocol codecs | `block_entity_parity` | Parity workflow |
 
 The first level shows that Rust computes what the same algorithm computes in Java, including `int` overflow and
@@ -47,7 +47,6 @@ use vanilla's data, not that the results match vanilla's, and they add nothing t
 | Test | Checks |
 |---|---|
 | `datapack_parity` in `harpas-worldgen` | The datapack loads and goes through every stage of generation |
-| `generated_chunk_parity` in `harpas-engine` | The chunk workers generate a chunk, save it and load it back |
 | `world_loading` in `harpas-server` | A real server starts a new world, keeps its seed when reopened, and vanilla opens the world |
 
 They live with the comparisons, and are named like them, so that the Parity workflow runs them.
@@ -71,7 +70,7 @@ comparison that covers the subsystem's behavior and runs in CI. The figures are 
 |---|---|---|---|
 | Random generators, Java math, noise | Partial | Java semantics (`java_parity`) | Vanilla's classes directly, beyond what world generation exercises |
 | Terrain, aquifers, ore veins, surface, carvers | Partial | Intermediate results, and every block, biome, carving mask, fluid update and heightmap of 1,621 chunks in 5 seeds with all 54 Overworld biomes; additional chunks in 2 seeds around all four structure terrain-adaptation modes | Other seeds; structure block placement; Nether and End |
-| Structures | Partial | Placements, starts, pieces and references of the structure types made so far, including ocean monuments' saved building piece; all 1,202 templates and 188 pools; 4,160,772 terrain-adaptation density samples including all five modes and chunk boundaries | Other structure types; ocean monuments' internal rooms; placing structures in chunks; engine worker integration |
+| Structures | Partial | Placements, starts, pieces and references of the structure types made so far, including ocean monuments' saved building piece; saved NBT and vanilla reloads of up to eight starts per structure and seed; all 1,202 templates and 188 pools; 4,160,772 terrain-adaptation density samples; worker terrain and saved structure records around all four adapting modes | Other structure types; ocean monuments' internal rooms; placing structures in chunks |
 | Block entity updates | Partial | All 49 types and representative update data, on the network | Live changes |
 | Features | Not started | | |
 | Light | Not started | | |

@@ -478,7 +478,7 @@ impl<'d> Start<'d> {
         Ok(pieces
             .into_iter()
             .map(|piece| StructurePiece {
-                kind: "minecraft:jigsaw",
+                kind: "minecraft:jigsaw".to_string(),
                 bounding_box: piece.bounding_box,
                 orientation: None,
                 gen_depth: 0,
@@ -490,6 +490,13 @@ impl<'d> Start<'d> {
                     ground_level_delta: piece.ground_level_delta,
                 }),
                 template: None,
+                save_data: if self.jigsaw.ignore_waterlogging {
+                    let mut tag = harpas_core::nbt::Compound::new();
+                    tag.insert("liquid_settings", "ignore_waterlogging");
+                    tag
+                } else {
+                    Default::default()
+                },
             })
             .collect())
     }

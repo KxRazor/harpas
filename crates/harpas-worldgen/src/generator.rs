@@ -1064,7 +1064,7 @@ impl NoiseBasedChunkGenerator {
     }
 
     /// Generates through carvers with the structure density collected from the chunk's referenced starts.
-    /// This adjusts terrain only; structure blocks and persistence of starts/references belong to later stages.
+    /// This adjusts terrain only; the caller handles persistence of starts/references and structure blocks.
     pub fn generate_chunk_carved_with_beardifier(
         &self,
         chunk_x: i32,

@@ -29,6 +29,8 @@ public final class StructureTerrainProbe {
         var biomes = registries.lookupOrThrow(Registries.BIOME);
         var chunks = new HashMap<Long, ChunkAccess>();
         var options = new WorldOptions(seed, true, false);
+        var saved = new net.minecraft.nbt.CompoundTag();
+        var serialization = new net.minecraft.world.level.levelgen.structure.pieces.StructurePieceSerializationContext(server.resources(), registries, templates);
         try (var out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(args[0])))) {
             out.writeInt(biomes.size());
             for (var biome : biomes) out.writeUTF(biomes.getKey(biome).toString());
@@ -54,8 +56,21 @@ public final class StructureTerrainProbe {
                 var manager = new StructureManager(region, options, null);
                 generator.createReferences(region, manager, proto);
                 ChunkParityProbe.writeChunk(out, seed, biomes, factory, generator, random, region, manager, proto);
+                var starts = new net.minecraft.nbt.CompoundTag();
+                for (var entry : proto.getAllStarts().entrySet()) {
+                    starts.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(entry.getKey()).toString(), entry.getValue().createTag(serialization, proto.getPos()));
+                }
+                var references = new net.minecraft.nbt.CompoundTag();
+                for (var entry : proto.getAllReferences().entrySet()) {
+                    long[] sources = entry.getValue().toLongArray(); java.util.Arrays.sort(sources);
+                    references.putLongArray(registries.lookupOrThrow(Registries.STRUCTURE).getKey(entry.getKey()).toString(), sources);
+                }
+                var tag = new net.minecraft.nbt.CompoundTag();
+                tag.put("starts", starts); tag.put("References", references);
+                saved.put(cx + "," + cz, tag);
             }
         }
+        net.minecraft.nbt.NbtIo.write(saved, Path.of(args[0] + ".nbt"));
         storage.close();
         server.resources().close();
         net.minecraft.util.Util.shutdownExecutors();

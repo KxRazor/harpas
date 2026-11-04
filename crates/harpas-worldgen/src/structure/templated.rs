@@ -91,7 +91,7 @@ pub(super) fn placed_piece(
                 message: "unknown structure template".to_string(),
             })?;
     Ok(StructurePiece {
-        kind,
+        kind: kind.to_string(),
         bounding_box: found.bounding_box_around(
             placed.position,
             placed.rotation,
@@ -103,6 +103,7 @@ pub(super) fn placed_piece(
         junctions: Vec::new(),
         jigsaw: None,
         template: Some(placed),
+        save_data: Default::default(),
     })
 }
 
@@ -160,7 +161,7 @@ pub(super) fn shipwreck(
             message: "shipwreck template too large to place".to_string(),
         });
     }
-    let start = piece(
+    let mut start = piece(
         "minecraft:shipwreck",
         templates,
         template,
@@ -168,6 +169,8 @@ pub(super) fn shipwreck(
         rotation,
         SHIPWRECK_PIVOT,
     )?;
+    start.save_data.insert("isBeached", i8::from(beached));
+    start.save_data.insert("height_adjusted", 0_i8);
     Ok(vec![start])
 }
 
@@ -262,14 +265,31 @@ fn add_ruin(
     rotation: Rotation,
 ) -> Result<(), WorldgenDataError> {
     let mut add = |name: String| {
-        pieces.push(piece(
+        let mut placed = piece(
             "minecraft:orp",
             templates,
             format!("minecraft:underwater_ruin/{name}"),
             position,
             rotation,
             [0, 0, 0],
-        )?);
+        )?;
+        let integrity = if !cold {
+            if large { 0.9_f32 } else { 0.8_f32 }
+        } else if name.contains("cracked") {
+            0.7_f32
+        } else if name.contains("mossy") {
+            0.5_f32
+        } else if large {
+            0.9_f32
+        } else {
+            0.8_f32
+        };
+        placed.save_data.insert("Integrity", integrity);
+        placed
+            .save_data
+            .insert("BiomeType", if cold { "COLD" } else { "WARM" });
+        placed.save_data.insert("IsLarge", i8::from(large));
+        pieces.push(placed);
         Ok(())
     };
     let prefix = if large { "big_" } else { "" };

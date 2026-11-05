@@ -21,6 +21,7 @@ mod mineshaft;
 mod mineshaft_blocks;
 pub use mineshaft_blocks::place_mineshafts_in_chunk;
 mod monument;
+pub use monument::{MonumentLayout, MonumentRoom, MonumentRoomKind, MonumentRoomPiece};
 mod ocean_ruin;
 mod placement;
 mod portal_blocks;

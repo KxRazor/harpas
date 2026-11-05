@@ -260,7 +260,7 @@ and the owner **accepts it once**:
     other structure types are skipped. Ocean monuments check the full 3D biome volume within 29 blocks of a point
     9 blocks into the start chunk at sea level, against `required_ocean_monument_surrounding`. The biome at the
     generation point on the ocean floor is checked separately against the structure's allowed biomes. Their one
-    saved building piece is laid out; internal rooms follow with block placement. Vanilla
+    saved building piece is laid out; its internal rooms are reconstructed as described below. Vanilla
     places shipwrecks wider or taller than 32 blocks by another rule, which none of its templates reaches, so Harpas
     refuses them. The `structure_start_parity`
     harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,
@@ -270,6 +270,15 @@ and the owner **accepts it once**:
     Jigsaw pieces reconstruct their template bounds on reload, as vanilla does, dropping any extra height reserved
     by the expansion hack. Ring positions and the biome checks of starts search biomes starting without a last
     result, whereas vanilla's depends on its worker threads, so a tie may resolve differently in a vanilla world.
+  - `MonumentLayout` builds ocean monuments' 46 grid cells and three special connectors, closes passages
+    while retaining access to the entrance, reserves the eight-cell treasure core and fits the remaining
+    cells into rooms in vanilla's order. It records every internal piece's bounds and the simple-room and
+    wing designs, including wings and the penthouse outside the grid. `from_start` reconstructs this layout
+    from the world seed and the single saved building piece, retaining its origin and orientation; internal
+    pieces are not added to Anvil's `Children`. `monument_layout_parity` compares 3,237 layouts with vanilla:
+    graphs, piece order, all eleven piece types, four orientations, negative and world-limit coordinates,
+    designs, the following random draw and reconstruction from saved records (including a missing orientation).
+    Block placement and worker integration remain pending; this comparison does not establish block parity.
   - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
     their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
     `beard_box` and `encapsulate`, including jigsaw ground-level offsets and junctions on terrain-matching pieces.

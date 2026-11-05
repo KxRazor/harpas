@@ -45,9 +45,9 @@ pub use ore_vein::{OreVeinifier, VeinType};
 pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
 pub use structure::{
-    BoundingBox, Direction, JigsawJunction, JigsawPiece, RuinedPortalBlocks, RuinedPortalGenerator,
-    StructurePiece, StructureReference, StructureStart, StructureState, TemplatePiece,
-    place_mineshafts_in_chunk,
+    BoundingBox, Direction, JigsawJunction, JigsawPiece, MonumentLayout, MonumentRoom,
+    MonumentRoomKind, MonumentRoomPiece, RuinedPortalBlocks, RuinedPortalGenerator, StructurePiece,
+    StructureReference, StructureStart, StructureState, TemplatePiece, place_mineshafts_in_chunk,
 };
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,

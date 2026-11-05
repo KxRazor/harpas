@@ -131,7 +131,7 @@ vanilla for the same seed.
   - [x] Mineshaft starts of both kinds: rooms, corridors, crossings and stairs, below the sea level or up to the
         surface in badlands.
   - [x] Ocean monument starts: the surrounding biome volume, the saved building piece and its references.
-        Internal rooms follow with block placement.
+        Room layouts and block placement are tracked separately below.
   - [x] Structure terrain adaptation (`Beardifier`): rigid pieces, jigsaw junctions and all five adjustment
         modes, connected to chunk generation and compared against vanilla.
   - [x] Structure terrain adaptation on the chunk workers, with a shared bounded cache of starts, saved-neighbor
@@ -174,6 +174,9 @@ vanilla for the same seed.
         with vanilla placement/replay, chunk-boundary, world-limit, saved-neighbor, reversed-request and Anvil
         reload comparisons. Workers retain incoming chest/spawner flags at `carvers`; spawner ticking follows
         in M4. Full FEATURES resumption remains pending.
+  - [x] Ocean monument internal room layouts: the connected cell graph, treasure core, fitted rooms, wings and
+        penthouse, with all orientations, designs, random consumption and reconstruction from saved building
+        records compared against vanilla. Block placement and worker integration remain pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

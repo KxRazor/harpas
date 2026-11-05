@@ -278,7 +278,20 @@ and the owner **accepts it once**:
     pieces are not added to Anvil's `Children`. `monument_layout_parity` compares 3,237 layouts with vanilla:
     graphs, piece order, all eleven piece types, four orientations, negative and world-limit coordinates,
     designs, the following random draw and reconstruction from saved records (including a missing orientation).
-    Block placement and worker integration remain pending; this comparison does not establish block parity.
+    This layout comparison does not establish block parity.
+  - `StructureStart::place_monument_exterior_in_chunk` places the building's outer wings, entrance arches,
+    facade, roof and three tiers of walls, using the saved building's origin and orientation. Clearing
+    preserves water and ice, empties space above sea level and extends five blocks outside the saved bounds.
+    The 23 foundation pads extend through replaceable blocks until they meet support, leaving the two
+    bottom layers untouched. Section intersection checks retain vanilla's asymmetric limits. Placement
+    consumes no random draws and leaves saved records unchanged. `monument_exterior_parity` isolates the
+    exterior by removing vanilla's internal child rooms, then compares every block and all six final-block
+    heightmaps in 13,160 chunk placements and replays after reloading the building record. It covers all four
+    orientations, every horizontal offset within a chunk, ocean, solid, air, mixed and uneven terrain,
+    water, ice, plants and waterlogged blocks, negative coordinates, world limits and different sea levels. Pull requests use
+    fewer offsets. Internal room blocks and worker integration remain pending; this API is not called
+    by the normal chunk pipeline until the monument can be placed in full. Scheduled fluid ticks and the
+    complete FEATURES schedule remain separate work.
   - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
     their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
     `beard_box` and `encapsulate`, including jigsaw ground-level offsets and junctions on terrain-matching pieces.

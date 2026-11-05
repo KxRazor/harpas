@@ -9,15 +9,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Ocean monument interior placement API: all eleven room types, gold treasure core, sponge rooms,
+  both wing designs and penthouse. Individual rooms and complete monument passes are compared against
+  vanilla, including blocks, all six heightmaps, random consumption, rotations, chunk edges, world limits
+  and reconstruction from saved records. Worker integration remains pending; elder spawning follows
+  in M4 (`harpas-worldgen`).
+
 - Ocean monument exterior placement API: outer wings, entrance, facade, roof, stepped walls, terrain
   clearing and foundations, compared block by block against vanilla with all six heightmaps, rotations,
-  chunk edges, world limits and replays after loading saved records. Internal rooms and worker integration
-  remain pending (`harpas-worldgen`).
+  chunk edges, world limits and replays after loading saved records. Worker integration remains pending
+  (`harpas-worldgen`).
 
 - Ocean monument internal room layouts, reconstructed from the world seed and saved building piece:
   connections, treasure core, fitted rooms, wings and penthouse. Room graphs, piece order, rotated bounds,
   designs and random consumption are compared against vanilla, including reconstruction after reload.
-  Internal room blocks and worker integration remain pending (`harpas-worldgen`).
+  Worker integration remains pending (`harpas-worldgen`).
 
 - Stronghold blocks generated on chunk workers: corridors, doors, prisons, crossings, stairs, libraries
   and portal rooms, including chest loot metadata, silverfish spawner data and portal eyes. Placement and

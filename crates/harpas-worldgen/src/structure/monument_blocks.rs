@@ -2,15 +2,15 @@
 
 use harpas_core::block::block_states;
 
-use super::{BoundingBox, Direction, StructurePiece, StructureStart};
+use super::{BoundingBox, Direction, StructureStart};
 use crate::GeneratedChunk;
 
 impl StructureStart {
     /// Places the monument's exterior, entrance, roof and foundations in one chunk.
     ///
     /// Uses the saved building's origin and orientation. Clearing reaches five blocks outside its
-    /// bounds; callers must include those chunks. Internal rooms and worker integration are separate
-    /// work, so this partial pass is deliberately not called by `place_in_chunk`.
+    /// bounds; callers must include those chunks, then call `MonumentLayout::place_rooms_in_chunk`.
+    /// Worker integration is separate work, so this pass is not called by `place_in_chunk` yet.
     /// No random draws, entities or saved-record changes occur in this pass.
     pub fn place_monument_exterior_in_chunk(&self, chunk: &mut GeneratedChunk, sea_level: i32) {
         if self.structure != "minecraft:monument" {
@@ -23,9 +23,39 @@ impl StructureStart {
         else {
             return;
         };
+        let mut exterior = MonumentBlocks::new(
+            piece.bounding_box,
+            piece.orientation.unwrap(),
+            chunk,
+            sea_level,
+        );
+        exterior.build();
+    }
+}
+
+pub(super) struct MonumentBlocks<'a> {
+    bounds: BoundingBox,
+    direction: Direction,
+    pub(super) chunk: &'a mut GeneratedChunk,
+    sea_level: i32,
+    pub(super) rough: u32,
+    pub(super) bricks: u32,
+    pub(super) dark: u32,
+    pub(super) lamp: u32,
+    pub(super) water: u32,
+}
+
+impl MonumentBlocks<'_> {
+    pub(super) fn new(
+        bounds: BoundingBox,
+        direction: Direction,
+        chunk: &mut GeneratedChunk,
+        sea_level: i32,
+    ) -> MonumentBlocks<'_> {
         let states = block_states();
-        let mut exterior = Exterior {
-            piece,
+        MonumentBlocks {
+            bounds,
+            direction,
             chunk,
             sea_level,
             rough: states.default_state("minecraft:prismarine").unwrap(),
@@ -33,23 +63,8 @@ impl StructureStart {
             dark: states.default_state("minecraft:dark_prismarine").unwrap(),
             lamp: states.default_state("minecraft:sea_lantern").unwrap(),
             water: states.default_state("minecraft:water").unwrap(),
-        };
-        exterior.build();
+        }
     }
-}
-
-struct Exterior<'a> {
-    piece: &'a StructurePiece,
-    chunk: &'a mut GeneratedChunk,
-    sea_level: i32,
-    rough: u32,
-    bricks: u32,
-    dark: u32,
-    lamp: u32,
-    water: u32,
-}
-
-impl Exterior<'_> {
     fn intersects(&self, [x0, z0, x1, z1]: [i32; 4]) -> bool {
         let bounds =
             BoundingBox::from_corners(self.position([x0, 0, z0]), self.position([x1, 0, z1]));
@@ -57,9 +72,9 @@ impl Exterior<'_> {
         bounds.intersects_columns(x, z, x + 15, z + 15)
     }
 
-    fn position(&self, [x, y, z]: [i32; 3]) -> [i32; 3] {
-        let b = self.piece.bounding_box;
-        let (x, z) = match self.piece.orientation.unwrap() {
+    pub(super) fn position(&self, [x, y, z]: [i32; 3]) -> [i32; 3] {
+        let b = self.bounds;
+        let (x, z) = match self.direction {
             Direction::South => (b.min[0] + x, b.min[2] + z),
             Direction::North => (b.min[0] + x, b.max[2] - z),
             Direction::East => (b.min[0] + z, b.min[2] + x),
@@ -68,7 +83,7 @@ impl Exterior<'_> {
         [x, b.min[1] + y, z]
     }
 
-    fn clipped_box(&self, min: [i32; 3], max: [i32; 3]) -> BoundingBox {
+    pub(super) fn clipped_box(&self, min: [i32; 3], max: [i32; 3]) -> BoundingBox {
         let mut b = BoundingBox::from_corners(self.position(min), self.position(max));
         let x = self.chunk.chunk_x() * 16;
         let z = self.chunk.chunk_z() * 16;
@@ -81,7 +96,7 @@ impl Exterior<'_> {
         b
     }
 
-    fn fill(&mut self, min: [i32; 3], max: [i32; 3], state: u32) {
+    pub(super) fn fill(&mut self, min: [i32; 3], max: [i32; 3], state: u32) {
         let b = self.clipped_box(min, max);
         for y in b.min[1]..=b.max[1] {
             for x in b.min[0]..=b.max[0] {
@@ -93,11 +108,11 @@ impl Exterior<'_> {
         }
     }
 
-    fn block(&mut self, pos: [i32; 3], state: u32) {
+    pub(super) fn block(&mut self, pos: [i32; 3], state: u32) {
         self.fill(pos, pos, state);
     }
 
-    fn clear(&mut self, min: [i32; 3], max: [i32; 3]) {
+    pub(super) fn clear(&mut self, min: [i32; 3], max: [i32; 3]) {
         if min[1] > max[1] {
             return;
         }
@@ -131,11 +146,7 @@ impl Exterior<'_> {
     fn build(&mut self) {
         self.clear(
             [0, 0, 0],
-            [
-                58,
-                self.sea_level.max(64) - self.piece.bounding_box.min[1],
-                58,
-            ],
+            [58, self.sea_level.max(64) - self.bounds.min[1], 58],
         );
         self.wing(0, false);
         self.wing(33, true);

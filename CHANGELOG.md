@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Ocean monument internal room layouts, reconstructed from the world seed and saved building piece:
+  connections, treasure core, fitted rooms, wings and penthouse. Room graphs, piece order, rotated bounds,
+  designs and random consumption are compared against vanilla, including reconstruction after reload.
+  Block placement and worker integration remain pending (`harpas-worldgen`).
+
 - Stronghold blocks generated on chunk workers: corridors, doors, prisons, crossings, stairs, libraries
   and portal rooms, including chest loot metadata, silverfish spawner data and portal eyes. Placement and
   individual pass replays are compared against vanilla, including rotations, chunk boundaries, world

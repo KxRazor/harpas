@@ -224,9 +224,14 @@ impl StructurePiece {
         } else {
             None
         };
-        let template = if matches!(kind.as_str(), "minecraft:iglu" | "minecraft:shipwreck") {
+        let template = if matches!(
+            kind.as_str(),
+            "minecraft:iglu" | "minecraft:shipwreck" | "minecraft:orp"
+        ) {
             let template = string(tag, "Template")?.to_string();
-            let pivot = if kind == "minecraft:shipwreck" {
+            let pivot = if kind == "minecraft:orp" {
+                [0, 0, 0]
+            } else if kind == "minecraft:shipwreck" {
                 [4, 0, 15]
             } else {
                 super::igloo::settings(&template)
@@ -512,6 +517,43 @@ mod tests {
             original.compute(-44, 37, 85).to_bits(),
             restored.compute(-44, 37, 85).to_bits()
         );
+    }
+
+    #[test]
+    fn ocean_ruin_reload_restores_rotation_origin_and_processors() {
+        let templates = StructureTemplates::with_sizes([("test:ruin", [6, 7, 7])]);
+        let mut tag = Compound::new();
+        tag.insert("id", "minecraft:orp");
+        tag.insert("BB", Nbt::IntArray(vec![0, 90, 0, 5, 96, 6]));
+        tag.insert("O", 2);
+        tag.insert("GD", 0);
+        tag.insert("Template", "test:ruin");
+        tag.insert("TPX", -18);
+        tag.insert("TPY", -60);
+        tag.insert("TPZ", 30);
+        tag.insert("Rot", "CLOCKWISE_180");
+        tag.insert("Integrity", 0.5_f32);
+        tag.insert("BiomeType", "COLD");
+        tag.insert("IsLarge", 1_i8);
+        let loaded = StructurePiece::from_nbt(&tag, &templates).unwrap();
+        assert_eq!(loaded.bounding_box.min, [-23, -60, 24]);
+        assert_eq!(loaded.bounding_box.max, [-18, -54, 30]);
+        let template = loaded.template.as_ref().unwrap();
+        assert_eq!(template.position, [-18, -60, 30]);
+        assert_eq!(template.pivot, [0, 0, 0]);
+        let saved = loaded.to_nbt();
+        for key in [
+            "Template",
+            "Rot",
+            "TPX",
+            "TPY",
+            "TPZ",
+            "Integrity",
+            "BiomeType",
+            "IsLarge",
+        ] {
+            assert_eq!(saved.get(key), tag.get(key), "{key}");
+        }
     }
 
     #[test]

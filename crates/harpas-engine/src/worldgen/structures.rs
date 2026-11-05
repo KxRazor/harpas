@@ -152,6 +152,39 @@ impl ChunkStructures {
                         self.initial_shipwreck_burials.contains(&start.structure),
                     );
                 }
+                if matches!(
+                    start.structure.as_str(),
+                    "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm"
+                ) {
+                    return start.place_ocean_ruin_in_chunk(
+                        generated,
+                        seed,
+                        templates,
+                        &mut |kind, x, z| {
+                            terrain_chunks[&ChunkPos {
+                                x: x >> 4,
+                                z: z >> 4,
+                            }]
+                                .heightmaps()
+                                .get(
+                                    kind,
+                                    (x & 15) as usize,
+                                    (z & 15) as usize,
+                                )
+                        },
+                        &mut |x, y, z| {
+                            terrain_chunks[&ChunkPos {
+                                x: x >> 4,
+                                z: z >> 4,
+                            }]
+                                .block_state(
+                                    (x & 15) as usize,
+                                    y,
+                                    (z & 15) as usize,
+                                )
+                        },
+                    );
+                }
                 if start.structure == "minecraft:igloo" {
                     return start.place_igloo_in_chunk(
                         generated,
@@ -363,8 +396,8 @@ impl Structures {
         read: &ChunkReader<'_>,
     ) -> io::Result<HashMap<ChunkPos, GeneratedChunk>> {
         let mut terrain_chunks = HashMap::new();
-        // Pyramids and shipwrecks sample neighboring heights; template edges may read neighboring
-        // blocks. Igloo ladders and rotated shipwrecks can sample outside their piece bounds.
+        // Pyramids and ocean templates sample neighboring heights and blocks. Igloo ladders and
+        // rotated shipwrecks can sample outside their piece bounds.
         // Resolve these reads before placing blocks, preferring saved terrain.
         for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
             if !matches!(
@@ -374,6 +407,8 @@ impl Structures {
                     | "minecraft:igloo"
                     | "minecraft:shipwreck"
                     | "minecraft:shipwreck_beached"
+                    | "minecraft:ocean_ruin_cold"
+                    | "minecraft:ocean_ruin_warm"
             ) {
                 continue;
             }
@@ -386,6 +421,7 @@ impl Structures {
                     let padding = match start.structure.as_str() {
                         "minecraft:shipwreck" | "minecraft:shipwreck_beached" => 2,
                         "minecraft:igloo" => 1,
+                        "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm" => 2,
                         _ => 0,
                     };
                     (((piece.bounding_box.min[0] - padding) >> 4)
@@ -527,6 +563,8 @@ impl Structures {
                             | "minecraft:igloo"
                             | "minecraft:shipwreck"
                             | "minecraft:shipwreck_beached"
+                            | "minecraft:ocean_ruin_cold"
+                            | "minecraft:ocean_ruin_warm"
                     )
             })
             .map(|s| (*s).clone())

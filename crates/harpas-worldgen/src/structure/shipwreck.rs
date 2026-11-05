@@ -198,83 +198,91 @@ impl StructureStart {
                     }
                 }
             }
-            // Containers whose original position was dry can take source water from above or a
-            // horizontal neighbor. Repeat until no more containers fill, as template placement does.
-            loop {
-                let mut changed = false;
-                for &pos @ [x, y, z] in &placed {
-                    let state = chunk.block_state((x & 15) as usize, y, (z & 15) as usize);
-                    if !block_states()
-                        .properties(state)
-                        .unwrap()
-                        .1
-                        .contains(&("waterlogged", "false"))
-                    {
-                        continue;
-                    }
-                    let fills = [(0, 1, 0), (0, 0, -1), (1, 0, 0), (0, 0, 1), (-1, 0, 0)]
-                        .into_iter()
-                        .any(|(dx, dy, dz)| {
-                            let neighbor = if ((x + dx) >> 4, (z + dz) >> 4)
-                                == (chunk.chunk_x(), chunk.chunk_z())
-                            {
-                                chunk.block_state(
-                                    ((x + dx) & 15) as usize,
-                                    y + dy,
-                                    ((z + dz) & 15) as usize,
-                                )
-                            } else {
-                                block_at(x + dx, y + dy, z + dz)
-                            };
-                            source_water(neighbor)
-                        });
-                    if fills {
-                        set(chunk, pos, property(state, "waterlogged", "true"));
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-            // Template edge updates also affect existing blocks beside the placed voxel shape. A
-            // replay can move the hull upward and leave old stairs or fences just outside that shape.
-            let mut affected = placed.clone();
-            let mut seen: std::collections::HashSet<_> = placed.iter().copied().collect();
-            for &[x, y, z] in &placed {
-                for [dx, dy, dz] in [
-                    [0, -1, 0],
-                    [0, 1, 0],
-                    [0, 0, -1],
-                    [1, 0, 0],
-                    [0, 0, 1],
-                    [-1, 0, 0],
-                ] {
-                    let pos = [x + dx, y + dy, z + dz];
-                    if contains(chunk, pos) && seen.insert(pos) {
-                        affected.push(pos);
-                    }
-                }
-            }
-            // Resolve stair faces before fences test them; the stored palettes deliberately contain
-            // placeholder stair shapes that vanilla recomputes when placing the template.
-            for &pos @ [x, y, z] in &affected {
-                if block_states()
-                    .properties(chunk.block_state((x & 15) as usize, y, (z & 15) as usize))
-                    .unwrap()
-                    .0
-                    .ends_with("_stairs")
-                {
-                    let state = shape(chunk, pos, block_at);
-                    set(chunk, pos, state);
-                }
-            }
-            for pos in affected {
-                let state = shape(chunk, pos, block_at);
-                set(chunk, pos, state);
-            }
+            finish_template(chunk, &placed, block_at);
         }
         entities
+    }
+}
+
+/// Completes template waterlogging and edge shape updates after placing its blocks and markers.
+pub(super) fn finish_template(
+    chunk: &mut GeneratedChunk,
+    placed: &[[i32; 3]],
+    block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+) {
+    // Containers whose original position was dry can take source water from above or a
+    // horizontal neighbor. Repeat until no more containers fill, as template placement does.
+    loop {
+        let mut changed = false;
+        for &pos @ [x, y, z] in placed {
+            let state = chunk.block_state((x & 15) as usize, y, (z & 15) as usize);
+            if !block_states()
+                .properties(state)
+                .unwrap()
+                .1
+                .contains(&("waterlogged", "false"))
+            {
+                continue;
+            }
+            let fills = [(0, 1, 0), (0, 0, -1), (1, 0, 0), (0, 0, 1), (-1, 0, 0)]
+                .into_iter()
+                .any(|(dx, dy, dz)| {
+                    let neighbor =
+                        if ((x + dx) >> 4, (z + dz) >> 4) == (chunk.chunk_x(), chunk.chunk_z()) {
+                            chunk.block_state(
+                                ((x + dx) & 15) as usize,
+                                y + dy,
+                                ((z + dz) & 15) as usize,
+                            )
+                        } else {
+                            block_at(x + dx, y + dy, z + dz)
+                        };
+                    source_water(neighbor)
+                });
+            if fills {
+                set(chunk, pos, property(state, "waterlogged", "true"));
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Template edge updates also affect existing blocks beside the placed voxel shape. A
+    // replay can move the hull upward and leave old stairs or fences just outside that shape.
+    let mut affected = placed.to_vec();
+    let mut seen: std::collections::HashSet<_> = placed.iter().copied().collect();
+    for &[x, y, z] in placed {
+        for [dx, dy, dz] in [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [1, 0, 0],
+            [0, 0, 1],
+            [-1, 0, 0],
+        ] {
+            let pos = [x + dx, y + dy, z + dz];
+            if contains(chunk, pos) && seen.insert(pos) {
+                affected.push(pos);
+            }
+        }
+    }
+    // Resolve stair faces before fences test them; the stored palettes deliberately contain
+    // placeholder stair shapes that vanilla recomputes when placing the template.
+    for &pos @ [x, y, z] in &affected {
+        if block_states()
+            .properties(chunk.block_state((x & 15) as usize, y, (z & 15) as usize))
+            .unwrap()
+            .0
+            .ends_with("_stairs")
+        {
+            let state = shape(chunk, pos, block_at);
+            set(chunk, pos, state);
+        }
+    }
+    for pos in affected {
+        let state = shape(chunk, pos, block_at);
+        set(chunk, pos, state);
     }
 }
 
@@ -322,22 +330,22 @@ fn adjust_height(
     );
 }
 
-fn position(template: &TemplatePiece, pos: [i32; 3]) -> [i32; 3] {
+pub(super) fn position(template: &TemplatePiece, pos: [i32; 3]) -> [i32; 3] {
     let p = template.rotation.transform_around(pos, template.pivot);
     std::array::from_fn(|i| p[i] + template.position[i])
 }
 
-fn contains(chunk: &GeneratedChunk, [x, y, z]: [i32; 3]) -> bool {
+pub(super) fn contains(chunk: &GeneratedChunk, [x, y, z]: [i32; 3]) -> bool {
     (x >> 4, z >> 4) == (chunk.chunk_x(), chunk.chunk_z())
         && y >= chunk.min_y()
         && y < chunk.min_y() + chunk.height()
 }
 
-fn set(chunk: &mut GeneratedChunk, [x, y, z]: [i32; 3], state: u32) {
+pub(super) fn set(chunk: &mut GeneratedChunk, [x, y, z]: [i32; 3], state: u32) {
     chunk.set_block_state((x & 15) as usize, y, (z & 15) as usize, state);
 }
 
-fn water(state: u32) -> bool {
+pub(super) fn water(state: u32) -> bool {
     let (name, props) = block_states().properties(state).unwrap();
     matches!(
         name,
@@ -355,7 +363,7 @@ fn source_water(state: u32) -> bool {
     water(state) && (name != "minecraft:water" || props.contains(&("level", "0")))
 }
 
-fn property(state: u32, key: &str, value: &str) -> u32 {
+pub(super) fn property(state: u32, key: &str, value: &str) -> u32 {
     let (name, mut props) = block_states().properties(state).unwrap();
     let Some(prop) = props.iter_mut().find(|p| p.0 == key) else {
         return state;

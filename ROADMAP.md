@@ -169,6 +169,11 @@ vanilla for the same seed.
         vanilla placement/replay, partial floors, liquid/biome checks, world limits, shared decoration streams,
         saved neighbors, reversed requests and Anvil reload comparisons. Spawner flags remain deferred at
         `carvers`; chest minecart entities and spawner ticking follow in M4. Full FEATURES resumption remains pending.
+  - [x] Stronghold block placement on chunk workers: corridors, prisons, crossings, stairs, libraries and portal
+        rooms, rotated doors and decorations, chest loot metadata, portal eyes and silverfish spawner data,
+        with vanilla placement/replay, chunk-boundary, world-limit, saved-neighbor, reversed-request and Anvil
+        reload comparisons. Workers retain incoming chest/spawner flags at `carvers`; spawner ticking follows
+        in M4. Full FEATURES resumption remains pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

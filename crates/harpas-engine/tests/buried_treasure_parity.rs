@@ -195,6 +195,7 @@ fn treasure_blocks_metadata_workers_and_vanilla_resumption_match() {
     // This probe compares treasure placement alone. A shipwreck can occupy the same chunk;
     // shipwreck_parity covers that composition against vanilla's shipwreck pass separately.
     data.structure_sets.shift_remove("minecraft:shipwrecks");
+    data.structure_sets.shift_remove("minecraft:mineshafts");
     let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();

@@ -35,6 +35,7 @@ public final class StructureTerrainProbe {
             out.writeInt(biomes.size());
             for (var biome : biomes) out.writeUTF(biomes.getKey(biome).toString());
             for (int argument = 2; argument < args.length; argument++) {
+                if (args[argument].equals("--without-mineshafts")) continue;
                 var coordinates = args[argument].split(",");
                 int cx = Integer.parseInt(coordinates[0]), cz = Integer.parseInt(coordinates[1]);
                 // Cache starts across neighboring target chunks, as a real world's STRUCTURE_STARTS stage does.
@@ -46,6 +47,14 @@ public final class StructureTerrainProbe {
                         var manager = new StructureManager(null, options, null);
                         ChunkParityProbe.onNewThread(() ->
                             generator.createStructures(registries, state, manager, proto, templates, Level.OVERWORLD));
+                        // The worker terrain harness excludes mine blocks; its reference records must
+                        // use the same structure sets. Other callers retain all structures by default.
+                        if (Arrays.asList(args).contains("--without-mineshafts")) {
+                            var starts = new HashMap<>(proto.getAllStarts());
+                            starts.entrySet().removeIf(entry -> entry.getKey()
+                                instanceof net.minecraft.world.level.levelgen.structure.structures.MineshaftStructure);
+                            proto.setAllStarts(starts);
+                        }
                         chunks.put(key, proto);
                     }
                 }

@@ -140,6 +140,7 @@ fn block_heightmap_flags() -> &'static [u8] {
                         | "minecraft:ladder"
                         | "minecraft:redstone_torch"
                         | "minecraft:wall_torch"
+                        | "minecraft:rail"
                         | "minecraft:potted_cactus"
                 ) || name.ends_with("_carpet");
                 let mut f = FLAG_NOT_AIR;

@@ -9,6 +9,7 @@ use harpas_core::nbt::{Compound, Nbt};
 use harpas_worldgen::{
     Beardifier, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, RuinedPortalBlocks,
     RuinedPortalGenerator, StructureStart, StructureState, StructureTemplates, WorldgenData,
+    place_mineshafts_in_chunk,
 };
 
 use crate::world::{ChunkPos, ChunkReader};
@@ -97,13 +98,136 @@ impl ChunkStructures {
         }
     }
 
+    pub(super) fn mineshaft_biomes(
+        &self,
+        chunk: &GeneratedChunk,
+        generator: &NoiseBasedChunkGenerator,
+        data: &WorldgenData,
+        read: &ChunkReader<'_>,
+    ) -> io::Result<HashMap<[i32; 3], bool>> {
+        let samples: HashSet<_> = self
+            .starts
+            .iter()
+            .chain(&self.neighbor_pieces)
+            .flat_map(|s| s.mineshaft_biome_samples(chunk))
+            .collect();
+        if samples.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let blocking = data
+            .resolve_biomes(&["#minecraft:mineshaft_blocking".to_owned()])
+            .map_err(io::Error::other)?;
+        let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+        let mut saved = HashMap::<ChunkPos, Option<Chunk>>::new();
+        let mut noise = generator.create_noise_chunk(chunk.chunk_x(), chunk.chunk_z());
+        let min_qy = chunk.min_y() >> 2;
+        let max_qy = (chunk.min_y() + chunk.height() - 1) >> 2;
+        let mut result = HashMap::new();
+        for sample @ [x, y, z] in samples {
+            // BiomeManager chooses exactly one quart sample; resolve it before doing fallible I/O.
+            let mut quart = [0; 3];
+            generator.biome_manager().get_biome(x, y, z, |qx, qy, qz| {
+                quart = [qx, qy, qz];
+                0
+            });
+            let [qx, qy, qz] = quart;
+            let qy = qy.clamp(min_qy, max_qy);
+            let pos = ChunkPos {
+                x: qx >> 2,
+                z: qz >> 2,
+            };
+            let biome = if pos
+                == (ChunkPos {
+                    x: chunk.chunk_x(),
+                    z: chunk.chunk_z(),
+                }) {
+                chunk.sections()[((qy >> 2) - chunk.min_section_y()) as usize].biome(
+                    (qx & 3) as usize,
+                    (qy & 3) as usize,
+                    (qz & 3) as usize,
+                )
+            } else {
+                if let std::collections::hash_map::Entry::Vacant(entry) = saved.entry(pos) {
+                    let saved = read(pos)?
+                        .filter(|tag| tag.get("sections").is_some())
+                        .map(|tag| Chunk::read(tag, &names).map(|(c, _)| c))
+                        .transpose()?;
+                    entry.insert(saved);
+                }
+                if let Some(saved) = &saved[&pos] {
+                    saved
+                        .sections
+                        .iter()
+                        .find(|s| i32::from(s.y) == qy >> 2)
+                        .and_then(|s| s.section.as_ref())
+                        .map_or_else(
+                            || {
+                                data.biome_id("minecraft:plains")
+                                    .expect("vanilla plains biome")
+                            },
+                            |s| s.biome((qx & 3) as usize, (qy & 3) as usize, (qz & 3) as usize),
+                        )
+                } else {
+                    generator
+                        .biome_source()
+                        .neighbor_biome(&mut noise, qx, qy, qz, min_qy, max_qy)
+                }
+            };
+            result.insert(sample, blocking.contains(&biome));
+        }
+        Ok(result)
+    }
+
     pub(super) fn place_blocks(
         &mut self,
         generated: &mut GeneratedChunk,
         seed: i64,
         terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
         templates: &StructureTemplates,
+        blocking_biomes: &HashMap<[i32; 3], bool>,
     ) -> Vec<Compound> {
+        // UNDERGROUND_STRUCTURES seeds treasure before normal and mesa mineshafts.
+        let mut early_entities: Vec<_> = self
+            .starts
+            .iter_mut()
+            .chain(&mut self.neighbor_pieces)
+            .filter(|s| s.structure == "minecraft:buried_treasure")
+            .flat_map(|s| {
+                s.place_in_chunk(
+                    generated,
+                    seed,
+                    &mut |_, _| unreachable!("treasure does not sample heights"),
+                    &mut |_, _, _| unreachable!("treasure is contained in its source chunk"),
+                )
+            })
+            .collect();
+        let flags: Vec<_> = self
+            .starts
+            .iter()
+            .chain(&self.neighbor_pieces)
+            .flat_map(|s| s.pieces.iter())
+            .map(|p| p.save_data.get("hps").cloned())
+            .collect();
+        early_entities.extend(place_mineshafts_in_chunk(
+            self.starts.iter_mut().chain(&mut self.neighbor_pieces),
+            generated,
+            seed,
+            &mut |x, y, z| blocking_biomes[&[x, y, z]],
+        ));
+        // CARVERS chunks repeat feature placement in vanilla. Allow cleared spawners to be recreated.
+        for (piece, flag) in self
+            .starts
+            .iter_mut()
+            .chain(&mut self.neighbor_pieces)
+            .flat_map(|s| &mut s.pieces)
+            .zip(flags)
+        {
+            if let Some(flag) = flag {
+                piece.save_data.insert("hps", flag);
+            } else {
+                piece.save_data.remove("hps");
+            }
+        }
         let height_at = |x: i32, z: i32| {
             terrain_chunks[&crate::world::ChunkPos {
                 x: x >> 4,
@@ -121,6 +245,9 @@ impl ChunkStructures {
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
+                if start.structure == "minecraft:buried_treasure" {
+                    return Vec::new();
+                }
                 if matches!(
                     start.structure.as_str(),
                     "minecraft:shipwreck" | "minecraft:shipwreck_beached"
@@ -285,6 +412,29 @@ impl ChunkStructures {
                 entities
             })
             .collect();
+        // Later structures may remove an early chest/spawner or replace its block entity.
+        let position = |entity: &Compound| {
+            ["x", "y", "z"].map(|key| match entity.get(key) {
+                Some(Nbt::Int(n)) => *n,
+                _ => unreachable!("generated block entity position"),
+            })
+        };
+        early_entities.retain(|entity| {
+            let [x, y, z] = position(entity);
+            let block = generated.block_state((x & 15) as usize, y, (z & 15) as usize);
+            let expected = if entity.get("id") == Some(&Nbt::from("minecraft:mob_spawner")) {
+                "minecraft:spawner"
+            } else {
+                "minecraft:chest"
+            };
+            harpas_core::block::block_states()
+                .properties(block)
+                .unwrap()
+                .0
+                == expected
+                && !entities.iter().any(|later| position(later) == [x, y, z])
+        });
+        entities.extend(early_entities);
         for plans in &self.portal_blocks {
             for plan in plans.iter() {
                 entities.retain(|e| !plan.removes_block_entity(e));
@@ -641,6 +791,8 @@ impl Structures {
                     ) && matches!(
                         s.structure.as_str(),
                         "minecraft:swamp_hut"
+                            | "minecraft:mineshaft"
+                            | "minecraft:mineshaft_mesa"
                             | "minecraft:desert_pyramid"
                             | "minecraft:jungle_pyramid"
                             | "minecraft:igloo"

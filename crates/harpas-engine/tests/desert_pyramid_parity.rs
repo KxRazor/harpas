@@ -115,7 +115,10 @@ fn pyramid_blocks_and_metadata_match_vanilla() {
     };
     let mut inputs = Compound::new();
     let mut expected = Compound::new();
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
+    data.structure_sets.shift_remove("minecraft:mineshafts");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     use harpas_worldgen::Direction::{East, North, South, West};
     for &seed in reference::sampled_seeds(&[0, -4_172_144_997_902_289_642]) {
@@ -576,7 +579,10 @@ fn saved_neighbor_pyramids_keep_their_height_and_source_record() {
         eprintln!("Skipping saved pyramid neighbor: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
     };
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
+    data.structure_sets.shift_remove("minecraft:mineshafts");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
     let seed = 42;

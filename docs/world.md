@@ -391,6 +391,30 @@ and the owner **accepts it once**:
     and repeated placement. Saved-neighbor cases verify fitting against saved terrain and piece records.
     Workers resolve missing neighboring terrain through carvers and prefer saved blocks;
     comparisons use those pre-placement neighbors, not the complete feature-stage schedule.
+  - Overworld ruined portal blocks run on chunk workers using the owner's 13 templates. Rotations and
+    front/back mirrors preserve each template's pivot. The saved `Properties` and `VerticalPlacement`
+    rebuild the positional processors: gold removal, cold/ocean lava replacement, magma substitutions,
+    block ageing and mossiness, protected blocks, lava submersion and optional blackstone replacements.
+    Waterlogging and template edge shapes are resolved before jigsaw final states and terrain decoration.
+    The chunk containing the piece center supplies its decoration stream, including chest loot seeds,
+    netherrack spread, capped drip columns, vines and persistent jungle leaves. A center outside the
+    world's vertical bounds skips the pass, as vanilla does. Replays also update existing vines whose
+    supporting blocks were cleared.
+    A portal's owning pass writes the entire piece and surrounding
+    terrain, including positions outside the saved piece bounds. Workers prepare this complete sparse
+    result against carved or saved terrain and share up to 256 source chunks through a bounded cache,
+    applying only their target chunk's writes. The normal structure references retain vanilla's piece
+    bounds; spread-only chunks receive blocks without adding a reference to the portal. Saved neighbors
+    restore the template, origin, pivot, rotation, mirror and processor properties before placement.
+    `ruined_portal_parity` compares every block, all six heightmaps, chest NBT, saved records and
+    postprocessing across the 13 templates, all rotations and both mirrors, water and lava, cold and
+    overgrown properties, slopes, burial, negative coordinates, chunk boundaries and vertical limits.
+    Representative small and giant templates are repeated after vanilla reloads Harpas records. Natural
+    portals across two seeds also run through workers, reversed requests, Anvil reloads and pass replays;
+    saved-neighbor cases read altered water, lava and protected blocks. Pull requests use one seed.
+    These comparisons use the same pre-placement neighbors for each complete portal pass; they do not
+    establish the full feature-stage schedule or resumption. Ruined portals in the Nether follow with
+    that dimension.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
@@ -406,7 +430,8 @@ and the owner **accepts it once**:
   the original burial draw, so its chest loot seeds can change, as in vanilla. These comparisons do not
   establish a complete FEATURES-stage round trip. Ocean ruin pass replays likewise refit their saved pieces
   to the existing terrain; blocks and loot can change when earlier placement changed that terrain.
-  Full feature-stage resumption, other structure blocks and lighting
+  Ruined portal passes likewise replay against existing blocks, and generated chunks continue to save at
+  `carvers`. Full feature-stage resumption, other structure blocks and lighting
   remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).

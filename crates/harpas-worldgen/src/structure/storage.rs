@@ -226,10 +226,17 @@ impl StructurePiece {
         };
         let template = if matches!(
             kind.as_str(),
-            "minecraft:iglu" | "minecraft:shipwreck" | "minecraft:orp"
+            "minecraft:iglu" | "minecraft:shipwreck" | "minecraft:orp" | "minecraft:rupo"
         ) {
             let template = string(tag, "Template")?.to_string();
-            let pivot = if kind == "minecraft:orp" {
+            let ruined = kind == "minecraft:rupo";
+            let pivot = if ruined {
+                let size = templates
+                    .get(&template)
+                    .unwrap_or(&StructureTemplate::empty())
+                    .size;
+                [size[0] / 2, 0, size[2] / 2]
+            } else if kind == "minecraft:orp" {
                 [0, 0, 0]
             } else if kind == "minecraft:shipwreck" {
                 [4, 0, 15]
@@ -245,8 +252,16 @@ impl StructurePiece {
                     integer(tag, "TPY")?,
                     integer(tag, "TPZ")?,
                 ],
-                rotation: rotation(string(tag, "Rot")?)?,
-                mirror: crate::Mirror::None,
+                rotation: rotation(string(tag, if ruined { "Rotation" } else { "Rot" })?)?,
+                mirror: if ruined {
+                    match string(tag, "Mirror")? {
+                        "NONE" => crate::Mirror::None,
+                        "FRONT_BACK" => crate::Mirror::FrontBack,
+                        _ => return Err(invalid("invalid ruined portal mirror")),
+                    }
+                } else {
+                    crate::Mirror::None
+                },
                 pivot,
             })
         } else {
@@ -516,6 +531,59 @@ mod tests {
         assert_eq!(
             original.compute(-44, 37, 85).to_bits(),
             restored.compute(-44, 37, 85).to_bits()
+        );
+    }
+
+    #[test]
+    fn ruined_portal_reload_restores_placement_and_properties() {
+        let templates = StructureTemplates::with_sizes([("test:portal", [6, 10, 6])]);
+        let mut tag = Compound::new();
+        tag.insert("id", "minecraft:rupo");
+        tag.insert("BB", Nbt::IntArray(vec![0, 0, 0, 0, 0, 0]));
+        tag.insert("O", 2);
+        tag.insert("GD", 0);
+        tag.insert("Template", "test:portal");
+        tag.insert("TPX", -18);
+        tag.insert("TPY", 50);
+        tag.insert("TPZ", 30);
+        tag.insert("Rotation", "CLOCKWISE_90");
+        tag.insert("Mirror", "FRONT_BACK");
+        tag.insert("VerticalPlacement", "on_land_surface");
+        tag.insert(
+            "Properties",
+            [("cold", Nbt::Byte(1)), ("mossiness", Nbt::Float(0.2))]
+                .into_iter()
+                .collect::<Compound>(),
+        );
+        let piece = StructurePiece::from_nbt(&tag, &templates).unwrap();
+        let template = piece
+            .template
+            .as_ref()
+            .expect("portal template needed for saved-neighbor placement");
+        assert_eq!(template.position, [-18, 50, 30]);
+        assert_eq!(template.pivot, [3, 0, 3]);
+        assert_eq!(template.rotation, Rotation::Clockwise90);
+        assert_eq!(template.mirror, crate::Mirror::FrontBack);
+        assert_eq!(piece.bounding_box.min, [-17, 50, 25]);
+        assert_eq!(piece.bounding_box.max, [-12, 59, 30]);
+        let saved = piece.to_nbt();
+        for key in [
+            "Template",
+            "TPX",
+            "TPY",
+            "TPZ",
+            "Rotation",
+            "Mirror",
+            "VerticalPlacement",
+            "Properties",
+        ] {
+            assert_eq!(saved.get(key), tag.get(key), "{key}");
+        }
+        assert_eq!(
+            StructurePiece::from_nbt(&saved, &templates)
+                .unwrap()
+                .to_nbt(),
+            saved
         );
     }
 

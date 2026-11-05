@@ -377,14 +377,18 @@ fn shape(
     [x, y, z]: [i32; 3],
     block_at: &mut impl FnMut(i32, i32, i32) -> u32,
 ) -> u32 {
-    let state = chunk.block_state((x & 15) as usize, y, (z & 15) as usize);
-    let read = &mut |dx, dy, dz| {
-        if ((x + dx) >> 4, (z + dz) >> 4) == (chunk.chunk_x(), chunk.chunk_z()) {
-            chunk.block_state(((x + dx) & 15) as usize, y + dy, ((z + dz) & 15) as usize)
+    shape_at([x, y, z], &mut |[sx, sy, sz]| {
+        if (sx >> 4, sz >> 4) == (chunk.chunk_x(), chunk.chunk_z()) {
+            chunk.block_state((sx & 15) as usize, sy, (sz & 15) as usize)
         } else {
-            block_at(x + dx, y + dy, z + dz)
+            block_at(sx, sy, sz)
         }
-    };
+    })
+}
+
+pub(super) fn shape_at([x, y, z]: [i32; 3], block_at: &mut impl FnMut([i32; 3]) -> u32) -> u32 {
+    let state = block_at([x, y, z]);
+    let read = &mut |dx, dy, dz| block_at([x + dx, y + dy, z + dz]);
     let (name, props) = block_states().properties(state).unwrap();
     let get = |key| props.iter().find(|p| p.0 == key).unwrap().1;
     if name.ends_with("_fence") {

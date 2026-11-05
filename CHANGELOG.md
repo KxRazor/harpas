@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Overworld ruined portal blocks generated on chunk workers from the owner's templates, including
+  rotations and mirrors, decay, netherrack spread and columns, waterlogging, vines/leaves and chest loot
+  metadata. Whole portal results are shared across workers; saved portal templates are reconstructed on
+  Anvil reload. Placement and replays are compared against vanilla, including chunk boundaries, world
+  limits, saved neighbors and reversed requests (`harpas-worldgen`, `harpas-engine`).
+
 - Cold and warm ocean ruin blocks generated on chunk workers from the owner's templates, with ocean-floor
   fitting, positional deterioration, up to five archaeology blocks per piece and chest loot metadata.
   Rotated pieces survive Anvil reloads, and placement/replay is compared against vanilla, including

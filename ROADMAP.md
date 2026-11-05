@@ -160,6 +160,10 @@ vanilla for the same seed.
         positional deterioration, capped archaeology, waterlogged chests and loot metadata, with vanilla
         placement/replay, chunk-boundary, saved-neighbor, reversed-request and Anvil reload comparisons.
         Drowned spawning follows in M4; full FEATURES resumption remains pending.
+  - [x] Overworld ruined portal block placement on chunk workers: mirrored and rotated templates, positional
+        decay, waterlogging, netherrack spread and drip columns, vines/leaves and chest loot metadata, with
+        vanilla placement/replay, world-limit, saved-neighbor, reversed-request and Anvil reload comparisons.
+        Complete FEATURES-stage resumption remains pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

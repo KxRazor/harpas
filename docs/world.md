@@ -289,9 +289,19 @@ and the owner **accepts it once**:
     heightmaps in 13,160 chunk placements and replays after reloading the building record. It covers all four
     orientations, every horizontal offset within a chunk, ocean, solid, air, mixed and uneven terrain,
     water, ice, plants and waterlogged blocks, negative coordinates, world limits and different sea levels. Pull requests use
-    fewer offsets. Internal room blocks and worker integration remain pending; this API is not called
-    by the normal chunk pipeline until the monument can be placed in full. Scheduled fluid ticks and the
-    complete FEATURES schedule remain separate work.
+    fewer offsets. Worker integration remains pending; this API is not called by the normal chunk pipeline.
+  - `MonumentLayout::place_rooms_in_chunk` follows the exterior with all eleven internal piece types:
+    entry, treasure core with eight gold blocks, double rooms, three simple designs, sponge rooms, both
+    wing designs and penthouse. Floors retain vertical passages; ceilings replace only source water when
+    no cell exists above. Horizontal passages preserve water and ice as the exterior does. Child bounds
+    gate placement and random consumption; an intersecting sponge room draws for all its columns before
+    clipping writes to the chunk. Simple rooms draw their pillar boolean before checking vertical passages.
+    `monument_interior_parity` compares 122,200 isolated-child and complete-monument chunk placements
+    and replays, every block, all six final-block heightmaps and the decoration stream's next draw. It covers
+    all piece types and designs, four orientations, negative and world-limit coordinates, chunk edges, mixed terrain, sea levels and
+    vertical clipping. Second passes reconstruct rooms from saved building records without changing their
+    NBT. No internal children are persisted. Worker integration, scheduled fluid ticks and the complete
+    FEATURES schedule remain pending; elder guardian spawning follows in M4 and is suppressed in the probe.
   - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
     their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
     `beard_box` and `encapsulate`, including jigsaw ground-level offsets and junctions on terrain-matching pieces.

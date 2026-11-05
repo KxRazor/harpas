@@ -176,11 +176,15 @@ vanilla for the same seed.
         in M4. Full FEATURES resumption remains pending.
   - [x] Ocean monument internal room layouts: the connected cell graph, treasure core, fitted rooms, wings and
         penthouse, with all orientations, designs, random consumption and reconstruction from saved building
-        records compared against vanilla. Internal room blocks and worker integration remain pending.
+        records compared against vanilla. Block placement is tracked separately below.
   - [x] Ocean monument exterior placement API: outer wings, entrance, facade, roof, stepped walls, terrain
         clearing and foundations, with block and heightmap comparisons against vanilla, all orientations,
-        chunk edges, world limits and saved-record pass replays. Internal rooms, worker integration and the
-        complete FEATURES stage remain pending.
+        chunk edges, world limits and saved-record pass replays.
+  - [x] Ocean monument interior placement API: all eleven room types, treasure core, sponge rooms, both wing
+        designs and penthouse, with individual rooms and complete monument passes compared against vanilla:
+        blocks, six heightmaps, decoration random consumption, rotations, chunk edges, world limits and
+        saved-record replays. Worker integration and the complete FEATURES stage remain pending;
+        elder guardian spawning follows in M4.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

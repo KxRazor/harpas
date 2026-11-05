@@ -1,6 +1,6 @@
 //! Ocean monument starts: the surrounding biomes and the single saved building piece.
 //! Internal rooms are reconstructed from the structure seed; only the building is saved in NBT.
-//! Exterior block placement is in `monument_blocks`; internal room blocks follow separately.
+//! Exterior block placement is in `monument_blocks`; internal blocks are in `monument_rooms`.
 
 use std::collections::BTreeMap;
 

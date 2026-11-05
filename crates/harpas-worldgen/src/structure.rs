@@ -23,6 +23,7 @@ pub use mineshaft_blocks::place_mineshafts_in_chunk;
 mod monument;
 pub use monument::{MonumentLayout, MonumentRoom, MonumentRoomKind, MonumentRoomPiece};
 mod monument_blocks;
+mod monument_rooms;
 mod ocean_ruin;
 mod placement;
 mod portal_blocks;

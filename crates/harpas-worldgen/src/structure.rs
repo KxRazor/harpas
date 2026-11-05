@@ -21,6 +21,8 @@ mod mineshaft;
 mod monument;
 mod ocean_ruin;
 mod placement;
+mod portal_blocks;
+pub use portal_blocks::{RuinedPortalBlocks, RuinedPortalGenerator};
 mod ruined_portal;
 mod shipwreck;
 mod start;

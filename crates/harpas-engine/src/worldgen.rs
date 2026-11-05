@@ -59,6 +59,13 @@ pub fn overworld_generator(
         };
         if let Some(source) = &structure_source {
             source.prepare_shipwrecks(&mut structures, pos, seed, &terrain_chunks)?;
+            source.prepare_portals(
+                &mut structures,
+                seed,
+                &terrain_chunks,
+                generated.min_y(),
+                generated.height(),
+            )?;
         }
         let entities = structures.place_blocks(&mut generated, seed, &terrain_chunks, &templates);
         let mut chunk = into_anvil(generated)?;

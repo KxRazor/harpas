@@ -7,27 +7,29 @@ use std::sync::{Arc, Mutex};
 use harpas_anvil::Chunk;
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_worldgen::{
-    Beardifier, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureStart,
-    StructureState, StructureTemplates, WorldgenData,
+    Beardifier, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, RuinedPortalBlocks,
+    RuinedPortalGenerator, StructureStart, StructureState, StructureTemplates, WorldgenData,
 };
 
 use crate::world::{ChunkPos, ChunkReader};
 
 type Starts = Arc<Vec<StructureStart>>;
-type Entry = Arc<Mutex<Option<Starts>>>;
+type Entry<T> = Arc<Mutex<Option<Arc<T>>>>;
+type StartCache = Cache<Vec<StructureStart>>;
+type PortalPlans = Vec<RuinedPortalBlocks>;
 
-struct Entries {
-    by_pos: HashMap<ChunkPos, Entry>,
+struct Entries<T> {
+    by_pos: HashMap<ChunkPos, Entry<T>>,
     order: VecDeque<ChunkPos>,
 }
 
-/// Bounds both successful and empty starts; each cached entry has its own lock so unrelated starts run in parallel.
-struct StartCache {
+/// Bounds shared generation results; each entry has its own lock so unrelated sources run in parallel.
+struct Cache<T> {
     capacity: usize,
-    entries: Mutex<Entries>,
+    entries: Mutex<Entries<T>>,
 }
 
-impl StartCache {
+impl<T> Cache<T> {
     fn new(capacity: usize) -> Self {
         assert!(capacity > 0);
         Self {
@@ -39,11 +41,7 @@ impl StartCache {
         }
     }
 
-    fn get(
-        &self,
-        pos: ChunkPos,
-        load: impl FnOnce() -> io::Result<Vec<StructureStart>>,
-    ) -> io::Result<Starts> {
+    fn get(&self, pos: ChunkPos, load: impl FnOnce() -> io::Result<T>) -> io::Result<Arc<T>> {
         let entry = {
             let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = entries.by_pos.get(&pos) {
@@ -74,6 +72,8 @@ pub(super) struct Structures {
     templates: Arc<StructureTemplates>,
     starts: StartCache,
     shipwreck_heights: StartCache,
+    portals: RuinedPortalGenerator,
+    portal_blocks: Cache<PortalPlans>,
 }
 
 pub(super) struct ChunkStructures {
@@ -82,6 +82,7 @@ pub(super) struct ChunkStructures {
     pub neighbor_pieces: Vec<StructureStart>,
     references: Compound,
     initial_shipwreck_burials: HashSet<String>,
+    portal_blocks: Vec<Arc<PortalPlans>>,
 }
 
 impl ChunkStructures {
@@ -92,6 +93,7 @@ impl ChunkStructures {
             neighbor_pieces: Vec::new(),
             references: Compound::new(),
             initial_shipwreck_burials: HashSet::new(),
+            portal_blocks: Vec::new(),
         }
     }
 
@@ -114,7 +116,8 @@ impl ChunkStructures {
                     (z & 15) as usize,
                 )
         };
-        self.starts
+        let mut entities: Vec<_> = self
+            .starts
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
@@ -281,7 +284,14 @@ impl ChunkStructures {
                 }
                 entities
             })
-            .collect()
+            .collect();
+        for plans in &self.portal_blocks {
+            for plan in plans.iter() {
+                entities.retain(|e| !plan.removes_block_entity(e));
+                entities.extend(plan.place_in_chunk(generated));
+            }
+        }
+        entities
     }
 
     pub(super) fn into_nbt(self) -> Compound {
@@ -309,6 +319,9 @@ impl Structures {
             templates,
             starts: StartCache::new(4096),
             shipwreck_heights: StartCache::new(4096),
+            portals: RuinedPortalGenerator::new(data).map_err(io::Error::other)?,
+            // Portal results include terrain writes, so retain fewer entries than the compact start records.
+            portal_blocks: Cache::new(256),
         })
     }
 
@@ -387,6 +400,58 @@ impl Structures {
         Ok(())
     }
 
+    pub(super) fn prepare_portals(
+        &self,
+        placements: &mut ChunkStructures,
+        seed: i64,
+        terrain: &HashMap<ChunkPos, GeneratedChunk>,
+        min_y: i32,
+        height: i32,
+    ) -> io::Result<()> {
+        let mut sources = HashSet::new();
+        for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
+            if start.ruined_portal_terrain_bounds().is_none() || !sources.insert(start.chunk) {
+                continue;
+            }
+            let origin = ChunkPos {
+                x: start.chunk.0,
+                z: start.chunk.1,
+            };
+            let plans = self.portal_blocks.get(origin, || {
+                Ok(placements
+                    .starts
+                    .iter()
+                    .chain(&placements.neighbor_pieces)
+                    .filter(|s| {
+                        s.chunk == start.chunk && s.ruined_portal_terrain_bounds().is_some()
+                    })
+                    .map(|s| {
+                        self.portals.prepare(
+                            s,
+                            seed,
+                            &self.templates,
+                            min_y,
+                            height,
+                            &mut |x, y, z| {
+                                terrain[&ChunkPos {
+                                    x: x >> 4,
+                                    z: z >> 4,
+                                }]
+                                    .block_state(
+                                        (x & 15) as usize,
+                                        y,
+                                        (z & 15) as usize,
+                                    )
+                            },
+                        )
+                    })
+                    .collect())
+            })?;
+            placements.portal_blocks.push(plans);
+        }
+        Ok(())
+    }
+
     pub(super) fn terrain_for_placements(
         &self,
         chunk: &GeneratedChunk,
@@ -400,58 +465,68 @@ impl Structures {
         // rotated shipwrecks can sample outside their piece bounds.
         // Resolve these reads before placing blocks, preferring saved terrain.
         for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
-            if !matches!(
-                start.structure.as_str(),
-                "minecraft:desert_pyramid"
-                    | "minecraft:jungle_pyramid"
-                    | "minecraft:igloo"
-                    | "minecraft:shipwreck"
-                    | "minecraft:shipwreck_beached"
-                    | "minecraft:ocean_ruin_cold"
-                    | "minecraft:ocean_ruin_warm"
-            ) {
-                continue;
-            }
-            let mut neighbors: Vec<_> = start
-                .pieces
-                .iter()
-                .flat_map(|piece| {
-                    // Shipwreck edge updates can inspect the neighbors of an existing block just
-                    // outside the template, requiring two columns beyond the piece bounds.
-                    let padding = match start.structure.as_str() {
-                        "minecraft:shipwreck" | "minecraft:shipwreck_beached" => 2,
-                        "minecraft:igloo" => 1,
-                        "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm" => 2,
-                        _ => 0,
-                    };
-                    (((piece.bounding_box.min[0] - padding) >> 4)
-                        ..=((piece.bounding_box.max[0] + padding) >> 4))
-                        .flat_map(move |x| {
-                            (((piece.bounding_box.min[2] - padding) >> 4)
-                                ..=((piece.bounding_box.max[2] + padding) >> 4))
-                                .map(move |z| ChunkPos { x, z })
-                        })
-                })
-                .collect();
-            if start.structure == "minecraft:igloo" {
-                neighbors.extend(start.igloo_height_samples().map(|(x, z)| ChunkPos {
-                    x: x >> 4,
-                    z: z >> 4,
-                }));
-            }
-            if matches!(
-                start.structure.as_str(),
-                "minecraft:shipwreck" | "minecraft:shipwreck_beached"
-            ) {
-                neighbors.extend(
-                    start
-                        .shipwreck_height_samples(&self.templates)
-                        .map(|(x, z)| ChunkPos {
+            let mut neighbors: Vec<_> = if let Some(bounds) = start.ruined_portal_terrain_bounds() {
+                ((bounds.min[0] >> 4)..=(bounds.max[0] >> 4))
+                    .flat_map(|x| {
+                        ((bounds.min[2] >> 4)..=(bounds.max[2] >> 4))
+                            .map(move |z| ChunkPos { x, z })
+                    })
+                    .collect()
+            } else {
+                if !matches!(
+                    start.structure.as_str(),
+                    "minecraft:desert_pyramid"
+                        | "minecraft:jungle_pyramid"
+                        | "minecraft:igloo"
+                        | "minecraft:shipwreck"
+                        | "minecraft:shipwreck_beached"
+                        | "minecraft:ocean_ruin_cold"
+                        | "minecraft:ocean_ruin_warm"
+                ) {
+                    continue;
+                }
+                let mut neighbors: Vec<_> = start
+                    .pieces
+                    .iter()
+                    .flat_map(|piece| {
+                        // Shipwreck edge updates can inspect the neighbors of an existing block just
+                        // outside the template, requiring two columns beyond the piece bounds.
+                        let padding = match start.structure.as_str() {
+                            "minecraft:shipwreck" | "minecraft:shipwreck_beached" => 2,
+                            "minecraft:igloo" => 1,
+                            "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm" => 2,
+                            _ => 0,
+                        };
+                        (((piece.bounding_box.min[0] - padding) >> 4)
+                            ..=((piece.bounding_box.max[0] + padding) >> 4))
+                            .flat_map(move |x| {
+                                (((piece.bounding_box.min[2] - padding) >> 4)
+                                    ..=((piece.bounding_box.max[2] + padding) >> 4))
+                                    .map(move |z| ChunkPos { x, z })
+                            })
+                    })
+                    .collect();
+                if start.structure == "minecraft:igloo" {
+                    neighbors.extend(start.igloo_height_samples().map(|(x, z)| ChunkPos {
+                        x: x >> 4,
+                        z: z >> 4,
+                    }));
+                }
+                if matches!(
+                    start.structure.as_str(),
+                    "minecraft:shipwreck" | "minecraft:shipwreck_beached"
+                ) {
+                    neighbors.extend(start.shipwreck_height_samples(&self.templates).map(
+                        |(x, z)| ChunkPos {
                             x: x >> 4,
                             z: z >> 4,
-                        }),
-                );
-            }
+                        },
+                    ));
+                }
+                neighbors
+            };
+            neighbors.sort_by_key(|p| (p.x, p.z));
+            neighbors.dedup();
             for neighbor @ ChunkPos { x, z } in neighbors {
                 if terrain_chunks.contains_key(&neighbor) {
                     continue;
@@ -551,11 +626,19 @@ impl Structures {
             .map_err(io::Error::other)?;
         // Template hulls, pyramids and igloos can span several chunks; saved huts and temples can too.
         // Place their intersection without moving or duplicating the source chunk's saved start.
-        let neighbor_pieces = referenced
+        let neighbor_pieces = nearby
             .iter()
+            .flat_map(|starts| starts.iter())
             .filter(|s| {
                 s.chunk != (pos.x, pos.z)
-                    && matches!(
+                    && (s.ruined_portal_terrain_bounds().is_some_and(|bounds| {
+                        bounds.intersects_columns(min_x, min_z, min_x + 15, min_z + 15)
+                    }) || s.bounding_box.intersects_columns(
+                        min_x,
+                        min_z,
+                        min_x + 15,
+                        min_z + 15,
+                    ) && matches!(
                         s.structure.as_str(),
                         "minecraft:swamp_hut"
                             | "minecraft:desert_pyramid"
@@ -565,7 +648,7 @@ impl Structures {
                             | "minecraft:shipwreck_beached"
                             | "minecraft:ocean_ruin_cold"
                             | "minecraft:ocean_ruin_warm"
-                    )
+                    ))
             })
             .map(|s| (*s).clone())
             .collect();
@@ -585,6 +668,7 @@ impl Structures {
             neighbor_pieces,
             references,
             initial_shipwreck_burials: HashSet::new(),
+            portal_blocks: Vec::new(),
         })
     }
 }

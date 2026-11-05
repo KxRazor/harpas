@@ -107,7 +107,10 @@ fn hut_blocks_metadata_workers_and_vanilla_resumption_match() {
     let mut expected = Compound::new();
     let states = block_states();
     let stone = states.default_state("minecraft:stone").unwrap();
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
+    data.structure_sets.shift_remove("minecraft:mineshafts");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     use harpas_worldgen::Direction::{East, North, South, West};
     for (di, direction) in [North, East, South, West].into_iter().enumerate() {
@@ -497,7 +500,10 @@ fn workers_place_saved_neighbor_huts_and_preserve_source_records() {
         eprintln!("Skipping saved neighbor huts: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
     };
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
+    data.structure_sets.shift_remove("minecraft:mineshafts");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
     let seed = 42;

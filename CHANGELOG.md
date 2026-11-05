@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Normal and badlands mineshaft blocks generated on chunk workers: rooms, crossings, stairs and corridors,
+  supports and hanging chains, rails, cobwebs, torches and cave-spider spawner metadata. Placement shares
+  vanilla's decoration stream across references and respects liquid shells and saved neighboring biomes.
+  Blocks, heightmaps, records and replays are compared against vanilla, including world limits, partial
+  floors, shared chunks, reversed worker requests and Anvil reloads. Chest minecart entities and spawner
+  ticking follow in M4 (`harpas-worldgen`, `harpas-engine`).
+
 - Overworld ruined portal blocks generated on chunk workers from the owner's templates, including
   rotations and mirrors, decay, netherrack spread and columns, waterlogging, vines/leaves and chest loot
   metadata. Whole portal results are shared across workers; saved portal templates are reconstructed on

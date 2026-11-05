@@ -47,6 +47,7 @@ pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
 pub use structure::{
     BoundingBox, Direction, JigsawJunction, JigsawPiece, RuinedPortalBlocks, RuinedPortalGenerator,
     StructurePiece, StructureReference, StructureStart, StructureState, TemplatePiece,
+    place_mineshafts_in_chunk,
 };
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,

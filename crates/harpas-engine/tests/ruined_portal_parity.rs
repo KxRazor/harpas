@@ -162,7 +162,10 @@ fn ruined_portal_blocks_and_metadata_match_vanilla() {
     let Some(reference) = Reference::from_env() else {
         return;
     };
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
+    data.structure_sets.shift_remove("minecraft:mineshafts");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let generator = RuinedPortalGenerator::new(&data).unwrap();
     reference.compile(&[

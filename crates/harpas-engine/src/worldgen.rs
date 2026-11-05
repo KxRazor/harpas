@@ -67,7 +67,14 @@ pub fn overworld_generator(
                 generated.height(),
             )?;
         }
-        let entities = structures.place_blocks(&mut generated, seed, &terrain_chunks, &templates);
+        let blocking_biomes = structures.mineshaft_biomes(&generated, &generator, &data, read)?;
+        let entities = structures.place_blocks(
+            &mut generated,
+            seed,
+            &terrain_chunks,
+            &templates,
+            &blocking_biomes,
+        );
         let mut chunk = into_anvil(generated)?;
         if !entities.is_empty() {
             chunk

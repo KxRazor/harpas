@@ -164,6 +164,11 @@ vanilla for the same seed.
         decay, waterlogging, netherrack spread and drip columns, vines/leaves and chest loot metadata, with
         vanilla placement/replay, world-limit, saved-neighbor, reversed-request and Anvil reload comparisons.
         Complete FEATURES-stage resumption remains pending.
+  - [x] Normal and badlands mineshaft block placement on chunk workers: rooms, crossings, stairs, corridors,
+        floor supports and hanging chains, rails, cobwebs, torches and cave-spider spawner metadata, with
+        vanilla placement/replay, partial floors, liquid/biome checks, world limits, shared decoration streams,
+        saved neighbors, reversed requests and Anvil reload comparisons. Spawner flags remain deferred at
+        `carvers`; chest minecart entities and spawner ticking follow in M4. Full FEATURES resumption remains pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

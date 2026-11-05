@@ -415,6 +415,24 @@ and the owner **accepts it once**:
     These comparisons use the same pre-placement neighbors for each complete portal pass; they do not
     establish the full feature-stage schedule or resumption. Ruined portals in the Nether follow with
     that dimension.
+  - Normal and badlands mineshaft blocks run on chunk workers, retaining the saved piece layout, entrances,
+    orientation, depth and reference count. Rooms carve their upper dome; crossings include upper floors
+    and supported posts; stairs excavate their rotated slope. Corridors place oak or dark oak supports,
+    floating floors, hanging fences/chains, rails, torches and cobwebs. Pieces check the liquid shell clipped
+    to the target chunk and the zoomed `mineshaft_blocking` biome at its clipped center. Biome samples use
+    saved neighboring sections when available, otherwise the noise biome source, without generating extra
+    terrain. Floor support and solid-render checks differ for slabs, stairs, leaves and glass.
+    Each structure type shares one decoration-seeded stream across all its starts, in a new chunk's native
+    reference-set iteration order. Buried treasure runs before the mineshafts. Spider corridors write cave-spider
+    spawner NBT; workers retain incoming `hps` flags at `carvers` so a later vanilla pass can recreate a
+    spawner which its excavation clears. Chest minecart entities and loot remain with M4; their placement
+    draws and rail blocks are already preserved. The light engine and spawner ticking are separate tasks.
+    `mineshaft_parity` compares every block, all six heightmaps, postprocessing, saved records and spawner
+    data in 558 synthetic chunks and their replays, including both types, all rotations, multiple references
+    and reference-set growth, partial floors, liquids, blocked biomes, chunk edges and vertical limits.
+    Natural worker chunks across three seeds include a chunk shared with buried treasure, reversed requests
+    and Anvil reloads. A saved-neighbor case checks piece records and a changed biome across a chunk edge.
+    These are individual placement-pass comparisons; the full FEATURES schedule and resumption remain pending.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with

@@ -75,7 +75,10 @@ fn workers_apply_structure_terrain_and_persist_starts_and_references() {
         eprintln!("Skipping structure workers: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
     };
-    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+    // Terrain adaptation is compared here; mine block placement has its own harness.
+    data.structure_sets.shift_remove("minecraft:mineshafts");
+    let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let seed = 0;
     let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
@@ -131,6 +134,7 @@ fn workers_apply_structure_terrain_and_persist_starts_and_references() {
     let output = reference.temp.0.join("worker-chunks.bin");
     let mut args = vec![output.display().to_string(), seed.to_string()];
     args.extend(positions.iter().map(|(x, z)| format!("{x},{z}")));
+    args.push("--without-mineshafts".to_owned());
     reference.java("StructureTerrainProbe", args);
     let bytes = std::fs::read(output.with_extension("bin.nbt")).unwrap();
     let (_, Nbt::Compound(expected_structures)) = Nbt::read_named(&mut bytes.as_slice()).unwrap()

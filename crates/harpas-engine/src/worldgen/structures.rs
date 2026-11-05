@@ -355,13 +355,21 @@ impl ChunkStructures {
                 // containers with the same deterministic loot seeds when it resumes FEATURES.
                 let deferred: Vec<_> = if matches!(
                     start.structure.as_str(),
-                    "minecraft:desert_pyramid" | "minecraft:jungle_pyramid"
+                    "minecraft:desert_pyramid"
+                        | "minecraft:jungle_pyramid"
+                        | "minecraft:stronghold"
                 ) {
                     start
                         .pieces
                         .iter()
                         .map(|piece| {
-                            if piece.kind == "minecraft:tejp" {
+                            if piece.kind == "minecraft:shcc" {
+                                vec!["Chest".to_owned()]
+                            } else if piece.kind == "minecraft:shpr" {
+                                vec!["Mob".to_owned()]
+                            } else if start.structure == "minecraft:stronghold" {
+                                Vec::new()
+                            } else if piece.kind == "minecraft:tejp" {
                                 [
                                     "placedMainChest",
                                     "placedHiddenChest",
@@ -622,6 +630,15 @@ impl Structures {
                             .map(move |z| ChunkPos { x, z })
                     })
                     .collect()
+            } else if start.structure == "minecraft:stronghold" {
+                start
+                    .stronghold_chest_neighbors(chunk)
+                    .into_iter()
+                    .map(|[x, _, z]| ChunkPos {
+                        x: x >> 4,
+                        z: z >> 4,
+                    })
+                    .collect()
             } else {
                 if !matches!(
                     start.structure.as_str(),
@@ -791,6 +808,7 @@ impl Structures {
                     ) && matches!(
                         s.structure.as_str(),
                         "minecraft:swamp_hut"
+                            | "minecraft:stronghold"
                             | "minecraft:mineshaft"
                             | "minecraft:mineshaft_mesa"
                             | "minecraft:desert_pyramid"

@@ -30,6 +30,7 @@ mod shipwreck;
 mod start;
 mod storage;
 mod stronghold;
+mod stronghold_blocks;
 mod swamp_hut;
 mod templated;
 

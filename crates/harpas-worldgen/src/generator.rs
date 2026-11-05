@@ -140,6 +140,9 @@ fn block_heightmap_flags() -> &'static [u8] {
                         | "minecraft:ladder"
                         | "minecraft:redstone_torch"
                         | "minecraft:wall_torch"
+                        | "minecraft:torch"
+                        | "minecraft:stone_button"
+                        | "minecraft:end_portal"
                         | "minecraft:rail"
                         | "minecraft:potted_cactus"
                 ) || name.ends_with("_carpet");
@@ -1191,6 +1194,25 @@ mod tests {
             assert!(HeightmapType::WorldSurfaceWg.matches(state));
             assert!(!HeightmapType::OceanFloorWg.matches(state));
             assert!(!HeightmapType::MotionBlocking.matches(state));
+        }
+    }
+
+    #[test]
+    fn stronghold_decoration_blocks_have_vanillas_heightmap_predicates() {
+        for name in ["torch", "stone_button", "end_portal"] {
+            let state = block_states()
+                .default_state(&format!("minecraft:{name}"))
+                .unwrap();
+            assert!(HeightmapType::WorldSurface.matches(state));
+            assert!(HeightmapType::WorldSurfaceWg.matches(state));
+            for kind in [
+                HeightmapType::OceanFloor,
+                HeightmapType::OceanFloorWg,
+                HeightmapType::MotionBlocking,
+                HeightmapType::MotionBlockingNoLeaves,
+            ] {
+                assert!(!kind.matches(state), "{name} {kind:?}");
+            }
         }
     }
 }

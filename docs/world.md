@@ -433,6 +433,25 @@ and the owner **accepts it once**:
     Natural worker chunks across three seeds include a chunk shared with buried treasure, reversed requests
     and Anvil reloads. A saved-neighbor case checks piece records and a changed biome across a chunk edge.
     These are individual placement-pass comparisons; the full FEATURES schedule and resumption remain pending.
+  - Stronghold blocks run on chunk workers using the existing saved piece layout, in piece order. Corridors,
+    prisons, three- and five-way crossings, both stair types, filler corridors and short/tall libraries retain
+    their doors, child openings and room variants. Masonry draws only on box boundaries; boxes which skip air
+    also skip draws outside the target chunk, while portal-room masonry and library cobweb draws include
+    clipped positions. All pieces of a start share the stronghold decoration stream (index 19, step 4 in 26.1).
+    Chests retain loot table names and seeds without rolling items. Chest facing excludes transparent and
+    partial blocks; workers resolve only the neighboring positions needed for chests on a chunk edge,
+    preferring saved terrain. Portal rooms place lava, stairs, bars and all twelve independently drawn eyes,
+    including an active portal when every frame has an eye, and save silverfish spawner data. Spawner ticking
+    follows in M4. Workers retain incoming `Chest` and `Mob` flags at `carvers` so vanilla can recreate containers
+    which its next structure pass clears; the direct placement API updates them as vanilla does.
+    `stronghold_parity` compares blocks, six final-block heightmaps, block entities, postprocessing and saved
+    records in 5,472 placements and replays across two seeds: every piece type and rotation, all door types,
+    crossing/library variants, air, liquids, caves, chunk boundaries and vertical limits, including individual
+    pass replays after loading the saved records. Eighteen natural worker chunks across two seeds cover
+    libraries, portal rooms, chests and crossings, reversed
+    requests and Anvil reloads. A saved-neighbor test changes a chest's neighboring block to glass and checks
+    the retained source record and target chunk against vanilla. Complete FEATURES scheduling and resumption
+    remain separate work.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with

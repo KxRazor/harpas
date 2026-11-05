@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Stronghold blocks generated on chunk workers: corridors, doors, prisons, crossings, stairs, libraries
+  and portal rooms, including chest loot metadata, silverfish spawner data and portal eyes. Placement and
+  individual pass replays are compared against vanilla, including rotations, chunk boundaries, world
+  limits, saved neighbors, reversed requests and Anvil reloads. Workers retain incoming container and
+  spawner flags until the complete feature stage is implemented (`harpas-worldgen`, `harpas-engine`).
+
 - Normal and badlands mineshaft blocks generated on chunk workers: rooms, crossings, stairs and corridors,
   supports and hanging chains, rails, cobwebs, torches and cave-spider spawner metadata. Placement shares
   vanilla's decoration stream across references and respects liquid shells and saved neighboring biomes.

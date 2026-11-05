@@ -19,6 +19,38 @@ impl StructureStart {
         height_at: &mut impl FnMut(i32, i32) -> i32,
         block_at: &mut impl FnMut(i32, i32, i32) -> u32,
     ) -> Vec<Compound> {
+        if self.structure == "minecraft:stronghold" {
+            let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+            let decoration =
+                random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
+            random.set_feature_seed(decoration, 19, 4);
+            let mut entities = Vec::new();
+            for piece in &mut self.pieces {
+                entities.extend(super::stronghold_blocks::place(
+                    piece,
+                    chunk,
+                    &mut random,
+                    block_at,
+                ));
+            }
+            // Later pieces can excavate earlier containers or the portal spawner.
+            entities.retain(|tag| {
+                let [x, y, z] = ["x", "y", "z"].map(|key| match tag.get(key) {
+                    Some(harpas_core::nbt::Nbt::Int(v)) => *v,
+                    _ => unreachable!(),
+                });
+                let name = block_states()
+                    .properties(chunk.block_state((x & 15) as usize, y, (z & 15) as usize))
+                    .unwrap()
+                    .0;
+                name == if tag.get("id") == Some(&harpas_core::nbt::Nbt::from("minecraft:chest")) {
+                    "minecraft:chest"
+                } else {
+                    "minecraft:spawner"
+                }
+            });
+            return entities;
+        }
         if self.structure == "minecraft:jungle_pyramid" {
             let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
             let decoration =

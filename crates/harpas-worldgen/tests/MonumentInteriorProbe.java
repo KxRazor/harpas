@@ -33,6 +33,14 @@ public final class MonumentInteriorProbe {
         f.setAccessible(true);
         return (List<StructurePiece>) f.get(building);
     }
+    /** Vanilla's `applyBiomeDecoration` stream for `minecraft:monument` in 26.1 (index 6, step 4). */
+    static RandomSource featureRandom(long seed, int cx, int cz) {
+        var random = new WorldgenRandom(new XoroshiroRandomSource(0));
+        long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
+        random.setFeatureSeed(decoration, 6, 4);
+        return random;
+    }
+
     static MonumentBuilding building(long seed, int ox, int oz, int dir, boolean reload) throws Exception {
         int cx = ox >> 4, cz = oz >> 4;
         MonumentBuilding building;
@@ -77,6 +85,9 @@ public final class MonumentInteriorProbe {
             for (String line : lines.subList(1, lines.size())) {
                 String[] v = line.split(" ");
                 long seed = Long.parseLong(v[0]), decoration = Long.parseLong(v[12]);
+                // Optional final field: 1 selects vanilla's real monument feature stream instead of
+                // the caller-supplied legacy stream used by the individual-room cases.
+                int stream = v.length > 13 ? Integer.parseInt(v[13]) : 0;
                 int ox = Integer.parseInt(v[1]), oy = Integer.parseInt(v[2]), oz = Integer.parseInt(v[3]);
                 int dir = Integer.parseInt(v[4]), mode = Integer.parseInt(v[5]), sea = Integer.parseInt(v[6]);
                 int minY = Integer.parseInt(v[7]), height = Integer.parseInt(v[8]);
@@ -110,7 +121,7 @@ public final class MonumentInteriorProbe {
                     var building = building(seed, ox, oz, dir, pass == 1);
                     building.getBoundingBox().move(0, oy - 39, 0);
                     for (var child : children(building)) child.getBoundingBox().move(0, oy - 39, 0);
-                    var random = RandomSource.create(decoration + pass);
+                    var random = stream == 1 ? featureRandom(seed, cx, cz) : RandomSource.create(decoration + pass);
                     var clip = new BoundingBox(cx * 16, minY, cz * 16, cx * 16 + 15, minY + height - 1, cz * 16 + 15);
                     if (selection == -1) {
                         building.postProcess(world, null, null, random, clip, new ChunkPos(cx, cz), BlockPos.ZERO);

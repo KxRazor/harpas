@@ -71,6 +71,7 @@ pub fn overworld_generator(
         let entities = structures.place_blocks(
             &mut generated,
             seed,
+            generator.sea_level(),
             &terrain_chunks,
             &templates,
             &blocking_biomes,

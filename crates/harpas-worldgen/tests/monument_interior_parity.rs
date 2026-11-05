@@ -378,3 +378,190 @@ fn monument_interiors_match_vanilla() {
         (cases.lines().count() - 1) * 2
     );
 }
+
+#[test]
+fn monument_worker_stream_matches_vanilla() {
+    let Some(reference) = Reference::from_env() else {
+        eprintln!("Skipping monument worker stream: HARPAS_VANILLA_SERVER_DIR is not set");
+        return;
+    };
+    let palette = palette();
+    let mut cases = palette
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
+        + "\n";
+    let reduced = reference::reduced_sample();
+    let seeds: &[i64] = if reduced {
+        &[0]
+    } else {
+        &[0, 0x0123_4567_89ab_cdef]
+    };
+    let modes: &[i32] = if reduced { &[0, 3] } else { &[0, 1, 2, 3] };
+    // The worker API uses vanilla's fixed building height (y = 39) in a normal Overworld.
+    for &seed in seeds {
+        for direction in [
+            Direction::South,
+            Direction::West,
+            Direction::North,
+            Direction::East,
+        ] {
+            for [ox, oy, oz] in [[15, 39, 15], [-33, 39, -47]] {
+                for &mode in modes {
+                    for cz in ((oz - 5) >> 4)..=((oz + 62) >> 4) {
+                        for cx in ((ox - 5) >> 4)..=((ox + 62) >> 4) {
+                            cases.push_str(&format!(
+                                "{seed} {ox} {oy} {oz} {} {mode} 63 -64 384 {cx} {cz} -1 0 1\n",
+                                direction.data_value()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let inputs = reference.temp.0.join("worker-cases.txt");
+    let output = reference.temp.0.join("worker.bin.zlib");
+    fs::write(&inputs, &cases).unwrap();
+    reference.compile(&[
+        (
+            "MonumentExteriorProbe.java",
+            include_str!("MonumentExteriorProbe.java"),
+        ),
+        (
+            "MonumentInteriorProbe.java",
+            include_str!("MonumentInteriorProbe.java"),
+        ),
+    ]);
+    reference.java(
+        "MonumentInteriorProbe",
+        [inputs.display().to_string(), output.display().to_string()],
+    );
+    let mut actual = Input(BufReader::new(ZlibDecoder::new(BufReader::new(
+        File::open(output).unwrap(),
+    ))));
+    let data = WorldgenData::from_json_entries([(
+        "data/minecraft/worldgen/structure/monument.json",
+        r#"{"type":"minecraft:ocean_monument","biomes":[],"terrain_adaptation":"none"}"#,
+    )])
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in cases.lines().skip(1) {
+        let values: Vec<i64> = case
+            .split_whitespace()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let [
+            seed,
+            ox,
+            oy,
+            oz,
+            dir,
+            mode,
+            sea,
+            min_y,
+            height,
+            cx,
+            cz,
+            selection,
+            _decoration,
+            stream,
+        ]: [i64; 14] = values.try_into().unwrap();
+        assert_eq!((selection, stream), (-1, 1), "task case");
+        let [ox, oy, oz, mode, sea, min_y, height, cx, cz] =
+            [ox, oy, oz, mode, sea, min_y, height, cx, cz].map(|v| v as i32);
+        let direction = [
+            Direction::South,
+            Direction::West,
+            Direction::North,
+            Direction::East,
+        ][dir as usize];
+        let mut start = monument([ox, oy, oz], direction);
+        let original = start.to_nbt();
+        let mut chunk = GeneratedChunk::new(cx, cz, min_y, height, 1);
+        for y in min_y..min_y + height {
+            for z in 0..16 {
+                for x in 0..16 {
+                    chunk.set_block_state(
+                        x,
+                        y,
+                        z,
+                        terrain(
+                            cx * 16 + x as i32,
+                            y,
+                            cz * 16 + z as i32,
+                            oy,
+                            mode,
+                            sea,
+                            &palette,
+                        ),
+                    );
+                }
+            }
+        }
+        for pass in 0..2 {
+            if pass == 1 {
+                start = StructureStart::from_nbt(
+                    &start.to_nbt(),
+                    &data,
+                    &StructureTemplates::default(),
+                )
+                .unwrap()
+                .unwrap();
+            }
+            start.place_monument_in_chunk(&mut chunk, seed, sea);
+            let mut index = 0;
+            let mut first = None;
+            loop {
+                let length = actual.int();
+                if length == 0 {
+                    break;
+                }
+                assert!(length > 0);
+                let expected = actual.int() as u32;
+                for _ in 0..length {
+                    let (x, y, z) = (index % 16, min_y + index / 256, (index / 16) % 16);
+                    let found = chunk.block_state(x as usize, y, z as usize);
+                    if found != expected && first.is_none() {
+                        first = Some((x, y, z, expected, found));
+                    }
+                    index += 1;
+                }
+            }
+            assert_eq!(index, height * 256);
+            let mut differs = Vec::new();
+            for kind in HeightmapType::ALL {
+                for z in 0..16 {
+                    for x in 0..16 {
+                        let expected = actual.int();
+                        let found = chunk.heightmaps().get(kind, x, z);
+                        if expected != found && differs.len() < 4 {
+                            differs.push((kind, x, z, expected, found));
+                        }
+                    }
+                }
+            }
+            let _tail = actual.long();
+            if let Some(first) = first {
+                failures.push(format!("{case}, pass {pass}: first block {first:?}"));
+            }
+            if !differs.is_empty() {
+                failures.push(format!("{case}, pass {pass}: heightmaps {differs:?}"));
+            }
+            assert_eq!(original, start.to_nbt());
+            assert!(chunk.fluid_postprocessing().is_empty());
+            if failures.len() >= 30 {
+                break;
+            }
+        }
+        if failures.len() >= 30 {
+            break;
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    eprintln!(
+        "Compared {} monument worker chunk placements and replays against vanilla",
+        (cases.lines().count() - 1) * 2
+    );
+}

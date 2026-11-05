@@ -9,21 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Ocean monument blocks on chunk workers: the exterior and all internal rooms are placed in every
+  chunk intersecting the saved bounds, with the five-block clearing clipped to each, using vanilla's
+  monument decoration stream (index 6 and step 4). Only the single building record is saved; elder
+  guardians, scheduled fluid ticks and the complete FEATURES stage remain pending. Worker chunks,
+  reversed request order and Anvil reloads are compared with the direct placement API, and complete
+  passes are compared block by block with vanilla (`harpas-worldgen`, `harpas-engine`).
+
 - Ocean monument interior placement API: all eleven room types, gold treasure core, sponge rooms,
   both wing designs and penthouse. Individual rooms and complete monument passes are compared against
   vanilla, including blocks, all six heightmaps, random consumption, rotations, chunk edges, world limits
-  and reconstruction from saved records. Worker integration remains pending; elder spawning follows
-  in M4 (`harpas-worldgen`).
+  and reconstruction from saved records. Elder spawning follows in M4 (`harpas-worldgen`).
 
 - Ocean monument exterior placement API: outer wings, entrance, facade, roof, stepped walls, terrain
   clearing and foundations, compared block by block against vanilla with all six heightmaps, rotations,
-  chunk edges, world limits and replays after loading saved records. Worker integration remains pending
-  (`harpas-worldgen`).
+  chunk edges, world limits and replays after loading saved records (`harpas-worldgen`).
 
 - Ocean monument internal room layouts, reconstructed from the world seed and saved building piece:
   connections, treasure core, fitted rooms, wings and penthouse. Room graphs, piece order, rotated bounds,
-  designs and random consumption are compared against vanilla, including reconstruction after reload.
-  Worker integration remains pending (`harpas-worldgen`).
+  designs and random consumption are compared against vanilla, including reconstruction after reload
+  (`harpas-worldgen`).
 
 - Stronghold blocks generated on chunk workers: corridors, doors, prisons, crossings, stairs, libraries
   and portal rooms, including chest loot metadata, silverfish spawner data and portal eyes. Placement and

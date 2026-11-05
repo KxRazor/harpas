@@ -19,6 +19,7 @@ mod jigsaw;
 mod jungle_temple;
 mod mineshaft;
 mod monument;
+mod ocean_ruin;
 mod placement;
 mod ruined_portal;
 mod shipwreck;

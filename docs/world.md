@@ -371,6 +371,26 @@ and the owner **accepts it once**:
     with buried treasure. Two saved
     neighbor cases check altered ocean-floor columns and an already adjusted origin. Pull requests use one
     seed; the treasure overlap is included in the full sample.
+  - Cold and warm ocean ruin blocks run on chunk workers using the owner's 48 templates. Each intersecting
+    piece samples `OCEAN_FLOOR_WG` at its origin and checks support across its rotated footprint before
+    placement. The fitted origin and piece bounds are saved; a repeated pass fits the piece again, as vanilla
+    does. Cold ruins overlay their brick, cracked and mossy pieces in order, removing block entities when a
+    later layer replaces their blocks.
+    Deterioration uses a position-seeded legacy random stream. Archaeology shuffles the surviving blocks of
+    the whole piece with a world-seeded positional stream and converts up to five sand or gravel blocks before
+    clipping to the target chunk. Their loot tables and seeds are retained without rolling items. Chest
+    markers run independently of deterioration, retaining water and using the chunk's structure decoration
+    stream for loot seeds. Drowned markers remain deferred to M4.
+    `ocean_ruin_parity` compares every block, all six heightmaps, block entity NBT, saved records and
+    postprocessing in 2,320 placements and replays across two seeds. It covers all 48 templates and rotations,
+    slopes, coasts, ice, waterlogged terrain, negative coordinates, chunk boundaries and vertical world
+    limits, including repeated placement after
+    vanilla reloads Harpas records. Additional kelp cases compare fitting and metadata, allowing only the
+    deferred conversion of neighboring kelp plants to randomized tips; general plant shape updates belong
+    to gameplay. Natural cold and warm ruins also run through workers, reversed request order, Anvil reloads
+    and repeated placement. Saved-neighbor cases verify fitting against saved terrain and piece records.
+    Workers resolve missing neighboring terrain through carvers and prefer saved blocks;
+    comparisons use those pre-placement neighbors, not the complete feature-stage schedule.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
@@ -384,7 +404,8 @@ and the owner **accepts it once**:
   Igloo pass replays also match vanilla, including its height changing when the existing roof raises the
   entrance's `WORLD_SURFACE_WG` height. Shipwreck replays retain their saved height. A beached replay skips
   the original burial draw, so its chest loot seeds can change, as in vanilla. These comparisons do not
-  establish a complete FEATURES-stage round trip.
+  establish a complete FEATURES-stage round trip. Ocean ruin pass replays likewise refit their saved pieces
+  to the existing terrain; blocks and loot can change when earlier placement changed that terrain.
   Full feature-stage resumption, other structure blocks and lighting
   remain separate roadmap tasks; generated chunks do not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined

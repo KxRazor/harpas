@@ -156,6 +156,10 @@ vanilla for the same seed.
         templates and palettes, waterlogging, stair/fence/door shapes and chest loot metadata, with vanilla placement/replay,
         chunk-boundary, saved-neighbor and Anvil reload comparisons, including a chunk shared with buried
         treasure. Full FEATURES resumption remains pending.
+  - [x] Cold and warm ocean ruin block placement on chunk workers: rotated templates, ocean-floor fitting,
+        positional deterioration, capped archaeology, waterlogged chests and loot metadata, with vanilla
+        placement/replay, chunk-boundary, saved-neighbor, reversed-request and Anvil reload comparisons.
+        Drowned spawning follows in M4; full FEATURES resumption remains pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

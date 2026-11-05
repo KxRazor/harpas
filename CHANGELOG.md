@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Cold and warm ocean ruin blocks generated on chunk workers from the owner's templates, with ocean-floor
+  fitting, positional deterioration, up to five archaeology blocks per piece and chest loot metadata.
+  Rotated pieces survive Anvil reloads, and placement/replay is compared against vanilla, including
+  chunk boundaries, saved neighbors and reversed worker requests. Drowned spawning follows in M4
+  (`harpas-worldgen`, `harpas-engine`).
+
 - Ocean and beached shipwreck blocks generated on chunk workers from the owner's templates, with vanilla's
   height adjustment shared across workers with a source-first schedule, rotated palettes, waterlogging,
   block shapes and chest loot metadata. Saved adjusted

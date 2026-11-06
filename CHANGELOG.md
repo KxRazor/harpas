@@ -9,12 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Feature source window: the FEATURES stage now runs the target's 3x3 source chunks, seeds each source chunk's
+  features with its own decoration seed, and routes reads and writes across the nine chunks through
+  `RegionFeatureWorld`. The complete 17x17 loop, worker integration and the families that write across chunks
+  follow (`harpas-worldgen`).
+
 - Vein ore features and the FEATURES-stage scheduler: vanilla's ore vein geometry, rule tests, discard chance,
   height providers and decoration seeds, with the 26.1 ores compiled from the datapack. `ore_feature_parity`
   compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration source, including the
-  random state after the call. Scattered ore (ancient debris) follows with the Nether. The scheduler currently
-  runs for one source chunk; the complete stage, the source-chunk window and worker integration follow
-  (`harpas-worldgen`).
+  random state after the call. Scattered ore (ancient debris) follows with the Nether. The complete stage and
+  worker integration follow (`harpas-worldgen`).
 
 - Feature data: the datapack loader reads `configured_feature` and `placed_feature` definitions and each
   biome's `features` lists, with `minecraft:ore` configurations, rule tests, target states and the `count`,

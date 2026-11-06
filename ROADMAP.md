@@ -120,9 +120,12 @@ vanilla for the same seed.
         lists, with `minecraft:ore` configurations (size, discard chance, rule tests and target states) and the
         `count`, `in_square`, `height_range` and `biome` placement modifiers. Other types keep their JSON for
         later families.
-  - [ ] The FEATURES stage on chunk workers: generation steps, per-source-chunk feature seeds, biome decoration
-        and the source-chunk window.
-  - [ ] Ore features, compared with vanilla through a feature set isolated by a datapack.
+  - [x] Ore feature placement: vanilla's vein geometry, rule tests, discard chance, height providers and random
+        consumption, compared with vanilla's own `OreFeature` on the same decoration random source
+        (`ore_feature_parity`). Ancient debris uses `scattered_ore` and follows with the Nether.
+  - [ ] The FEATURES stage on chunk workers: the generation steps, decoration seeds, placement modifiers and
+        biome filter are implemented for one source chunk; the source-chunk window, worker integration and the
+        complete stage remain.
   - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

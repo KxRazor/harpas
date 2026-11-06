@@ -6,8 +6,8 @@ mod reference;
 
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
 use harpas_worldgen::{
-    CompiledDensityGraph, FeatureConfigDef, FeatureRefDef, HeightProviderDef, HeightmapType,
-    IntProviderDef, MultiNoiseBiomeSource, NoiseBasedChunkGenerator, NoiseChunk,
+    CompiledDensityGraph, FeatureConfigDef, FeatureIndex, FeatureRefDef, HeightProviderDef,
+    HeightmapType, IntProviderDef, MultiNoiseBiomeSource, NoiseBasedChunkGenerator, NoiseChunk,
     PlacementModifierDef, SurfaceRule, VerticalAnchor, WorldgenData, carver,
 };
 use reference::VanillaData;
@@ -80,6 +80,23 @@ fn loads_and_evaluates_the_26_1_datapack() {
         }
     }
 
+    let index = FeatureIndex::new(&data).expect("compile the feature index");
+    assert_eq!(
+        index.sizes(),
+        (data.biomes.len(), data.placed_features.len())
+    );
+    let iron_middle = data
+        .placed_features
+        .get_index_of("minecraft:ore_iron_middle")
+        .expect("iron ore placed feature");
+    let compiled = index.ore(iron_middle).expect("iron ore compiles");
+    assert_eq!(compiled.size, 9);
+    assert_eq!(compiled.targets.len(), 2);
+    assert!(
+        index
+            .allowed_biomes(iron_middle)
+            .is_some_and(|biomes| !biomes.is_empty())
+    );
     for (name, biome) in &data.biomes {
         for (step, features) in biome.features.iter().enumerate() {
             for feature in features {

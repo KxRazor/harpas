@@ -10,8 +10,8 @@ Region files, chunk sections, `level.dat` and player data are read and written. 
 loaded and sent within each player's view, with block states, biomes, heightmaps, saved light and block entity
 data checked against vanilla. Generated chunks receive sky and block light from the light engine when they are
 sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
-generation through features, live block changes and saving other world and player data during play remain in
-progress.
+feature definitions are loaded from the datapack, but generation through features, live block changes and saving
+other world and player data during play remain in progress.
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -242,6 +242,19 @@ and the owner **accepts it once**:
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by
     this pipeline. Generation is refused near saved chunks that require blending with older terrain.
+  - Feature data is loaded from `worldgen/configured_feature/<name>.json`, `worldgen/placed_feature/<name>.json`
+    and each biome's `features` array, which keeps one list per generation step. `minecraft:ore` and
+    `minecraft:scattered_ore` configurations are parsed with their size, discard chance, rule tests and target
+    states, and the placement modifiers those features use (`count`, `in_square`, `height_range` and `biome`) are
+    parsed too. Other feature and modifier types keep their JSON for later families, so the complete 26.1 pack
+    loads. The FEATURES schedule that places features on chunk workers with vanilla's feature seeds remains to be
+    implemented; no feature changes a generated chunk yet.
+  - The FEATURES stage will follow vanilla's `applyBiomeDecoration`: walk the generation steps in order, seed
+    each source chunk's features with `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and
+    `set_feature_seed(decoration, index, step)`, apply the placement modifiers to choose positions, and let a
+    feature read and write a window around the target chunk. Chunk workers will run it after carvers and before
+    light, with the saved-neighbor reads and bounded caches the structures already use. Parity will isolate one
+    feature family at a time with a datapack that enables only that family, and then compare the complete stage.
   - The generation settings and seed live in `data/minecraft/world_gen_settings.dat`, separately from
     `level.dat`. A new world's seed comes from `level-seed` or a random value and is saved before generation;
     existing settings and unknown fields are preserved. If an existing world lacks generation settings,

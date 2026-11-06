@@ -1,17 +1,24 @@
 //! Monument exterior reconstructed from vanilla placement observed on supplied terrain.
 
 use harpas_core::block::block_states;
+use harpas_core::random::{WorldgenRandom, XoroshiroRandom};
 
-use super::{BoundingBox, Direction, StructureStart};
+use super::{BoundingBox, Direction, MonumentLayout, StructureStart};
 use crate::GeneratedChunk;
+
+/// `minecraft:monument`'s position among `SURFACE_STRUCTURES` in 26.1, observed from the reference
+/// server. Vanilla seeds the decoration stream with this index and the step's ordinal.
+const MONUMENT_FEATURE_INDEX: i32 = 6;
+/// The ordinal of `GenerationStep.Decoration.SURFACE_STRUCTURES` in 26.1.
+const SURFACE_STRUCTURES_STEP: i32 = 4;
 
 impl StructureStart {
     /// Places the monument's exterior, entrance, roof and foundations in one chunk.
     ///
-    /// Uses the saved building's origin and orientation. Clearing reaches five blocks outside its
-    /// bounds; callers must include those chunks, then call `MonumentLayout::place_rooms_in_chunk`.
-    /// Worker integration is separate work, so this pass is not called by `place_in_chunk` yet.
-    /// No random draws, entities or saved-record changes occur in this pass.
+    /// Uses the saved building's origin and orientation. The five-block clearing outside the saved
+    /// bounds is clipped to the target chunk; vanilla invokes this pass only for chunks intersecting
+    /// those bounds, so callers that mimic it do the same. Call `MonumentLayout::place_rooms_in_chunk`
+    /// afterwards. No random draws, entities or saved-record changes occur in this pass.
     pub fn place_monument_exterior_in_chunk(&self, chunk: &mut GeneratedChunk, sea_level: i32) {
         if self.structure != "minecraft:monument" {
             return;
@@ -30,6 +37,35 @@ impl StructureStart {
             sea_level,
         );
         exterior.build();
+    }
+
+    /// Places the monument's exterior and internal rooms in one chunk with vanilla's decoration
+    /// stream.
+    ///
+    /// Call this for every chunk that intersects the saved building's bounds, as vanilla does; the
+    /// five-block exterior clearing is clipped to the target chunk and does not reach chunks outside
+    /// those bounds. The stream is seeded like vanilla's `applyBiomeDecoration` for
+    /// `minecraft:monument` (index 6, step 4). The saved record is not changed and no elder
+    /// guardians are spawned; they follow in M4.
+    pub fn place_monument_in_chunk(&self, chunk: &mut GeneratedChunk, seed: i64, sea_level: i32) {
+        let Some(piece) = self.pieces.first() else {
+            return;
+        };
+        if self.structure != "minecraft:monument"
+            || piece.kind != "minecraft:omb"
+            || piece.orientation.is_none()
+        {
+            return;
+        }
+        self.place_monument_exterior_in_chunk(chunk, sea_level);
+        let Some(layout) = MonumentLayout::from_start(seed, self) else {
+            return;
+        };
+        let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+        let decoration =
+            random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
+        random.set_feature_seed(decoration, MONUMENT_FEATURE_INDEX, SURFACE_STRUCTURES_STEP);
+        layout.place_rooms_in_chunk(chunk, sea_level, &mut random);
     }
 }
 

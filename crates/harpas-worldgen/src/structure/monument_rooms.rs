@@ -18,8 +18,8 @@ impl MonumentLayout {
     ///
     /// The caller supplies the chunk's decoration stream. Only intersecting child bounds consume it;
     /// sponge columns still draw outside the target chunk once their room intersects. This pass does
-    /// not spawn elders, schedule fluid ticks or change the single saved building record. Worker
-    /// integration and the complete FEATURES schedule are separate work.
+    /// not spawn elders, schedule fluid ticks or change the single saved building record. The complete
+    /// FEATURES schedule is separate work.
     pub fn place_rooms_in_chunk(
         &self,
         chunk: &mut GeneratedChunk,

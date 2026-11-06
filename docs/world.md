@@ -288,8 +288,8 @@ and the owner **accepts it once**:
     exterior by removing vanilla's internal child rooms, then compares every block and all six final-block
     heightmaps in 13,160 chunk placements and replays after reloading the building record. It covers all four
     orientations, every horizontal offset within a chunk, ocean, solid, air, mixed and uneven terrain,
-    water, ice, plants and waterlogged blocks, negative coordinates, world limits and different sea levels. Pull requests use
-    fewer offsets. Worker integration remains pending; this API is not called by the normal chunk pipeline.
+    water, ice, plants and waterlogged blocks, negative coordinates, world limits and different sea levels.
+    Pull requests use fewer offsets.
   - `MonumentLayout::place_rooms_in_chunk` follows the exterior with all eleven internal piece types:
     entry, treasure core with eight gold blocks, double rooms, three simple designs, sponge rooms, both
     wing designs and penthouse. Floors retain vertical passages; ceilings replace only source water when
@@ -300,8 +300,19 @@ and the owner **accepts it once**:
     and replays, every block, all six final-block heightmaps and the decoration stream's next draw. It covers
     all piece types and designs, four orientations, negative and world-limit coordinates, chunk edges, mixed terrain, sea levels and
     vertical clipping. Second passes reconstruct rooms from saved building records without changing their
-    NBT. No internal children are persisted. Worker integration, scheduled fluid ticks and the complete
-    FEATURES schedule remain pending; elder guardian spawning follows in M4 and is suppressed in the probe.
+    NBT. No internal children are persisted. Scheduled fluid ticks and the complete FEATURES schedule
+    remain pending; elder guardian spawning follows in M4 and is suppressed in the probe.
+  - Ocean monument blocks run on chunk workers through `StructureStart::place_monument_in_chunk`, which
+    places the exterior and then the internal rooms in the target chunk. The decoration stream is seeded
+    like vanilla's `applyBiomeDecoration` for `minecraft:monument` (index 6, step 4), so sponge rooms and
+    simple-room pillars choose the same columns. Vanilla invokes the building only in chunks that intersect
+    its saved bounds; the five-block exterior clearing is clipped to those chunks, so chunks reached only by
+    the halo keep their terrain. A chunk's `References` likewise stays limited to the saved bounds. Only the
+    single building record is saved, no internal children are persisted, and saved records are unchanged.
+    The worker stream test in `monument_interior_parity` compares complete passes with vanilla; the
+    engine's `monument_parity`
+    compares worker chunks, reversed request orders and Anvil reloads with the direct API. Elder guardians
+    and scheduled fluid ticks follow in M4.
   - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
     their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
     `beard_box` and `encapsulate`, including jigsaw ground-level offsets and junctions on terrain-matching pieces.
@@ -500,8 +511,11 @@ and the owner **accepts it once**:
   establish a complete FEATURES-stage round trip. Ocean ruin pass replays likewise refit their saved pieces
   to the existing terrain; blocks and loot can change when earlier placement changed that terrain.
   Ruined portal passes likewise replay against existing blocks, and generated chunks continue to save at
-  `carvers`. Full feature-stage resumption, other structure blocks and lighting
-  remain separate roadmap tasks; generated chunks do not yet include them.
+  `carvers`. Ocean monument workers place the exterior and internal rooms on every chunk intersecting the
+  saved bounds, clipping the five-block clearing to each chunk, keep only the single saved building record,
+  and reproduce the same blocks after an Anvil reload and in reversed request order. Full feature-stage
+  resumption, the jigsaw structures' blocks and lighting remain separate roadmap tasks; generated chunks do
+  not yet include them.
 - **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
   points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline

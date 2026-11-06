@@ -183,8 +183,14 @@ vanilla for the same seed.
   - [x] Ocean monument interior placement API: all eleven room types, treasure core, sponge rooms, both wing
         designs and penthouse, with individual rooms and complete monument passes compared against vanilla:
         blocks, six heightmaps, decoration random consumption, rotations, chunk edges, world limits and
-        saved-record replays. Worker integration and the complete FEATURES stage remain pending;
-        elder guardian spawning follows in M4.
+        saved-record replays. The complete FEATURES stage remains pending; elder guardian spawning follows
+        in M4.
+  - [x] Ocean monument blocks generated on chunk workers: exterior and all internal rooms in every chunk
+        intersecting the saved bounds, with the five-block clearing clipped to each, using vanilla's
+        monument decoration stream (index 6, step 4) and keeping the single saved building record.
+        Worker chunks, reversed request order and Anvil reloads are compared with the direct API, and
+        complete passes block by block with vanilla. Elder guardians, scheduled fluid ticks and the
+        complete FEATURES stage remain pending.
 - [ ] Light engine port.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the

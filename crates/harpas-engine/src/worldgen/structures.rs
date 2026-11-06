@@ -182,6 +182,7 @@ impl ChunkStructures {
         &mut self,
         generated: &mut GeneratedChunk,
         seed: i64,
+        sea_level: i32,
         terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
         templates: &StructureTemplates,
         blocking_biomes: &HashMap<[i32; 3], bool>,
@@ -344,6 +345,10 @@ impl ChunkStructures {
                                 )
                         },
                     );
+                }
+                if start.structure == "minecraft:monument" {
+                    start.place_monument_in_chunk(generated, seed, sea_level);
+                    return Vec::new();
                 }
                 start.prepare_pyramid_height(
                     seed,
@@ -791,8 +796,10 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Template hulls, pyramids and igloos can span several chunks; saved huts and temples can too.
-        // Place their intersection without moving or duplicating the source chunk's saved start.
+        // Template hulls, pyramids, monuments and igloos can span several chunks; saved huts and
+        // temples can too. Place their intersection without moving or duplicating the source
+        // chunk's saved start. Vanilla only invokes a monument in chunks that intersect its saved
+        // bounds, so the five-block exterior clearing is clipped to those chunks.
         let neighbor_pieces = nearby
             .iter()
             .flat_map(|starts| starts.iter())
@@ -818,6 +825,7 @@ impl Structures {
                             | "minecraft:shipwreck_beached"
                             | "minecraft:ocean_ruin_cold"
                             | "minecraft:ocean_ruin_warm"
+                            | "minecraft:monument"
                     ))
             })
             .map(|s| (*s).clone())

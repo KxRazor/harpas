@@ -192,6 +192,11 @@ vanilla for the same seed.
         complete passes block by block with vanilla. Elder guardians, scheduled fluid ticks and the
         complete FEATURES stage remain pending.
 - [ ] Light engine port.
+  - [x] Sky and block light for generated chunks, with per-state emission and dampening from the block registry,
+        one-chunk border propagation and vanilla's saved-light parity harness. Generated chunks are lit when
+        sent; their carver records keep no light so vanilla can still run features and light.
+  - [ ] Run light on the worker pool and apply queued updates at defined points, including block changes in M4.
+  - [ ] Save light at the `light` stage once features are ported.
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
         comparison as they are ported.

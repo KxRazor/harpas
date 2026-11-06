@@ -279,10 +279,27 @@ impl TickWork for Game {
                 }
             })
             .collect();
+        // A generated chunk's light reads one chunk around it, so a generating world keeps that border
+        // loaded without sending it.
+        let load_views: Vec<_> = if world.generates() {
+            self.players
+                .iter()
+                .map(|p| {
+                    if p.disconnecting {
+                        Vec::new()
+                    } else {
+                        world::ChunkPos::at(p.player.position.x, p.player.position.z)
+                            .view(p.view_distance.saturating_add(1))
+                    }
+                })
+                .collect()
+        } else {
+            views.clone()
+        };
         // Interleave each player's nearest-first view so one large view cannot monopolize the work queue.
-        let longest = views.iter().map(Vec::len).max().unwrap_or(0);
+        let longest = load_views.iter().map(Vec::len).max().unwrap_or(0);
         let wanted = (0..longest).flat_map(|index| {
-            views
+            load_views
                 .iter()
                 .filter_map(move |view| view.get(index).copied())
         });
@@ -314,10 +331,20 @@ impl TickWork for Game {
                     Some(world::ChunkState::Missing) => None,
                     _ => continue,
                 };
+                let neighbors = if world.needs_light(pos) {
+                    match world.light_neighbors(pos) {
+                        Some(neighbors) => neighbors,
+                        None if world.generates() => continue,
+                        None => std::array::from_fn(|_| None),
+                    }
+                } else {
+                    std::array::from_fn(|_| None)
+                };
                 player.sent_chunks.insert(pos);
                 batch.push(player::VisibleChunk {
                     position: pos,
                     chunk,
+                    neighbors,
                 });
                 if batch.len() == limit {
                     break;

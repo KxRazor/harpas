@@ -1,1168 +1,1168 @@
-air
-stone
-granite
-polished_granite
-diorite
-polished_diorite
-andesite
-polished_andesite
-grass_block default=1 snowy=true,false
-dirt
-coarse_dirt
-podzol default=1 snowy=true,false
-cobblestone
-oak_planks
-spruce_planks
-birch_planks
-jungle_planks
-acacia_planks
-cherry_planks
-dark_oak_planks
-pale_oak_wood default=1 axis=x,y,z
-pale_oak_planks
-mangrove_planks
-bamboo_planks
-bamboo_mosaic
-oak_sapling stage=0,1
-spruce_sapling stage=0,1
-birch_sapling stage=0,1
-jungle_sapling stage=0,1
-acacia_sapling stage=0,1
-cherry_sapling stage=0,1
-dark_oak_sapling stage=0,1
-pale_oak_sapling stage=0,1
-mangrove_propagule default=5 age=0,1,2,3,4 hanging=true,false stage=0,1 waterlogged=true,false
-bedrock
-water level=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-lava level=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-sand
-suspicious_sand dusted=0,1,2,3
-red_sand
-gravel
-suspicious_gravel dusted=0,1,2,3
-gold_ore
-deepslate_gold_ore
-iron_ore
-deepslate_iron_ore
-coal_ore
-deepslate_coal_ore
-nether_gold_ore
-oak_log default=1 axis=x,y,z
-spruce_log default=1 axis=x,y,z
-birch_log default=1 axis=x,y,z
-jungle_log default=1 axis=x,y,z
-acacia_log default=1 axis=x,y,z
-cherry_log default=1 axis=x,y,z
-dark_oak_log default=1 axis=x,y,z
-pale_oak_log default=1 axis=x,y,z
-mangrove_log default=1 axis=x,y,z
-mangrove_roots default=1 waterlogged=true,false
-muddy_mangrove_roots default=1 axis=x,y,z
-bamboo_block default=1 axis=x,y,z
-stripped_spruce_log default=1 axis=x,y,z
-stripped_birch_log default=1 axis=x,y,z
-stripped_jungle_log default=1 axis=x,y,z
-stripped_acacia_log default=1 axis=x,y,z
-stripped_cherry_log default=1 axis=x,y,z
-stripped_dark_oak_log default=1 axis=x,y,z
-stripped_pale_oak_log default=1 axis=x,y,z
-stripped_oak_log default=1 axis=x,y,z
-stripped_mangrove_log default=1 axis=x,y,z
-stripped_bamboo_block default=1 axis=x,y,z
-oak_wood default=1 axis=x,y,z
-spruce_wood default=1 axis=x,y,z
-birch_wood default=1 axis=x,y,z
-jungle_wood default=1 axis=x,y,z
-acacia_wood default=1 axis=x,y,z
-cherry_wood default=1 axis=x,y,z
-dark_oak_wood default=1 axis=x,y,z
-mangrove_wood default=1 axis=x,y,z
-stripped_oak_wood default=1 axis=x,y,z
-stripped_spruce_wood default=1 axis=x,y,z
-stripped_birch_wood default=1 axis=x,y,z
-stripped_jungle_wood default=1 axis=x,y,z
-stripped_acacia_wood default=1 axis=x,y,z
-stripped_cherry_wood default=1 axis=x,y,z
-stripped_dark_oak_wood default=1 axis=x,y,z
-stripped_pale_oak_wood default=1 axis=x,y,z
-stripped_mangrove_wood default=1 axis=x,y,z
-oak_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-spruce_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-birch_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-jungle_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-acacia_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-cherry_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-dark_oak_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-pale_oak_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-mangrove_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-azalea_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-flowering_azalea_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false
-sponge
-wet_sponge
-glass
-lapis_ore
-deepslate_lapis_ore
-lapis_block
-dispenser default=1 facing=north,east,south,west,up,down triggered=true,false
-sandstone
-chiseled_sandstone
-cut_sandstone
-note_block default=1 instrument=harp,basedrum,snare,hat,bass,flute,bell,guitar,chime,xylophone,iron_xylophone,cow_bell,didgeridoo,bit,banjo,pling,trumpet,trumpet_exposed,trumpet_oxidized,trumpet_weathered,zombie,skeleton,creeper,dragon,wither_skeleton,piglin,custom_head note=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24 powered=true,false
-white_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-orange_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-magenta_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-light_blue_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-yellow_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-lime_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-pink_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-gray_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-light_gray_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-cyan_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-purple_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-blue_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-brown_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-green_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-red_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-black_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot
-powered_rail default=13 powered=true,false shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south waterlogged=true,false
-detector_rail default=13 powered=true,false shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south waterlogged=true,false
-sticky_piston default=6 extended=true,false facing=north,east,south,west,up,down
-cobweb
-short_grass
-fern
-dead_bush
-bush
-short_dry_grass
-tall_dry_grass
-seagrass
-tall_seagrass default=1 half=upper,lower
-piston default=6 extended=true,false facing=north,east,south,west,up,down
-piston_head default=2 facing=north,east,south,west,up,down short=true,false type=normal,sticky
-white_wool
-orange_wool
-magenta_wool
-light_blue_wool
-yellow_wool
-lime_wool
-pink_wool
-gray_wool
-light_gray_wool
-cyan_wool
-purple_wool
-blue_wool
-brown_wool
-green_wool
-red_wool
-black_wool
-moving_piston facing=north,east,south,west,up,down type=normal,sticky
-dandelion
-golden_dandelion
-torchflower
-poppy
-blue_orchid
-allium
-azure_bluet
-red_tulip
-orange_tulip
-white_tulip
-pink_tulip
-oxeye_daisy
-cornflower
-wither_rose
-lily_of_the_valley
-brown_mushroom
-red_mushroom
-gold_block
-iron_block
-bricks
-tnt default=1 unstable=true,false
-bookshelf
-chiseled_bookshelf default=63 facing=north,south,west,east slot_0_occupied=true,false slot_1_occupied=true,false slot_2_occupied=true,false slot_3_occupied=true,false slot_4_occupied=true,false slot_5_occupied=true,false
-acacia_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-bamboo_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-birch_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-cherry_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-crimson_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-dark_oak_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-jungle_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-mangrove_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-oak_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-pale_oak_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-spruce_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-warped_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false
-mossy_cobblestone
-obsidian
-torch
-wall_torch facing=north,south,west,east
-fire default=31 age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 east=true,false north=true,false south=true,false up=true,false west=true,false
-soul_fire
-spawner
-creaking_heart default=7 axis=x,y,z creaking_heart_state=uprooted,dormant,awake natural=true,false
-oak_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-redstone_wire default=1160 east=up,side,none north=up,side,none power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 south=up,side,none west=up,side,none
-diamond_ore
-deepslate_diamond_ore
-diamond_block
-crafting_table
-wheat age=0,1,2,3,4,5,6,7
-farmland moisture=0,1,2,3,4,5,6,7
-furnace default=1 facing=north,south,west,east lit=true,false
-oak_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-spruce_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-birch_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-acacia_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-cherry_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-jungle_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-dark_oak_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-pale_oak_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-mangrove_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-bamboo_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-oak_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-ladder default=1 facing=north,south,west,east waterlogged=true,false
-rail default=1 shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south,south_east,south_west,north_west,north_east waterlogged=true,false
-cobblestone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-oak_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-spruce_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-birch_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-acacia_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-cherry_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-jungle_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-dark_oak_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-pale_oak_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-mangrove_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-bamboo_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-oak_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-spruce_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-birch_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-acacia_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-cherry_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-jungle_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-dark_oak_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-pale_oak_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-crimson_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-warped_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-mangrove_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-bamboo_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-oak_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-spruce_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-birch_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-acacia_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-cherry_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-jungle_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-dark_oak_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-pale_oak_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-mangrove_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-crimson_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-warped_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-bamboo_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false
-lever default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-stone_pressure_plate default=1 powered=true,false
-iron_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-oak_pressure_plate default=1 powered=true,false
-spruce_pressure_plate default=1 powered=true,false
-birch_pressure_plate default=1 powered=true,false
-jungle_pressure_plate default=1 powered=true,false
-acacia_pressure_plate default=1 powered=true,false
-cherry_pressure_plate default=1 powered=true,false
-dark_oak_pressure_plate default=1 powered=true,false
-pale_oak_pressure_plate default=1 powered=true,false
-mangrove_pressure_plate default=1 powered=true,false
-bamboo_pressure_plate default=1 powered=true,false
-redstone_ore default=1 lit=true,false
-deepslate_redstone_ore default=1 lit=true,false
-redstone_torch lit=true,false
-redstone_wall_torch facing=north,south,west,east lit=true,false
-stone_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-snow layers=1,2,3,4,5,6,7,8
-ice
-snow_block
-cactus age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-cactus_flower
-clay
-sugar_cane age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-jukebox default=1 has_record=true,false
-oak_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-netherrack
-soul_sand
-soul_soil
-basalt default=1 axis=x,y,z
-polished_basalt default=1 axis=x,y,z
-soul_torch
-soul_wall_torch facing=north,south,west,east
-copper_torch
-copper_wall_torch facing=north,south,west,east
-glowstone
-nether_portal axis=x,z
-carved_pumpkin facing=north,south,west,east
-jack_o_lantern facing=north,south,west,east
-cake bites=0,1,2,3,4,5,6
-repeater default=3 delay=1,2,3,4 facing=north,south,west,east locked=true,false powered=true,false
-white_stained_glass
-orange_stained_glass
-magenta_stained_glass
-light_blue_stained_glass
-yellow_stained_glass
-lime_stained_glass
-pink_stained_glass
-gray_stained_glass
-light_gray_stained_glass
-cyan_stained_glass
-purple_stained_glass
-blue_stained_glass
-brown_stained_glass
-green_stained_glass
-red_stained_glass
-black_stained_glass
-oak_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-spruce_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-birch_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-jungle_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-acacia_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-cherry_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-dark_oak_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-pale_oak_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-mangrove_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-bamboo_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-stone_bricks
-mossy_stone_bricks
-cracked_stone_bricks
-chiseled_stone_bricks
-packed_mud
-mud_bricks
-infested_stone
-infested_cobblestone
-infested_stone_bricks
-infested_mossy_stone_bricks
-infested_cracked_stone_bricks
-infested_chiseled_stone_bricks
-brown_mushroom_block down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false
-red_mushroom_block down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false
-mushroom_stem down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false
-iron_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-exposed_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-weathered_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-oxidized_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-waxed_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-waxed_exposed_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-waxed_weathered_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-waxed_oxidized_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-iron_chain default=3 axis=x,y,z waterlogged=true,false
-copper_chain default=3 axis=x,y,z waterlogged=true,false
-exposed_copper_chain default=3 axis=x,y,z waterlogged=true,false
-weathered_copper_chain default=3 axis=x,y,z waterlogged=true,false
-oxidized_copper_chain default=3 axis=x,y,z waterlogged=true,false
-waxed_copper_chain default=3 axis=x,y,z waterlogged=true,false
-waxed_exposed_copper_chain default=3 axis=x,y,z waterlogged=true,false
-waxed_weathered_copper_chain default=3 axis=x,y,z waterlogged=true,false
-waxed_oxidized_copper_chain default=3 axis=x,y,z waterlogged=true,false
-glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-pumpkin
-melon
-attached_pumpkin_stem facing=north,south,west,east
-attached_melon_stem facing=north,south,west,east
-pumpkin_stem age=0,1,2,3,4,5,6,7
-melon_stem age=0,1,2,3,4,5,6,7
-vine default=31 east=true,false north=true,false south=true,false up=true,false west=true,false
-glow_lichen default=127 down=true,false east=true,false north=true,false south=true,false up=true,false waterlogged=true,false west=true,false
-resin_clump default=127 down=true,false east=true,false north=true,false south=true,false up=true,false waterlogged=true,false west=true,false
-oak_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-stone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-mud_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-mycelium default=1 snowy=true,false
-lily_pad
-resin_block
-resin_bricks
-resin_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-resin_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-resin_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-chiseled_resin_bricks
-nether_bricks
-nether_brick_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-nether_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-nether_wart age=0,1,2,3
-enchanting_table
-brewing_stand default=7 has_bottle_0=true,false has_bottle_1=true,false has_bottle_2=true,false
-cauldron
-water_cauldron level=1,2,3
-lava_cauldron
-powder_snow_cauldron level=1,2,3
-end_portal
-end_portal_frame default=4 eye=true,false facing=north,south,west,east
-end_stone
-dragon_egg
-redstone_lamp default=1 lit=true,false
-cocoa age=0,1,2 facing=north,south,west,east
-sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-emerald_ore
-deepslate_emerald_ore
-ender_chest default=1 facing=north,south,west,east waterlogged=true,false
-tripwire_hook default=9 attached=true,false facing=north,south,west,east powered=true,false
-tripwire default=127 attached=true,false disarmed=true,false east=true,false north=true,false powered=true,false south=true,false west=true,false
-emerald_block
-spruce_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-birch_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-jungle_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-command_block default=6 conditional=true,false facing=north,east,south,west,up,down
-beacon
-cobblestone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-mossy_cobblestone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-flower_pot
-potted_torchflower
-potted_oak_sapling
-potted_spruce_sapling
-potted_birch_sapling
-potted_jungle_sapling
-potted_acacia_sapling
-potted_cherry_sapling
-potted_dark_oak_sapling
-potted_pale_oak_sapling
-potted_mangrove_propagule
-potted_fern
-potted_dandelion
-potted_golden_dandelion
-potted_poppy
-potted_blue_orchid
-potted_allium
-potted_azure_bluet
-potted_red_tulip
-potted_orange_tulip
-potted_white_tulip
-potted_pink_tulip
-potted_oxeye_daisy
-potted_cornflower
-potted_lily_of_the_valley
-potted_wither_rose
-potted_red_mushroom
-potted_brown_mushroom
-potted_dead_bush
-potted_cactus
-carrots age=0,1,2,3,4,5,6,7
-potatoes age=0,1,2,3,4,5,6,7
-oak_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-spruce_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-birch_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-jungle_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-acacia_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-cherry_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-dark_oak_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-pale_oak_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-mangrove_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-bamboo_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-skeleton_skull default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-skeleton_wall_skull default=1 facing=north,south,west,east powered=true,false
-wither_skeleton_skull default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-wither_skeleton_wall_skull default=1 facing=north,south,west,east powered=true,false
-zombie_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-zombie_wall_head default=1 facing=north,south,west,east powered=true,false
-player_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-player_wall_head default=1 facing=north,south,west,east powered=true,false
-creeper_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-creeper_wall_head default=1 facing=north,south,west,east powered=true,false
-dragon_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-dragon_wall_head default=1 facing=north,south,west,east powered=true,false
-piglin_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-piglin_wall_head default=1 facing=north,south,west,east powered=true,false
-anvil facing=north,south,west,east
-chipped_anvil facing=north,south,west,east
-damaged_anvil facing=north,south,west,east
-trapped_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-light_weighted_pressure_plate power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-heavy_weighted_pressure_plate power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-comparator default=1 facing=north,south,west,east mode=compare,subtract powered=true,false
-daylight_detector default=16 inverted=true,false power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-redstone_block
-nether_quartz_ore
-hopper enabled=true,false facing=down,north,south,west,east
-quartz_block
-chiseled_quartz_block
-quartz_pillar default=1 axis=x,y,z
-quartz_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-activator_rail default=13 powered=true,false shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south waterlogged=true,false
-dropper default=1 facing=north,east,south,west,up,down triggered=true,false
-white_terracotta
-orange_terracotta
-magenta_terracotta
-light_blue_terracotta
-yellow_terracotta
-lime_terracotta
-pink_terracotta
-gray_terracotta
-light_gray_terracotta
-cyan_terracotta
-purple_terracotta
-blue_terracotta
-brown_terracotta
-green_terracotta
-red_terracotta
-black_terracotta
-white_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-orange_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-magenta_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-light_blue_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-yellow_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-lime_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-pink_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-gray_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-light_gray_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-cyan_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-purple_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-blue_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-brown_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-green_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-red_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-black_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-acacia_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-cherry_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-dark_oak_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-pale_oak_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-mangrove_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-bamboo_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-bamboo_mosaic_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-slime_block
-barrier default=1 waterlogged=true,false
-light default=31 level=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-iron_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-prismarine
-prismarine_bricks
-dark_prismarine
-prismarine_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-prismarine_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-dark_prismarine_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-prismarine_slab default=3 type=top,bottom,double waterlogged=true,false
-prismarine_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-dark_prismarine_slab default=3 type=top,bottom,double waterlogged=true,false
-sea_lantern
-hay_block default=1 axis=x,y,z
-white_carpet
-orange_carpet
-magenta_carpet
-light_blue_carpet
-yellow_carpet
-lime_carpet
-pink_carpet
-gray_carpet
-light_gray_carpet
-cyan_carpet
-purple_carpet
-blue_carpet
-brown_carpet
-green_carpet
-red_carpet
-black_carpet
-terracotta
-coal_block
-packed_ice
-sunflower default=1 half=upper,lower
-lilac default=1 half=upper,lower
-rose_bush default=1 half=upper,lower
-peony default=1 half=upper,lower
-tall_grass default=1 half=upper,lower
-large_fern default=1 half=upper,lower
-white_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-orange_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-magenta_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-light_blue_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-yellow_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-lime_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-pink_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-gray_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-light_gray_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-cyan_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-purple_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-blue_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-brown_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-green_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-red_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-black_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-white_wall_banner facing=north,south,west,east
-orange_wall_banner facing=north,south,west,east
-magenta_wall_banner facing=north,south,west,east
-light_blue_wall_banner facing=north,south,west,east
-yellow_wall_banner facing=north,south,west,east
-lime_wall_banner facing=north,south,west,east
-pink_wall_banner facing=north,south,west,east
-gray_wall_banner facing=north,south,west,east
-light_gray_wall_banner facing=north,south,west,east
-cyan_wall_banner facing=north,south,west,east
-purple_wall_banner facing=north,south,west,east
-blue_wall_banner facing=north,south,west,east
-brown_wall_banner facing=north,south,west,east
-green_wall_banner facing=north,south,west,east
-red_wall_banner facing=north,south,west,east
-black_wall_banner facing=north,south,west,east
-red_sandstone
-chiseled_red_sandstone
-cut_red_sandstone
-red_sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-oak_slab default=3 type=top,bottom,double waterlogged=true,false
-spruce_slab default=3 type=top,bottom,double waterlogged=true,false
-birch_slab default=3 type=top,bottom,double waterlogged=true,false
-jungle_slab default=3 type=top,bottom,double waterlogged=true,false
-acacia_slab default=3 type=top,bottom,double waterlogged=true,false
-cherry_slab default=3 type=top,bottom,double waterlogged=true,false
-dark_oak_slab default=3 type=top,bottom,double waterlogged=true,false
-pale_oak_slab default=3 type=top,bottom,double waterlogged=true,false
-mangrove_slab default=3 type=top,bottom,double waterlogged=true,false
-bamboo_slab default=3 type=top,bottom,double waterlogged=true,false
-bamboo_mosaic_slab default=3 type=top,bottom,double waterlogged=true,false
-stone_slab default=3 type=top,bottom,double waterlogged=true,false
-smooth_stone_slab default=3 type=top,bottom,double waterlogged=true,false
-sandstone_slab default=3 type=top,bottom,double waterlogged=true,false
-cut_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false
-petrified_oak_slab default=3 type=top,bottom,double waterlogged=true,false
-cobblestone_slab default=3 type=top,bottom,double waterlogged=true,false
-brick_slab default=3 type=top,bottom,double waterlogged=true,false
-stone_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-mud_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-nether_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-quartz_slab default=3 type=top,bottom,double waterlogged=true,false
-red_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false
-cut_red_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false
-purpur_slab default=3 type=top,bottom,double waterlogged=true,false
-smooth_stone
-smooth_sandstone
-smooth_quartz
-smooth_red_sandstone
-spruce_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-birch_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-jungle_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-acacia_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-cherry_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-dark_oak_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-pale_oak_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-mangrove_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-bamboo_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-spruce_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-birch_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-jungle_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-acacia_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-cherry_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-dark_oak_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-pale_oak_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-mangrove_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-bamboo_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-spruce_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-birch_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-jungle_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-acacia_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-cherry_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-dark_oak_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-pale_oak_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-mangrove_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-bamboo_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-end_rod default=4 facing=north,east,south,west,up,down
-chorus_plant default=63 down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false
-chorus_flower age=0,1,2,3,4,5
-purpur_block
-purpur_pillar default=1 axis=x,y,z
-purpur_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-end_stone_bricks
-torchflower_crop age=0,1
-pitcher_crop default=1 age=0,1,2,3,4 half=upper,lower
-pitcher_plant default=1 half=upper,lower
-beetroots age=0,1,2,3
-dirt_path
-end_gateway
-repeating_command_block default=6 conditional=true,false facing=north,east,south,west,up,down
-chain_command_block default=6 conditional=true,false facing=north,east,south,west,up,down
-frosted_ice age=0,1,2,3
-magma_block
-nether_wart_block
-red_nether_bricks
-bone_block default=1 axis=x,y,z
-structure_void
-observer default=5 facing=north,east,south,west,up,down powered=true,false
-shulker_box default=4 facing=north,east,south,west,up,down
-white_shulker_box default=4 facing=north,east,south,west,up,down
-orange_shulker_box default=4 facing=north,east,south,west,up,down
-magenta_shulker_box default=4 facing=north,east,south,west,up,down
-light_blue_shulker_box default=4 facing=north,east,south,west,up,down
-yellow_shulker_box default=4 facing=north,east,south,west,up,down
-lime_shulker_box default=4 facing=north,east,south,west,up,down
-pink_shulker_box default=4 facing=north,east,south,west,up,down
-gray_shulker_box default=4 facing=north,east,south,west,up,down
-light_gray_shulker_box default=4 facing=north,east,south,west,up,down
-cyan_shulker_box default=4 facing=north,east,south,west,up,down
-purple_shulker_box default=4 facing=north,east,south,west,up,down
-blue_shulker_box default=4 facing=north,east,south,west,up,down
-brown_shulker_box default=4 facing=north,east,south,west,up,down
-green_shulker_box default=4 facing=north,east,south,west,up,down
-red_shulker_box default=4 facing=north,east,south,west,up,down
-black_shulker_box default=4 facing=north,east,south,west,up,down
-white_glazed_terracotta facing=north,south,west,east
-orange_glazed_terracotta facing=north,south,west,east
-magenta_glazed_terracotta facing=north,south,west,east
-light_blue_glazed_terracotta facing=north,south,west,east
-yellow_glazed_terracotta facing=north,south,west,east
-lime_glazed_terracotta facing=north,south,west,east
-pink_glazed_terracotta facing=north,south,west,east
-gray_glazed_terracotta facing=north,south,west,east
-light_gray_glazed_terracotta facing=north,south,west,east
-cyan_glazed_terracotta facing=north,south,west,east
-purple_glazed_terracotta facing=north,south,west,east
-blue_glazed_terracotta facing=north,south,west,east
-brown_glazed_terracotta facing=north,south,west,east
-green_glazed_terracotta facing=north,south,west,east
-red_glazed_terracotta facing=north,south,west,east
-black_glazed_terracotta facing=north,south,west,east
-white_concrete
-orange_concrete
-magenta_concrete
-light_blue_concrete
-yellow_concrete
-lime_concrete
-pink_concrete
-gray_concrete
-light_gray_concrete
-cyan_concrete
-purple_concrete
-blue_concrete
-brown_concrete
-green_concrete
-red_concrete
-black_concrete
-white_concrete_powder
-orange_concrete_powder
-magenta_concrete_powder
-light_blue_concrete_powder
-yellow_concrete_powder
-lime_concrete_powder
-pink_concrete_powder
-gray_concrete_powder
-light_gray_concrete_powder
-cyan_concrete_powder
-purple_concrete_powder
-blue_concrete_powder
-brown_concrete_powder
-green_concrete_powder
-red_concrete_powder
-black_concrete_powder
-kelp age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-kelp_plant
-dried_kelp_block
-turtle_egg eggs=1,2,3,4 hatch=0,1,2
-sniffer_egg hatch=0,1,2
-dried_ghast default=1 facing=north,south,west,east hydration=0,1,2,3 waterlogged=true,false
-dead_tube_coral_block
-dead_brain_coral_block
-dead_bubble_coral_block
-dead_fire_coral_block
-dead_horn_coral_block
-tube_coral_block
-brain_coral_block
-bubble_coral_block
-fire_coral_block
-horn_coral_block
-dead_tube_coral waterlogged=true,false
-dead_brain_coral waterlogged=true,false
-dead_bubble_coral waterlogged=true,false
-dead_fire_coral waterlogged=true,false
-dead_horn_coral waterlogged=true,false
-tube_coral waterlogged=true,false
-brain_coral waterlogged=true,false
-bubble_coral waterlogged=true,false
-fire_coral waterlogged=true,false
-horn_coral waterlogged=true,false
-dead_tube_coral_fan waterlogged=true,false
-dead_brain_coral_fan waterlogged=true,false
-dead_bubble_coral_fan waterlogged=true,false
-dead_fire_coral_fan waterlogged=true,false
-dead_horn_coral_fan waterlogged=true,false
-tube_coral_fan waterlogged=true,false
-brain_coral_fan waterlogged=true,false
-bubble_coral_fan waterlogged=true,false
-fire_coral_fan waterlogged=true,false
-horn_coral_fan waterlogged=true,false
-dead_tube_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-dead_brain_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-dead_bubble_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-dead_fire_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-dead_horn_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-tube_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-brain_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-bubble_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-fire_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-horn_coral_wall_fan facing=north,south,west,east waterlogged=true,false
-sea_pickle pickles=1,2,3,4 waterlogged=true,false
-blue_ice
-conduit waterlogged=true,false
-bamboo_sapling
-bamboo age=0,1 leaves=none,small,large stage=0,1
-potted_bamboo
-void_air
-cave_air
-bubble_column drag=true,false
-polished_granite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-smooth_red_sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-mossy_stone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_diorite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-mossy_cobblestone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-end_stone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-stone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-smooth_sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-smooth_quartz_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-granite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-andesite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-red_nether_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_andesite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-diorite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_granite_slab default=3 type=top,bottom,double waterlogged=true,false
-smooth_red_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false
-mossy_stone_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_diorite_slab default=3 type=top,bottom,double waterlogged=true,false
-mossy_cobblestone_slab default=3 type=top,bottom,double waterlogged=true,false
-end_stone_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-smooth_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false
-smooth_quartz_slab default=3 type=top,bottom,double waterlogged=true,false
-granite_slab default=3 type=top,bottom,double waterlogged=true,false
-andesite_slab default=3 type=top,bottom,double waterlogged=true,false
-red_nether_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_andesite_slab default=3 type=top,bottom,double waterlogged=true,false
-diorite_slab default=3 type=top,bottom,double waterlogged=true,false
-brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-prismarine_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-red_sandstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-mossy_stone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-granite_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-stone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-mud_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-nether_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-andesite_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-red_nether_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-sandstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-end_stone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-diorite_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-scaffolding default=31 bottom=true,false distance=0,1,2,3,4,5,6,7 waterlogged=true,false
-loom facing=north,south,west,east
-barrel default=1 facing=north,east,south,west,up,down open=true,false
-smoker default=1 facing=north,south,west,east lit=true,false
-blast_furnace default=1 facing=north,south,west,east lit=true,false
-cartography_table
-fletching_table
-grindstone default=4 face=floor,wall,ceiling facing=north,south,west,east
-lectern default=3 facing=north,south,west,east has_book=true,false powered=true,false
-smithing_table
-stonecutter facing=north,south,west,east
-bell default=1 attachment=floor,ceiling,single_wall,double_wall facing=north,south,west,east powered=true,false
-lantern default=3 hanging=true,false waterlogged=true,false
-soul_lantern default=3 hanging=true,false waterlogged=true,false
-copper_lantern default=3 hanging=true,false waterlogged=true,false
-exposed_copper_lantern default=3 hanging=true,false waterlogged=true,false
-weathered_copper_lantern default=3 hanging=true,false waterlogged=true,false
-oxidized_copper_lantern default=3 hanging=true,false waterlogged=true,false
-waxed_copper_lantern default=3 hanging=true,false waterlogged=true,false
-waxed_exposed_copper_lantern default=3 hanging=true,false waterlogged=true,false
-waxed_weathered_copper_lantern default=3 hanging=true,false waterlogged=true,false
-waxed_oxidized_copper_lantern default=3 hanging=true,false waterlogged=true,false
-campfire default=3 facing=north,south,west,east lit=true,false signal_fire=true,false waterlogged=true,false
-soul_campfire default=3 facing=north,south,west,east lit=true,false signal_fire=true,false waterlogged=true,false
-sweet_berry_bush age=0,1,2,3
-warped_stem default=1 axis=x,y,z
-stripped_warped_stem default=1 axis=x,y,z
-warped_hyphae default=1 axis=x,y,z
-stripped_warped_hyphae default=1 axis=x,y,z
-warped_nylium
-warped_fungus
-warped_wart_block
-warped_roots
-nether_sprouts
-crimson_stem default=1 axis=x,y,z
-stripped_crimson_stem default=1 axis=x,y,z
-crimson_hyphae default=1 axis=x,y,z
-stripped_crimson_hyphae default=1 axis=x,y,z
-crimson_nylium
-crimson_fungus
-shroomlight
-weeping_vines age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-weeping_vines_plant
-twisting_vines age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-twisting_vines_plant
-crimson_roots
-crimson_planks
-warped_planks
-crimson_slab default=3 type=top,bottom,double waterlogged=true,false
-warped_slab default=3 type=top,bottom,double waterlogged=true,false
-crimson_pressure_plate default=1 powered=true,false
-warped_pressure_plate default=1 powered=true,false
-crimson_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-warped_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false
-crimson_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-warped_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-crimson_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-warped_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false
-crimson_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-warped_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-crimson_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-warped_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-crimson_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-warped_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-crimson_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-warped_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false
-crimson_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-warped_wall_sign default=1 facing=north,south,west,east waterlogged=true,false
-structure_block default=1 mode=save,load,corner,data
-jigsaw default=10 orientation=down_east,down_north,down_south,down_west,up_east,up_north,up_south,up_west,west_up,east_up,north_up,south_up
-test_block mode=start,log,fail,accept
-test_instance_block
-composter level=0,1,2,3,4,5,6,7,8
-target power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-bee_nest facing=north,south,west,east honey_level=0,1,2,3,4,5
-beehive facing=north,south,west,east honey_level=0,1,2,3,4,5
-honey_block
-honeycomb_block
-netherite_block
-ancient_debris
-crying_obsidian
-respawn_anchor charges=0,1,2,3,4
-potted_crimson_fungus
-potted_warped_fungus
-potted_crimson_roots
-potted_warped_roots
-lodestone
-blackstone
-blackstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-blackstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-blackstone_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_blackstone
-polished_blackstone_bricks
-cracked_polished_blackstone_bricks
-chiseled_polished_blackstone
-polished_blackstone_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_blackstone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_blackstone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-gilded_blackstone
-polished_blackstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_blackstone_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_blackstone_pressure_plate default=1 powered=true,false
-polished_blackstone_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false
-polished_blackstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-chiseled_nether_bricks
-cracked_nether_bricks
-quartz_bricks
-candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-white_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-orange_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-magenta_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-light_blue_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-yellow_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-lime_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-pink_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-gray_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-light_gray_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-cyan_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-purple_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-blue_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-brown_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-green_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-red_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-black_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false
-candle_cake default=1 lit=true,false
-white_candle_cake default=1 lit=true,false
-orange_candle_cake default=1 lit=true,false
-magenta_candle_cake default=1 lit=true,false
-light_blue_candle_cake default=1 lit=true,false
-yellow_candle_cake default=1 lit=true,false
-lime_candle_cake default=1 lit=true,false
-pink_candle_cake default=1 lit=true,false
-gray_candle_cake default=1 lit=true,false
-light_gray_candle_cake default=1 lit=true,false
-cyan_candle_cake default=1 lit=true,false
-purple_candle_cake default=1 lit=true,false
-blue_candle_cake default=1 lit=true,false
-brown_candle_cake default=1 lit=true,false
-green_candle_cake default=1 lit=true,false
-red_candle_cake default=1 lit=true,false
-black_candle_cake default=1 lit=true,false
-amethyst_block
-budding_amethyst
-amethyst_cluster default=9 facing=north,east,south,west,up,down waterlogged=true,false
-large_amethyst_bud default=9 facing=north,east,south,west,up,down waterlogged=true,false
-medium_amethyst_bud default=9 facing=north,east,south,west,up,down waterlogged=true,false
-small_amethyst_bud default=9 facing=north,east,south,west,up,down waterlogged=true,false
-tuff
-tuff_slab default=3 type=top,bottom,double waterlogged=true,false
-tuff_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-tuff_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-polished_tuff
-polished_tuff_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_tuff_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_tuff_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-chiseled_tuff
-tuff_bricks
-tuff_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-tuff_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-tuff_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-chiseled_tuff_bricks
-calcite
-tinted_glass
-powder_snow
-sculk_sensor default=1 power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 sculk_sensor_phase=inactive,active,cooldown waterlogged=true,false
-calibrated_sculk_sensor default=1 facing=north,south,west,east power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 sculk_sensor_phase=inactive,active,cooldown waterlogged=true,false
-sculk
-sculk_vein default=127 down=true,false east=true,false north=true,false south=true,false up=true,false waterlogged=true,false west=true,false
-sculk_catalyst default=1 bloom=true,false
-sculk_shrieker default=7 can_summon=true,false shrieking=true,false waterlogged=true,false
-copper_block
-exposed_copper
-weathered_copper
-oxidized_copper
-copper_ore
-deepslate_copper_ore
-oxidized_cut_copper
-weathered_cut_copper
-exposed_cut_copper
-cut_copper
-oxidized_chiseled_copper
-weathered_chiseled_copper
-exposed_chiseled_copper
-chiseled_copper
-waxed_oxidized_chiseled_copper
-waxed_weathered_chiseled_copper
-waxed_exposed_chiseled_copper
-waxed_chiseled_copper
-oxidized_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-weathered_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-exposed_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-oxidized_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-weathered_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-exposed_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-waxed_copper_block
-waxed_weathered_copper
-waxed_exposed_copper
-waxed_oxidized_copper
-waxed_oxidized_cut_copper
-waxed_weathered_cut_copper
-waxed_exposed_cut_copper
-waxed_cut_copper
-waxed_oxidized_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-waxed_weathered_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-waxed_exposed_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-waxed_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-waxed_oxidized_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-waxed_weathered_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-waxed_exposed_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-waxed_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false
-copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-exposed_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-oxidized_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-weathered_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-waxed_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-waxed_exposed_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-waxed_oxidized_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-waxed_weathered_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false
-copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-exposed_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-oxidized_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-weathered_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-waxed_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-waxed_exposed_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-waxed_oxidized_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-waxed_weathered_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false
-copper_grate default=1 waterlogged=true,false
-exposed_copper_grate default=1 waterlogged=true,false
-weathered_copper_grate default=1 waterlogged=true,false
-oxidized_copper_grate default=1 waterlogged=true,false
-waxed_copper_grate default=1 waterlogged=true,false
-waxed_exposed_copper_grate default=1 waterlogged=true,false
-waxed_weathered_copper_grate default=1 waterlogged=true,false
-waxed_oxidized_copper_grate default=1 waterlogged=true,false
-copper_bulb default=3 lit=true,false powered=true,false
-exposed_copper_bulb default=3 lit=true,false powered=true,false
-weathered_copper_bulb default=3 lit=true,false powered=true,false
-oxidized_copper_bulb default=3 lit=true,false powered=true,false
-waxed_copper_bulb default=3 lit=true,false powered=true,false
-waxed_exposed_copper_bulb default=3 lit=true,false powered=true,false
-waxed_weathered_copper_bulb default=3 lit=true,false powered=true,false
-waxed_oxidized_copper_bulb default=3 lit=true,false powered=true,false
-copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-exposed_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-weathered_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-oxidized_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-waxed_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-waxed_exposed_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-waxed_weathered_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-waxed_oxidized_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false
-copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-exposed_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-weathered_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-oxidized_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-waxed_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-waxed_exposed_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-waxed_weathered_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-waxed_oxidized_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false
-lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-exposed_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-weathered_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-oxidized_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-waxed_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-waxed_exposed_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-waxed_weathered_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-waxed_oxidized_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false
-pointed_dripstone default=5 thickness=tip_merge,tip,frustum,middle,base vertical_direction=up,down waterlogged=true,false
-dripstone_block
-cave_vines default=1 age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25 berries=true,false
-cave_vines_plant default=1 berries=true,false
-spore_blossom
-azalea
-flowering_azalea
-moss_carpet
-pink_petals facing=north,south,west,east flower_amount=1,2,3,4
-wildflowers facing=north,south,west,east flower_amount=1,2,3,4
-leaf_litter facing=north,south,west,east segment_amount=1,2,3,4
-moss_block
-big_dripleaf default=1 facing=north,south,west,east tilt=none,unstable,partial,full waterlogged=true,false
-big_dripleaf_stem default=1 facing=north,south,west,east waterlogged=true,false
-small_dripleaf default=3 facing=north,south,west,east half=upper,lower waterlogged=true,false
-hanging_roots default=1 waterlogged=true,false
-rooted_dirt
-mud
-deepslate default=1 axis=x,y,z
-cobbled_deepslate
-cobbled_deepslate_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-cobbled_deepslate_slab default=3 type=top,bottom,double waterlogged=true,false
-cobbled_deepslate_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-polished_deepslate
-polished_deepslate_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-polished_deepslate_slab default=3 type=top,bottom,double waterlogged=true,false
-polished_deepslate_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-deepslate_tiles
-deepslate_tile_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-deepslate_tile_slab default=3 type=top,bottom,double waterlogged=true,false
-deepslate_tile_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-deepslate_bricks
-deepslate_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false
-deepslate_brick_slab default=3 type=top,bottom,double waterlogged=true,false
-deepslate_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall
-chiseled_deepslate
-cracked_deepslate_bricks
-cracked_deepslate_tiles
-infested_deepslate default=1 axis=x,y,z
-smooth_basalt
-raw_iron_block
-raw_copper_block
-raw_gold_block
-potted_azalea_bush
-potted_flowering_azalea_bush
-ochre_froglight default=1 axis=x,y,z
-verdant_froglight default=1 axis=x,y,z
-pearlescent_froglight default=1 axis=x,y,z
-frogspawn
-reinforced_deepslate
-decorated_pot default=9 cracked=true,false facing=north,south,west,east waterlogged=true,false
-crafter default=45 crafting=true,false orientation=down_east,down_north,down_south,down_west,up_east,up_north,up_south,up_west,west_up,east_up,north_up,south_up triggered=true,false
-trial_spawner default=6 ominous=true,false trial_spawner_state=inactive,waiting_for_players,active,waiting_for_reward_ejection,ejecting_reward,cooldown
-vault default=4 facing=north,south,west,east ominous=true,false vault_state=inactive,active,unlocking,ejecting
-heavy_core default=1 waterlogged=true,false
-pale_moss_block
-pale_moss_carpet bottom=true,false east=none,low,tall north=none,low,tall south=none,low,tall west=none,low,tall
-pale_hanging_moss tip=true,false
-open_eyeblossom
-closed_eyeblossom
-potted_open_eyeblossom
-potted_closed_eyeblossom
-firefly_bush
+air emit=0 filter=0
+stone emit=0 filter=15
+granite emit=0 filter=15
+polished_granite emit=0 filter=15
+diorite emit=0 filter=15
+polished_diorite emit=0 filter=15
+andesite emit=0 filter=15
+polished_andesite emit=0 filter=15
+grass_block default=1 snowy=true,false emit=0 filter=15
+dirt emit=0 filter=15
+coarse_dirt emit=0 filter=15
+podzol default=1 snowy=true,false emit=0 filter=15
+cobblestone emit=0 filter=15
+oak_planks emit=0 filter=15
+spruce_planks emit=0 filter=15
+birch_planks emit=0 filter=15
+jungle_planks emit=0 filter=15
+acacia_planks emit=0 filter=15
+cherry_planks emit=0 filter=15
+dark_oak_planks emit=0 filter=15
+pale_oak_wood default=1 axis=x,y,z emit=0 filter=15
+pale_oak_planks emit=0 filter=15
+mangrove_planks emit=0 filter=15
+bamboo_planks emit=0 filter=15
+bamboo_mosaic emit=0 filter=15
+oak_sapling stage=0,1 emit=0 filter=0
+spruce_sapling stage=0,1 emit=0 filter=0
+birch_sapling stage=0,1 emit=0 filter=0
+jungle_sapling stage=0,1 emit=0 filter=0
+acacia_sapling stage=0,1 emit=0 filter=0
+cherry_sapling stage=0,1 emit=0 filter=0
+dark_oak_sapling stage=0,1 emit=0 filter=0
+pale_oak_sapling stage=0,1 emit=0 filter=0
+mangrove_propagule default=5 age=0,1,2,3,4 hanging=true,false stage=0,1 waterlogged=true,false emit=0 filter=0
+bedrock emit=0 filter=15
+water level=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=1
+lava level=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=15 filter=1
+sand emit=0 filter=15
+suspicious_sand dusted=0,1,2,3 emit=0 filter=15
+red_sand emit=0 filter=15
+gravel emit=0 filter=15
+suspicious_gravel dusted=0,1,2,3 emit=0 filter=15
+gold_ore emit=0 filter=15
+deepslate_gold_ore emit=0 filter=15
+iron_ore emit=0 filter=15
+deepslate_iron_ore emit=0 filter=15
+coal_ore emit=0 filter=15
+deepslate_coal_ore emit=0 filter=15
+nether_gold_ore emit=0 filter=15
+oak_log default=1 axis=x,y,z emit=0 filter=15
+spruce_log default=1 axis=x,y,z emit=0 filter=15
+birch_log default=1 axis=x,y,z emit=0 filter=15
+jungle_log default=1 axis=x,y,z emit=0 filter=15
+acacia_log default=1 axis=x,y,z emit=0 filter=15
+cherry_log default=1 axis=x,y,z emit=0 filter=15
+dark_oak_log default=1 axis=x,y,z emit=0 filter=15
+pale_oak_log default=1 axis=x,y,z emit=0 filter=15
+mangrove_log default=1 axis=x,y,z emit=0 filter=15
+mangrove_roots default=1 waterlogged=true,false emit=0 filter=1
+muddy_mangrove_roots default=1 axis=x,y,z emit=0 filter=15
+bamboo_block default=1 axis=x,y,z emit=0 filter=15
+stripped_spruce_log default=1 axis=x,y,z emit=0 filter=15
+stripped_birch_log default=1 axis=x,y,z emit=0 filter=15
+stripped_jungle_log default=1 axis=x,y,z emit=0 filter=15
+stripped_acacia_log default=1 axis=x,y,z emit=0 filter=15
+stripped_cherry_log default=1 axis=x,y,z emit=0 filter=15
+stripped_dark_oak_log default=1 axis=x,y,z emit=0 filter=15
+stripped_pale_oak_log default=1 axis=x,y,z emit=0 filter=15
+stripped_oak_log default=1 axis=x,y,z emit=0 filter=15
+stripped_mangrove_log default=1 axis=x,y,z emit=0 filter=15
+stripped_bamboo_block default=1 axis=x,y,z emit=0 filter=15
+oak_wood default=1 axis=x,y,z emit=0 filter=15
+spruce_wood default=1 axis=x,y,z emit=0 filter=15
+birch_wood default=1 axis=x,y,z emit=0 filter=15
+jungle_wood default=1 axis=x,y,z emit=0 filter=15
+acacia_wood default=1 axis=x,y,z emit=0 filter=15
+cherry_wood default=1 axis=x,y,z emit=0 filter=15
+dark_oak_wood default=1 axis=x,y,z emit=0 filter=15
+mangrove_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_oak_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_spruce_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_birch_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_jungle_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_acacia_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_cherry_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_dark_oak_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_pale_oak_wood default=1 axis=x,y,z emit=0 filter=15
+stripped_mangrove_wood default=1 axis=x,y,z emit=0 filter=15
+oak_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+spruce_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+birch_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+jungle_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+acacia_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+cherry_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+dark_oak_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+pale_oak_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+mangrove_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+azalea_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+flowering_azalea_leaves default=27 distance=1,2,3,4,5,6,7 persistent=true,false waterlogged=true,false emit=0 filter=1
+sponge emit=0 filter=15
+wet_sponge emit=0 filter=15
+glass emit=0 filter=0
+lapis_ore emit=0 filter=15
+deepslate_lapis_ore emit=0 filter=15
+lapis_block emit=0 filter=15
+dispenser default=1 facing=north,east,south,west,up,down triggered=true,false emit=0 filter=15
+sandstone emit=0 filter=15
+chiseled_sandstone emit=0 filter=15
+cut_sandstone emit=0 filter=15
+note_block default=1 instrument=harp,basedrum,snare,hat,bass,flute,bell,guitar,chime,xylophone,iron_xylophone,cow_bell,didgeridoo,bit,banjo,pling,trumpet,trumpet_exposed,trumpet_oxidized,trumpet_weathered,zombie,skeleton,creeper,dragon,wither_skeleton,piglin,custom_head note=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24 powered=true,false emit=0 filter=15
+white_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+orange_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+magenta_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+light_blue_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+yellow_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+lime_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+pink_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+gray_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+light_gray_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+cyan_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+purple_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+blue_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+brown_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+green_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+red_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+black_bed default=3 facing=north,south,west,east occupied=true,false part=head,foot emit=0 filter=0
+powered_rail default=13 powered=true,false shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south waterlogged=true,false emit=0 filter=0
+detector_rail default=13 powered=true,false shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south waterlogged=true,false emit=0 filter=0
+sticky_piston default=6 extended=true,false facing=north,east,south,west,up,down emit=0 filter=15
+cobweb emit=0 filter=1
+short_grass emit=0 filter=0
+fern emit=0 filter=0
+dead_bush emit=0 filter=0
+bush emit=0 filter=0
+short_dry_grass emit=0 filter=0
+tall_dry_grass emit=0 filter=0
+seagrass emit=0 filter=1
+tall_seagrass default=1 half=upper,lower emit=0 filter=1
+piston default=6 extended=true,false facing=north,east,south,west,up,down emit=0 filter=15
+piston_head default=2 facing=north,east,south,west,up,down short=true,false type=normal,sticky emit=0 filter=0
+white_wool emit=0 filter=15
+orange_wool emit=0 filter=15
+magenta_wool emit=0 filter=15
+light_blue_wool emit=0 filter=15
+yellow_wool emit=0 filter=15
+lime_wool emit=0 filter=15
+pink_wool emit=0 filter=15
+gray_wool emit=0 filter=15
+light_gray_wool emit=0 filter=15
+cyan_wool emit=0 filter=15
+purple_wool emit=0 filter=15
+blue_wool emit=0 filter=15
+brown_wool emit=0 filter=15
+green_wool emit=0 filter=15
+red_wool emit=0 filter=15
+black_wool emit=0 filter=15
+moving_piston facing=north,east,south,west,up,down type=normal,sticky emit=0 filter=0
+dandelion emit=0 filter=0
+golden_dandelion emit=0 filter=0
+torchflower emit=0 filter=0
+poppy emit=0 filter=0
+blue_orchid emit=0 filter=0
+allium emit=0 filter=0
+azure_bluet emit=0 filter=0
+red_tulip emit=0 filter=0
+orange_tulip emit=0 filter=0
+white_tulip emit=0 filter=0
+pink_tulip emit=0 filter=0
+oxeye_daisy emit=0 filter=0
+cornflower emit=0 filter=0
+wither_rose emit=0 filter=0
+lily_of_the_valley emit=0 filter=0
+brown_mushroom emit=1 filter=0
+red_mushroom emit=0 filter=0
+gold_block emit=0 filter=15
+iron_block emit=0 filter=15
+bricks emit=0 filter=15
+tnt default=1 unstable=true,false emit=0 filter=15
+bookshelf emit=0 filter=15
+chiseled_bookshelf default=63 facing=north,south,west,east slot_0_occupied=true,false slot_1_occupied=true,false slot_2_occupied=true,false slot_3_occupied=true,false slot_4_occupied=true,false slot_5_occupied=true,false emit=0 filter=15
+acacia_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+bamboo_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+birch_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+cherry_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+crimson_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+dark_oak_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+jungle_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+mangrove_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+oak_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+pale_oak_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+spruce_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+warped_shelf default=9 facing=north,south,west,east powered=true,false side_chain=unconnected,right,center,left waterlogged=true,false emit=0 filter=0
+mossy_cobblestone emit=0 filter=15
+obsidian emit=0 filter=15
+torch emit=14 filter=0
+wall_torch facing=north,south,west,east emit=14 filter=0
+fire default=31 age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 east=true,false north=true,false south=true,false up=true,false west=true,false emit=15 filter=0
+soul_fire emit=10 filter=0
+spawner emit=0 filter=1
+creaking_heart default=7 axis=x,y,z creaking_heart_state=uprooted,dormant,awake natural=true,false emit=0 filter=15
+oak_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+redstone_wire default=1160 east=up,side,none north=up,side,none power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 south=up,side,none west=up,side,none emit=0 filter=0
+diamond_ore emit=0 filter=15
+deepslate_diamond_ore emit=0 filter=15
+diamond_block emit=0 filter=15
+crafting_table emit=0 filter=15
+wheat age=0,1,2,3,4,5,6,7 emit=0 filter=0
+farmland moisture=0,1,2,3,4,5,6,7 emit=0 filter=0
+furnace default=1 facing=north,south,west,east lit=true,false emit=0 filter=15
+oak_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+spruce_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+birch_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+acacia_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+cherry_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+jungle_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+dark_oak_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+pale_oak_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+mangrove_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+bamboo_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+oak_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+ladder default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+rail default=1 shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south,south_east,south_west,north_west,north_east waterlogged=true,false emit=0 filter=0
+cobblestone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+oak_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+spruce_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+birch_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+acacia_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+cherry_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+jungle_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+dark_oak_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+pale_oak_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+mangrove_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+bamboo_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+oak_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+spruce_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+birch_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+acacia_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+cherry_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+jungle_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+dark_oak_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+pale_oak_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+crimson_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+warped_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+mangrove_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+bamboo_hanging_sign default=49 attached=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+oak_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+spruce_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+birch_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+acacia_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+cherry_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+jungle_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+dark_oak_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+pale_oak_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+mangrove_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+crimson_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+warped_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+bamboo_wall_hanging_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+lever default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+stone_pressure_plate default=1 powered=true,false emit=0 filter=0
+iron_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+oak_pressure_plate default=1 powered=true,false emit=0 filter=0
+spruce_pressure_plate default=1 powered=true,false emit=0 filter=0
+birch_pressure_plate default=1 powered=true,false emit=0 filter=0
+jungle_pressure_plate default=1 powered=true,false emit=0 filter=0
+acacia_pressure_plate default=1 powered=true,false emit=0 filter=0
+cherry_pressure_plate default=1 powered=true,false emit=0 filter=0
+dark_oak_pressure_plate default=1 powered=true,false emit=0 filter=0
+pale_oak_pressure_plate default=1 powered=true,false emit=0 filter=0
+mangrove_pressure_plate default=1 powered=true,false emit=0 filter=0
+bamboo_pressure_plate default=1 powered=true,false emit=0 filter=0
+redstone_ore default=1 lit=true,false emit=0 filter=15
+deepslate_redstone_ore default=1 lit=true,false emit=0 filter=15
+redstone_torch lit=true,false emit=7 filter=0
+redstone_wall_torch facing=north,south,west,east lit=true,false emit=7 filter=0
+stone_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+snow layers=1,2,3,4,5,6,7,8 emit=0 filter=0
+ice emit=0 filter=1
+snow_block emit=0 filter=15
+cactus age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+cactus_flower emit=0 filter=0
+clay emit=0 filter=15
+sugar_cane age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+jukebox default=1 has_record=true,false emit=0 filter=15
+oak_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+netherrack emit=0 filter=15
+soul_sand emit=0 filter=15
+soul_soil emit=0 filter=15
+basalt default=1 axis=x,y,z emit=0 filter=15
+polished_basalt default=1 axis=x,y,z emit=0 filter=15
+soul_torch emit=10 filter=0
+soul_wall_torch facing=north,south,west,east emit=10 filter=0
+copper_torch emit=14 filter=0
+copper_wall_torch facing=north,south,west,east emit=14 filter=0
+glowstone emit=15 filter=15
+nether_portal axis=x,z emit=11 filter=0
+carved_pumpkin facing=north,south,west,east emit=0 filter=15
+jack_o_lantern facing=north,south,west,east emit=15 filter=15
+cake bites=0,1,2,3,4,5,6 emit=0 filter=0
+repeater default=3 delay=1,2,3,4 facing=north,south,west,east locked=true,false powered=true,false emit=0 filter=0
+white_stained_glass emit=0 filter=0
+orange_stained_glass emit=0 filter=0
+magenta_stained_glass emit=0 filter=0
+light_blue_stained_glass emit=0 filter=0
+yellow_stained_glass emit=0 filter=0
+lime_stained_glass emit=0 filter=0
+pink_stained_glass emit=0 filter=0
+gray_stained_glass emit=0 filter=0
+light_gray_stained_glass emit=0 filter=0
+cyan_stained_glass emit=0 filter=0
+purple_stained_glass emit=0 filter=0
+blue_stained_glass emit=0 filter=0
+brown_stained_glass emit=0 filter=0
+green_stained_glass emit=0 filter=0
+red_stained_glass emit=0 filter=0
+black_stained_glass emit=0 filter=0
+oak_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+spruce_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+birch_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+jungle_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+acacia_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+cherry_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+dark_oak_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+pale_oak_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+mangrove_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+bamboo_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+stone_bricks emit=0 filter=15
+mossy_stone_bricks emit=0 filter=15
+cracked_stone_bricks emit=0 filter=15
+chiseled_stone_bricks emit=0 filter=15
+packed_mud emit=0 filter=15
+mud_bricks emit=0 filter=15
+infested_stone emit=0 filter=15
+infested_cobblestone emit=0 filter=15
+infested_stone_bricks emit=0 filter=15
+infested_mossy_stone_bricks emit=0 filter=15
+infested_cracked_stone_bricks emit=0 filter=15
+infested_chiseled_stone_bricks emit=0 filter=15
+brown_mushroom_block down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false emit=0 filter=15
+red_mushroom_block down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false emit=0 filter=15
+mushroom_stem down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false emit=0 filter=15
+iron_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+exposed_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+weathered_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+oxidized_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+waxed_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+waxed_exposed_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+waxed_weathered_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+waxed_oxidized_copper_bars default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+iron_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+exposed_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+weathered_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+oxidized_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+waxed_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+waxed_exposed_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+waxed_weathered_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+waxed_oxidized_copper_chain default=3 axis=x,y,z waterlogged=true,false emit=0 filter=0
+glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+pumpkin emit=0 filter=15
+melon emit=0 filter=15
+attached_pumpkin_stem facing=north,south,west,east emit=0 filter=0
+attached_melon_stem facing=north,south,west,east emit=0 filter=0
+pumpkin_stem age=0,1,2,3,4,5,6,7 emit=0 filter=0
+melon_stem age=0,1,2,3,4,5,6,7 emit=0 filter=0
+vine default=31 east=true,false north=true,false south=true,false up=true,false west=true,false emit=0 filter=0
+glow_lichen default=127 down=true,false east=true,false north=true,false south=true,false up=true,false waterlogged=true,false west=true,false emit=0 filter=0
+resin_clump default=127 down=true,false east=true,false north=true,false south=true,false up=true,false waterlogged=true,false west=true,false emit=0 filter=1
+oak_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+stone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+mud_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+mycelium default=1 snowy=true,false emit=0 filter=15
+lily_pad emit=0 filter=0
+resin_block emit=0 filter=15
+resin_bricks emit=0 filter=15
+resin_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+resin_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+resin_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+chiseled_resin_bricks emit=0 filter=15
+nether_bricks emit=0 filter=15
+nether_brick_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+nether_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+nether_wart age=0,1,2,3 emit=0 filter=0
+enchanting_table emit=7 filter=0
+brewing_stand default=7 has_bottle_0=true,false has_bottle_1=true,false has_bottle_2=true,false emit=1 filter=0
+cauldron emit=0 filter=0
+water_cauldron level=1,2,3 emit=0 filter=0
+lava_cauldron emit=15 filter=0
+powder_snow_cauldron level=1,2,3 emit=0 filter=0
+end_portal emit=15 filter=0
+end_portal_frame default=4 eye=true,false facing=north,south,west,east emit=1 filter=0
+end_stone emit=0 filter=15
+dragon_egg emit=1 filter=0
+redstone_lamp default=1 lit=true,false emit=0 filter=15
+cocoa age=0,1,2 facing=north,south,west,east emit=0 filter=0
+sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+emerald_ore emit=0 filter=15
+deepslate_emerald_ore emit=0 filter=15
+ender_chest default=1 facing=north,south,west,east waterlogged=true,false emit=7 filter=0
+tripwire_hook default=9 attached=true,false facing=north,south,west,east powered=true,false emit=0 filter=0
+tripwire default=127 attached=true,false disarmed=true,false east=true,false north=true,false powered=true,false south=true,false west=true,false emit=0 filter=0
+emerald_block emit=0 filter=15
+spruce_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+birch_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+jungle_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+command_block default=6 conditional=true,false facing=north,east,south,west,up,down emit=0 filter=15
+beacon emit=15 filter=1
+cobblestone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+mossy_cobblestone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+flower_pot emit=0 filter=0
+potted_torchflower emit=0 filter=0
+potted_oak_sapling emit=0 filter=0
+potted_spruce_sapling emit=0 filter=0
+potted_birch_sapling emit=0 filter=0
+potted_jungle_sapling emit=0 filter=0
+potted_acacia_sapling emit=0 filter=0
+potted_cherry_sapling emit=0 filter=0
+potted_dark_oak_sapling emit=0 filter=0
+potted_pale_oak_sapling emit=0 filter=0
+potted_mangrove_propagule emit=0 filter=0
+potted_fern emit=0 filter=0
+potted_dandelion emit=0 filter=0
+potted_golden_dandelion emit=0 filter=0
+potted_poppy emit=0 filter=0
+potted_blue_orchid emit=0 filter=0
+potted_allium emit=0 filter=0
+potted_azure_bluet emit=0 filter=0
+potted_red_tulip emit=0 filter=0
+potted_orange_tulip emit=0 filter=0
+potted_white_tulip emit=0 filter=0
+potted_pink_tulip emit=0 filter=0
+potted_oxeye_daisy emit=0 filter=0
+potted_cornflower emit=0 filter=0
+potted_lily_of_the_valley emit=0 filter=0
+potted_wither_rose emit=0 filter=0
+potted_red_mushroom emit=0 filter=0
+potted_brown_mushroom emit=0 filter=0
+potted_dead_bush emit=0 filter=0
+potted_cactus emit=0 filter=0
+carrots age=0,1,2,3,4,5,6,7 emit=0 filter=0
+potatoes age=0,1,2,3,4,5,6,7 emit=0 filter=0
+oak_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+spruce_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+birch_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+jungle_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+acacia_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+cherry_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+dark_oak_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+pale_oak_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+mangrove_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+bamboo_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+skeleton_skull default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+skeleton_wall_skull default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+wither_skeleton_skull default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+wither_skeleton_wall_skull default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+zombie_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+zombie_wall_head default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+player_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+player_wall_head default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+creeper_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+creeper_wall_head default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+dragon_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+dragon_wall_head default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+piglin_head default=16 powered=true,false rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+piglin_wall_head default=1 facing=north,south,west,east powered=true,false emit=0 filter=0
+anvil facing=north,south,west,east emit=0 filter=0
+chipped_anvil facing=north,south,west,east emit=0 filter=0
+damaged_anvil facing=north,south,west,east emit=0 filter=0
+trapped_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+light_weighted_pressure_plate power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+heavy_weighted_pressure_plate power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+comparator default=1 facing=north,south,west,east mode=compare,subtract powered=true,false emit=0 filter=0
+daylight_detector default=16 inverted=true,false power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+redstone_block emit=0 filter=15
+nether_quartz_ore emit=0 filter=15
+hopper enabled=true,false facing=down,north,south,west,east emit=0 filter=0
+quartz_block emit=0 filter=15
+chiseled_quartz_block emit=0 filter=15
+quartz_pillar default=1 axis=x,y,z emit=0 filter=15
+quartz_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+activator_rail default=13 powered=true,false shape=north_south,east_west,ascending_east,ascending_west,ascending_north,ascending_south waterlogged=true,false emit=0 filter=0
+dropper default=1 facing=north,east,south,west,up,down triggered=true,false emit=0 filter=15
+white_terracotta emit=0 filter=15
+orange_terracotta emit=0 filter=15
+magenta_terracotta emit=0 filter=15
+light_blue_terracotta emit=0 filter=15
+yellow_terracotta emit=0 filter=15
+lime_terracotta emit=0 filter=15
+pink_terracotta emit=0 filter=15
+gray_terracotta emit=0 filter=15
+light_gray_terracotta emit=0 filter=15
+cyan_terracotta emit=0 filter=15
+purple_terracotta emit=0 filter=15
+blue_terracotta emit=0 filter=15
+brown_terracotta emit=0 filter=15
+green_terracotta emit=0 filter=15
+red_terracotta emit=0 filter=15
+black_terracotta emit=0 filter=15
+white_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+orange_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+magenta_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+light_blue_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+yellow_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+lime_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+pink_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+gray_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+light_gray_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+cyan_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+purple_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+blue_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+brown_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+green_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+red_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+black_stained_glass_pane default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+acacia_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+cherry_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+dark_oak_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+pale_oak_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+mangrove_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+bamboo_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+bamboo_mosaic_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+slime_block emit=0 filter=1
+barrier default=1 waterlogged=true,false emit=0 filter=0
+light default=31 level=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=15 filter=0
+iron_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+prismarine emit=0 filter=15
+prismarine_bricks emit=0 filter=15
+dark_prismarine emit=0 filter=15
+prismarine_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+prismarine_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+dark_prismarine_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+prismarine_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+prismarine_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+dark_prismarine_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+sea_lantern emit=15 filter=15
+hay_block default=1 axis=x,y,z emit=0 filter=15
+white_carpet emit=0 filter=0
+orange_carpet emit=0 filter=0
+magenta_carpet emit=0 filter=0
+light_blue_carpet emit=0 filter=0
+yellow_carpet emit=0 filter=0
+lime_carpet emit=0 filter=0
+pink_carpet emit=0 filter=0
+gray_carpet emit=0 filter=0
+light_gray_carpet emit=0 filter=0
+cyan_carpet emit=0 filter=0
+purple_carpet emit=0 filter=0
+blue_carpet emit=0 filter=0
+brown_carpet emit=0 filter=0
+green_carpet emit=0 filter=0
+red_carpet emit=0 filter=0
+black_carpet emit=0 filter=0
+terracotta emit=0 filter=15
+coal_block emit=0 filter=15
+packed_ice emit=0 filter=15
+sunflower default=1 half=upper,lower emit=0 filter=0
+lilac default=1 half=upper,lower emit=0 filter=0
+rose_bush default=1 half=upper,lower emit=0 filter=0
+peony default=1 half=upper,lower emit=0 filter=0
+tall_grass default=1 half=upper,lower emit=0 filter=0
+large_fern default=1 half=upper,lower emit=0 filter=0
+white_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+orange_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+magenta_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+light_blue_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+yellow_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+lime_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+pink_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+gray_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+light_gray_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+cyan_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+purple_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+blue_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+brown_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+green_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+red_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+black_banner default=8 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=0
+white_wall_banner facing=north,south,west,east emit=0 filter=0
+orange_wall_banner facing=north,south,west,east emit=0 filter=0
+magenta_wall_banner facing=north,south,west,east emit=0 filter=0
+light_blue_wall_banner facing=north,south,west,east emit=0 filter=0
+yellow_wall_banner facing=north,south,west,east emit=0 filter=0
+lime_wall_banner facing=north,south,west,east emit=0 filter=0
+pink_wall_banner facing=north,south,west,east emit=0 filter=0
+gray_wall_banner facing=north,south,west,east emit=0 filter=0
+light_gray_wall_banner facing=north,south,west,east emit=0 filter=0
+cyan_wall_banner facing=north,south,west,east emit=0 filter=0
+purple_wall_banner facing=north,south,west,east emit=0 filter=0
+blue_wall_banner facing=north,south,west,east emit=0 filter=0
+brown_wall_banner facing=north,south,west,east emit=0 filter=0
+green_wall_banner facing=north,south,west,east emit=0 filter=0
+red_wall_banner facing=north,south,west,east emit=0 filter=0
+black_wall_banner facing=north,south,west,east emit=0 filter=0
+red_sandstone emit=0 filter=15
+chiseled_red_sandstone emit=0 filter=15
+cut_red_sandstone emit=0 filter=15
+red_sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+oak_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+spruce_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+birch_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+jungle_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+acacia_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+cherry_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+dark_oak_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+pale_oak_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+mangrove_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+bamboo_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+bamboo_mosaic_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+stone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+smooth_stone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+sandstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+cut_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+petrified_oak_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+cobblestone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+stone_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+mud_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+nether_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+quartz_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+red_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+cut_red_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+purpur_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+smooth_stone emit=0 filter=15
+smooth_sandstone emit=0 filter=15
+smooth_quartz emit=0 filter=15
+smooth_red_sandstone emit=0 filter=15
+spruce_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+birch_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+jungle_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+acacia_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+cherry_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+dark_oak_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+pale_oak_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+mangrove_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+bamboo_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+spruce_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+birch_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+jungle_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+acacia_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+cherry_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+dark_oak_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+pale_oak_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+mangrove_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+bamboo_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+spruce_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+birch_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+jungle_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+acacia_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+cherry_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+dark_oak_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+pale_oak_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+mangrove_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+bamboo_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+end_rod default=4 facing=north,east,south,west,up,down emit=14 filter=0
+chorus_plant default=63 down=true,false east=true,false north=true,false south=true,false up=true,false west=true,false emit=0 filter=1
+chorus_flower age=0,1,2,3,4,5 emit=0 filter=1
+purpur_block emit=0 filter=15
+purpur_pillar default=1 axis=x,y,z emit=0 filter=15
+purpur_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+end_stone_bricks emit=0 filter=15
+torchflower_crop age=0,1 emit=0 filter=0
+pitcher_crop default=1 age=0,1,2,3,4 half=upper,lower emit=0 filter=0
+pitcher_plant default=1 half=upper,lower emit=0 filter=0
+beetroots age=0,1,2,3 emit=0 filter=0
+dirt_path emit=0 filter=0
+end_gateway emit=15 filter=1
+repeating_command_block default=6 conditional=true,false facing=north,east,south,west,up,down emit=0 filter=15
+chain_command_block default=6 conditional=true,false facing=north,east,south,west,up,down emit=0 filter=15
+frosted_ice age=0,1,2,3 emit=0 filter=1
+magma_block emit=3 filter=15
+nether_wart_block emit=0 filter=15
+red_nether_bricks emit=0 filter=15
+bone_block default=1 axis=x,y,z emit=0 filter=15
+structure_void emit=0 filter=0
+observer default=5 facing=north,east,south,west,up,down powered=true,false emit=0 filter=15
+shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+white_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+orange_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+magenta_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+light_blue_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+yellow_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+lime_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+pink_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+gray_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+light_gray_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+cyan_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+purple_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+blue_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+brown_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+green_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+red_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+black_shulker_box default=4 facing=north,east,south,west,up,down emit=0 filter=1
+white_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+orange_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+magenta_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+light_blue_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+yellow_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+lime_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+pink_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+gray_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+light_gray_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+cyan_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+purple_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+blue_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+brown_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+green_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+red_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+black_glazed_terracotta facing=north,south,west,east emit=0 filter=15
+white_concrete emit=0 filter=15
+orange_concrete emit=0 filter=15
+magenta_concrete emit=0 filter=15
+light_blue_concrete emit=0 filter=15
+yellow_concrete emit=0 filter=15
+lime_concrete emit=0 filter=15
+pink_concrete emit=0 filter=15
+gray_concrete emit=0 filter=15
+light_gray_concrete emit=0 filter=15
+cyan_concrete emit=0 filter=15
+purple_concrete emit=0 filter=15
+blue_concrete emit=0 filter=15
+brown_concrete emit=0 filter=15
+green_concrete emit=0 filter=15
+red_concrete emit=0 filter=15
+black_concrete emit=0 filter=15
+white_concrete_powder emit=0 filter=15
+orange_concrete_powder emit=0 filter=15
+magenta_concrete_powder emit=0 filter=15
+light_blue_concrete_powder emit=0 filter=15
+yellow_concrete_powder emit=0 filter=15
+lime_concrete_powder emit=0 filter=15
+pink_concrete_powder emit=0 filter=15
+gray_concrete_powder emit=0 filter=15
+light_gray_concrete_powder emit=0 filter=15
+cyan_concrete_powder emit=0 filter=15
+purple_concrete_powder emit=0 filter=15
+blue_concrete_powder emit=0 filter=15
+brown_concrete_powder emit=0 filter=15
+green_concrete_powder emit=0 filter=15
+red_concrete_powder emit=0 filter=15
+black_concrete_powder emit=0 filter=15
+kelp age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25 emit=0 filter=1
+kelp_plant emit=0 filter=1
+dried_kelp_block emit=0 filter=15
+turtle_egg eggs=1,2,3,4 hatch=0,1,2 emit=0 filter=0
+sniffer_egg hatch=0,1,2 emit=0 filter=0
+dried_ghast default=1 facing=north,south,west,east hydration=0,1,2,3 waterlogged=true,false emit=0 filter=0
+dead_tube_coral_block emit=0 filter=15
+dead_brain_coral_block emit=0 filter=15
+dead_bubble_coral_block emit=0 filter=15
+dead_fire_coral_block emit=0 filter=15
+dead_horn_coral_block emit=0 filter=15
+tube_coral_block emit=0 filter=15
+brain_coral_block emit=0 filter=15
+bubble_coral_block emit=0 filter=15
+fire_coral_block emit=0 filter=15
+horn_coral_block emit=0 filter=15
+dead_tube_coral waterlogged=true,false emit=0 filter=1
+dead_brain_coral waterlogged=true,false emit=0 filter=1
+dead_bubble_coral waterlogged=true,false emit=0 filter=1
+dead_fire_coral waterlogged=true,false emit=0 filter=1
+dead_horn_coral waterlogged=true,false emit=0 filter=1
+tube_coral waterlogged=true,false emit=0 filter=1
+brain_coral waterlogged=true,false emit=0 filter=1
+bubble_coral waterlogged=true,false emit=0 filter=1
+fire_coral waterlogged=true,false emit=0 filter=1
+horn_coral waterlogged=true,false emit=0 filter=1
+dead_tube_coral_fan waterlogged=true,false emit=0 filter=1
+dead_brain_coral_fan waterlogged=true,false emit=0 filter=1
+dead_bubble_coral_fan waterlogged=true,false emit=0 filter=1
+dead_fire_coral_fan waterlogged=true,false emit=0 filter=1
+dead_horn_coral_fan waterlogged=true,false emit=0 filter=1
+tube_coral_fan waterlogged=true,false emit=0 filter=1
+brain_coral_fan waterlogged=true,false emit=0 filter=1
+bubble_coral_fan waterlogged=true,false emit=0 filter=1
+fire_coral_fan waterlogged=true,false emit=0 filter=1
+horn_coral_fan waterlogged=true,false emit=0 filter=1
+dead_tube_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+dead_brain_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+dead_bubble_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+dead_fire_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+dead_horn_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+tube_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+brain_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+bubble_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+fire_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+horn_coral_wall_fan facing=north,south,west,east waterlogged=true,false emit=0 filter=1
+sea_pickle pickles=1,2,3,4 waterlogged=true,false emit=6 filter=1
+blue_ice emit=0 filter=15
+conduit waterlogged=true,false emit=15 filter=1
+bamboo_sapling emit=0 filter=0
+bamboo age=0,1 leaves=none,small,large stage=0,1 emit=0 filter=0
+potted_bamboo emit=0 filter=0
+void_air emit=0 filter=0
+cave_air emit=0 filter=0
+bubble_column drag=true,false emit=0 filter=1
+polished_granite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+smooth_red_sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+mossy_stone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_diorite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+mossy_cobblestone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+end_stone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+stone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+smooth_sandstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+smooth_quartz_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+granite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+andesite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+red_nether_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_andesite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+diorite_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_granite_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+smooth_red_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+mossy_stone_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_diorite_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+mossy_cobblestone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+end_stone_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+smooth_sandstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+smooth_quartz_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+granite_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+andesite_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+red_nether_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_andesite_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+diorite_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+prismarine_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+red_sandstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+mossy_stone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+granite_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+stone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+mud_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+nether_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+andesite_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+red_nether_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+sandstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+end_stone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+diorite_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+scaffolding default=31 bottom=true,false distance=0,1,2,3,4,5,6,7 waterlogged=true,false emit=0 filter=0
+loom facing=north,south,west,east emit=0 filter=15
+barrel default=1 facing=north,east,south,west,up,down open=true,false emit=0 filter=15
+smoker default=1 facing=north,south,west,east lit=true,false emit=0 filter=15
+blast_furnace default=1 facing=north,south,west,east lit=true,false emit=0 filter=15
+cartography_table emit=0 filter=15
+fletching_table emit=0 filter=15
+grindstone default=4 face=floor,wall,ceiling facing=north,south,west,east emit=0 filter=0
+lectern default=3 facing=north,south,west,east has_book=true,false powered=true,false emit=0 filter=0
+smithing_table emit=0 filter=15
+stonecutter facing=north,south,west,east emit=0 filter=0
+bell default=1 attachment=floor,ceiling,single_wall,double_wall facing=north,south,west,east powered=true,false emit=0 filter=0
+lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+soul_lantern default=3 hanging=true,false waterlogged=true,false emit=10 filter=0
+copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+exposed_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+weathered_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+oxidized_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+waxed_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+waxed_exposed_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+waxed_weathered_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+waxed_oxidized_copper_lantern default=3 hanging=true,false waterlogged=true,false emit=15 filter=0
+campfire default=3 facing=north,south,west,east lit=true,false signal_fire=true,false waterlogged=true,false emit=15 filter=0
+soul_campfire default=3 facing=north,south,west,east lit=true,false signal_fire=true,false waterlogged=true,false emit=10 filter=0
+sweet_berry_bush age=0,1,2,3 emit=0 filter=0
+warped_stem default=1 axis=x,y,z emit=0 filter=15
+stripped_warped_stem default=1 axis=x,y,z emit=0 filter=15
+warped_hyphae default=1 axis=x,y,z emit=0 filter=15
+stripped_warped_hyphae default=1 axis=x,y,z emit=0 filter=15
+warped_nylium emit=0 filter=15
+warped_fungus emit=0 filter=0
+warped_wart_block emit=0 filter=15
+warped_roots emit=0 filter=0
+nether_sprouts emit=0 filter=0
+crimson_stem default=1 axis=x,y,z emit=0 filter=15
+stripped_crimson_stem default=1 axis=x,y,z emit=0 filter=15
+crimson_hyphae default=1 axis=x,y,z emit=0 filter=15
+stripped_crimson_hyphae default=1 axis=x,y,z emit=0 filter=15
+crimson_nylium emit=0 filter=15
+crimson_fungus emit=0 filter=0
+shroomlight emit=15 filter=15
+weeping_vines age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25 emit=0 filter=0
+weeping_vines_plant emit=0 filter=0
+twisting_vines age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25 emit=0 filter=0
+twisting_vines_plant emit=0 filter=0
+crimson_roots emit=0 filter=0
+crimson_planks emit=0 filter=15
+warped_planks emit=0 filter=15
+crimson_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+warped_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+crimson_pressure_plate default=1 powered=true,false emit=0 filter=0
+warped_pressure_plate default=1 powered=true,false emit=0 filter=0
+crimson_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+warped_fence default=31 east=true,false north=true,false south=true,false waterlogged=true,false west=true,false emit=0 filter=0
+crimson_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+warped_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+crimson_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+warped_fence_gate default=7 facing=north,south,west,east in_wall=true,false open=true,false powered=true,false emit=0 filter=0
+crimson_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+warped_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+crimson_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+warped_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+crimson_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+warped_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+crimson_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+warped_sign default=17 rotation=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 waterlogged=true,false emit=0 filter=0
+crimson_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+warped_wall_sign default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+structure_block default=1 mode=save,load,corner,data emit=0 filter=15
+jigsaw default=10 orientation=down_east,down_north,down_south,down_west,up_east,up_north,up_south,up_west,west_up,east_up,north_up,south_up emit=0 filter=15
+test_block mode=start,log,fail,accept emit=0 filter=15
+test_instance_block emit=0 filter=1
+composter level=0,1,2,3,4,5,6,7,8 emit=0 filter=0
+target power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 emit=0 filter=15
+bee_nest facing=north,south,west,east honey_level=0,1,2,3,4,5 emit=0 filter=15
+beehive facing=north,south,west,east honey_level=0,1,2,3,4,5 emit=0 filter=15
+honey_block emit=0 filter=1
+honeycomb_block emit=0 filter=15
+netherite_block emit=0 filter=15
+ancient_debris emit=0 filter=15
+crying_obsidian emit=10 filter=15
+respawn_anchor charges=0,1,2,3,4 emit=0 filter=15
+potted_crimson_fungus emit=0 filter=0
+potted_warped_fungus emit=0 filter=0
+potted_crimson_roots emit=0 filter=0
+potted_warped_roots emit=0 filter=0
+lodestone emit=0 filter=15
+blackstone emit=0 filter=15
+blackstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+blackstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+blackstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_blackstone emit=0 filter=15
+polished_blackstone_bricks emit=0 filter=15
+cracked_polished_blackstone_bricks emit=0 filter=15
+chiseled_polished_blackstone emit=0 filter=15
+polished_blackstone_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_blackstone_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_blackstone_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+gilded_blackstone emit=0 filter=15
+polished_blackstone_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_blackstone_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_blackstone_pressure_plate default=1 powered=true,false emit=0 filter=0
+polished_blackstone_button default=9 face=floor,wall,ceiling facing=north,south,west,east powered=true,false emit=0 filter=0
+polished_blackstone_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+chiseled_nether_bricks emit=0 filter=15
+cracked_nether_bricks emit=0 filter=15
+quartz_bricks emit=0 filter=15
+candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+white_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+orange_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+magenta_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+light_blue_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+yellow_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+lime_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+pink_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+gray_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+light_gray_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+cyan_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+purple_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+blue_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+brown_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+green_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+red_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+black_candle default=3 candles=1,2,3,4 lit=true,false waterlogged=true,false emit=0 filter=0
+candle_cake default=1 lit=true,false emit=0 filter=0
+white_candle_cake default=1 lit=true,false emit=0 filter=0
+orange_candle_cake default=1 lit=true,false emit=0 filter=0
+magenta_candle_cake default=1 lit=true,false emit=0 filter=0
+light_blue_candle_cake default=1 lit=true,false emit=0 filter=0
+yellow_candle_cake default=1 lit=true,false emit=0 filter=0
+lime_candle_cake default=1 lit=true,false emit=0 filter=0
+pink_candle_cake default=1 lit=true,false emit=0 filter=0
+gray_candle_cake default=1 lit=true,false emit=0 filter=0
+light_gray_candle_cake default=1 lit=true,false emit=0 filter=0
+cyan_candle_cake default=1 lit=true,false emit=0 filter=0
+purple_candle_cake default=1 lit=true,false emit=0 filter=0
+blue_candle_cake default=1 lit=true,false emit=0 filter=0
+brown_candle_cake default=1 lit=true,false emit=0 filter=0
+green_candle_cake default=1 lit=true,false emit=0 filter=0
+red_candle_cake default=1 lit=true,false emit=0 filter=0
+black_candle_cake default=1 lit=true,false emit=0 filter=0
+amethyst_block emit=0 filter=15
+budding_amethyst emit=0 filter=15
+amethyst_cluster default=9 facing=north,east,south,west,up,down waterlogged=true,false emit=5 filter=0
+large_amethyst_bud default=9 facing=north,east,south,west,up,down waterlogged=true,false emit=4 filter=0
+medium_amethyst_bud default=9 facing=north,east,south,west,up,down waterlogged=true,false emit=2 filter=0
+small_amethyst_bud default=9 facing=north,east,south,west,up,down waterlogged=true,false emit=1 filter=0
+tuff emit=0 filter=15
+tuff_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+tuff_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+tuff_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+polished_tuff emit=0 filter=15
+polished_tuff_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_tuff_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_tuff_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+chiseled_tuff emit=0 filter=15
+tuff_bricks emit=0 filter=15
+tuff_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+tuff_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+tuff_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+chiseled_tuff_bricks emit=0 filter=15
+calcite emit=0 filter=15
+tinted_glass emit=0 filter=15
+powder_snow emit=0 filter=1
+sculk_sensor default=1 power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 sculk_sensor_phase=inactive,active,cooldown waterlogged=true,false emit=1 filter=0
+calibrated_sculk_sensor default=1 facing=north,south,west,east power=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 sculk_sensor_phase=inactive,active,cooldown waterlogged=true,false emit=1 filter=0
+sculk emit=0 filter=15
+sculk_vein default=127 down=true,false east=true,false north=true,false south=true,false up=true,false waterlogged=true,false west=true,false emit=0 filter=1
+sculk_catalyst default=1 bloom=true,false emit=6 filter=15
+sculk_shrieker default=7 can_summon=true,false shrieking=true,false waterlogged=true,false emit=0 filter=1
+copper_block emit=0 filter=15
+exposed_copper emit=0 filter=15
+weathered_copper emit=0 filter=15
+oxidized_copper emit=0 filter=15
+copper_ore emit=0 filter=15
+deepslate_copper_ore emit=0 filter=15
+oxidized_cut_copper emit=0 filter=15
+weathered_cut_copper emit=0 filter=15
+exposed_cut_copper emit=0 filter=15
+cut_copper emit=0 filter=15
+oxidized_chiseled_copper emit=0 filter=15
+weathered_chiseled_copper emit=0 filter=15
+exposed_chiseled_copper emit=0 filter=15
+chiseled_copper emit=0 filter=15
+waxed_oxidized_chiseled_copper emit=0 filter=15
+waxed_weathered_chiseled_copper emit=0 filter=15
+waxed_exposed_chiseled_copper emit=0 filter=15
+waxed_chiseled_copper emit=0 filter=15
+oxidized_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+weathered_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+exposed_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+oxidized_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+weathered_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+exposed_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+waxed_copper_block emit=0 filter=15
+waxed_weathered_copper emit=0 filter=15
+waxed_exposed_copper emit=0 filter=15
+waxed_oxidized_copper emit=0 filter=15
+waxed_oxidized_cut_copper emit=0 filter=15
+waxed_weathered_cut_copper emit=0 filter=15
+waxed_exposed_cut_copper emit=0 filter=15
+waxed_cut_copper emit=0 filter=15
+waxed_oxidized_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+waxed_weathered_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+waxed_exposed_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+waxed_cut_copper_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+waxed_oxidized_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+waxed_weathered_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+waxed_exposed_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+waxed_cut_copper_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+exposed_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+oxidized_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+weathered_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+waxed_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+waxed_exposed_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+waxed_oxidized_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+waxed_weathered_copper_door default=11 facing=north,south,west,east half=upper,lower hinge=left,right open=true,false powered=true,false emit=0 filter=0
+copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+exposed_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+oxidized_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+weathered_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_exposed_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_oxidized_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_weathered_copper_trapdoor default=15 facing=north,south,west,east half=top,bottom open=true,false powered=true,false waterlogged=true,false emit=0 filter=0
+copper_grate default=1 waterlogged=true,false emit=0 filter=0
+exposed_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+weathered_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+oxidized_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+waxed_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+waxed_exposed_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+waxed_weathered_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+waxed_oxidized_copper_grate default=1 waterlogged=true,false emit=0 filter=0
+copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+exposed_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+weathered_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+oxidized_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+waxed_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+waxed_exposed_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+waxed_weathered_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+waxed_oxidized_copper_bulb default=3 lit=true,false powered=true,false emit=0 filter=15
+copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+exposed_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+weathered_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+oxidized_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+waxed_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+waxed_exposed_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+waxed_weathered_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+waxed_oxidized_copper_chest default=1 facing=north,south,west,east type=single,left,right waterlogged=true,false emit=0 filter=0
+copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+exposed_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+weathered_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+oxidized_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+waxed_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+waxed_exposed_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+waxed_weathered_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+waxed_oxidized_copper_golem_statue default=1 copper_golem_pose=standing,sitting,running,star facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+exposed_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+weathered_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+oxidized_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_exposed_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_weathered_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+waxed_oxidized_lightning_rod default=19 facing=north,east,south,west,up,down powered=true,false waterlogged=true,false emit=0 filter=0
+pointed_dripstone default=5 thickness=tip_merge,tip,frustum,middle,base vertical_direction=up,down waterlogged=true,false emit=0 filter=0
+dripstone_block emit=0 filter=15
+cave_vines default=1 age=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25 berries=true,false emit=0 filter=0
+cave_vines_plant default=1 berries=true,false emit=0 filter=0
+spore_blossom emit=0 filter=0
+azalea emit=0 filter=0
+flowering_azalea emit=0 filter=0
+moss_carpet emit=0 filter=0
+pink_petals facing=north,south,west,east flower_amount=1,2,3,4 emit=0 filter=0
+wildflowers facing=north,south,west,east flower_amount=1,2,3,4 emit=0 filter=0
+leaf_litter facing=north,south,west,east segment_amount=1,2,3,4 emit=0 filter=0
+moss_block emit=0 filter=15
+big_dripleaf default=1 facing=north,south,west,east tilt=none,unstable,partial,full waterlogged=true,false emit=0 filter=0
+big_dripleaf_stem default=1 facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+small_dripleaf default=3 facing=north,south,west,east half=upper,lower waterlogged=true,false emit=0 filter=0
+hanging_roots default=1 waterlogged=true,false emit=0 filter=0
+rooted_dirt emit=0 filter=15
+mud emit=0 filter=15
+deepslate default=1 axis=x,y,z emit=0 filter=15
+cobbled_deepslate emit=0 filter=15
+cobbled_deepslate_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+cobbled_deepslate_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+cobbled_deepslate_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+polished_deepslate emit=0 filter=15
+polished_deepslate_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+polished_deepslate_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+polished_deepslate_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+deepslate_tiles emit=0 filter=15
+deepslate_tile_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+deepslate_tile_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+deepslate_tile_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+deepslate_bricks emit=0 filter=15
+deepslate_brick_stairs default=11 facing=north,south,west,east half=top,bottom shape=straight,inner_left,inner_right,outer_left,outer_right waterlogged=true,false emit=0 filter=0
+deepslate_brick_slab default=3 type=top,bottom,double waterlogged=true,false emit=0 filter=0
+deepslate_brick_wall default=3 east=none,low,tall north=none,low,tall south=none,low,tall up=true,false waterlogged=true,false west=none,low,tall emit=0 filter=0
+chiseled_deepslate emit=0 filter=15
+cracked_deepslate_bricks emit=0 filter=15
+cracked_deepslate_tiles emit=0 filter=15
+infested_deepslate default=1 axis=x,y,z emit=0 filter=15
+smooth_basalt emit=0 filter=15
+raw_iron_block emit=0 filter=15
+raw_copper_block emit=0 filter=15
+raw_gold_block emit=0 filter=15
+potted_azalea_bush emit=0 filter=0
+potted_flowering_azalea_bush emit=0 filter=0
+ochre_froglight default=1 axis=x,y,z emit=15 filter=15
+verdant_froglight default=1 axis=x,y,z emit=15 filter=15
+pearlescent_froglight default=1 axis=x,y,z emit=15 filter=15
+frogspawn emit=0 filter=0
+reinforced_deepslate emit=0 filter=15
+decorated_pot default=9 cracked=true,false facing=north,south,west,east waterlogged=true,false emit=0 filter=0
+crafter default=45 crafting=true,false orientation=down_east,down_north,down_south,down_west,up_east,up_north,up_south,up_west,west_up,east_up,north_up,south_up triggered=true,false emit=0 filter=15
+trial_spawner default=6 ominous=true,false trial_spawner_state=inactive,waiting_for_players,active,waiting_for_reward_ejection,ejecting_reward,cooldown emit=0 filter=1
+vault default=4 facing=north,south,west,east ominous=true,false vault_state=inactive,active,unlocking,ejecting emit=6 filter=1
+heavy_core default=1 waterlogged=true,false emit=0 filter=0
+pale_moss_block emit=0 filter=15
+pale_moss_carpet bottom=true,false east=none,low,tall north=none,low,tall south=none,low,tall west=none,low,tall emit=0 filter=0
+pale_hanging_moss tip=true,false emit=0 filter=0
+open_eyeblossom emit=0 filter=0
+closed_eyeblossom emit=0 filter=0
+potted_open_eyeblossom emit=0 filter=0
+potted_closed_eyeblossom emit=0 filter=0
+firefly_bush emit=2 filter=0

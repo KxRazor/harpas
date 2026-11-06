@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Light engine: sky and block light for generated chunks, with per-state emission and dampening from the block
+  registry, propagation across a one-chunk border, and vanilla's own saved chunks compared layer by layer
+  (`light_parity`). Generated chunks are lit when sent and keep no light in their carver records, so vanilla can
+  still run features and its own light (`harpas-core`, `harpas-worldgen`, `harpas-engine`, `harpas-server`).
+
 - Ocean monument blocks on chunk workers: the exterior and all internal rooms are placed in every
   chunk intersecting the saved bounds, with the five-block clearing clipped to each, using vanilla's
   monument decoration stream (index 6 and step 4). Only the single building record is saved; elder

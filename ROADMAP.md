@@ -106,7 +106,7 @@ vanilla for the same seed.
 - [x] Make saves crash-consistent across region files and external `.mcc` chunks, including recovery and tests
       for interruptions during each write stage.
 - [x] Vanilla-exact random generators and Java math semantics.
-- [ ] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
+- [x] World generation port: noise router, density functions, biomes, surface rules, aquifers, carvers.
   - [x] Vanilla-exact noise primitives (`ImprovedNoise`, `PerlinNoise`, `NormalNoise`, `BlendedNoise`,
         `SimplexNoise` and `PerlinSimplexNoise`) in `harpas-core`.
   - [x] Worldgen data loader, density functions, `NoiseChunk`, `NoiseRouter`, `MultiNoiseBiomeSource` and 3D
@@ -116,6 +116,16 @@ vanilla for the same seed.
   - [x] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
         `harpas-engine`.
 - [ ] Features and structures.
+  - [x] Feature data: `worldgen/configured_feature`, `worldgen/placed_feature` and each biome's `features`
+        lists, with `minecraft:ore` configurations (size, discard chance, rule tests and target states) and the
+        `count`, `in_square`, `height_range` and `biome` placement modifiers. Other types keep their JSON for
+        later families.
+  - [ ] The FEATURES stage on chunk workers: generation steps, per-source-chunk feature seeds, biome decoration
+        and the source-chunk window.
+  - [ ] Ore features, compared with vanilla through a feature set isolated by a datapack.
+  - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
+  - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
+  - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.
   - [x] Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with

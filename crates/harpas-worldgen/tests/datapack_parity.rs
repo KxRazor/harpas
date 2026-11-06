@@ -6,8 +6,9 @@ mod reference;
 
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
 use harpas_worldgen::{
-    CompiledDensityGraph, HeightmapType, MultiNoiseBiomeSource, NoiseBasedChunkGenerator,
-    NoiseChunk, SurfaceRule, WorldgenData, carver,
+    CompiledDensityGraph, FeatureConfigDef, FeatureRefDef, HeightProviderDef, HeightmapType,
+    IntProviderDef, MultiNoiseBiomeSource, NoiseBasedChunkGenerator, NoiseChunk,
+    PlacementModifierDef, SurfaceRule, VerticalAnchor, WorldgenData, carver,
 };
 use reference::VanillaData;
 
@@ -26,6 +27,68 @@ fn loads_and_evaluates_the_26_1_datapack() {
     for name in data.configured_carvers.keys() {
         carver::CarverConfig::compile(name, &data)
             .unwrap_or_else(|error| panic!("compile carver {name}: {error}"));
+    }
+
+    let ore = &data.configured_features["minecraft:ore_iron"];
+    assert_eq!(ore.feature_type, "minecraft:ore");
+    let FeatureConfigDef::Ore(ore) = &ore.config else {
+        panic!("minecraft:ore_iron must parse as an ore feature");
+    };
+    assert!(ore.size > 0);
+    assert_eq!(ore.targets.len(), 2);
+    assert!(
+        ore.targets
+            .iter()
+            .all(|target| target.state.name.ends_with("iron_ore"))
+    );
+    let placed_ore = &data.placed_features["minecraft:ore_iron_middle"];
+    assert!(matches!(
+        placed_ore.feature,
+        FeatureRefDef::Reference(ref reference) if reference == "minecraft:ore_iron"
+    ));
+    assert_eq!(
+        placed_ore.placement.first(),
+        Some(&PlacementModifierDef::Count(IntProviderDef::Constant(10)))
+    );
+    assert!(
+        placed_ore
+            .placement
+            .contains(&PlacementModifierDef::InSquare)
+    );
+    assert_eq!(
+        placed_ore
+            .placement
+            .iter()
+            .find_map(|modifier| match modifier {
+                PlacementModifierDef::HeightRange(height) => Some(height),
+                _ => None,
+            }),
+        Some(&HeightProviderDef::Trapezoid {
+            min_inclusive: VerticalAnchor::Absolute(-24),
+            max_inclusive: VerticalAnchor::Absolute(56),
+            plateau: 0,
+        })
+    );
+    assert!(placed_ore.placement.contains(&PlacementModifierDef::Biome));
+
+    for (name, placed) in &data.placed_features {
+        if let FeatureRefDef::Reference(reference) = &placed.feature {
+            assert!(
+                data.configured_features.contains_key(reference),
+                "placed feature {name} references missing configured feature {reference}"
+            );
+        }
+    }
+
+    for (name, biome) in &data.biomes {
+        for (step, features) in biome.features.iter().enumerate() {
+            for feature in features {
+                assert!(
+                    data.placed_features.contains_key(feature),
+                    "biome {name} step {step} references missing placed feature {feature}"
+                );
+            }
+        }
     }
     assert!(
         data.block_tags

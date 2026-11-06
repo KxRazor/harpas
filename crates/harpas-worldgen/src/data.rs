@@ -21,6 +21,7 @@ use crate::density::{
     BinaryOp, DensityFunctionDef, MarkerKind, NoiseRouterDef, RarityValueMapper, UnaryOp,
 };
 use crate::spline::{CubicSplineDef, SplinePointDef};
+use crate::surface::{VerticalAnchor, parse_vertical_anchor};
 
 /// Error returned when loading or parsing worldgen JSON data fails.
 #[derive(Debug)]
@@ -185,6 +186,8 @@ pub struct BiomeDef {
     pub downfall: f32,
     /// Configured carver identifiers assigned to this biome (e.g. `["minecraft:cave", "minecraft:canyon"]`).
     pub carvers: Vec<String>,
+    /// Placed feature identifiers by generation step (`features`), in data-pack order.
+    pub features: Vec<Vec<String>>,
 }
 
 /// An entry in an explicit `multi_noise_biome_source_parameter_list` `"biomes"` array.
@@ -245,6 +248,150 @@ pub struct ConfiguredCarverDef {
     pub carver_type: String,
     /// The carver's configuration object.
     pub config: Value,
+}
+
+/// Parsed contents of a `worldgen/configured_feature/<name>.json` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfiguredFeatureDef {
+    /// Feature type, such as `minecraft:ore` or `minecraft:tree`.
+    pub feature_type: String,
+    /// The configuration, parsed for the feature types Harpas places.
+    pub config: FeatureConfigDef,
+}
+
+/// Configuration of a configured feature.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FeatureConfigDef {
+    /// `minecraft:ore` and `minecraft:scattered_ore`.
+    Ore(OreFeatureDef),
+    /// A feature type Harpas does not place yet, keeping its raw JSON.
+    Other(Value),
+}
+
+/// Configuration of `minecraft:ore` and `minecraft:scattered_ore`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OreFeatureDef {
+    /// Number of blocks sampled by the feature.
+    pub size: i32,
+    /// Chance, from 0 to 1, of discarding a sample exposed to air.
+    pub discard_chance_on_air_exposure: f32,
+    /// The blocks the feature may replace, with the state it places there.
+    pub targets: Vec<OreTargetDef>,
+}
+
+/// One target of an ore feature: a rule test and the block state placed where it matches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OreTargetDef {
+    /// Which blocks the feature may replace.
+    pub target: RuleTestDef,
+    /// The block state placed in a replaced block.
+    pub state: BlockStateDef,
+}
+
+/// A rule test, as `RuleTest` uses in feature configurations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleTestDef {
+    /// Matches any block in a block tag (`minecraft:tag_match`).
+    TagMatch(String),
+    /// Matches one block (`minecraft:block_match`).
+    BlockMatch(String),
+    /// Matches one block state (`minecraft:blockstate_match`).
+    BlockStateMatch(BlockStateDef),
+    /// Matches one block with a probability (`minecraft:random_block_match`).
+    RandomBlockMatch {
+        /// The block identifier.
+        block: String,
+        /// Probability, from 0 to 1.
+        probability: f32,
+    },
+    /// Matches every block (`minecraft:always_true`).
+    AlwaysTrue,
+    /// A rule test Harpas does not evaluate yet, keeping its raw JSON.
+    Other {
+        /// The `predicate_type` identifier.
+        predicate_type: String,
+        /// The raw rule-test object.
+        config: Value,
+    },
+}
+
+/// Parsed contents of a `worldgen/placed_feature/<name>.json` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedFeatureDef {
+    /// The configured feature this placed feature places.
+    pub feature: FeatureRefDef,
+    /// The placement modifiers, in data-pack order.
+    pub placement: Vec<PlacementModifierDef>,
+}
+
+/// A placed feature's reference to its configured feature.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FeatureRefDef {
+    /// A resource location such as `minecraft:ore_iron`.
+    Reference(String),
+    /// A configured feature written inline in the placed feature.
+    Inline(Box<ConfiguredFeatureDef>),
+}
+
+/// A placement modifier from a placed feature.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlacementModifierDef {
+    /// Runs the feature a number of times (`minecraft:count`).
+    Count(IntProviderDef),
+    /// Spreads each run over the chunk (`minecraft:in_square`).
+    InSquare,
+    /// Chooses a height from a provider (`minecraft:height_range`).
+    HeightRange(HeightProviderDef),
+    /// Places the feature only in biomes that list it (`minecraft:biome`).
+    Biome,
+    /// A modifier Harpas does not apply yet, keeping its raw JSON.
+    Other {
+        /// The modifier `type` identifier.
+        modifier_type: String,
+        /// The raw modifier object.
+        config: Value,
+    },
+}
+
+/// An integer provider (`IntProvider`) from a placement modifier or feature configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IntProviderDef {
+    /// Always the same value (`minecraft:constant` or a bare integer).
+    Constant(i32),
+    /// A value in `[min_inclusive, max_inclusive]` (`minecraft:uniform`).
+    Uniform {
+        /// Smallest value.
+        min_inclusive: i32,
+        /// Largest value.
+        max_inclusive: i32,
+    },
+    /// A provider Harpas does not evaluate yet, keeping its raw JSON.
+    Other(Value),
+}
+
+/// A height provider (`HeightProvider`) from a `minecraft:height_range` modifier.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HeightProviderDef {
+    /// Always the same height (`minecraft:constant`).
+    Constant(VerticalAnchor),
+    /// A height in `[min_inclusive, max_inclusive]` (`minecraft:uniform`).
+    Uniform {
+        /// Lowest height.
+        min_inclusive: VerticalAnchor,
+        /// Highest height.
+        max_inclusive: VerticalAnchor,
+    },
+    /// A trapezoidal distribution (`minecraft:trapezoid`).
+    Trapezoid {
+        /// Lowest height.
+        min_inclusive: VerticalAnchor,
+        /// Highest height.
+        max_inclusive: VerticalAnchor,
+        /// Number of heights at the top of the distribution with equal probability.
+        plateau: i32,
+    },
+    /// A provider Harpas does not evaluate yet, keeping its raw JSON.
+    Other(Value),
 }
 
 /// One block or nested block-tag reference in a data pack tag.
@@ -578,6 +725,10 @@ pub struct WorldgenData {
     pub world_presets: IndexMap<String, WorldPresetDef>,
     /// Configured cave and canyon carvers, keyed by resource location.
     pub configured_carvers: IndexMap<String, ConfiguredCarverDef>,
+    /// `minecraft:worldgen/configured_feature` definitions keyed by resource location.
+    pub configured_features: IndexMap<String, ConfiguredFeatureDef>,
+    /// `minecraft:worldgen/placed_feature` definitions keyed by resource location.
+    pub placed_features: IndexMap<String, PlacedFeatureDef>,
     /// Block tags, including nested tags used to select replaceable terrain.
     pub block_tags: IndexMap<String, BlockTagDef>,
     /// Biome tags, including nested tags, which select where structures generate.
@@ -694,6 +845,18 @@ impl WorldgenData {
                             carver_type,
                             config,
                         },
+                    );
+                }
+                "configured_feature" => {
+                    data.configured_features.insert(
+                        resource_id.clone(),
+                        parse_configured_feature(&resource_id, &json)?,
+                    );
+                }
+                "placed_feature" => {
+                    data.placed_features.insert(
+                        resource_id.clone(),
+                        parse_placed_feature(&resource_id, &json)?,
                     );
                 }
                 "block_tag" => {
@@ -1394,6 +1557,8 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
         | "biome"
         | "multi_noise_biome_source_parameter_list"
         | "configured_carver"
+        | "configured_feature"
+        | "placed_feature"
         | "structure"
         | "structure_set"
         | "template_pool"
@@ -2011,12 +2176,213 @@ fn parse_biome(ctx: &str, json: &Value) -> Result<BiomeDef, WorldgenDataError> {
         }
     }
 
+    let mut features = Vec::new();
+    if let Some(features_val) = obj.get("features") {
+        let steps = features_val
+            .as_array()
+            .ok_or_else(|| invalid_def(ctx, "`features` must be an array of generation steps"))?;
+        for step in steps {
+            let entries = step
+                .as_array()
+                .ok_or_else(|| invalid_def(ctx, "each `features` step must be an array"))?;
+            let mut step_features = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let feature = entry
+                    .as_str()
+                    .ok_or_else(|| invalid_def(ctx, "a biome feature must be a string"))?;
+                step_features.push(resource_name(feature));
+            }
+            features.push(step_features);
+        }
+    }
+
     Ok(BiomeDef {
         has_precipitation,
         temperature,
         temperature_modifier,
         downfall,
         carvers,
+        features,
+    })
+}
+
+fn parse_configured_feature(
+    ctx: &str,
+    json: &Value,
+) -> Result<ConfiguredFeatureDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "configured feature must be an object"))?;
+    let feature_type = req_str(obj, "type", ctx)?.to_string();
+    let config_json = req_field(obj, "config", ctx)?;
+    let config = match feature_type.as_str() {
+        "minecraft:ore" | "minecraft:scattered_ore" => {
+            FeatureConfigDef::Ore(parse_ore_config(ctx, config_json)?)
+        }
+        _ => FeatureConfigDef::Other(config_json.clone()),
+    };
+    Ok(ConfiguredFeatureDef {
+        feature_type,
+        config,
+    })
+}
+
+fn parse_ore_config(ctx: &str, json: &Value) -> Result<OreFeatureDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "ore config must be an object"))?;
+    let size = req_i32(obj, "size", ctx)?;
+    let discard_chance_on_air_exposure = match obj.get("discard_chance_on_air_exposure") {
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| invalid_def(ctx, "`discard_chance_on_air_exposure` must be a number"))?
+            as f32,
+        None => 0.0,
+    };
+    let targets_json = req_field(obj, "targets", ctx)?
+        .as_array()
+        .ok_or_else(|| invalid_def(ctx, "`targets` must be an array"))?;
+    let mut targets = Vec::with_capacity(targets_json.len());
+    for target in targets_json {
+        let target_obj = target
+            .as_object()
+            .ok_or_else(|| invalid_def(ctx, "ore target must be an object"))?;
+        targets.push(OreTargetDef {
+            target: parse_rule_test(ctx, req_field(target_obj, "target", ctx)?)?,
+            state: parse_block_state_def(ctx, req_field(target_obj, "state", ctx)?)?,
+        });
+    }
+    Ok(OreFeatureDef {
+        size,
+        discard_chance_on_air_exposure,
+        targets,
+    })
+}
+
+fn parse_rule_test(ctx: &str, json: &Value) -> Result<RuleTestDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "rule test must be an object"))?;
+    let predicate_type = req_str(obj, "predicate_type", ctx)?;
+    Ok(match predicate_type {
+        "minecraft:tag_match" => RuleTestDef::TagMatch(req_str(obj, "tag", ctx)?.to_string()),
+        "minecraft:block_match" => RuleTestDef::BlockMatch(req_str(obj, "block", ctx)?.to_string()),
+        "minecraft:blockstate_match" => RuleTestDef::BlockStateMatch(parse_block_state_def(
+            ctx,
+            req_field(obj, "block_state", ctx)?,
+        )?),
+        "minecraft:random_block_match" => RuleTestDef::RandomBlockMatch {
+            block: req_str(obj, "block", ctx)?.to_string(),
+            probability: req_f64(obj, "probability", ctx)? as f32,
+        },
+        "minecraft:always_true" => RuleTestDef::AlwaysTrue,
+        other => RuleTestDef::Other {
+            predicate_type: other.to_string(),
+            config: json.clone(),
+        },
+    })
+}
+
+fn parse_placed_feature(ctx: &str, json: &Value) -> Result<PlacedFeatureDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "placed feature must be an object"))?;
+    let feature_json = req_field(obj, "feature", ctx)?;
+    let feature = if let Some(id) = feature_json.as_str() {
+        FeatureRefDef::Reference(resource_name(id))
+    } else {
+        FeatureRefDef::Inline(Box::new(parse_configured_feature(ctx, feature_json)?))
+    };
+    let placement_json = req_field(obj, "placement", ctx)?
+        .as_array()
+        .ok_or_else(|| invalid_def(ctx, "`placement` must be an array"))?;
+    let mut placement = Vec::with_capacity(placement_json.len());
+    for modifier in placement_json {
+        placement.push(parse_placement_modifier(ctx, modifier)?);
+    }
+    Ok(PlacedFeatureDef { feature, placement })
+}
+
+fn parse_placement_modifier(
+    ctx: &str,
+    json: &Value,
+) -> Result<PlacementModifierDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "placement modifier must be an object"))?;
+    let modifier_type = req_str(obj, "type", ctx)?;
+    Ok(match modifier_type {
+        "minecraft:count" => {
+            PlacementModifierDef::Count(parse_int_provider(ctx, req_field(obj, "count", ctx)?)?)
+        }
+        "minecraft:in_square" => PlacementModifierDef::InSquare,
+        "minecraft:height_range" => PlacementModifierDef::HeightRange(parse_height_provider(
+            ctx,
+            req_field(obj, "height", ctx)?,
+        )?),
+        "minecraft:biome" => PlacementModifierDef::Biome,
+        other => PlacementModifierDef::Other {
+            modifier_type: other.to_string(),
+            config: json.clone(),
+        },
+    })
+}
+
+fn parse_int_provider(ctx: &str, json: &Value) -> Result<IntProviderDef, WorldgenDataError> {
+    if let Some(value) = json.as_i64() {
+        return i32::try_from(value)
+            .map(IntProviderDef::Constant)
+            .map_err(|_| invalid_def(ctx, "integer provider out of i32 range"));
+    }
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "integer provider must be an integer or an object"))?;
+    let provider_type = req_str(obj, "type", ctx)?;
+    Ok(match provider_type {
+        "minecraft:constant" => IntProviderDef::Constant(req_i32(obj, "value", ctx)?),
+        "minecraft:uniform" => {
+            let min_inclusive = req_i32(obj, "min_inclusive", ctx)?;
+            let max_inclusive = req_i32(obj, "max_inclusive", ctx)?;
+            if min_inclusive > max_inclusive {
+                return Err(invalid_def(
+                    ctx,
+                    "uniform integer provider has min_inclusive > max_inclusive",
+                ));
+            }
+            IntProviderDef::Uniform {
+                min_inclusive,
+                max_inclusive,
+            }
+        }
+        _ => IntProviderDef::Other(json.clone()),
+    })
+}
+
+fn parse_height_provider(ctx: &str, json: &Value) -> Result<HeightProviderDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "height provider must be an object"))?;
+    let provider_type = req_str(obj, "type", ctx)?;
+    Ok(match provider_type {
+        "minecraft:constant" => {
+            HeightProviderDef::Constant(parse_vertical_anchor(ctx, req_field(obj, "value", ctx)?)?)
+        }
+        "minecraft:uniform" => HeightProviderDef::Uniform {
+            min_inclusive: parse_vertical_anchor(ctx, req_field(obj, "min_inclusive", ctx)?)?,
+            max_inclusive: parse_vertical_anchor(ctx, req_field(obj, "max_inclusive", ctx)?)?,
+        },
+        "minecraft:trapezoid" => HeightProviderDef::Trapezoid {
+            min_inclusive: parse_vertical_anchor(ctx, req_field(obj, "min_inclusive", ctx)?)?,
+            max_inclusive: parse_vertical_anchor(ctx, req_field(obj, "max_inclusive", ctx)?)?,
+            plateau: match obj.get("plateau") {
+                Some(value) => value
+                    .as_i64()
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or_else(|| invalid_def(ctx, "`plateau` must be a 32-bit integer"))?,
+                None => 0,
+            },
+        },
+        _ => HeightProviderDef::Other(json.clone()),
     })
 }
 

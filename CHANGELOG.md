@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Feature data: the datapack loader reads `configured_feature` and `placed_feature` definitions and each
+  biome's `features` lists, with `minecraft:ore` configurations, rule tests, target states and the `count`,
+  `in_square`, `height_range` and `biome` placement modifiers. Other types keep their JSON for later feature
+  families, and the 26.1 pack's feature references are checked as part of `datapack_parity`
+  (`harpas-worldgen`).
+
 - Light engine: sky and block light for generated chunks, with per-state emission and dampening from the block
   registry, propagation across a one-chunk border, and vanilla's own saved chunks compared layer by layer
   (`light_parity`). Generated chunks are lit when sent and keep no light in their carver records, so vanilla can

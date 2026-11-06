@@ -29,9 +29,11 @@ pub use biome::{
 };
 pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
-    ConfiguredCarverDef, DimensionDef, ExclusionZoneDef, FrequencyReductionMethod, JigsawDef,
+    ConfiguredCarverDef, ConfiguredFeatureDef, DimensionDef, ExclusionZoneDef, FeatureConfigDef,
+    FeatureRefDef, FrequencyReductionMethod, HeightProviderDef, IntProviderDef, JigsawDef,
     MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, OceanRuinDef,
-    PoolAliasDef, PoolElementDef, Projection, RuinedPortalPlacement, RuinedPortalSetupDef,
+    OreFeatureDef, OreTargetDef, PlacedFeatureDef, PlacementModifierDef, PoolAliasDef,
+    PoolElementDef, Projection, RuinedPortalPlacement, RuinedPortalSetupDef, RuleTestDef,
     StartHeightDef, StructureDef, StructurePlacementCommon, StructurePlacementDef,
     StructurePlacementKind, StructureSetDef, StructureSetEntryDef, TemperatureModifier,
     TemplatePoolDef, WorldPresetDef, WorldgenData, WorldgenDataError,
@@ -255,6 +257,143 @@ mod tests {
         ])
         .unwrap();
         assert!(cycle.block_tag_states("example:a").is_err());
+    }
+
+    #[test]
+    fn loads_feature_data_and_biome_feature_lists() {
+        let data = WorldgenData::from_json_entries([
+            (
+                "data/example/worldgen/configured_feature/ore_test.json",
+                r#"{"type":"minecraft:ore","config":{
+                    "size":4,
+                    "discard_chance_on_air_exposure":0.5,
+                    "targets":[
+                        {"target":{"predicate_type":"minecraft:tag_match","tag":"example:stone_ore_replaceables"},"state":{"Name":"minecraft:gold_ore"}},
+                        {"target":{"predicate_type":"minecraft:block_match","block":"minecraft:deepslate"},"state":{"Name":"minecraft:deepslate_gold_ore"}},
+                        {"target":{"predicate_type":"minecraft:blockstate_match","block_state":{"Name":"minecraft:stone","Properties":{"snowy":"false"}}},"state":{"Name":"minecraft:coal_ore"}},
+                        {"target":{"predicate_type":"minecraft:random_block_match","block":"minecraft:tuff","probability":0.25},"state":{"Name":"minecraft:copper_ore"}},
+                        {"target":{"predicate_type":"minecraft:always_true"},"state":{"Name":"minecraft:iron_ore"}}
+                    ]
+                }}"#,
+            ),
+            (
+                "data/example/worldgen/configured_feature/tree_test.json",
+                r#"{"type":"minecraft:tree","config":{"foo":"bar"}}"#,
+            ),
+            (
+                "data/example/worldgen/placed_feature/ore_test.json",
+                r#"{"feature":"example:ore_test","placement":[
+                    {"type":"minecraft:count","count":9},
+                    {"type":"minecraft:in_square"},
+                    {"type":"minecraft:height_range","height":{"type":"minecraft:trapezoid","min_inclusive":{"absolute":-64},"max_inclusive":{"absolute":0},"plateau":4}},
+                    {"type":"minecraft:biome"},
+                    {"type":"minecraft:unknown_modifier","value":1}
+                ]}"#,
+            ),
+            (
+                "data/example/worldgen/placed_feature/inline_test.json",
+                r#"{"feature":{"type":"minecraft:ore","config":{"size":1,"targets":[{"target":{"predicate_type":"minecraft:always_true"},"state":{"Name":"minecraft:coal_ore"}}]}},"placement":[]}"#,
+            ),
+            (
+                "data/example/worldgen/biome/test.json",
+                r#"{"has_precipitation":true,"temperature":0.8,"downfall":0.4,"features":[["minecraft:ore_iron"],[],["example:foo"]]}"#,
+            ),
+            (
+                "data/example/worldgen/biome/empty.json",
+                r#"{"has_precipitation":false,"temperature":0.0,"downfall":0.0}"#,
+            ),
+        ])
+        .unwrap();
+
+        let ore = &data.configured_features["example:ore_test"];
+        assert_eq!(ore.feature_type, "minecraft:ore");
+        let FeatureConfigDef::Ore(config) = &ore.config else {
+            panic!("expected a parsed ore config");
+        };
+        assert_eq!(config.size, 4);
+        assert_eq!(config.discard_chance_on_air_exposure, 0.5);
+        assert_eq!(config.targets.len(), 5);
+        assert_eq!(
+            config.targets[0].target,
+            RuleTestDef::TagMatch("example:stone_ore_replaceables".to_string())
+        );
+        assert_eq!(config.targets[0].state.name, "minecraft:gold_ore");
+        assert_eq!(
+            config.targets[1].target,
+            RuleTestDef::BlockMatch("minecraft:deepslate".to_string())
+        );
+        assert_eq!(
+            config.targets[2].target,
+            RuleTestDef::BlockStateMatch(BlockStateDef {
+                name: "minecraft:stone".to_string(),
+                properties: [("snowy".to_string(), "false".to_string())]
+                    .into_iter()
+                    .collect(),
+            })
+        );
+        assert_eq!(
+            config.targets[3].target,
+            RuleTestDef::RandomBlockMatch {
+                block: "minecraft:tuff".to_string(),
+                probability: 0.25,
+            }
+        );
+        assert_eq!(config.targets[4].target, RuleTestDef::AlwaysTrue);
+
+        let FeatureConfigDef::Other(tree) = &data.configured_features["example:tree_test"].config
+        else {
+            panic!("an unsupported feature type keeps its raw config");
+        };
+        assert_eq!(tree["foo"], "bar");
+
+        let placed = &data.placed_features["example:ore_test"];
+        assert_eq!(
+            placed.feature,
+            FeatureRefDef::Reference("example:ore_test".to_string())
+        );
+        assert_eq!(
+            placed.placement[0],
+            PlacementModifierDef::Count(IntProviderDef::Constant(9))
+        );
+        assert_eq!(placed.placement[1], PlacementModifierDef::InSquare);
+        assert_eq!(
+            placed.placement[2],
+            PlacementModifierDef::HeightRange(HeightProviderDef::Trapezoid {
+                min_inclusive: VerticalAnchor::Absolute(-64),
+                max_inclusive: VerticalAnchor::Absolute(0),
+                plateau: 4,
+            })
+        );
+        assert_eq!(placed.placement[3], PlacementModifierDef::Biome);
+        assert!(matches!(
+            &placed.placement[4],
+            PlacementModifierDef::Other { modifier_type, .. }
+                if modifier_type == "minecraft:unknown_modifier"
+        ));
+        assert!(matches!(
+            &data.placed_features["example:inline_test"].feature,
+            FeatureRefDef::Inline(feature)
+                if feature.feature_type == "minecraft:ore"
+        ));
+
+        assert_eq!(
+            data.biomes["example:test"].features,
+            vec![
+                vec!["minecraft:ore_iron".to_string()],
+                Vec::new(),
+                vec!["example:foo".to_string()],
+            ]
+        );
+        assert!(data.biomes["example:empty"].features.is_empty());
+
+        let malformed = WorldgenData::from_json_entries([(
+            "data/example/worldgen/placed_feature/bad.json",
+            r#"{"feature":"example:ore_test","placement":[{"type":"minecraft:height_range","height":{"type":"minecraft:constant","value":{"absolute":"nope"}}}]}"#,
+        )]);
+        assert!(matches!(
+            malformed,
+            Err(WorldgenDataError::InvalidDefinition { .. })
+        ));
     }
 
     #[test]

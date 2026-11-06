@@ -249,13 +249,14 @@ and the owner **accepts it once**:
     states, and the placement modifiers those features use (`count`, `in_square`, `height_range` and `biome`) are
     parsed too. Other feature and modifier types keep their JSON for later families, so the complete 26.1 pack
     loads.
-  - Ore placement follows vanilla's `applyBiomeDecoration` for one source chunk: walk the generation steps in
-    order, seed the chunk's features with `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and
-    `set_feature_seed(decoration, index, step)`, apply `count`, `in_square`, `height_range` and `biome`, and
-    place `minecraft:ore` with vanilla's vein geometry, rule tests and discard chance; scattered ore (ancient
-    debris) is parsed but waits for the Nether. Height providers `constant`, `uniform` and `trapezoid` are ported.
-    The source window is one chunk for now, so features that write across chunks, worker integration and the
-    remaining families are next.
+  - Ore placement follows vanilla's `applyBiomeDecoration` for the target's 3x3 source window: for each source
+    chunk, walk the generation steps in order, seed its features with
+    `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and `set_feature_seed(decoration, index, step)`,
+    apply `count`, `in_square`, `height_range` and `biome`, and place `minecraft:ore` with vanilla's vein
+    geometry, rule tests and discard chance; scattered ore (ancient debris) is parsed but waits for the Nether.
+    Height providers `constant`, `uniform` and `trapezoid` are ported. A `RegionFeatureWorld` routes reads and
+    writes across the nine chunks, so the families that write across a chunk boundary can use the same stage;
+    the complete 17x17 loop, worker integration and those families follow.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
     source, including the random state after the call.
   - The generation settings and seed live in `data/minecraft/world_gen_settings.dat`, separately from

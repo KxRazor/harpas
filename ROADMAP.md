@@ -123,9 +123,9 @@ vanilla for the same seed.
   - [x] Ore feature placement: vanilla's vein geometry, rule tests, discard chance, height providers and random
         consumption, compared with vanilla's own `OreFeature` on the same decoration random source
         (`ore_feature_parity`). Ancient debris uses `scattered_ore` and follows with the Nether.
-  - [ ] The FEATURES stage on chunk workers: the generation steps, decoration seeds, placement modifiers and
-        biome filter are implemented for one source chunk; the source-chunk window, worker integration and the
-        complete stage remain.
+  - [ ] The FEATURES stage on chunk workers: the generation steps, decoration seeds, placement modifiers, biome
+        filter and 3x3 source window are implemented; the complete 17x17 loop, worker integration and the
+        remaining families remain.
   - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

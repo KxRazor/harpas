@@ -4,10 +4,10 @@
 //! from the source chunk's decoration seed, its index in the step list and the generation step; the placement
 //! modifiers then choose positions and the configured feature writes blocks through FeatureWorld.
 //!
-//! This first slice places ores. A chunk only receives ore blocks from its own source chunk, so the source
-//! window is one chunk; features that write across chunks will extend it.
+//! The source window is the 3x3 chunks a feature can write into around its source chunk. The complete
+//! 17x17 vanilla loop and the remaining feature families follow.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use harpas_core::block::block_states;
 use harpas_core::math::sin_f32;
@@ -97,6 +97,110 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
             .map_or(self.chunk.min_y(), |(lx, _, lz)| {
                 self.chunk.heightmaps().get(kind, lx, lz)
             })
+    }
+
+    fn source_biome(&self, _chunk_x: i32, _chunk_z: i32) -> u32 {
+        self.biome
+    }
+}
+
+/// A 3x3 chunk region for a FEATURES pass: every source chunk's features write into it.
+///
+/// Reads and writes outside the region are rejected. The biome is constant in this test-friendly region;
+/// the engine supplies the zoomed biome through its own FeatureWorld implementation.
+pub struct RegionFeatureWorld {
+    chunks: HashMap<(i32, i32), GeneratedChunk>,
+    biome: u32,
+    min_y: i32,
+    height: i32,
+}
+
+impl RegionFeatureWorld {
+    /// Builds a region from chunks that share the same vertical bounds. At least one chunk is required.
+    pub fn new(chunks: impl IntoIterator<Item = GeneratedChunk>, biome: u32) -> Option<Self> {
+        let mut chunks = chunks.into_iter();
+        let first = chunks.next()?;
+        let (min_y, height) = (first.min_y(), first.height());
+        let mut map = HashMap::new();
+        map.insert((first.chunk_x(), first.chunk_z()), first);
+        for chunk in chunks {
+            if chunk.min_y() != min_y || chunk.height() != height {
+                return None;
+            }
+            map.insert((chunk.chunk_x(), chunk.chunk_z()), chunk);
+        }
+        Some(Self {
+            chunks: map,
+            biome,
+            min_y,
+            height,
+        })
+    }
+
+    /// A chunk in the region.
+    pub fn chunk(&self, chunk_x: i32, chunk_z: i32) -> Option<&GeneratedChunk> {
+        self.chunks.get(&(chunk_x, chunk_z))
+    }
+
+    /// Removes and returns a chunk from the region.
+    pub fn into_chunk(mut self, chunk_x: i32, chunk_z: i32) -> Option<GeneratedChunk> {
+        self.chunks.remove(&(chunk_x, chunk_z))
+    }
+
+    fn local(&self, x: i32, y: i32, z: i32) -> Option<((i32, i32), usize, i32, usize)> {
+        if !(self.min_y..self.min_y + self.height).contains(&y) {
+            return None;
+        }
+        let key = (x.div_euclid(16), z.div_euclid(16));
+        self.chunks.contains_key(&key).then_some((
+            key,
+            x.rem_euclid(16) as usize,
+            y,
+            z.rem_euclid(16) as usize,
+        ))
+    }
+}
+
+impl FeatureWorld for RegionFeatureWorld {
+    fn min_y(&self) -> i32 {
+        self.min_y
+    }
+
+    fn height(&self) -> i32 {
+        self.height
+    }
+
+    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
+        let Some((key, lx, y, lz)) = self.local(x, y, z) else {
+            return air_state();
+        };
+        self.chunks
+            .get(&key)
+            .map_or_else(air_state, |chunk| chunk.block_state(lx, y, lz))
+    }
+
+    fn set_block_state(&mut self, x: i32, y: i32, z: i32, state: u32) -> bool {
+        let Some((key, lx, y, lz)) = self.local(x, y, z) else {
+            return false;
+        };
+        let Some(chunk) = self.chunks.get_mut(&key) else {
+            return false;
+        };
+        chunk.set_block_state(lx, y, lz, state);
+        true
+    }
+
+    fn biome(&self, _x: i32, _y: i32, _z: i32) -> u32 {
+        self.biome
+    }
+
+    fn heightmap(&self, kind: HeightmapType, x: i32, z: i32) -> i32 {
+        let key = (x.div_euclid(16), z.div_euclid(16));
+        self.chunks.get(&key).map_or(self.min_y, |chunk| {
+            chunk
+                .heightmaps()
+                .get(kind, x.rem_euclid(16) as usize, z.rem_euclid(16) as usize)
+        })
     }
 
     fn source_biome(&self, _chunk_x: i32, _chunk_z: i32) -> u32 {
@@ -525,9 +629,11 @@ fn do_place<R: RandomSource>(
     placed > 0
 }
 
-/// Applies the FEATURES stage to the source chunk at (chunk_x, chunk_z).
+/// Applies the FEATURES stage to the target chunk from its 3x3 source window.
 ///
-/// The source window is one chunk for now: the ported ores only write inside their source chunk.
+/// A source chunk's features can write up to one chunk away, so the target receives writes from itself
+/// and its eight neighbours. The full 17x17 vanilla loop and the indirect effects of farther source
+/// chunks follow with the complete stage.
 pub fn apply_biome_decoration(
     world: &mut impl FeatureWorld,
     index: &FeatureIndex,
@@ -536,20 +642,26 @@ pub fn apply_biome_decoration(
     chunk_z: i32,
 ) -> Result<(), WorldgenDataError> {
     let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
-    let decoration = random.set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16);
-    let biome = world.source_biome(chunk_x, chunk_z);
-    let steps = index
-        .biome_features
-        .get(biome as usize)
-        .ok_or_else(|| invalid("features", format!("unknown biome ID {biome}")))?;
-    let origin = [chunk_x * 16, world.min_y(), chunk_z * 16];
-    for (step, features) in steps.iter().enumerate() {
-        for (position, &placed) in features.iter().enumerate() {
-            let Some(ore) = index.ores.get(placed).and_then(Option::as_ref) else {
-                continue;
-            };
-            random.set_feature_seed(decoration, position as i32, step as i32);
-            place_placed_feature(world, index, placed, ore, &mut random, origin);
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let source_x = chunk_x + dx;
+            let source_z = chunk_z + dz;
+            let biome = world.source_biome(source_x, source_z);
+            let steps = index
+                .biome_features
+                .get(biome as usize)
+                .ok_or_else(|| invalid("features", format!("unknown biome ID {biome}")))?;
+            let decoration = random.set_decoration_seed(world_seed, source_x * 16, source_z * 16);
+            let origin = [source_x * 16, world.min_y(), source_z * 16];
+            for (step, features) in steps.iter().enumerate() {
+                for (position, &placed) in features.iter().enumerate() {
+                    let Some(ore) = index.ores.get(placed).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    random.set_feature_seed(decoration, position as i32, step as i32);
+                    place_placed_feature(world, index, placed, ore, &mut random, origin);
+                }
+            }
         }
     }
     Ok(())
@@ -616,8 +728,8 @@ mod tests {
     use crate::surface::VerticalAnchor;
     use harpas_core::random::LegacyRandom;
 
-    fn flat_stone_chunk() -> GeneratedChunk {
-        let mut chunk = GeneratedChunk::new(0, 0, -64, 384, 1);
+    fn flat_stone_chunk_at(chunk_x: i32, chunk_z: i32) -> GeneratedChunk {
+        let mut chunk = GeneratedChunk::new(chunk_x, chunk_z, -64, 384, 1);
         let stone = block_states().default_state("minecraft:stone").unwrap();
         for y in -64..64 {
             for z in 0..16 {
@@ -627,6 +739,54 @@ mod tests {
             }
         }
         chunk
+    }
+
+    fn flat_stone_chunk() -> GeneratedChunk {
+        flat_stone_chunk_at(0, 0)
+    }
+
+    fn synthetic_ore_data() -> WorldgenData {
+        let ore = ConfiguredFeatureDef {
+            feature_type: "minecraft:ore".to_string(),
+            config: FeatureConfigDef::Ore(OreFeatureDef {
+                size: 9,
+                discard_chance_on_air_exposure: 0.0,
+                targets: vec![OreTargetDef {
+                    target: RuleTestDef::BlockMatch("minecraft:stone".to_string()),
+                    state: BlockStateDef::simple("minecraft:iron_ore"),
+                }],
+            }),
+        };
+        let placed = PlacedFeatureDef {
+            feature: FeatureRefDef::Reference("example:ore".to_string()),
+            placement: vec![
+                PlacementModifierDef::Count(IntProviderDef::Constant(1)),
+                PlacementModifierDef::InSquare,
+                PlacementModifierDef::HeightRange(HeightProviderDef::Constant(
+                    VerticalAnchor::Absolute(32),
+                )),
+                PlacementModifierDef::Biome,
+            ],
+        };
+        let mut features = vec![Vec::new(); STEP_COUNT];
+        features[6] = vec!["example:ore_placed".to_string()];
+        let mut data = WorldgenData::default();
+        data.configured_features
+            .insert("example:ore".to_string(), ore);
+        data.placed_features
+            .insert("example:ore_placed".to_string(), placed);
+        data.biomes.insert(
+            "example:test".to_string(),
+            BiomeDef {
+                has_precipitation: true,
+                temperature: 0.8,
+                temperature_modifier: TemperatureModifier::None,
+                downfall: 0.4,
+                carvers: Vec::new(),
+                features,
+            },
+        );
+        data
     }
 
     #[test]
@@ -781,6 +941,50 @@ mod tests {
             }
         }
         assert!(count > 0, "the ore feature placed nothing");
+    }
+
+    #[test]
+    fn region_world_routes_reads_writes_and_heightmaps() {
+        let chunks = vec![flat_stone_chunk_at(0, 0), flat_stone_chunk_at(1, 0)];
+        let mut world = RegionFeatureWorld::new(chunks, 0).expect("region");
+        let iron = block_states().default_state("minecraft:iron_ore").unwrap();
+        assert!(world.set_block_state(20, 30, 5, iron));
+        assert_eq!(world.block_state(20, 30, 5), iron);
+        assert!(!world.set_block_state(40, 30, 5, iron));
+        assert_eq!(world.heightmap(HeightmapType::OceanFloorWg, 20, 5), 64);
+        assert!(world.chunk(0, 0).is_some());
+        assert!(world.into_chunk(1, 0).is_some());
+    }
+
+    #[test]
+    fn scheduler_runs_the_three_by_three_source_window() {
+        let data = synthetic_ore_data();
+        let index = FeatureIndex::new(&data).expect("compile feature index");
+        let mut chunks = Vec::new();
+        for x in -1..=1 {
+            for z in -1..=1 {
+                chunks.push(flat_stone_chunk_at(x, z));
+            }
+        }
+        let mut world = RegionFeatureWorld::new(chunks, 0).expect("region");
+        apply_biome_decoration(&mut world, &index, 42, 0, 0).expect("apply features");
+        let iron = block_states().default_state("minecraft:iron_ore").unwrap();
+        for x in -1..=1 {
+            for z in -1..=1 {
+                let chunk = world.chunk(x, z).expect("source chunk");
+                let mut count = 0;
+                for lx in 0..16 {
+                    for lz in 0..16 {
+                        for y in 28..=34 {
+                            if chunk.block_state(lx, y, lz) == iron {
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                assert!(count > 0, "source chunk ({x},{z}) placed no ore");
+            }
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub mod biome;
 pub mod carver;
 pub mod data;
 pub mod density;
+pub mod feature;
 pub mod generator;
 pub mod light;
 pub mod noise_chunk;
@@ -41,6 +42,10 @@ pub use data::{
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
     DensityOp, MarkerKind, NodeId, NoiseRouterDef, PositionalRandom, RarityValueMapper, UnaryOp,
+};
+pub use feature::{
+    ChunkFeatureWorld, CompiledOre, FeatureIndex, FeatureWorld, OreTarget, RuleTestRule,
+    STEP_COUNT, apply_biome_decoration, place_ore, sample_height_provider, sample_int_provider,
 };
 pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
 pub use light::{ChunkLight, LIGHT_BYTES, LightSection, LightWorld, light_chunk};

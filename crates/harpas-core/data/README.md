@@ -2,9 +2,11 @@
 
 `blocks-26.1.txt` lists the blocks of Java 26.1 and their states, in the order of the block state registry.
 Each block is a line: its name without the `minecraft:` namespace, `default=<n>` when its default state is not
-its first, then each property as `name=value,value,…`. A block's states take consecutive IDs from the first
-free one: the properties are in vanilla's order, sorted by name, and the last one changes fastest. Boolean
-properties list `true` before `false`, as vanilla orders them.
+its first, then each property as `name=value,value,…`, then `emit=<n>` and `filter=<n>` for the block's default
+light emission and dampening. A block's states take consecutive IDs from the first free one: the properties are
+in vanilla's order, sorted by name, and the last one changes fastest. Boolean properties list `true` before
+`false`, as vanilla orders them. State-dependent light values are applied by `BlockStates` on top of these
+defaults.
 
 It is built from `data/pc/26.1/blocks.json` of
 [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data) (MIT), commit
@@ -19,5 +21,7 @@ for b in json.load(open("blocks.json")):
         line.append("default=%d" % (b["defaultState"] - b["minStateId"]))
     for s in b["states"]:
         line.append(s["name"] + "=" + ",".join(s.get("values") or ["true", "false"]))
+    line.append("emit=%d" % b["emitLight"])
+    line.append("filter=%d" % b["filterLight"])
     print(" ".join(line))' > blocks-26.1.txt
 ```

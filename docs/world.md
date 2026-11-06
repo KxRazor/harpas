@@ -8,8 +8,10 @@ Status: in progress. The [Mojang EULA](#mojang-eula) acceptance and [vanilla gam
 provisioning are implemented; both happen on every start, since every start needs the vanilla game data.
 Region files, chunk sections, `level.dat` and player data are read and written. Existing overworld chunks are
 loaded and sent within each player's view, with block states, biomes, heightmaps, saved light and block entity
-data checked against vanilla. Changed chunks can be saved asynchronously; generation, live block changes and
-saving other world and player data during play remain in progress.
+data checked against vanilla. Generated chunks receive sky and block light from the light engine when they are
+sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
+generation through features, live block changes and saving other world and player data during play remain in
+progress.
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -516,8 +518,20 @@ and the owner **accepts it once**:
   and reproduce the same blocks after an Anvil reload and in reversed request order. Full feature-stage
   resumption, the jigsaw structures' blocks and lighting remain separate roadmap tasks; generated chunks do
   not yet include them.
-- **Lighting:** a port of vanilla's light engine, run on the worker pool, with results applied at defined
-  points ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
+- **Lighting:** a port of vanilla's light engine, with results applied at defined points
+  ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
+  - `harpas_worldgen::light` computes sky and block light for a chunk from its blocks and one chunk around it,
+    using the block registry's per-state emission and dampening. Direct sky light falls without fading;
+    dimmer light loses a level per block, and water, leaves and partial blocks dampen it. A generated chunk is
+    lit when it is sent, using its eight loaded neighbours, so a generating world keeps one extra chunk loaded
+    around each player's view. The carver chunk on disk keeps no light, leaving vanilla free to run features
+    and its own light later.
+  - `light_parity` starts the reference server, generates a 7×7 area and compares every saved sky and block
+    light layer of three chunks with Harpas's engine on the same blocks. Vanilla omits a sky layer when it is
+    all fifteen and a block layer when it is all zero; the harness accepts a missing layer only when Harpas's
+    layer is uniform.
+  - Moving the computation to the worker pool, light updates for live block changes (M4), and saving light at
+    the `light` stage once features are ported remain to be done.
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline
   ([qol.md](qol.md#world-pregeneration)).
 

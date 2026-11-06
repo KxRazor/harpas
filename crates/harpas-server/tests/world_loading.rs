@@ -433,6 +433,10 @@ fn a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available() {
                     codec::read_i16(&mut data).unwrap() > 0,
                     "the lowest section should contain terrain"
                 );
+                assert!(
+                    !chunk.light.sky_light_mask.is_empty() && !chunk.light.sky_light.is_empty(),
+                    "a generated chunk should carry computed sky light"
+                );
                 break;
             }
             play::clientbound::Packet::ChunkBatchFinished(_) => {

@@ -9,6 +9,7 @@ pub mod carver;
 pub mod data;
 pub mod density;
 pub mod generator;
+pub mod light;
 pub mod noise_chunk;
 pub mod ore_vein;
 pub mod seed;
@@ -40,6 +41,7 @@ pub use density::{
     DensityOp, MarkerKind, NodeId, NoiseRouterDef, PositionalRandom, RarityValueMapper, UnaryOp,
 };
 pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
+pub use light::{ChunkLight, LIGHT_BYTES, LightSection, LightWorld, light_chunk};
 pub use noise_chunk::NoiseChunk;
 pub use ore_vein::{OreVeinifier, VeinType};
 pub use seed::parse_level_seed;

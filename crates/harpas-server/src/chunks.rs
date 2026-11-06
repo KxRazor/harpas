@@ -7,6 +7,7 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::player::VisibleChunk;
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::play::{self, clientbound};
+use harpas_worldgen::{ChunkLight, LightWorld, light_chunk};
 use std::sync::OnceLock;
 
 const MIN_SECTION: i8 = -4;
@@ -35,7 +36,14 @@ pub(crate) fn encode(
     }
     let (heightmaps, light) = visible.chunk.as_deref().map_or_else(
         || (Vec::new(), empty_light()),
-        |chunk| (heightmaps(chunk), light(chunk)),
+        |chunk| {
+            let light = if is_generated(chunk) {
+                computed_light(&visible).unwrap_or_else(|| light(chunk))
+            } else {
+                light(chunk)
+            };
+            (heightmaps(chunk), light)
+        },
     );
     clientbound::ChunkDataAndUpdateLight {
         x: visible.position.x,
@@ -306,6 +314,92 @@ fn empty_light() -> play::LightData {
     }
 }
 
+/// Whether the chunk stopped at carvers and still needs light computed from its blocks.
+fn is_generated(chunk: &Chunk) -> bool {
+    matches!(chunk.rest.get("Status"), Some(Nbt::String(status)) if status == "minecraft:carvers")
+}
+
+struct VisibleWorld<'a> {
+    visible: &'a VisibleChunk,
+}
+
+impl LightWorld for VisibleWorld<'_> {
+    fn min_y(&self) -> i32 {
+        i32::from(MIN_SECTION) * 16
+    }
+
+    fn height(&self) -> i32 {
+        (i32::from(MAX_SECTION) - i32::from(MIN_SECTION) + 1) * 16
+    }
+
+    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
+        let chunk_x = x.div_euclid(16) - self.visible.position.x;
+        let chunk_z = z.div_euclid(16) - self.visible.position.z;
+        let section_y = y.div_euclid(16) as i8;
+        self.visible
+            .chunk_at(chunk_x, chunk_z)
+            .and_then(|chunk| chunk.sections.iter().find(|section| section.y == section_y))
+            .and_then(|section| section.section.as_ref())
+            .map(|section| {
+                section.block_state((x & 15) as usize, (y & 15) as usize, (z & 15) as usize)
+            })
+            .unwrap_or(0)
+    }
+}
+
+fn computed_light(visible: &VisibleChunk) -> Option<play::LightData> {
+    let world = VisibleWorld { visible };
+    let light = light_chunk(&world, visible.position.x, visible.position.z);
+    Some(packet_light(&light))
+}
+
+/// Packs computed light like vanilla: full sky layers are omitted, all-zero layers are marked empty, and the
+/// remaining arrays follow the mask bits in order.
+fn packet_light(light: &ChunkLight) -> play::LightData {
+    let mut result = empty_light();
+    let mut sky = 0_u64;
+    let mut block = 0_u64;
+    let mut empty_sky = 0_u64;
+    let mut empty_block = 0_u64;
+    for section in &light.sections {
+        let offset = section.y - i32::from(LIGHT_MIN_SECTION);
+        let Ok(offset) = u32::try_from(offset) else {
+            continue;
+        };
+        if offset >= 64 {
+            continue;
+        }
+        let bit = 1_u64 << offset;
+        if !section.sky.iter().all(|value| *value == 15) {
+            if section.sky.iter().all(|value| *value == 0) {
+                empty_sky |= bit;
+            } else {
+                sky |= bit;
+                result.sky_light.push(section.sky.clone());
+            }
+        }
+        if section.block.iter().all(|value| *value == 0) {
+            empty_block |= bit;
+        } else {
+            block |= bit;
+            result.block_light.push(section.block.clone());
+        }
+    }
+    if sky != 0 {
+        result.sky_light_mask.push(sky as i64);
+    }
+    if block != 0 {
+        result.block_light_mask.push(block as i64);
+    }
+    if empty_sky != 0 {
+        result.empty_sky_light_mask.push(empty_sky as i64);
+    }
+    if empty_block != 0 {
+        result.empty_block_light_mask.push(empty_block as i64);
+    }
+    result
+}
+
 fn light(chunk: &Chunk) -> play::LightData {
     let mut result = empty_light();
     let mut sky = 0_u64;
@@ -459,6 +553,7 @@ mod tests {
             VisibleChunk {
                 position: ChunkPos { x: -1, z: 2 },
                 chunk: Some(Arc::new(chunk)),
+                neighbors: std::array::from_fn(|_| None),
             },
             &crate::block_entity_registry::Registry::default(),
         );
@@ -480,6 +575,41 @@ mod tests {
     }
 
     #[test]
+    fn computed_light_omits_full_sky_and_marks_empty_layers() {
+        let mut light = ChunkLight {
+            x: 0,
+            z: 0,
+            sections: Vec::new(),
+        };
+        for y in -5..=20 {
+            let mut sky = vec![15_u8; LIGHT_BYTES];
+            let mut block = vec![0_u8; LIGHT_BYTES];
+            if y < 0 {
+                sky.fill(0);
+            } else if y == 0 {
+                sky[0] = 7;
+            } else if y == 1 {
+                block[0] = 3;
+            }
+            light
+                .sections
+                .push(harpas_worldgen::LightSection { y, sky, block });
+        }
+        let packet = packet_light(&light);
+        assert_eq!(packet.sky_light_mask, vec![1 << 5]);
+        let mut expected_sky = vec![15_u8; LIGHT_BYTES];
+        expected_sky[0] = 7;
+        assert_eq!(packet.sky_light, vec![expected_sky]);
+        assert_eq!(packet.block_light_mask, vec![1 << 6]);
+        assert_eq!(packet.block_light.len(), 1);
+        assert_eq!(packet.empty_sky_light_mask, vec![0b1_1111]);
+        assert_eq!(
+            packet.empty_block_light_mask,
+            vec![(((1_i64 << 26) - 1) & !(1 << 6))]
+        );
+    }
+
+    #[test]
     fn unsupported_block_entity_storage_is_not_leaked_to_the_client() {
         let mut entity = Compound::new();
         entity.insert("id", "minecraft:chest");
@@ -497,6 +627,7 @@ mod tests {
             VisibleChunk {
                 position: ChunkPos { x: 0, z: 0 },
                 chunk: Some(Arc::clone(&chunk)),
+                neighbors: std::array::from_fn(|_| None),
             },
             &crate::block_entity_registry::Registry::synthetic(&[("minecraft:chest", 99)]),
         );

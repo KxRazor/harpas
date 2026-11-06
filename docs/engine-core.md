@@ -94,7 +94,7 @@ Work that cannot change the result of the tick runs in parallel, off the logic t
 | Packet encoding, compression and encryption | Encodes state the tick has already produced |
 | Bedrock translation | Reads state after it is produced, like encoding |
 | Chunk loading, saving and generation | Generation is deterministic from the seed; chunks join the world at the point vanilla would load them |
-| Lighting | Results are applied at defined points, as vanilla's light engine applies queued updates *(verify against vanilla's light update timing)* |
+| Lighting | Results are applied at defined points, as vanilla's light engine applies queued updates *(saved light verified by `light_parity`; update timing still to verify)* |
 | Entity tracking (which players see which entities) | Computes what to send, not what happens |
 | Precomputation on a snapshot (for example, path searches) | Only if the result is identical to computing it on the logic thread at that point *(verify per case)* |
 

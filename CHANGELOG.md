@@ -9,9 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Feature source window: the FEATURES stage now runs the target's 3x3 source chunks, seeds each source chunk's
-  features with its own decoration seed, and routes reads and writes across the nine chunks through
-  `RegionFeatureWorld`. The complete 17x17 loop, worker integration and the families that write across chunks
+- FEATURES-stage schedule: each chunk decorates itself once, from its own decoration seed, with the features of
+  every biome stored in the 3x3 chunks around it, run in the world's global order for each step and seeded by
+  their index in that order. Every position a placed feature produces is tried, `rarity_filter` is applied, and
+  vein ores cull spheres inside other spheres, bound the visited set as vanilla does and check air on all six
+  sides. `RegionFeatureWorld` routes reads and writes across the nine chunks and can zoom their stored biomes.
+  `feature_stage_parity` compares the order of all 11 steps and the ore blocks of 18 decorated chunks with
+  vanilla's own `applyBiomeDecoration`. The structures of each step, worker integration and the other families
   follow (`harpas-worldgen`).
 
 - Vein ore features and the FEATURES-stage scheduler: vanilla's ore vein geometry, rule tests, discard chance,

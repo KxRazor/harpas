@@ -36,6 +36,7 @@ public final class WorldgenReferenceProbe {
         @Override public net.minecraft.world.level.biome.BiomeManager getBiomeManager() { return biomes; }
         @Override public net.minecraft.world.level.ChunkPos getCenter() { return center; }
         @Override public boolean isOldChunkAround(net.minecraft.world.level.ChunkPos pos, int radius) { return false; }
+        @Override public boolean ensureCanWrite(net.minecraft.core.BlockPos pos) { return true; }
         @Override public int getMinY() { return height.getMinY(); }
         @Override public int getHeight() { return height.getHeight(); }
         @Override public long getSeed() { return seed; }

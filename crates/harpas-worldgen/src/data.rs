@@ -338,6 +338,8 @@ pub enum FeatureRefDef {
 pub enum PlacementModifierDef {
     /// Runs the feature a number of times (`minecraft:count`).
     Count(IntProviderDef),
+    /// Keeps a position with a chance of one in this value (`minecraft:rarity_filter`).
+    RarityFilter(i32),
     /// Spreads each run over the chunk (`minecraft:in_square`).
     InSquare,
     /// Chooses a height from a provider (`minecraft:height_range`).
@@ -2314,6 +2316,14 @@ fn parse_placement_modifier(
     Ok(match modifier_type {
         "minecraft:count" => {
             PlacementModifierDef::Count(parse_int_provider(ctx, req_field(obj, "count", ctx)?)?)
+        }
+        "minecraft:rarity_filter" => {
+            let chance = req_field(obj, "chance", ctx)?
+                .as_i64()
+                .and_then(|chance| i32::try_from(chance).ok())
+                .filter(|&chance| chance > 0)
+                .ok_or_else(|| invalid_def(ctx, "rarity chance must be a positive integer"))?;
+            PlacementModifierDef::RarityFilter(chance)
         }
         "minecraft:in_square" => PlacementModifierDef::InSquare,
         "minecraft:height_range" => PlacementModifierDef::HeightRange(parse_height_provider(

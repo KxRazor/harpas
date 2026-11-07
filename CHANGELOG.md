@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- FEATURES stage on the chunk workers, behind `generation.features = true` in `harpas.toml`: workers share the
+  proto-chunks of the area being generated, decorate each chunk once its eight neighbors have completed
+  carvers, and hand a chunk to the logic thread only once its eight neighbors have decorated, so no decoration
+  writes into a chunk players have. Proto-chunks are saved at `carvers` or `features` when memory runs short
+  and on shutdown, and saved proto-chunks, from Harpas or vanilla, are resumed. `feature_worker_parity`
+  compares final chunks with vanilla decorating their 3x3 chunks in the same order and reloads them unchanged.
+  Off by default while only ores are placed, because a chunk saved after FEATURES never runs it again
+  (`harpas-worldgen`, `harpas-engine`, `harpas-server`).
+
 - FEATURES-stage schedule: each chunk decorates itself once, from its own decoration seed, with the features of
   every biome stored in the 3x3 chunks around it, run in the world's global order for each step and seeded by
   their index in that order. Every position a placed feature produces is tried, `rarity_filter` is applied, and
@@ -192,6 +201,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   remains pending (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
+
+- A generated chunk that arrives after nobody wants it any more is saved instead of discarded
+  (`harpas-engine`).
 
 ### Fixed
 

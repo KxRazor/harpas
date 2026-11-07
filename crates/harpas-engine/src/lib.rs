@@ -178,6 +178,19 @@ pub fn start_with_world_generator(
     )?))
 }
 
+/// Starts the logic thread with a source for chunks missing from an existing or newly initialized world, or
+/// saved part way through generation. The source executes on chunk workers and the chunks it returns are
+/// persisted on unload or shutdown.
+pub fn start_with_world_source(
+    world_dir: &std::path::Path,
+    biomes: &[&str],
+    source: Arc<dyn world::ChunkSource>,
+) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
+    start_game(Some(world::World::open_with_source(
+        world_dir, biomes, source,
+    )?))
+}
+
 fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
     let (sender, receiver) = mpsc::channel();
     let online_players = Arc::new(AtomicU32::new(0));

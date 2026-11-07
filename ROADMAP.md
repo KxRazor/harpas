@@ -123,10 +123,14 @@ vanilla for the same seed.
   - [x] Ore feature placement: vanilla's vein geometry, rule tests, discard chance, height providers and random
         consumption, compared with vanilla's own `OreFeature` on the same decoration random source
         (`ore_feature_parity`). Ancient debris uses `scattered_ore` and follows with the Nether.
-  - [ ] The FEATURES stage on chunk workers. The schedule of one chunk (global feature order per step,
+  - [x] The FEATURES stage on chunk workers. The schedule of one chunk (global feature order per step,
         decoration and feature seeds, the biomes of the 3x3 chunks around it, placement modifiers including
         `rarity_filter`) is compared with vanilla's `applyBiomeDecoration` for ores (`feature_stage_parity`).
-        The structures of each step, worker integration and the remaining families remain.
+        Workers share proto-chunks, decorate each chunk once its neighbors reach `carvers` and hand out a
+        chunk once its neighbors have decorated, saving proto-chunks at `carvers` or `features` and resuming
+        them; final chunks match vanilla and reload unchanged (`feature_worker_parity`). Behind
+        `generation.features` in `harpas.toml` until the remaining families land; the structures of each step
+        are tracked under "Structures through the complete FEATURES schedule".
   - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

@@ -172,6 +172,11 @@ impl RegionFeatureWorld {
         self.chunks.remove(&(chunk_x, chunk_z))
     }
 
+    /// Returns every chunk of the region, in no particular order.
+    pub fn into_chunks(self) -> impl Iterator<Item = GeneratedChunk> {
+        self.chunks.into_values()
+    }
+
     /// The biome stored at quart coordinates, with Y clamped to the world as chunks do.
     fn stored_biome(&self, quart_x: i32, quart_y: i32, quart_z: i32) -> u32 {
         let Some(chunk) = self.chunks.get(&(quart_x >> 2, quart_z >> 2)) else {

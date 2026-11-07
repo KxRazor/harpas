@@ -12,7 +12,7 @@ use harpas_anvil::{
     Chunk, Region, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk,
     read_level, recover, region_of,
 };
-use harpas_core::nbt::Nbt;
+use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -89,7 +89,149 @@ pub enum ChunkState {
 pub type ChunkGenerator = dyn Fn(ChunkPos, &ChunkReader<'_>) -> io::Result<Chunk> + Send + Sync;
 
 /// Reads a saved neighbor under the same region locks as the chunk workers and saver.
-pub type ChunkReader<'a> = dyn Fn(ChunkPos) -> io::Result<Option<harpas_core::nbt::Compound>> + 'a;
+pub type ChunkReader<'a> = dyn Fn(ChunkPos) -> io::Result<Option<Compound>> + 'a;
+
+/// A chunk produced by a [`ChunkSource`].
+pub struct Generated {
+    /// The chunk, ready for the logic thread.
+    pub chunk: Chunk,
+    /// Whether it differs from the saved copy, so it must be saved again.
+    pub changed: bool,
+}
+
+/// Produces the chunks a world does not have yet, or has only part way through generation, on the chunk
+/// workers.
+pub trait ChunkSource: Send + Sync {
+    /// Whether a saved chunk with this `Status` must be passed to [`ChunkSource::generate`] instead of being
+    /// used as saved.
+    fn resumes(&self, status: &str) -> bool;
+
+    /// Returns a chunk that no later generation step will change. `saved` is the chunk's saved copy, if any.
+    fn generate(
+        &self,
+        pos: ChunkPos,
+        saved: Option<Compound>,
+        storage: &ChunkStorage,
+    ) -> io::Result<Generated>;
+
+    /// Saves any chunks the source holds in memory. Called on shutdown, once no worker is running.
+    fn flush(&self, storage: &ChunkStorage) -> io::Result<()>;
+}
+
+/// A [`ChunkGenerator`] whose chunks are complete as generated.
+struct GeneratorSource(Arc<ChunkGenerator>);
+
+/// A source whose chunks are complete as `generator` returns them, and which resumes no saved chunk.
+pub fn generator_source(generator: Arc<ChunkGenerator>) -> Arc<dyn ChunkSource> {
+    Arc::new(GeneratorSource(generator))
+}
+
+impl ChunkSource for GeneratorSource {
+    fn resumes(&self, _status: &str) -> bool {
+        false
+    }
+
+    fn generate(
+        &self,
+        pos: ChunkPos,
+        _saved: Option<Compound>,
+        storage: &ChunkStorage,
+    ) -> io::Result<Generated> {
+        (self.0)(pos, &|source| storage.read(source)).map(|chunk| Generated {
+            chunk,
+            changed: true,
+        })
+    }
+
+    fn flush(&self, _storage: &ChunkStorage) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// One world's overworld region files, read and written under the locks shared by the chunk workers and
+/// the saver.
+pub struct ChunkStorage {
+    dir: PathBuf,
+    locks: RegionLocks,
+    biomes: Vec<String>,
+    safety: GenerationSafety,
+}
+
+impl ChunkStorage {
+    pub(crate) fn new(dir: PathBuf, biomes: Vec<String>) -> Self {
+        Self {
+            dir,
+            locks: RegionLocks::new(),
+            biomes,
+            safety: GenerationSafety::default(),
+        }
+    }
+
+    fn read_unchecked(&self, pos: ChunkPos) -> io::Result<Option<Compound>> {
+        let (x, z) = region_of(pos.x, pos.z);
+        let _guard = self
+            .locks
+            .for_region(x, z)
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        read_chunk(&self.dir, pos.x, pos.z)
+    }
+
+    /// Reads a saved chunk and checks that its version is supported.
+    pub fn read(&self, pos: ChunkPos) -> io::Result<Option<Compound>> {
+        let chunk = self.read_unchecked(pos)?;
+        if let Some(nbt) = &chunk {
+            check_chunk(nbt).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        }
+        Ok(chunk)
+    }
+
+    /// Decodes a saved chunk with the server's biome registry.
+    pub fn decode(&self, nbt: Compound) -> io::Result<Chunk> {
+        Chunk::read(nbt, &self.biome_names()).map(|(chunk, _)| chunk)
+    }
+
+    /// Writes chunks, one region file at a time.
+    pub fn write(&self, chunks: &[(ChunkPos, &Chunk)]) -> io::Result<()> {
+        let mut regions: BTreeMap<(i32, i32), Vec<(ChunkPos, &Chunk)>> = BTreeMap::new();
+        for &(pos, chunk) in chunks {
+            regions
+                .entry(region_of(pos.x, pos.z))
+                .or_default()
+                .push((pos, chunk));
+        }
+        let biomes = self.biome_names();
+        for ((x, z), chunks) in regions {
+            let _guard = self
+                .locks
+                .for_region(x, z)
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut region = Region::open(&self.dir, x, z)?;
+            for (pos, chunk) in chunks {
+                region.set_chunk(pos.x, pos.z, &chunk.to_nbt(&biomes));
+            }
+            region.save()?;
+        }
+        Ok(())
+    }
+
+    /// Refuses to generate a chunk near one that needs terrain blending, which is not supported.
+    pub fn check_generation(&self, pos: ChunkPos) -> io::Result<()> {
+        self.safety.check(&self.dir, &self.locks, pos)
+    }
+
+    fn biome_names(&self) -> Vec<&str> {
+        self.biomes.iter().map(String::as_str).collect()
+    }
+}
+
+fn status(chunk: &Compound) -> Option<&str> {
+    match chunk.get("Status") {
+        Some(Nbt::String(status)) => Some(status),
+        _ => None,
+    }
+}
 
 type Loaded = io::Result<Option<(Chunk, Vec<String>, bool)>>;
 type Load = dyn Fn(ChunkPos) -> Loaded + Send + Sync;
@@ -206,6 +348,7 @@ pub struct World {
     chunks: HashMap<ChunkPos, ChunkState>,
     in_flight: HashSet<ChunkPos>,
     changes: HashMap<ChunkPos, Changes>,
+    source: Option<(Arc<dyn ChunkSource>, Arc<ChunkStorage>)>,
     loader: Loader,
     saver: Saver,
 }
@@ -224,13 +367,27 @@ impl World {
         biomes: &[&str],
         generator: Arc<ChunkGenerator>,
     ) -> io::Result<Self> {
-        Self::open_inner(world_dir, biomes, Some(generator))
+        Self::open_inner(
+            world_dir,
+            biomes,
+            Some(Arc::new(GeneratorSource(generator))),
+        )
+    }
+
+    /// Opens an overworld whose absent chunks, and chunks saved part way through generation, come from
+    /// `source` on the bounded chunk worker pool. Chunks it returns are saved on unload or flush.
+    pub fn open_with_source(
+        world_dir: &Path,
+        biomes: &[&str],
+        source: Arc<dyn ChunkSource>,
+    ) -> io::Result<Self> {
+        Self::open_inner(world_dir, biomes, Some(source))
     }
 
     fn open_inner(
         world_dir: &Path,
         biomes: &[&str],
-        generator: Option<Arc<ChunkGenerator>>,
+        generator: Option<Arc<dyn ChunkSource>>,
     ) -> io::Result<Self> {
         let spawn = read_level(world_dir)?
             .and_then(|(data, _)| overworld_spawn(&data))
@@ -250,67 +407,42 @@ impl World {
         for path in &recovery.discarded {
             warn!("Discarded {}, left by an interrupted save", path.display());
         }
-        let source_dir = region_dir.clone();
-        let biomes: Arc<Vec<String>> =
-            Arc::new(biomes.iter().map(|name| (*name).to_owned()).collect());
-        let load_biomes = Arc::clone(&biomes);
-        let locks = Arc::new(RegionLocks::new());
-        let read_locks = Arc::clone(&locks);
-        let generation_safety = GenerationSafety::default();
+        let storage = Arc::new(ChunkStorage::new(
+            region_dir.clone(),
+            biomes.iter().map(|name| (*name).to_owned()).collect(),
+        ));
+        let load_storage = Arc::clone(&storage);
         let generates = generator.is_some();
+        let source = generator
+            .clone()
+            .map(|source| (source, Arc::clone(&storage)));
         let load = Arc::new(move |pos: ChunkPos| {
-            let (x, z) = region_of(pos.x, pos.z);
-            let nbt = {
-                let _guard = read_locks
-                    .for_region(x, z)
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner());
-                read_chunk(&source_dir, pos.x, pos.z)?
-            };
-            let Some(nbt) = nbt else {
-                return match generator.as_ref() {
-                    Some(generate) => {
-                        generation_safety.check(&source_dir, &read_locks, pos)?;
-                        let read = |source: ChunkPos| {
-                            let (rx, rz) = region_of(source.x, source.z);
-                            let _guard = read_locks
-                                .for_region(rx, rz)
-                                .read()
-                                .unwrap_or_else(|e| e.into_inner());
-                            let chunk = read_chunk(&source_dir, source.x, source.z)?;
-                            if let Some(nbt) = &chunk {
-                                check_chunk(nbt).map_err(|error| {
-                                    io::Error::new(io::ErrorKind::InvalidData, error)
-                                })?;
-                            }
-                            Ok(chunk)
-                        };
-                        generate(pos, &read).map(|chunk| Some((chunk, Vec::new(), true)))
-                    }
-                    None => Ok(None),
-                };
-            };
-            let biomes: Vec<&str> = load_biomes.iter().map(String::as_str).collect();
-            Chunk::read(nbt, &biomes).map(|(chunk, warnings)| Some((chunk, warnings, false)))
-        });
-        let target_dir = region_dir.clone();
-        let save = Arc::new(move |job: &SaveJob| {
-            let first = &job.snapshots[0];
-            let (x, z) = region_of(first.pos.x, first.pos.z);
-            let _guard = locks
-                .for_region(x, z)
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            let mut region = Region::open(&target_dir, x, z)?;
-            let biomes: Vec<&str> = biomes.iter().map(String::as_str).collect();
-            for snapshot in &job.snapshots {
-                region.set_chunk(
-                    snapshot.pos.x,
-                    snapshot.pos.z,
-                    &snapshot.chunk.to_nbt(&biomes),
-                );
+            let storage = &*load_storage;
+            let nbt = storage.read_unchecked(pos)?;
+            match (nbt, generator.as_ref()) {
+                (None, Some(source)) => {
+                    storage.check_generation(pos)?;
+                    let generated = source.generate(pos, None, storage)?;
+                    Ok(Some((generated.chunk, Vec::new(), generated.changed)))
+                }
+                (None, None) => Ok(None),
+                (Some(nbt), Some(source)) if status(&nbt).is_some_and(|s| source.resumes(s)) => {
+                    check_chunk(&nbt)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    let generated = source.generate(pos, Some(nbt), storage)?;
+                    Ok(Some((generated.chunk, Vec::new(), generated.changed)))
+                }
+                (Some(nbt), _) => Chunk::read(nbt, &storage.biome_names())
+                    .map(|(chunk, warnings)| Some((chunk, warnings, false))),
             }
-            region.save()
+        });
+        let save = Arc::new(move |job: &SaveJob| {
+            let chunks: Vec<_> = job
+                .snapshots
+                .iter()
+                .map(|snapshot| (snapshot.pos, &*snapshot.chunk))
+                .collect();
+            storage.write(&chunks)
         });
         let workers = thread::available_parallelism()
             .map_or(1, usize::from)
@@ -322,6 +454,7 @@ impl World {
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
+            source,
             loader: Loader::start(workers, load)?,
             saver: Saver::start(save)?,
         })
@@ -346,12 +479,17 @@ impl World {
         self.generates
     }
 
-    /// Whether the chunk was generated only through carvers and still needs its light computed.
+    /// Whether the chunk was generated through carvers or features, without light, and still needs its light
+    /// computed.
     pub(crate) fn needs_light(&self, pos: ChunkPos) -> bool {
         matches!(
             self.chunks.get(&pos),
             Some(ChunkState::Loaded(chunk))
-                if matches!(chunk.rest.get("Status"), Some(Nbt::String(status)) if status == "minecraft:carvers")
+                if matches!(
+                    chunk.rest.get("Status"),
+                    Some(Nbt::String(status))
+                        if status == "minecraft:carvers" || status == "minecraft:features"
+                )
         )
     }
 
@@ -394,8 +532,26 @@ impl World {
         self.queue_saves()
     }
 
-    /// Waits for all changed chunks to reach disk. Intended for shutdown, not the tick loop.
+    /// Waits for the chunk workers' current requests and for all changed chunks to reach disk, then saves the
+    /// chunks the generator holds in memory. Intended for shutdown, not the tick loop.
     pub fn flush(&mut self) -> io::Result<()> {
+        let loading: HashSet<_> = self.in_flight.clone();
+        while !self.in_flight.is_empty() {
+            let completion = self
+                .loader
+                .completed
+                .recv()
+                .map_err(|_| io::Error::other("chunk workers stopped"))?;
+            self.finish_load(completion, &loading)?;
+        }
+        self.save_changes()?;
+        if let Some((source, storage)) = &self.source {
+            source.flush(storage)?;
+        }
+        Ok(())
+    }
+
+    fn save_changes(&mut self) -> io::Result<()> {
         while !self.changes.is_empty() {
             for changes in self.changes.values_mut() {
                 changes.requested = true;
@@ -479,6 +635,58 @@ impl World {
         })
     }
 
+    /// Applies one finished request. A generated chunk is kept until it is saved even when it is no longer
+    /// wanted: its neighbors may already depend on it, so generating it again could differ.
+    fn finish_load(
+        &mut self,
+        completion: Completion,
+        wanted: &HashSet<ChunkPos>,
+    ) -> io::Result<()> {
+        let pos = completion.pos;
+        self.in_flight.remove(&pos);
+        let prefix = format!(
+            "chunk {}, {} in {}",
+            pos.x,
+            pos.z,
+            self.region_dir.display()
+        );
+        let mut generated = false;
+        let state = match completion.result {
+            Ok(Some((chunk, warnings, is_generated))) => {
+                generated = is_generated;
+                for warning in warnings {
+                    warn!("{prefix}: {warning}");
+                }
+                ChunkState::Loaded(Arc::new(chunk))
+            }
+            Ok(None) => ChunkState::Missing,
+            Err(error) => {
+                if error
+                    .get_ref()
+                    .is_some_and(|source| source.is::<VersionError>())
+                {
+                    return Err(io::Error::other(format!("Cannot load {prefix}: {error}")));
+                }
+                error!("Cannot load {prefix}: {error}");
+                ChunkState::Failed(error)
+            }
+        };
+        if generated {
+            self.changes.insert(
+                pos,
+                Changes {
+                    revision: 1,
+                    requested: !wanted.contains(&pos),
+                    ..Changes::default()
+                },
+            );
+            self.chunks.insert(pos, state);
+        } else if wanted.contains(&pos) {
+            self.chunks.insert(pos, state);
+        }
+        Ok(())
+    }
+
     /// Applies finished reads and writes, saves unwanted changed chunks and queues requests without waiting for disk.
     /// An incompatible chunk or an unavailable worker pool is fatal and returned to the caller, even if the
     /// incompatible chunk is no longer wanted when its read finishes.
@@ -507,51 +715,7 @@ impl World {
         self.queue_saves()?;
         loop {
             match self.loader.completed.try_recv() {
-                Ok(completion) => {
-                    let pos = completion.pos;
-                    self.in_flight.remove(&pos);
-                    let prefix = format!(
-                        "chunk {}, {} in {}",
-                        pos.x,
-                        pos.z,
-                        self.region_dir.display()
-                    );
-                    let mut generated = false;
-                    let state = match completion.result {
-                        Ok(Some((chunk, warnings, is_generated))) => {
-                            generated = is_generated;
-                            for warning in warnings {
-                                warn!("{prefix}: {warning}");
-                            }
-                            ChunkState::Loaded(Arc::new(chunk))
-                        }
-                        Ok(None) => ChunkState::Missing,
-                        Err(error) => {
-                            if error
-                                .get_ref()
-                                .is_some_and(|source| source.is::<VersionError>())
-                            {
-                                return Err(io::Error::other(format!(
-                                    "Cannot load {prefix}: {error}"
-                                )));
-                            }
-                            error!("Cannot load {prefix}: {error}");
-                            ChunkState::Failed(error)
-                        }
-                    };
-                    if wanted_set.contains(&pos) {
-                        if generated {
-                            self.changes.insert(
-                                pos,
-                                Changes {
-                                    revision: 1,
-                                    ..Changes::default()
-                                },
-                            );
-                        }
-                        self.chunks.insert(pos, state);
-                    }
-                }
+                Ok(completion) => self.finish_load(completion, &wanted_set)?,
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     return Err(io::Error::other("chunk workers stopped"));
@@ -795,6 +959,7 @@ mod tests {
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
+            source: None,
             loader: Loader::start(workers, load).unwrap(),
             saver: Saver::start(save).unwrap(),
         }
@@ -1007,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn discarded_generated_results_are_not_saved() {
+    fn unwanted_generated_results_are_saved_before_they_are_dropped() {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let (started, received) = mpsc::channel();
         let load = {
@@ -1022,7 +1187,18 @@ mod tests {
                 Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), true)))
             })
         };
-        let mut world = fake_world(1, load);
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let save = {
+            let saved = Arc::clone(&saved);
+            Arc::new(move |job: &SaveJob| {
+                saved
+                    .lock()
+                    .unwrap()
+                    .extend(job.snapshots.iter().map(|snapshot| snapshot.pos));
+                Ok(())
+            })
+        };
+        let mut world = fake_world_with_save(1, load, save);
         let pos = ChunkPos { x: 0, z: 0 };
         world.update([pos]).unwrap();
         received.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -1030,12 +1206,14 @@ mod tests {
         let (lock, signal) = &*gate;
         *lock.lock().unwrap() = true;
         signal.notify_all();
+        // Its neighbors may already depend on it, so it is saved rather than generated again later.
         wait_until(|| {
             world.update([]).unwrap();
-            world.in_flight.is_empty()
+            world.in_flight.is_empty() && world.changes.is_empty()
         });
+        world.update([]).unwrap();
         assert!(world.chunk(pos).is_none());
-        assert!(world.changes.is_empty());
+        assert_eq!(*saved.lock().unwrap(), vec![pos]);
     }
 
     #[test]

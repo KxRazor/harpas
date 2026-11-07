@@ -6,18 +6,20 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use harpas_core::nbt::{Compound, List, Nbt};
-use harpas_engine::world::ChunkGenerator;
+use harpas_engine::world::{ChunkGenerator, ChunkSource};
 use harpas_worldgen::{BiomeSourceDef, MultiNoiseParameterListDef, WorldPresetDef, WorldgenData};
 use log::{info, warn};
 
 use crate::properties::Properties;
 
-/// Initializes a normal Overworld before its worker pool can create or save chunks.
+/// Initializes a normal Overworld before its worker pool can create or save chunks. With `features`, new
+/// chunks run the FEATURES stage before players receive them; otherwise they stay at `carvers`.
 pub(crate) fn prepare(
     world: &Path,
     properties: &Properties,
     pack: &Path,
-) -> io::Result<Option<Arc<ChunkGenerator>>> {
+    features: bool,
+) -> io::Result<Option<Arc<dyn ChunkSource>>> {
     let level = harpas_anvil::read_level(world)?;
     let saved = harpas_anvil::read_world_gen_settings(world)?;
     if level.is_some() && saved.is_none() {
@@ -118,7 +120,7 @@ pub(crate) fn prepare(
     }
     let generator = harpas_engine::worldgen::overworld_generator(
         seed,
-        data,
+        Arc::clone(&data),
         templates,
         structures_enabled(&root)?,
         harpas_java::biome_names(),
@@ -127,8 +129,14 @@ pub(crate) fn prepare(
         let spawn_y = spawn_height(Arc::clone(&generator))?;
         harpas_anvil::write_level(world, &new_level(properties, spawn_y))?;
     }
+    let source = if features {
+        info!("New chunks run the FEATURES stage, which places only ores so far");
+        harpas_engine::worldgen::decorated(generator, seed, &data)?
+    } else {
+        harpas_engine::world::generator_source(generator)
+    };
     info!("Prepared Overworld terrain generation for seed {seed}");
-    Ok(Some(generator))
+    Ok(Some(source))
 }
 
 fn structures_enabled(root: &Compound) -> io::Result<bool> {
@@ -398,7 +406,7 @@ mod tests {
         harpas_anvil::write_level(&folder.0, &level).unwrap();
         let props = Properties::parse("level-seed=123\n");
         assert!(
-            prepare(&folder.0, &props, Path::new("missing.zip"))
+            prepare(&folder.0, &props, Path::new("missing.zip"), false)
                 .unwrap()
                 .is_none()
         );
@@ -429,7 +437,7 @@ mod tests {
         harpas_anvil::write_world_gen_settings(&folder.0, &root).unwrap();
         let props = Properties::parse("level-seed=99\n");
         assert!(
-            prepare(&folder.0, &props, Path::new("missing.zip"))
+            prepare(&folder.0, &props, Path::new("missing.zip"), false)
                 .unwrap()
                 .is_none()
         );

@@ -319,6 +319,30 @@ impl GeneratedChunk {
         }
     }
 
+    /// Rebuilds a chunk from saved sections, from `min_y` upward, and recomputes its heightmaps from the
+    /// blocks, as vanilla primes them when it loads a proto-chunk. A missing section is air in biome 0.
+    /// Returns `None` when there are more sections than the height holds.
+    pub fn from_sections(
+        chunk_x: i32,
+        chunk_z: i32,
+        min_y: i32,
+        height: i32,
+        biome_count: usize,
+        sections: Vec<Option<Section>>,
+    ) -> Option<Self> {
+        let mut chunk = Self::new(chunk_x, chunk_z, min_y, height, biome_count);
+        if sections.len() > chunk.sections.len() {
+            return None;
+        }
+        for (slot, section) in chunk.sections.iter_mut().zip(sections) {
+            if let Some(section) = section {
+                *slot = section;
+            }
+        }
+        chunk.recompute_heightmaps();
+        Some(chunk)
+    }
+
     /// Chunk X coordinate.
     pub const fn chunk_x(&self) -> i32 {
         self.chunk_x

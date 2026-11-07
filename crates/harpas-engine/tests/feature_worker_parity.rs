@@ -1,0 +1,194 @@
+//! The FEATURES stage on the chunk workers: each final chunk is compared with vanilla decorating its 3x3
+//! chunks in the same order, then the world is saved and reopened, and the chunk must load unchanged.
+
+#[allow(dead_code)]
+#[path = "../../harpas-worldgen/tests/reference/mod.rs"]
+mod reference;
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use harpas_anvil::Chunk;
+use harpas_core::nbt::Nbt;
+use harpas_engine::world::{ChunkPos, ChunkState, World};
+use harpas_engine::worldgen::{decorated, overworld_generator};
+use harpas_worldgen::{NoiseBasedChunkGenerator, StructureTemplates, WorldgenData};
+use reference::Reference;
+
+const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
+/// Far apart, so no two share a decorated chunk.
+const CHUNKS: [(i32, i32); 3] = [(0, 0), (41, -26), (-203, -151)];
+
+type Blocks = BTreeSet<(i32, i32, i32, u32)>;
+
+fn load(world: &mut World, pos: ChunkPos) -> Arc<Chunk> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        world.update([pos]).unwrap();
+        match world.chunk(pos) {
+            Some(ChunkState::Loaded(chunk)) => return Arc::clone(chunk),
+            Some(ChunkState::Failed(error)) => panic!("chunk {pos:?} failed: {error}"),
+            _ => {}
+        }
+        assert!(Instant::now() < deadline, "timed out loading {pos:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn changed(chunk: &Chunk, carved: &harpas_worldgen::GeneratedChunk) -> Blocks {
+    let mut blocks = BTreeSet::new();
+    for section in &chunk.sections {
+        let Some(states) = &section.section else {
+            continue;
+        };
+        for y in 0..16 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let block_y = i32::from(section.y) * 16 + y as i32;
+                    let state = states.block_state(x, y, z);
+                    if state != carved.block_state(x, block_y, z) {
+                        blocks.insert((
+                            carved.chunk_x() * 16 + x as i32,
+                            block_y,
+                            carved.chunk_z() * 16 + z as i32,
+                            state,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    blocks
+}
+
+fn vanilla(reference: &Reference, seed: i64) -> Vec<Blocks> {
+    let output = reference.temp.0.join(format!("final-features-{seed}.txt"));
+    let mut args = vec![
+        output.display().to_string(),
+        seed.to_string(),
+        "final".to_string(),
+    ];
+    args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
+    reference.java("FeatureStageProbe", args);
+    let text = fs::read_to_string(&output).expect("read the vanilla feature output");
+    fs::remove_file(&output).unwrap();
+    let mut lines = text.lines().peekable();
+    // The probe writes the order of every generation step first.
+    while lines.next_if(|line| line.starts_with("step")).is_some() {}
+    CHUNKS
+        .iter()
+        .map(|&(x, z)| {
+            assert_eq!(lines.next(), Some(format!("chunk {x} {z}").as_str()));
+            let mut blocks = BTreeSet::new();
+            while let Some(line) = lines.next_if(|line| !line.starts_with("chunk")) {
+                let mut fields = line.split(' ').map(|field| field.parse::<i64>().unwrap());
+                let mut field = || fields.next().expect("block field");
+                blocks.insert((
+                    field() as i32,
+                    field() as i32,
+                    field() as i32,
+                    field() as u32,
+                ));
+            }
+            assert!(!blocks.is_empty(), "vanilla placed no ores in {x}, {z}");
+            blocks
+        })
+        .collect()
+}
+
+fn open(
+    folder: &Path,
+    seed: i64,
+    data: &Arc<WorldgenData>,
+    templates: &Arc<StructureTemplates>,
+) -> World {
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(data),
+        Arc::clone(templates),
+        false,
+        &biomes,
+    )
+    .unwrap();
+    let source = decorated(generator, seed, data).unwrap();
+    World::open_with_source(folder, &biomes, source).unwrap()
+}
+
+fn status(chunk: &Chunk) -> Option<&str> {
+    match chunk.rest.get("Status") {
+        Some(Nbt::String(status)) => Some(status),
+        _ => None,
+    }
+}
+
+#[test]
+fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
+    let Some(reference) = Reference::from_env() else {
+        eprintln!("Skipping the FEATURES stage on workers: HARPAS_VANILLA_SERVER_DIR is not set");
+        return;
+    };
+    let data = Arc::new(
+        WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data"),
+    );
+    let templates = Arc::new(
+        StructureTemplates::from_zip_path(&reference.server_jar).expect("load vanilla templates"),
+    );
+    reference.compile(&[
+        (
+            "WorldgenReferenceProbe.java",
+            include_str!("../../harpas-worldgen/tests/WorldgenReferenceProbe.java"),
+        ),
+        (
+            "ChunkParityProbe.java",
+            include_str!("../../harpas-worldgen/tests/ChunkParityProbe.java"),
+        ),
+        (
+            "FeatureStageProbe.java",
+            include_str!("../../harpas-worldgen/tests/FeatureStageProbe.java"),
+        ),
+    ]);
+    let mut compared = 0;
+    for &seed in reference::sampled_seeds(&SEEDS) {
+        let expected = vanilla(&reference, seed);
+        let folder = reference.temp.0.join(format!("world-{seed}"));
+        fs::create_dir_all(&folder).unwrap();
+        let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
+        let mut world = open(&folder, seed, &data, &templates);
+        let mut finals = Vec::new();
+        for (&(x, z), expected) in CHUNKS.iter().zip(&expected) {
+            let pos = ChunkPos { x, z };
+            let chunk = load(&mut world, pos);
+            assert_eq!(status(&chunk), Some("minecraft:features"));
+            let carved = terrain.generate_chunk_carved(x, z, &data).unwrap();
+            let actual = changed(&chunk, &carved);
+            let missing: Vec<_> = expected.difference(&actual).take(20).collect();
+            let extra: Vec<_> = actual.difference(expected).take(20).collect();
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "seed {seed} chunk {x}, {z}: {} blocks from vanilla, {} from Harpas\n\
+                 missing {missing:?}\nextra {extra:?}",
+                expected.len(),
+                actual.len(),
+            );
+            finals.push((pos, actual, carved));
+            compared += 1;
+        }
+        world.flush().unwrap();
+        drop(world);
+
+        let mut world = open(&folder, seed, &data, &templates);
+        for (pos, actual, carved) in &finals {
+            let chunk = load(&mut world, *pos);
+            assert_eq!(&changed(&chunk, carved), actual, "{pos:?} after reopening");
+        }
+        // Reopened final chunks are read as saved, so nothing waits to be saved.
+        world.flush().unwrap();
+        drop(world);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+    eprintln!("Compared {compared} final chunks decorated on the chunk workers");
+}

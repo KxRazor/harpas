@@ -12,7 +12,10 @@ use harpas_worldgen::{
 
 use crate::world::ChunkGenerator;
 
+mod features;
 mod structures;
+
+pub use features::decorated;
 
 /// Compiles an Overworld generator whose biome IDs match the registry used to read and send chunks.
 pub fn overworld_generator(

@@ -1,18 +1,17 @@
 //! Vanilla's FEATURES stage for the feature families ported so far.
 //!
-//! A chunk's placed features are chosen by the biome at each source chunk's center. Every feature is seeded
-//! from the source chunk's decoration seed, its index in the step list and the generation step; the placement
-//! modifiers then choose positions and the configured feature writes blocks through FeatureWorld.
-//!
-//! The source window is the 3x3 chunks a feature can write into around its source chunk. The complete
-//! 17x17 vanilla loop and the remaining feature families follow.
+//! Every chunk decorates itself once, reading and writing the 3x3 chunks around it. Its features are the
+//! ones listed by any biome in those chunks, run in the world's global order for each generation step, and
+//! each is seeded from the chunk's decoration seed, its global index and the step. The placement modifiers
+//! then choose positions and the configured feature writes blocks through FeatureWorld.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use harpas_core::block::block_states;
 use harpas_core::math::sin_f32;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 
+use crate::biome::{BiomeManager, overworld_biome_parameters};
 use crate::data::{
     ConfiguredFeatureDef, FeatureConfigDef, FeatureRefDef, HeightProviderDef, IntProviderDef,
     OreFeatureDef, PlacementModifierDef, RuleTestDef, WorldgenData, WorldgenDataError,
@@ -37,8 +36,8 @@ pub trait FeatureWorld {
     fn biome(&self, x: i32, y: i32, z: i32) -> u32;
     /// First available Y for a heightmap at a column.
     fn heightmap(&self, kind: HeightmapType, x: i32, z: i32) -> i32;
-    /// Biome at the center of a source chunk, which selects its feature lists.
-    fn source_biome(&self, chunk_x: i32, chunk_z: i32) -> u32;
+    /// Biomes stored in the chunks within one chunk of a target, which select its features.
+    fn region_biomes(&self, chunk_x: i32, chunk_z: i32) -> HashSet<u32>;
 }
 
 /// A single-chunk FeatureWorld, used by tests and by callers that pass one source chunk at a time.
@@ -99,25 +98,51 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
             })
     }
 
-    fn source_biome(&self, _chunk_x: i32, _chunk_z: i32) -> u32 {
-        self.biome
+    fn region_biomes(&self, _chunk_x: i32, _chunk_z: i32) -> HashSet<u32> {
+        HashSet::from([self.biome])
     }
 }
 
-/// A 3x3 chunk region for a FEATURES pass: every source chunk's features write into it.
+/// Where a RegionFeatureWorld takes its biomes from.
+enum RegionBiomes {
+    /// One biome everywhere.
+    Fixed(u32),
+    /// The biomes stored in the chunks, zoomed to block positions.
+    Stored(BiomeManager),
+}
+
+/// The 3x3 chunks a FEATURES pass reads and writes.
 ///
-/// Reads and writes outside the region are rejected. The biome is constant in this test-friendly region;
-/// the engine supplies the zoomed biome through its own FeatureWorld implementation.
+/// Reads and writes outside the region are rejected.
 pub struct RegionFeatureWorld {
     chunks: HashMap<(i32, i32), GeneratedChunk>,
-    biome: u32,
+    biomes: RegionBiomes,
     min_y: i32,
     height: i32,
 }
 
 impl RegionFeatureWorld {
-    /// Builds a region from chunks that share the same vertical bounds. At least one chunk is required.
+    /// Builds a region of chunks that share the same vertical bounds and one biome. At least one chunk is
+    /// required.
     pub fn new(chunks: impl IntoIterator<Item = GeneratedChunk>, biome: u32) -> Option<Self> {
+        Self::build(chunks, RegionBiomes::Fixed(biome))
+    }
+
+    /// Builds a region that reads the biomes stored in its chunks, as a world of that seed does.
+    pub fn with_stored_biomes(
+        chunks: impl IntoIterator<Item = GeneratedChunk>,
+        world_seed: i64,
+    ) -> Option<Self> {
+        Self::build(
+            chunks,
+            RegionBiomes::Stored(BiomeManager::from_world_seed(world_seed)),
+        )
+    }
+
+    fn build(
+        chunks: impl IntoIterator<Item = GeneratedChunk>,
+        biomes: RegionBiomes,
+    ) -> Option<Self> {
         let mut chunks = chunks.into_iter();
         let first = chunks.next()?;
         let (min_y, height) = (first.min_y(), first.height());
@@ -131,7 +156,7 @@ impl RegionFeatureWorld {
         }
         Some(Self {
             chunks: map,
-            biome,
+            biomes,
             min_y,
             height,
         })
@@ -145,6 +170,20 @@ impl RegionFeatureWorld {
     /// Removes and returns a chunk from the region.
     pub fn into_chunk(mut self, chunk_x: i32, chunk_z: i32) -> Option<GeneratedChunk> {
         self.chunks.remove(&(chunk_x, chunk_z))
+    }
+
+    /// The biome stored at quart coordinates, with Y clamped to the world as chunks do.
+    fn stored_biome(&self, quart_x: i32, quart_y: i32, quart_z: i32) -> u32 {
+        let Some(chunk) = self.chunks.get(&(quart_x >> 2, quart_z >> 2)) else {
+            return 0;
+        };
+        let min_quart = self.min_y >> 2;
+        let quart = (quart_y - min_quart).clamp(0, (self.height >> 2) - 1) as usize;
+        chunk.sections()[quart >> 2].biome(
+            (quart_x & 3) as usize,
+            quart & 3,
+            (quart_z & 3) as usize,
+        )
     }
 
     fn local(&self, x: i32, y: i32, z: i32) -> Option<((i32, i32), usize, i32, usize)> {
@@ -190,8 +229,13 @@ impl FeatureWorld for RegionFeatureWorld {
         true
     }
 
-    fn biome(&self, _x: i32, _y: i32, _z: i32) -> u32 {
-        self.biome
+    fn biome(&self, x: i32, y: i32, z: i32) -> u32 {
+        match &self.biomes {
+            RegionBiomes::Fixed(biome) => *biome,
+            RegionBiomes::Stored(manager) => {
+                manager.get_biome(x, y, z, |qx, qy, qz| self.stored_biome(qx, qy, qz))
+            }
+        }
     }
 
     fn heightmap(&self, kind: HeightmapType, x: i32, z: i32) -> i32 {
@@ -203,8 +247,28 @@ impl FeatureWorld for RegionFeatureWorld {
         })
     }
 
-    fn source_biome(&self, _chunk_x: i32, _chunk_z: i32) -> u32 {
-        self.biome
+    fn region_biomes(&self, chunk_x: i32, chunk_z: i32) -> HashSet<u32> {
+        let RegionBiomes::Fixed(biome) = self.biomes else {
+            let mut biomes = HashSet::new();
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(chunk) = self.chunks.get(&(chunk_x + dx, chunk_z + dz)) else {
+                        continue;
+                    };
+                    for section in chunk.sections() {
+                        for y in 0..4 {
+                            for z in 0..4 {
+                                for x in 0..4 {
+                                    biomes.insert(section.biome(x, y, z));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return biomes;
+        };
+        HashSet::from([biome])
     }
 }
 
@@ -217,6 +281,10 @@ fn air_state() -> u32 {
 pub struct FeatureIndex {
     /// biome_features[biome][step] lists placed feature indices in data-pack order.
     biome_features: Vec<Vec<Vec<usize>>>,
+    /// steps[step] lists the world's placed features in the order vanilla runs them.
+    steps: Vec<Vec<usize>>,
+    /// biome_indices[biome][step] lists positions in steps[step]; empty for biomes the world cannot have.
+    biome_indices: Vec<Vec<Vec<usize>>>,
     /// For every placed feature, the biome IDs that list it (the biome modifier).
     allowed_biomes: Vec<HashSet<u32>>,
     /// Placement modifiers of every placed feature.
@@ -226,8 +294,25 @@ pub struct FeatureIndex {
 }
 
 impl FeatureIndex {
-    /// Resolves every biome's feature lists and compiles the ore features.
-    pub fn new(data: &WorldgenData) -> Result<Self, WorldgenDataError> {
+    /// Indexes the features of a world with the normal Overworld's biome source.
+    pub fn overworld(data: &WorldgenData) -> Result<Self, WorldgenDataError> {
+        let mut biomes = Vec::new();
+        let mut seen = HashSet::new();
+        for (_, name) in overworld_biome_parameters() {
+            if seen.insert(name) {
+                let id = data
+                    .biomes
+                    .get_index_of(name)
+                    .ok_or_else(|| invalid("features", format!("unknown biome {name}")))?;
+                biomes.push(id as u32);
+            }
+        }
+        Self::new(data, &biomes)
+    }
+
+    /// Resolves every biome's feature lists, orders the features of `possible_biomes`, the IDs a world's
+    /// biome source can produce in its own order, and compiles the ore features.
+    pub fn new(data: &WorldgenData, possible_biomes: &[u32]) -> Result<Self, WorldgenDataError> {
         let placed_count = data.placed_features.len();
         let mut biome_features = Vec::with_capacity(data.biomes.len());
         let mut allowed_biomes = vec![HashSet::new(); placed_count];
@@ -270,8 +355,27 @@ impl FeatureIndex {
             ores.push(compile_ore(name, configured, data)?);
         }
 
+        let steps = sort_features(&biome_features, possible_biomes)?;
+        let positions: Vec<HashMap<usize, usize>> = steps
+            .iter()
+            .map(|step| step.iter().enumerate().map(|(i, &f)| (f, i)).collect())
+            .collect();
+        let mut biome_indices = vec![Vec::new(); biome_features.len()];
+        for &biome in possible_biomes {
+            let lists = biome_features
+                .get(biome as usize)
+                .ok_or_else(|| invalid("features", format!("unknown biome ID {biome}")))?;
+            biome_indices[biome as usize] = lists
+                .iter()
+                .enumerate()
+                .map(|(step, list)| list.iter().map(|f| positions[step][f]).collect())
+                .collect();
+        }
+
         Ok(Self {
             biome_features,
+            steps,
+            biome_indices,
             allowed_biomes,
             placements,
             ores,
@@ -296,6 +400,11 @@ impl FeatureIndex {
             .map(Vec::as_slice)
     }
 
+    /// Placed features of a generation step in the order they run; a feature's position is its seed index.
+    pub fn step_order(&self, step: usize) -> Option<&[usize]> {
+        self.steps.get(step).map(Vec::as_slice)
+    }
+
     /// Biome IDs that list a placed feature.
     pub fn allowed_biomes(&self, placed: usize) -> Option<&HashSet<u32>> {
         self.allowed_biomes.get(placed)
@@ -312,7 +421,7 @@ impl FeatureIndex {
 pub struct CompiledOre {
     /// Number of spheres along the vein.
     pub size: i32,
-    /// Chance of discarding a block whose top neighbour is air.
+    /// Chance of discarding a block that touches air.
     pub discard_chance_on_air_exposure: f32,
     /// Block states the vein may replace, in data-pack order.
     pub targets: Vec<OreTarget>,
@@ -364,6 +473,77 @@ impl RuleTestRule {
             Self::AlwaysTrue => true,
         }
     }
+}
+
+/// Merges the biomes' ordered lists into one order for each generation step.
+///
+/// Every list adds "runs before" edges, also across steps, and features with no order between them keep a
+/// fixed one: a depth-first topological sort that visits nodes by step and then by the first time a feature
+/// was seen. Vanilla's lists agree with each other, so a cycle is an error.
+fn sort_features(
+    biome_features: &[Vec<Vec<usize>>],
+    possible_biomes: &[u32],
+) -> Result<Vec<Vec<usize>>, WorldgenDataError> {
+    /// A feature in a step, ordered by step and then by first appearance.
+    type Node = (usize, usize);
+
+    fn visit(
+        node: Node,
+        graph: &BTreeMap<Node, BTreeSet<Node>>,
+        visited: &mut HashSet<Node>,
+        visiting: &mut HashSet<Node>,
+        sorted: &mut Vec<Node>,
+    ) -> Result<(), WorldgenDataError> {
+        if visited.contains(&node) {
+            return Ok(());
+        }
+        if !visiting.insert(node) {
+            return Err(invalid("features", "feature order has a cycle"));
+        }
+        for &next in graph.get(&node).into_iter().flatten() {
+            visit(next, graph, visited, visiting, sorted)?;
+        }
+        visiting.remove(&node);
+        visited.insert(node);
+        sorted.push(node);
+        Ok(())
+    }
+
+    let mut first_seen = HashMap::new();
+    let mut features = Vec::new();
+    let mut graph: BTreeMap<Node, BTreeSet<Node>> = BTreeMap::new();
+    let mut step_count = 0;
+    for &biome in possible_biomes {
+        let lists = biome_features
+            .get(biome as usize)
+            .ok_or_else(|| invalid("features", format!("unknown biome ID {biome}")))?;
+        step_count = step_count.max(lists.len());
+        let mut previous: Option<Node> = None;
+        for (step, list) in lists.iter().enumerate() {
+            for &feature in list {
+                let seen = *first_seen.entry(feature).or_insert_with(|| {
+                    features.push(feature);
+                    features.len() - 1
+                });
+                let node = (step, seen);
+                graph.entry(node).or_default();
+                if let Some(previous) = previous {
+                    graph.entry(previous).or_default().insert(node);
+                }
+                previous = Some(node);
+            }
+        }
+    }
+
+    let (mut visited, mut visiting, mut sorted) = (HashSet::new(), HashSet::new(), Vec::new());
+    for &node in graph.keys() {
+        visit(node, &graph, &mut visited, &mut visiting, &mut sorted)?;
+    }
+    let mut steps = vec![Vec::new(); step_count];
+    for &(step, seen) in sorted.iter().rev() {
+        steps[step].push(features[seen]);
+    }
+    Ok(steps)
 }
 
 fn compile_ore(
@@ -570,28 +750,45 @@ fn do_place<R: RandomSource>(
         let radius = ((f64::from(sin_f32(std::f32::consts::PI * t)) + 1.0) * spread + 1.0) / 2.0;
         spheres.push((center_x, center_y, center_z, radius));
     }
-    let target_width = width.max(1);
-    let target_height = height.max(1);
-    let mut seen = vec![false; (target_width * target_height * target_width) as usize];
-    let air = air_state();
+    // A sphere inside another is dropped; this changes the order blocks are visited in, not which ones.
+    for first in 0..spheres.len() {
+        for second in first + 1..spheres.len() {
+            let (a, b) = (spheres[first], spheres[second]);
+            if a.3 <= 0.0 || b.3 <= 0.0 {
+                continue;
+            }
+            let (dx, dy, dz, dr) = (a.0 - b.0, a.1 - b.1, a.2 - b.2, a.3 - b.3);
+            if dr * dr > dx * dx + dy * dy + dz * dz {
+                if dr > 0.0 {
+                    spheres[second].3 = -1.0;
+                } else {
+                    spheres[first].3 = -1.0;
+                }
+            }
+        }
+    }
+    // The visited set is indexed from the box's lower corner, which also bounds each sphere; the upper side
+    // is not bounded, so blocks past it share indices with others, as in vanilla.
+    let mut seen = vec![false; (width * height * width).max(0) as usize];
     let mut placed = 0;
+    let max_y = world.min_y() + world.height();
     for (center_x, center_y, center_z, radius) in spheres {
-        let from_x = (center_x - radius).floor() as i32;
-        let to_x = (center_x + radius).floor() as i32;
-        let from_y = (center_y - radius).floor() as i32;
-        let to_y = (center_y + radius).floor() as i32;
-        let from_z = (center_z - radius).floor() as i32;
-        let to_z = (center_z + radius).floor() as i32;
+        if radius < 0.0 {
+            continue;
+        }
+        let from_x = ((center_x - radius).floor() as i32).max(min[0]);
+        let from_y = ((center_y - radius).floor() as i32).max(min[1]);
+        let from_z = ((center_z - radius).floor() as i32).max(min[2]);
+        let to_x = ((center_x + radius).floor() as i32).max(from_x);
+        let to_y = ((center_y + radius).floor() as i32).max(from_y);
+        let to_z = ((center_z + radius).floor() as i32).max(from_z);
         for block_x in from_x..=to_x {
             for block_y in from_y..=to_y {
                 for block_z in from_z..=to_z {
                     let local_x = block_x - min[0];
                     let local_y = block_y - min[1];
                     let local_z = block_z - min[2];
-                    if !(0..target_width).contains(&local_x)
-                        || !(0..target_height).contains(&local_y)
-                        || !(0..target_width).contains(&local_z)
-                    {
+                    if !(world.min_y()..max_y).contains(&block_y) {
                         continue;
                     }
                     let dx = (f64::from(block_x) + 0.5 - center_x) / radius;
@@ -600,8 +797,12 @@ fn do_place<R: RandomSource>(
                     if dx * dx + dy * dy + dz * dz >= 1.0 {
                         continue;
                     }
-                    let seen_index = (local_y * target_width + local_z) * target_width + local_x;
-                    let seen = &mut seen[seen_index as usize];
+                    let seen_index =
+                        (local_x + local_y * width + local_z * width * height) as usize;
+                    if seen_index >= seen.len() {
+                        seen.resize(seen_index + 1, false);
+                    }
+                    let seen = &mut seen[seen_index];
                     if *seen {
                         continue;
                     }
@@ -611,11 +812,11 @@ fn do_place<R: RandomSource>(
                         if !target.rule.matches(state, random) {
                             continue;
                         }
-                        if config.discard_chance_on_air_exposure > 0.0
-                            && random.next_float() < config.discard_chance_on_air_exposure
-                            && world.block_state(block_x, block_y + 1, block_z) == air
-                        {
-                            break;
+                        let discard = config.discard_chance_on_air_exposure;
+                        let check_air =
+                            discard >= 1.0 || (discard > 0.0 && random.next_float() < discard);
+                        if check_air && touches_air(world, block_x, block_y, block_z) {
+                            continue;
                         }
                         if world.set_block_state(block_x, block_y, block_z, target.state) {
                             placed += 1;
@@ -629,11 +830,31 @@ fn do_place<R: RandomSource>(
     placed > 0
 }
 
-/// Applies the FEATURES stage to the target chunk from its 3x3 source window.
+/// Whether any of a block's six neighbors is air, of any kind.
+fn touches_air(world: &impl FeatureWorld, x: i32, y: i32, z: i32) -> bool {
+    const SIDES: [[i32; 3]; 6] = [
+        [0, -1, 0],
+        [0, 1, 0],
+        [0, 0, -1],
+        [0, 0, 1],
+        [-1, 0, 0],
+        [1, 0, 0],
+    ];
+    SIDES.iter().any(|side| {
+        let state = world.block_state(x + side[0], y + side[1], z + side[2]);
+        block_states().properties(state).is_some_and(|(name, _)| {
+            matches!(
+                name,
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            )
+        })
+    })
+}
+
+/// Decorates one chunk: vanilla's `applyBiomeDecoration`, without the structures of each step.
 ///
-/// A source chunk's features can write up to one chunk away, so the target receives writes from itself
-/// and its eight neighbours. The full 17x17 vanilla loop and the indirect effects of farther source
-/// chunks follow with the complete stage.
+/// The chunk's features write up to one chunk away, so a chunk's final blocks also depend on the passes of
+/// its eight neighbors. The world must hold the 3x3 chunks around the target.
 pub fn apply_biome_decoration(
     world: &mut impl FeatureWorld,
     index: &FeatureIndex,
@@ -642,83 +863,92 @@ pub fn apply_biome_decoration(
     chunk_z: i32,
 ) -> Result<(), WorldgenDataError> {
     let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
-    for dx in -1..=1 {
-        for dz in -1..=1 {
-            let source_x = chunk_x + dx;
-            let source_z = chunk_z + dz;
-            let biome = world.source_biome(source_x, source_z);
-            let steps = index
-                .biome_features
+    let origin = [chunk_x * 16, world.min_y(), chunk_z * 16];
+    let decoration = random.set_decoration_seed(world_seed, origin[0], origin[2]);
+    let biomes = world.region_biomes(chunk_x, chunk_z);
+    for (step, order) in index.steps.iter().enumerate() {
+        let mut positions = BTreeSet::<usize>::new();
+        for &biome in &biomes {
+            let lists = index
+                .biome_indices
                 .get(biome as usize)
                 .ok_or_else(|| invalid("features", format!("unknown biome ID {biome}")))?;
-            let decoration = random.set_decoration_seed(world_seed, source_x * 16, source_z * 16);
-            let origin = [source_x * 16, world.min_y(), source_z * 16];
-            for (step, features) in steps.iter().enumerate() {
-                for (position, &placed) in features.iter().enumerate() {
-                    let Some(ore) = index.ores.get(placed).and_then(Option::as_ref) else {
-                        continue;
-                    };
-                    random.set_feature_seed(decoration, position as i32, step as i32);
-                    place_placed_feature(world, index, placed, ore, &mut random, origin);
-                }
+            positions.extend(lists.get(step).into_iter().flatten());
+        }
+        for position in positions {
+            let placed = order[position];
+            let Some(ore) = index.ores[placed].as_ref() else {
+                continue;
+            };
+            let modifiers = index.placements[placed].as_slice();
+            if modifiers
+                .iter()
+                .any(|modifier| matches!(modifier, PlacementModifierDef::Other { .. }))
+            {
+                continue;
             }
+            random.set_feature_seed(decoration, position as i32, step as i32);
+            run_modifiers(
+                world,
+                &index.allowed_biomes[placed],
+                ore,
+                &mut random,
+                modifiers,
+                origin,
+            );
         }
     }
     Ok(())
 }
 
-fn place_placed_feature(
+/// Runs a placed feature's remaining modifiers on one position, depth first, and places the ore at every
+/// position that comes out.
+fn run_modifiers(
     world: &mut impl FeatureWorld,
-    index: &FeatureIndex,
-    placed: usize,
+    allowed: &HashSet<u32>,
     ore: &CompiledOre,
     random: &mut WorldgenRandom<XoroshiroRandom>,
-    origin: [i32; 3],
-) -> bool {
-    let modifiers = &index.placements[placed];
-    let allowed = &index.allowed_biomes[placed];
-    let mut start = 0;
-    let count = match modifiers.first() {
-        Some(PlacementModifierDef::Count(provider)) => {
-            start = 1;
-            match sample_int_provider(provider, random) {
-                Some(count) if count > 0 => count,
-                _ => return false,
-            }
-        }
-        _ => 1,
+    modifiers: &[PlacementModifierDef],
+    mut position: [i32; 3],
+) {
+    let Some((modifier, rest)) = modifiers.split_first() else {
+        place_ore(world, ore, random, position);
+        return;
     };
-    'positions: for _ in 0..count {
-        let mut position = origin;
-        for modifier in &modifiers[start..] {
-            match modifier {
-                PlacementModifierDef::Count(_) => return false,
-                PlacementModifierDef::InSquare => {
-                    position[0] += random.next_int_bounded(16);
-                    position[2] += random.next_int_bounded(16);
-                }
-                PlacementModifierDef::HeightRange(provider) => {
-                    let Some(y) =
-                        sample_height_provider(provider, world.min_y(), world.height(), random)
-                    else {
-                        return false;
-                    };
-                    position[1] = y;
-                }
-                PlacementModifierDef::Biome => {
-                    if !allowed.contains(&world.biome(position[0], position[1], position[2])) {
-                        continue 'positions;
-                    }
-                }
-                PlacementModifierDef::Other { .. } => return false,
+    match modifier {
+        PlacementModifierDef::Count(provider) => {
+            let count = sample_int_provider(provider, random).unwrap_or(0);
+            for _ in 0..count {
+                run_modifiers(world, allowed, ore, random, rest, position);
+            }
+            return;
+        }
+        PlacementModifierDef::RarityFilter(chance) => {
+            if random.next_float() >= 1.0 / *chance as f32 {
+                return;
             }
         }
-        if place_ore(world, ore, random, position) {
-            return true;
+        PlacementModifierDef::InSquare => {
+            position[0] += random.next_int_bounded(16);
+            position[2] += random.next_int_bounded(16);
         }
+        PlacementModifierDef::HeightRange(provider) => {
+            let Some(y) = sample_height_provider(provider, world.min_y(), world.height(), random)
+            else {
+                return;
+            };
+            position[1] = y;
+        }
+        PlacementModifierDef::Biome => {
+            if !allowed.contains(&world.biome(position[0], position[1], position[2])) {
+                return;
+            }
+        }
+        PlacementModifierDef::Other { .. } => return,
     }
-    false
+    run_modifiers(world, allowed, ore, random, rest, position);
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -925,7 +1155,7 @@ mod tests {
                 features,
             },
         );
-        let index = FeatureIndex::new(&data).expect("compile feature index");
+        let index = FeatureIndex::new(&data, &[0]).expect("compile feature index");
         let mut chunk = flat_stone_chunk();
         let mut world = ChunkFeatureWorld::new(&mut chunk, 0);
         apply_biome_decoration(&mut world, &index, 42, 0, 0).expect("apply features");
@@ -957,34 +1187,67 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_runs_the_three_by_three_source_window() {
+    fn a_chunk_decorates_once_from_its_own_seed() {
         let data = synthetic_ore_data();
-        let index = FeatureIndex::new(&data).expect("compile feature index");
-        let mut chunks = Vec::new();
-        for x in -1..=1 {
-            for z in -1..=1 {
-                chunks.push(flat_stone_chunk_at(x, z));
-            }
-        }
-        let mut world = RegionFeatureWorld::new(chunks, 0).expect("region");
-        apply_biome_decoration(&mut world, &index, 42, 0, 0).expect("apply features");
+        let index = FeatureIndex::new(&data, &[0]).expect("compile feature index");
         let iron = block_states().default_state("minecraft:iron_ore").unwrap();
-        for x in -1..=1 {
-            for z in -1..=1 {
-                let chunk = world.chunk(x, z).expect("source chunk");
-                let mut count = 0;
-                for lx in 0..16 {
-                    for lz in 0..16 {
-                        for y in 28..=34 {
-                            if chunk.block_state(lx, y, lz) == iron {
-                                count += 1;
-                            }
+        let ores = |target: (i32, i32)| {
+            let mut chunks = Vec::new();
+            for x in -1..=1 {
+                for z in -1..=1 {
+                    chunks.push(flat_stone_chunk_at(target.0 + x, target.1 + z));
+                }
+            }
+            let mut world = RegionFeatureWorld::new(chunks, 0).expect("region");
+            apply_biome_decoration(&mut world, &index, 42, target.0, target.1)
+                .expect("apply features");
+            let mut found = BTreeSet::new();
+            for x in -16..32 {
+                for z in -16..32 {
+                    for y in 24..=40 {
+                        let (x, z) = (x + target.0 * 16, z + target.1 * 16);
+                        if world.block_state(x, y, z) == iron {
+                            found.insert((x, y, z));
                         }
                     }
                 }
-                assert!(count > 0, "source chunk ({x},{z}) placed no ore");
+            }
+            found
+        };
+        let here = ores((0, 0));
+        assert!(!here.is_empty(), "the ore feature placed nothing");
+        assert_eq!(here, ores((0, 0)));
+        assert_ne!(here, ores((1, 0)));
+    }
+
+    #[test]
+    fn every_position_of_a_placed_feature_is_tried() {
+        let mut data = synthetic_ore_data();
+        let placement = &mut data.placed_features[0].placement;
+        placement[0] = PlacementModifierDef::Count(IntProviderDef::Constant(8));
+        let index = FeatureIndex::new(&data, &[0]).expect("compile feature index");
+        let mut chunk = flat_stone_chunk();
+        let mut world = ChunkFeatureWorld::new(&mut chunk, 0);
+        apply_biome_decoration(&mut world, &index, 42, 0, 0).expect("apply features");
+        let iron = block_states().default_state("minecraft:iron_ore").unwrap();
+        let mut count = 0;
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 24..=40 {
+                    count += usize::from(world.block_state(x, y, z) == iron);
+                }
             }
         }
+        assert!(count > 15, "only {count} blocks from eight veins");
+    }
+
+    #[test]
+    fn features_keep_the_order_every_biome_agrees_on() {
+        let biomes = vec![vec![vec![1, 3]], vec![vec![2, 3]], vec![vec![1, 2]]];
+        let steps = sort_features(&biomes, &[0, 1, 2]).expect("order features");
+        assert_eq!(steps, vec![vec![1, 2, 3]]);
+        let cycle = vec![vec![vec![1, 2]], vec![vec![2, 1]]];
+        assert!(sort_features(&cycle, &[0, 1]).is_err());
     }
 
     #[test]
@@ -1001,6 +1264,6 @@ mod tests {
                 features: vec![vec!["example:missing".to_string()]],
             },
         );
-        assert!(FeatureIndex::new(&data).is_err());
+        assert!(FeatureIndex::new(&data, &[0]).is_err());
     }
 }

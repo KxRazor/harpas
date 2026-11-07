@@ -249,14 +249,24 @@ and the owner **accepts it once**:
     states, and the placement modifiers those features use (`count`, `in_square`, `height_range` and `biome`) are
     parsed too. Other feature and modifier types keep their JSON for later families, so the complete 26.1 pack
     loads.
-  - Ore placement follows vanilla's `applyBiomeDecoration` for the target's 3x3 source window: for each source
-    chunk, walk the generation steps in order, seed its features with
-    `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and `set_feature_seed(decoration, index, step)`,
-    apply `count`, `in_square`, `height_range` and `biome`, and place `minecraft:ore` with vanilla's vein
-    geometry, rule tests and discard chance; scattered ore (ancient debris) is parsed but waits for the Nether.
-    Height providers `constant`, `uniform` and `trapezoid` are ported. A `RegionFeatureWorld` routes reads and
-    writes across the nine chunks, so the families that write across a chunk boundary can use the same stage;
-    the complete 17x17 loop, worker integration and those families follow.
+  - Every chunk decorates itself once, as vanilla's `applyBiomeDecoration` does: the FEATURES stage needs the
+    chunks within one chunk at `carvers` and writes only into them, so there is no wider source loop as there is
+    for carvers. A chunk's final blocks therefore also depend on the passes of its eight neighbors.
+    `FeatureIndex::overworld` merges the biomes' ordered lists into one order for each generation step, taking
+    the biomes in the biome source's order, with a depth-first topological sort (vanilla's `FeatureSorter`). A
+    chunk runs, for each step, the features listed by any biome stored in the 3x3 chunks around it, in that
+    order; each is seeded with `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and
+    `set_feature_seed(decoration, index, step)`, where `index` is its position in the step's global order, not
+    in a biome's list. The structures of each step take indices from the same counter and are not run yet.
+    Placement modifiers run depth first, each position through the rest of the list, and `count`,
+    `rarity_filter`, `in_square`, `height_range` and `biome` are ported; a feature with another modifier or
+    another type is skipped, which changes no other feature's seed. `minecraft:ore` is placed with vanilla's
+    vein geometry: spheres inside other spheres are dropped, the visited set is bounded only on the lower side,
+    and with a discard chance a block is skipped when any of its six neighbors is air. Scattered ore (ancient
+    debris) is parsed but waits for the Nether. Height providers `constant`, `uniform` and `trapezoid` are
+    ported. `RegionFeatureWorld` routes reads and writes across the nine chunks and zooms their stored biomes
+    with the world seed's `BiomeManager`. Worker integration, the structures of each step and the other
+    families follow; until then generated chunks stay at `carvers` without features.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
     source, including the random state after the call.
   - The generation settings and seed live in `data/minecraft/world_gen_settings.dat`, separately from

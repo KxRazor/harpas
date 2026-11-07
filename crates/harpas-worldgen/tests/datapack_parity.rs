@@ -80,7 +80,7 @@ fn loads_and_evaluates_the_26_1_datapack() {
         }
     }
 
-    let index = FeatureIndex::new(&data).expect("compile the feature index");
+    let index = FeatureIndex::overworld(&data).expect("compile the feature index");
     assert_eq!(
         index.sizes(),
         (data.biomes.len(), data.placed_features.len())

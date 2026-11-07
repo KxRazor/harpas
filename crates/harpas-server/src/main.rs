@@ -180,7 +180,8 @@ fn run() -> io::Result<()> {
     };
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
-    let generator = world_generation::prepare(&world_dir, &properties, &data_pack)?;
+    let features = harpas_toml::generation_features(&settings)?;
+    let generator = world_generation::prepare(&world_dir, &properties, &data_pack, features)?;
     let mut server_info = server_info(&properties);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
         && let Some(spawn) = harpas_anvil::overworld_spawn(&level)
@@ -229,11 +230,9 @@ fn run() -> io::Result<()> {
     // Poll the listener so an asynchronous fatal world error also stops an otherwise idle server.
     listener.set_nonblocking(true)?;
     let (logic, logic_thread) = match generator {
-        Some(generator) => harpas_engine::start_with_world_generator(
-            &world_dir,
-            harpas_java::biome_names(),
-            generator,
-        )?,
+        Some(source) => {
+            harpas_engine::start_with_world_source(&world_dir, harpas_java::biome_names(), source)?
+        }
         None => harpas_engine::start_with_world(&world_dir, harpas_java::biome_names())?,
     };
     let shutdown = Shutdown::new(logic.clone(), logic_thread);

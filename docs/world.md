@@ -265,8 +265,7 @@ and the owner **accepts it once**:
     and with a discard chance a block is skipped when any of its six neighbors is air. Scattered ore (ancient
     debris) is parsed but waits for the Nether. Height providers `constant`, `uniform` and `trapezoid` are
     ported. `RegionFeatureWorld` routes reads and writes across the nine chunks and zooms their stored biomes
-    with the world seed's `BiomeManager`. Worker integration, the structures of each step and the other
-    families follow; until then generated chunks stay at `carvers` without features.
+    with the world seed's `BiomeManager`. The structures of each step and the other families follow.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
     source, including the random state after the call.
   - The generation settings and seed live in `data/minecraft/world_gen_settings.dat`, separately from
@@ -526,6 +525,32 @@ and the owner **accepts it once**:
     remain separate work.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
+- **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
+  stage on the chunk workers before players receive them. It is off by default because only ores are placed so
+  far, and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never
+  get trees, vegetation, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
+    neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
+    a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker
+    and puts them back, so two decorations never write into the same chunk at the same time, and no chunk is
+    generated twice. A request for a chunk decorates the 3x3 chunks around it, which generates the 5x5 chunks
+    around it through carvers, and the chunk leaves the store when it is final.
+  - The logic thread receives only final chunks, so a decoration never writes into a chunk the logic thread
+    owns. It saves every chunk it receives, even one nobody wants any more by the time it arrives, because
+    its neighbors' blocks already depend on it.
+  - When the store holds more than 2,048 proto-chunks, the least recently used are saved to their region files,
+    with status `minecraft:features` once they have decorated and `minecraft:carvers` before, and read back when
+    a decoration needs them. Shutdown waits for the workers' requests, saves the logic thread's chunks and then
+    every proto-chunk. A final chunk is saved at `features` without light, which is computed when it is sent.
+  - A saved chunk at `carvers` or `features`, written by Harpas or by vanilla, is resumed: its missing neighbors
+    are generated and the chunks around it decorate, so a world generated before this setting existed gets its
+    ores where players go. Earlier vanilla statuses have received no decoration writes and are generated again.
+  - Decorations near each other run in request order, as in vanilla: a vein ore that reaches a block another
+    vein replaced already can use its randomness differently. A chunk is compared with vanilla decorating its
+    3x3 chunks west to east, and north to south within each column, as the workers do for a single request.
+  - Positions that left the store in this session are remembered for the rest of it, a few bytes each, so a
+    final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
+    memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
   status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure placement can be repeated
   by vanilla without replacing its chest or loot metadata in the compared cases. Swamp hut blocks and their
@@ -557,6 +582,8 @@ and the owner **accepts it once**:
     light layer of three chunks with Harpas's engine on the same blocks. Vanilla omits a sky layer when it is
     all fifteen and a block layer when it is all zero; the harness accepts a missing layer only when Harpas's
     layer is uniform.
+  - Chunks that ran FEATURES on the workers are lit the same way when they are sent; their saved copy at
+    `features` keeps no light either.
   - Moving the computation to the worker pool, light updates for live block changes (M4), and saving light at
     the `light` stage once features are ported remain to be done.
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline

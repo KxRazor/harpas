@@ -1,6 +1,10 @@
 // Parity probe: generates 3x3 chunks through carvers and runs vanilla's own applyBiomeDecoration on the center,
 // with every placed feature but vein ores replaced by a no-op at the same index, so each ore keeps its order and
 // seed. Writes the order of every step and the blocks that changed, for the Rust scheduler to compare.
+//
+// With "final" after the seed, each chunk is instead the center of 5x5 chunks generated through carvers, and
+// its 3x3 chunks decorate in the order Harpas's chunk workers use (west to east, then north to south within
+// each column), so the output lists the blocks that changed in the final center chunk.
 import java.io.*;
 import java.util.*;
 import net.minecraft.SharedConstants;
@@ -43,6 +47,54 @@ public final class FeatureStageProbe {
             var rule = new BlocksRule();
             for (var holder : holders) rule.blocks.add(holder.value());
             field.set(target, rule);
+        }
+    }
+
+    static long key(int x, int z) { return ((long) x << 32) ^ (z & 0xffffffffL); }
+
+    static void finalChunk(PrintWriter out, DataOutputStream discard, long seed, RegistryAccess access,
+            PalettedContainerFactory factory, LevelHeightAccessor height, Registry<Biome> biomes,
+            NoiseBasedChunkGenerator generator, RandomState random, int cx, int cz) throws Exception {
+        var chunks = new HashMap<Long, ProtoChunk>();
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                var at = new ChunkPos(cx + dx, cz + dz);
+                var proto = new ProtoChunk(at, UpgradeData.EMPTY, height, factory, null);
+                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, proto, seed);
+                var manager = new StructureManager(region, new WorldOptions(seed, false, false), null);
+                ChunkParityProbe.writeChunk(discard, seed, biomes, factory, generator, random, region, manager, proto);
+                chunks.put(key(at.x(), at.z()), proto);
+            }
+        }
+        var center = chunks.get(key(cx, cz));
+        var pos = new BlockPos.MutableBlockPos();
+        int[] before = new int[16 * 16 * 384];
+        int index = 0;
+        for (int y = -64; y < 320; y++)
+            for (int z = 0; z < 16; z++)
+                for (int x = 0; x < 16; x++)
+                    before[index++] = Block.getId(center.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                var target = chunks.get(key(cx + dx, cz + dz));
+                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed);
+                region.chunks.putAll(chunks);
+                region.biomes = new BiomeManager(
+                    (qx, qy, qz) -> region.getChunk(qx >> 2, qz >> 2).getNoiseBiome(qx, qy, qz),
+                    BiomeManager.obfuscateSeed(seed));
+                var manager = new StructureManager(region, new WorldOptions(seed, false, false), null);
+                generator.applyBiomeDecoration(region, target, manager);
+            }
+        }
+        out.println("chunk " + cx + " " + cz);
+        index = 0;
+        for (int y = -64; y < 320; y++) {
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++, index++) {
+                    int id = Block.getId(center.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
+                    if (before[index] != id) out.println((cx * 16 + x) + " " + y + " " + (cz * 16 + z) + " " + id);
+                }
+            }
         }
     }
 
@@ -109,6 +161,15 @@ public final class FeatureStageProbe {
             field.set(generator, (java.util.function.Supplier<List<FeatureSorter.StepFeatureData>>) () -> oresOnly);
 
             var discard = new DataOutputStream(OutputStream.nullOutputStream());
+            if (args.length > 2 && args[2].equals("final")) {
+                for (int argument = 3; argument < args.length; argument++) {
+                    var coordinates = args[argument].split(",");
+                    finalChunk(out, discard, seed, access, factory, height, biomes, generator, random,
+                        Integer.parseInt(coordinates[0]), Integer.parseInt(coordinates[1]));
+                }
+                net.minecraft.util.Util.shutdownExecutors();
+                return;
+            }
             for (int argument = 2; argument < args.length; argument++) {
                 var coordinates = args[argument].split(",");
                 int cx = Integer.parseInt(coordinates[0]), cz = Integer.parseInt(coordinates[1]);

@@ -3,7 +3,7 @@
 Scope: where Harpas' settings live, and how a server is operated: console, logs, remote administration,
 metrics, profiling, shutdown, hosting, and telemetry.
 
-Status: partly implemented. `server.properties` with every 26.1 key, `harpas.toml` checking and its `eula` setting, `HARPAS_*`
+Status: partly implemented. `server.properties` with every 26.1 key, `harpas.toml` checking and its `eula` and `generation.features` settings, `HARPAS_*`
 overrides, the console (`help`, `list`, `stop`), `logs/latest.log` with its archives, and stopping on SIGTERM and SIGINT
 are built; the rest is design. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
@@ -28,7 +28,7 @@ Every setting lives in exactly one place.
 | File | Contents |
 |---|---|
 | **`server.properties`** | Vanilla settings, with vanilla's keys, defaults and meaning: port, MOTD, `max-players`, `online-mode`, `view-distance`, `simulation-distance`, `network-compression-threshold`, `level-name`, `level-seed`, RCON, Query, the management server, and the rest [1] |
-| **`harpas.toml`** | Harpas-only settings: `eula`, `[mods]`, `[proxy]`, `[network]`, Bedrock, per-plugin capability restrictions, metrics. It never repeats a key that belongs in `server.properties` |
+| **`harpas.toml`** | Harpas-only settings: `eula`, `generation.features` (new chunks run the FEATURES stage, which places only ores so far; off by default, [world.md](world.md#world-generation)), `[mods]`, `[proxy]`, `[network]`, Bedrock, per-plugin capability restrictions, metrics. It never repeats a key that belongs in `server.properties` |
 | **`HARPAS_*` environment variables** | Override any setting from either file, for containers and hosting panels, with one naming convention (for example `HARPAS_EULA`, `HARPAS_RUNTIME_DIR`) |
 | **`ops.json`, `whitelist.json`, `banned-players.json`, `banned-ips.json`, `usercache.json`** | Vanilla's files and formats |
 

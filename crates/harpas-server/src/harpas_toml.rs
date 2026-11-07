@@ -1,7 +1,7 @@
 //! `harpas.toml`, Harpas' own settings
 //!
-//! Every setting in it belongs to a feature, and arrives with that feature; this version reads only `eula`
-//! (`crate::eula`). A broken file stops the server instead of being ignored, and settings this version does not
+//! Every setting in it belongs to a feature, and arrives with that feature; this version reads `eula`
+//! (`crate::eula`) and `generation.features`. A broken file stops the server instead of being ignored, and settings this version does not
 //! know, or that belong in `server.properties`, are reported (`docs/operations.md`).
 
 use std::fs;
@@ -11,7 +11,7 @@ use std::path::Path;
 use crate::properties;
 
 /// Harpas settings this version reads, as dotted paths.
-const KNOWN: &[&str] = &["eula"];
+const KNOWN: &[&str] = &["eula", "generation.features"];
 
 /// Reads `path`. A missing file has no settings.
 pub fn load(path: &Path) -> io::Result<toml::Table> {
@@ -26,6 +26,30 @@ pub fn load(path: &Path) -> io::Result<toml::Table> {
             format!("{} is not valid TOML: {e}", path.display()),
         )
     })
+}
+
+/// Whether new chunks run the FEATURES stage, which places only ores so far (`docs/world.md`). Off by
+/// default: a chunk saved after FEATURES never runs it again, in Harpas or vanilla.
+pub fn generation_features(table: &toml::Table) -> io::Result<bool> {
+    let Some(generation) = table.get("generation") else {
+        return Ok(false);
+    };
+    let value = generation
+        .as_table()
+        .ok_or_else(|| invalid("`generation` must be a table"))?
+        .get("features");
+    match value {
+        None => Ok(false),
+        Some(toml::Value::Boolean(enabled)) => Ok(*enabled),
+        Some(_) => Err(invalid("`generation.features` must be true or false")),
+    }
+}
+
+fn invalid(message: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("harpas.toml: {message}"),
+    )
 }
 
 /// A warning for every setting in `table` that is ignored.
@@ -92,6 +116,20 @@ mod tests {
         assert_eq!(warnings.len(), 2);
         assert!(warnings[0].contains("`bedrock`"));
         assert!(warnings[1].contains("`max-players`, which belongs in server.properties"));
+    }
+
+    #[test]
+    fn generation_features_are_off_unless_enabled() {
+        assert!(!generation_features(&load_text("eula = true\n").unwrap()).unwrap());
+        let enabled = load_text("[generation]\nfeatures = true\n").unwrap();
+        assert!(generation_features(&enabled).unwrap());
+        assert!(check(&enabled).is_empty());
+        let wrong = load_text("[generation]\nfeatures = \"yes\"\n").unwrap();
+        assert_eq!(
+            generation_features(&wrong).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(generation_features(&load_text("generation = 1\n").unwrap()).is_err());
     }
 
     #[test]

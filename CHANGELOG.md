@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Trees: `minecraft:tree` with straight and fancy trunks, blob, fancy, spruce and pine foliage and two- and
+  three-layer feature sizes, for trees without decorators or roots. Trees shorten to the free height around
+  them, set the `distance` of every leaf in their bounds walking vanilla's `HashSet` order, and update the
+  blocks along their surface, breaking double plants and vegetation that lose their support and clearing snowy
+  grass. Groves and the trees of oceans and rivers now grow, 85 of the 164 Overworld placed features.
+  `tree_feature_parity` places 48 oak, fancy oak, birch, spruce and pine trees one after another in each of 6
+  chunks and compares every block and each tree's random state with vanilla's own features, and
+  `feature_blocks_parity` adds a grove and a river (`harpas-worldgen`).
+
 - Simple features: `simple_block`, `random_selector`, `simple_random_selector`, `random_boolean_selector`,
   `block_column` and `disk`, with the simple, weighted, randomized-int, noise, noise-threshold, dual-noise and
   rule-based block state providers and the survival rules of the flowers, grasses, bushes, dry vegetation,

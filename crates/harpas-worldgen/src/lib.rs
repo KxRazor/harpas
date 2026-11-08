@@ -11,16 +11,19 @@ pub mod data;
 pub mod density;
 pub mod feature;
 pub mod generator;
+pub mod java_hash;
 pub mod light;
 pub mod noise_chunk;
 pub mod ore_vein;
 pub mod placement;
 pub mod seed;
+pub mod shape_update;
 pub mod spline;
 pub mod structure;
 pub mod surface;
 pub mod survival;
 pub mod template;
+pub mod tree;
 
 pub use aquifer::{
     Aquifer, FluidStatus, GlobalFluidPicker, NoiseBasedAquifer, WAY_BELOW_MIN_Y, clamped_map, map,

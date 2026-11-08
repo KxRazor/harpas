@@ -10,9 +10,9 @@ Region files, chunk sections, `level.dat` and player data are read and written. 
 loaded and sent within each player's view, with block states, biomes, heightmaps, saved light and block entity
 data checked against vanilla. Generated chunks receive sky and block light from the light engine when they are
 sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
-feature definitions are loaded from the datapack, and the ore family is placed and compared with vanilla, but
-generation through the complete feature stage, live block changes and saving other world and player data during
-play remain in progress.
+feature definitions are loaded from the datapack, and ores, simple vegetation and the first trees are placed and
+compared with vanilla, but generation through the complete feature stage, live block changes and saving other
+world and player data during play remain in progress.
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -294,10 +294,22 @@ and the owner **accepts it once**:
     the block above is air, each half waterlogged when it replaces water; `block_column` checks its positions
     one step ahead of those it places and shortens its layers from the base or the tip; `disk` replaces target
     blocks from the top of each column within its radius and marks up to two non-air blocks above each run of
-    replaced blocks for postprocessing. A configured feature with any part that is not ported, such as a tree,
-    a scheduled tick (eyeblossoms) or a block without a survival rule (mushrooms, which need light, fire,
-    dripleaves and pale moss carpets), is skipped as a whole; 83 of the 164 Overworld placed features run.
-    `feature_blocks_parity` compares every block they place in 24 decorated chunks, with vanilla running
+    replaced blocks for postprocessing. `harpas_worldgen::tree` places `tree` with straight and fancy trunks and
+    blob, fancy, spruce and pine foliage: the tree draws its height, foliage height and radius, gives up outside
+    the world's height, shortens to the free height its feature size allows (or gives up below its minimum clipped
+    height), places dirt below the trunk where its provider allows, the trunk and the foliage at each attachment,
+    with leaves waterlogged in water sources and persistent leaves left alone. Its blocks join four position sets
+    that iterate in the order of Java's `HashSet<BlockPos>` (`harpas_worldgen::java_hash`); `updateLeaves` then
+    walks them from the trunk, one set per distance, to set the `distance` of every leaf in the tree's bounds,
+    including those of other trees, and `updateShapeAtEdge` updates both blocks on each side of the tree's surface
+    (`harpas_worldgen::shape_update`): grass blocks, podzol and mycelium follow the snow above them, and
+    vegetation, carpets, spore blossoms and double plants break when they lose their support. Ticks that leaves
+    and liquids schedule there, and postprocessing marks, are not kept yet. A configured feature with any part
+    that is not ported, such as a tree with decorators, roots or other placers, a fallen tree, a scheduled tick
+    (eyeblossoms) or a block without a survival rule (mushrooms, which need light, fire, dripleaves and pale moss
+    carpets), is skipped as a whole; 85 of the 164 Overworld placed features run, trees only in groves, oceans and
+    rivers so far.
+    `feature_blocks_parity` compares every block they place in 26 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
@@ -560,9 +572,10 @@ and the owner **accepts it once**:
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
-  stage on the chunk workers before players receive them. It is off by default because only ores, flowers, grass and
-  other simple vegetation, disks and block columns are placed so far, and a chunk saved after FEATURES never
-  runs the stage again, in Harpas or in vanilla, so it would never get trees, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  stage on the chunk workers before players receive them. It is off by default because only ores, flowers, grass
+  and other simple vegetation, disks, block columns and the trees of groves, oceans and rivers are placed so far,
+  and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
+  trees of other biomes, lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

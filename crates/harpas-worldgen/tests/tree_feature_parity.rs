@@ -1,0 +1,224 @@
+//! Compares trees with vanilla's own tree configured features: many trees placed one after another in the same
+//! chunks, each with a decoration random source seeded from the chunk and its index, so that later trees grow
+//! through, are cut short by or change the leaves of earlier ones. Each tree's result and the random values it
+//! consumed are compared, then every block that changed in the 3x3 chunks.
+mod reference;
+
+use std::collections::BTreeSet;
+use std::fs;
+
+use harpas_core::block::block_states;
+use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::{
+    FeatureCompiler, FeatureWorld, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
+    place_feature,
+};
+use reference::Reference;
+
+const SEED: i64 = -4_172_144_997_902_289_642;
+/// The configured features compared, cycled through in each chunk.
+const FEATURES: [&str; 5] = [
+    "minecraft:oak",
+    "minecraft:fancy_oak",
+    "minecraft:birch",
+    "minecraft:spruce",
+    "minecraft:pine",
+];
+const TREES_PER_CHUNK: usize = 48;
+/// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow and a steep mixed chunk.
+const CHUNKS: [(i32, i32); 6] = [
+    (-42, 6),
+    (-36, -36),
+    (-198, -198),
+    (-108, -108),
+    (-528, -480),
+    (600, 312),
+];
+
+type Blocks = BTreeSet<(i32, i32, i32, u32)>;
+
+/// `TreeFeatureProbe.plantGround`: on the top grass block of each column, by a pattern of its coordinates, tall
+/// grass, short grass, a poppy, or snow on the grass block itself, for the trees to update.
+fn plant_ground(world: &mut RegionFeatureWorld, cx: i32, cz: i32) {
+    let states = block_states();
+    let state = |name: &str, properties: &[(&str, &str)]| {
+        states
+            .state(name, properties.iter().copied())
+            .expect("known block")
+            .0
+    };
+    let grass_states: Vec<u32> = (0..states.len())
+        .filter(|&id| {
+            states
+                .properties(id)
+                .is_some_and(|(name, _)| name == "minecraft:grass_block")
+        })
+        .collect();
+    for z in (cz - 1) * 16..(cz + 2) * 16 {
+        for x in (cx - 1) * 16..(cx + 2) * 16 {
+            let mut top = 319;
+            while top > -64 && states.is_air(world.block_state(x, top, z)) {
+                top -= 1;
+            }
+            if !grass_states.contains(&world.block_state(x, top, z)) {
+                continue;
+            }
+            match (x * 3 + z * 7).rem_euclid(6) {
+                0 => {
+                    world.set_block_state(
+                        x,
+                        top + 1,
+                        z,
+                        state("minecraft:tall_grass", &[("half", "lower")]),
+                    );
+                    world.set_block_state(
+                        x,
+                        top + 2,
+                        z,
+                        state("minecraft:tall_grass", &[("half", "upper")]),
+                    );
+                }
+                1 => {
+                    world.set_block_state(x, top + 1, z, state("minecraft:short_grass", &[]));
+                }
+                2 => {
+                    world.set_block_state(
+                        x,
+                        top,
+                        z,
+                        state("minecraft:grass_block", &[("snowy", "true")]),
+                    );
+                }
+                3 => {
+                    world.set_block_state(x, top + 1, z, state("minecraft:poppy", &[]));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn trees_match_vanilla() {
+    let Some(reference) = Reference::from_env() else {
+        eprintln!("Skipping tree features: HARPAS_VANILLA_SERVER_DIR is not set");
+        return;
+    };
+    let data =
+        WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
+    reference.compile(&[
+        (
+            "WorldgenReferenceProbe.java",
+            include_str!("WorldgenReferenceProbe.java"),
+        ),
+        (
+            "ChunkParityProbe.java",
+            include_str!("ChunkParityProbe.java"),
+        ),
+        ("PlacementProbe.java", include_str!("PlacementProbe.java")),
+        (
+            "TreeFeatureProbe.java",
+            include_str!("TreeFeatureProbe.java"),
+        ),
+    ]);
+    let output = reference.temp.0.join("tree-features.txt");
+    let mut args = vec![
+        output.display().to_string(),
+        reference.server_jar.display().to_string(),
+        SEED.to_string(),
+        TREES_PER_CHUNK.to_string(),
+        FEATURES.join(","),
+    ];
+    args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
+    reference.java("TreeFeatureProbe", args);
+    let text = fs::read_to_string(&output).expect("read the vanilla tree output");
+
+    let mut compiler = FeatureCompiler::new(&data);
+    let features: Vec<_> = FEATURES
+        .iter()
+        .map(|name| {
+            compiler
+                .configured(name)
+                .expect("compile the tree")
+                .unwrap_or_else(|| panic!("{name} is not ported"))
+        })
+        .collect();
+    let generator = NoiseBasedChunkGenerator::overworld(SEED, &data).expect("compile generator");
+
+    let mut lines = text.lines().peekable();
+    let mut placed_trees = 0;
+    let mut compared_blocks = 0;
+    for &(cx, cz) in &CHUNKS {
+        assert_eq!(lines.next(), Some(format!("chunk {cx} {cz}").as_str()));
+        let chunks: Vec<_> = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dz| (cx + dx, cz + dz)))
+            .map(|(x, z)| generator.generate_chunk_carved(x, z, &data).unwrap())
+            .collect();
+        let mut world = RegionFeatureWorld::with_stored_biomes(chunks, SEED).expect("region");
+        plant_ground(&mut world, cx, cz);
+        let before = RegionFeatureWorld::with_stored_biomes(
+            (-1..=1)
+                .flat_map(|dx| (-1..=1).map(move |dz| (cx + dx, cz + dz)))
+                .map(|(x, z)| world.chunk(x, z).expect("region chunk").clone()),
+            SEED,
+        )
+        .expect("region");
+        while let Some(line) = lines.next_if(|line| line.starts_with("tree ")) {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let [_, index, name, x, y, z, placed, next] = fields[..] else {
+                panic!("unexpected tree line {line}");
+            };
+            let index: usize = index.parse().unwrap();
+            assert_eq!(name, FEATURES[index % FEATURES.len()]);
+            let origin = [x.parse().unwrap(), y.parse().unwrap(), z.parse().unwrap()];
+            let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+            let decoration = random.set_decoration_seed(SEED, cx * 16, cz * 16);
+            random.set_feature_seed(decoration, index as i32, 9);
+            let feature = &features[index % FEATURES.len()];
+            let result = place_feature(&mut world, feature, &mut random, origin);
+            assert_eq!(
+                (result, random.next_int()),
+                (placed.parse().unwrap(), next.parse().unwrap()),
+                "chunk ({cx}, {cz}) tree {index} ({name} at {origin:?}): result and next random value",
+            );
+            placed_trees += usize::from(result);
+        }
+        let mut expected = Blocks::new();
+        while let Some(line) = lines.next_if(|line| !line.starts_with("chunk")) {
+            let mut fields = line.split(' ').map(|field| field.parse::<i64>().unwrap());
+            let mut field = || fields.next().expect("block field");
+            expected.insert((
+                field() as i32,
+                field() as i32,
+                field() as i32,
+                field() as u32,
+            ));
+        }
+        let mut actual = Blocks::new();
+        for y in -64..320 {
+            for z in (cz - 1) * 16..(cz + 2) * 16 {
+                for x in (cx - 1) * 16..(cx + 2) * 16 {
+                    let state = world.block_state(x, y, z);
+                    if state != before.block_state(x, y, z) {
+                        actual.insert((x, y, z, state));
+                    }
+                }
+            }
+        }
+        let missing: Vec<_> = expected.difference(&actual).take(20).collect();
+        let extra: Vec<_> = actual.difference(&expected).take(20).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "chunk ({cx}, {cz}): {} blocks from vanilla, {} from Harpas\nmissing {missing:?}\nextra {extra:?}",
+            expected.len(),
+            actual.len(),
+        );
+        compared_blocks += expected.len();
+    }
+    assert!(lines.next().is_none(), "unread vanilla output");
+    assert!(placed_trees > 0, "no tree was placed");
+    eprintln!(
+        "Compared {placed_trees} placed trees and {compared_blocks} blocks around {} chunks",
+        CHUNKS.len()
+    );
+}

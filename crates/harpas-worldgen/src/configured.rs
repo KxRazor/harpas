@@ -1,5 +1,5 @@
-//! Configured features beyond ores: `simple_block`, the three selectors, `block_column` and `disk`, with the
-//! block state providers they use.
+//! Configured features beyond ores: `simple_block`, the three selectors, `block_column`, `disk` and `tree`
+//! (in [`crate::tree`]), with the block state providers they use.
 //!
 //! A configured feature compiles from its JSON once, with every placed feature it refers to, and fails to
 //! compile, as a whole, when any part of it is not ported yet: a feature type, a block state provider, a
@@ -26,6 +26,7 @@ use crate::placement::{
 };
 use crate::surface::resolve_block_state;
 use crate::survival::{SurvivalRule, compile_block_survival};
+use crate::tree::{CompiledTree, TreeBlocks, place_tree};
 
 /// A placed feature compiled with its configured feature.
 #[derive(Debug)]
@@ -70,6 +71,8 @@ pub enum CompiledFeature {
         /// Whether a column cut short keeps its last layers rather than its first.
         prioritize_tip: bool,
     },
+    /// `minecraft:tree`.
+    Tree(Box<CompiledTree>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -364,6 +367,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             random,
             origin,
         ),
+        CompiledFeature::Tree(tree) => place_tree(world, tree, random, origin),
         CompiledFeature::Disk {
             provider,
             target,
@@ -584,6 +588,7 @@ pub struct FeatureCompiler<'a> {
     configured: HashMap<String, Option<Arc<CompiledFeature>>>,
     placed: HashMap<String, Option<Arc<CompiledPlaced>>>,
     active: HashSet<String>,
+    tree_blocks: Option<Arc<TreeBlocks>>,
 }
 
 impl<'a> FeatureCompiler<'a> {
@@ -594,7 +599,18 @@ impl<'a> FeatureCompiler<'a> {
             configured: HashMap::new(),
             placed: HashMap::new(),
             active: HashSet::new(),
+            tree_blocks: None,
         }
+    }
+
+    /// The block sets trees read, compiled on first use.
+    pub(crate) fn tree_blocks(&mut self) -> Result<Arc<TreeBlocks>, WorldgenDataError> {
+        if let Some(blocks) = &self.tree_blocks {
+            return Ok(blocks.clone());
+        }
+        let blocks = Arc::new(TreeBlocks::new(self.data)?);
+        self.tree_blocks = Some(blocks.clone());
+        Ok(blocks)
     }
 
     /// Compiles a placed feature of the data pack by name; None when part of it is not ported yet.
@@ -836,6 +852,10 @@ impl<'a> FeatureCompiler<'a> {
                         .ok_or_else(|| invalid(name, "`half_height` must be an integer"))?,
                 }
             }
+            "minecraft:tree" => match self.tree(name, config)? {
+                Some(tree) => CompiledFeature::Tree(Box::new(tree)),
+                None => return Ok(None),
+            },
             _ => return Ok(None),
         };
         Ok(Some(Arc::new(feature)))
@@ -849,7 +869,7 @@ impl<'a> FeatureCompiler<'a> {
         compile_predicate(name, &parse_block_predicate(name, json)?, self.data)
     }
 
-    fn provider(
+    pub(crate) fn provider(
         &mut self,
         name: &str,
         json: &Value,

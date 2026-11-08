@@ -1,4 +1,4 @@
-//! Compares trees and fallen trees with vanilla's own configured features: many trees placed one after another in the same
+//! Compares trees, fallen trees and huge mushrooms with vanilla's own configured features: many trees placed one after another in the same
 //! chunks, each with a decoration random source seeded from the chunk and its index, so that later trees grow
 //! through, are cut short by or change the leaves of earlier ones. Each tree's result and the random values it
 //! consumed are compared, then every block that changed in the 3x3 chunks and the block entities the trees
@@ -18,11 +18,15 @@ use harpas_worldgen::{
 use reference::Reference;
 
 const SEED: i64 = -4_172_144_997_902_289_642;
-/// The configured features compared, cycled through in each chunk: trees without decorators, then trees with
+/// The configured features compared, cycled through in each chunk: huge brown and red mushrooms first, which
+/// need room for their caps, then trees without decorators, then trees with
 /// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), leaf litter, and
 /// fallen trees with vines on their stumps and mushrooms on their logs, then acacias, jungle bushes and mega
-/// jungle trees, mega pines and mega spruces with podzol around them.
-const FEATURES: [&str; 22] = [
+/// jungle trees, mega pines and mega spruces with podzol around them, and dark oaks and cherries with hanging
+/// leaves.
+const FEATURES: [&str; 27] = [
+    "minecraft:huge_brown_mushroom",
+    "minecraft:huge_red_mushroom",
     "minecraft:oak",
     "minecraft:fancy_oak",
     "minecraft:birch",
@@ -45,8 +49,11 @@ const FEATURES: [&str; 22] = [
     "minecraft:mega_jungle_tree",
     "minecraft:mega_pine",
     "minecraft:mega_spruce",
+    "minecraft:dark_oak",
+    "minecraft:cherry",
+    "minecraft:cherry_bees_005",
 ];
-const TREES_PER_CHUNK: usize = 132;
+const TREES_PER_CHUNK: usize = 162;
 /// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow and a steep mixed chunk.
 const CHUNKS: [(i32, i32); 6] = [
     (-42, 6),
@@ -58,13 +65,16 @@ const CHUNKS: [(i32, i32); 6] = [
 ];
 
 /// The blocks the decorators place, each of which vanilla's trees must place for the comparison to cover it.
-const DECORATIONS: [&str; 6] = [
+const DECORATIONS: [&str; 9] = [
     "minecraft:vine",
     "minecraft:cocoa",
     "minecraft:bee_nest",
     "minecraft:leaf_litter",
     "minecraft:red_mushroom",
     "minecraft:podzol",
+    "minecraft:brown_mushroom_block",
+    "minecraft:red_mushroom_block",
+    "minecraft:mushroom_stem",
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;

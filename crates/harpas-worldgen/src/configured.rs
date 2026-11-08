@@ -1,5 +1,6 @@
 //! Configured features beyond ores: `simple_block`, the three selectors, `block_column`, `disk`, `tree` (in
-//! [`crate::tree`]) and `fallen_tree` (in [`crate::fallen_tree`]), with the block state providers they use.
+//! [`crate::tree`]), `fallen_tree` (in [`crate::fallen_tree`]) and the huge mushrooms (in
+//! [`crate::huge_mushroom`]), with the block state providers they use.
 //!
 //! A configured feature compiles from its JSON once, with every placed feature it refers to, and fails to
 //! compile, as a whole, when any part of it is not ported yet: a feature type, a block state provider, a
@@ -21,6 +22,7 @@ use crate::data::{
 };
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
+use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
 use crate::placement::{
     BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
     pick_weighted, place_positions, sample_int_provider,
@@ -76,6 +78,8 @@ pub enum CompiledFeature {
     Tree(Box<CompiledTree>),
     /// `minecraft:fallen_tree`.
     FallenTree(Box<CompiledFallenTree>),
+    /// `minecraft:huge_brown_mushroom` and `minecraft:huge_red_mushroom`.
+    HugeMushroom(Box<CompiledHugeMushroom>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -372,6 +376,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         ),
         CompiledFeature::Tree(tree) => place_tree(world, tree, random, origin),
         CompiledFeature::FallenTree(tree) => place_fallen_tree(world, tree, random, origin),
+        CompiledFeature::HugeMushroom(mushroom) => {
+            place_huge_mushroom(world, mushroom, random, origin)
+        }
         CompiledFeature::Disk {
             provider,
             target,
@@ -864,12 +871,24 @@ impl<'a> FeatureCompiler<'a> {
                 Some(tree) => CompiledFeature::FallenTree(Box::new(tree)),
                 None => return Ok(None),
             },
+            kind @ ("minecraft:huge_brown_mushroom" | "minecraft:huge_red_mushroom") => {
+                let red = kind == "minecraft:huge_red_mushroom";
+                match self.huge_mushroom(name, red, config)? {
+                    Some(mushroom) => CompiledFeature::HugeMushroom(Box::new(mushroom)),
+                    None => return Ok(None),
+                }
+            }
             _ => return Ok(None),
         };
         Ok(Some(Arc::new(feature)))
     }
 
-    fn predicate(
+    /// The data pack the compiler reads.
+    pub(crate) fn data(&self) -> &WorldgenData {
+        self.data
+    }
+
+    pub(crate) fn predicate(
         &self,
         name: &str,
         json: &Value,

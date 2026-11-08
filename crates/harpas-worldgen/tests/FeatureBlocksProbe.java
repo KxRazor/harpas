@@ -88,6 +88,7 @@ public final class FeatureBlocksProbe {
         long seed = Long.parseLong(args[2]);
         var supported = new HashSet<>(Files.readAllLines(Path.of(args[3])));
         var lookup = VanillaRegistries.createLookup();
+        WorldgenReferenceProbe.loadConfiguredFeaturesFromDataPack(lookup);
         var random = RandomState.create(lookup, NoiseGeneratorSettings.OVERWORLD, seed);
         var biomes = new MappedRegistry<Biome>(Registries.BIOME, com.mojang.serialization.Lifecycle.stable());
         lookup.lookupOrThrow(Registries.BIOME).listElements().forEach(

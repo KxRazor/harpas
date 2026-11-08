@@ -83,6 +83,24 @@ public final class WorldgenReferenceProbe {
         }
     }
 
+    // Replaces every configured feature built in code (VanillaRegistries) by the one a server loads from the data
+    // pack in the jar. The two differ where a codec does not write back what the code built: the shipped JSON was
+    // generated through the codec, so CherryFoliagePlacer's corner_hole_chance holds its wide_bottom_layer_hole_chance.
+    static void loadConfiguredFeaturesFromDataPack(net.minecraft.core.HolderLookup.Provider lookup) throws Exception {
+        var ops = net.minecraft.resources.RegistryOps.create(com.mojang.serialization.JsonOps.INSTANCE, lookup);
+        var value = net.minecraft.core.Holder.Reference.class.getDeclaredField("value");
+        value.setAccessible(true);
+        for (var holder : lookup.lookupOrThrow(net.minecraft.core.registries.Registries.CONFIGURED_FEATURE).listElements().toList()) {
+            var id = holder.key().identifier();
+            String path = "/data/" + id.getNamespace() + "/worldgen/configured_feature/" + id.getPath() + ".json";
+            try (var stream = WorldgenReferenceProbe.class.getResourceAsStream(path)) {
+                if (stream == null) throw new IllegalArgumentException("missing configured feature " + id);
+                var json = com.google.gson.JsonParser.parseReader(new java.io.InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8));
+                value.set(holder, net.minecraft.world.level.levelgen.feature.ConfiguredFeature.DIRECT_CODEC.parse(ops, json).getOrThrow());
+            }
+        }
+    }
+
     static void addBlockTag(String name, java.util.Set<net.minecraft.core.Holder<Block>> blocks,
                             java.util.Set<String> visited) throws Exception {
         if (!visited.add(name)) return;

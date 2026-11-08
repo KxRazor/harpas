@@ -64,6 +64,7 @@ public final class TreeFeatureProbe {
         int trees = Integer.parseInt(args[3]);
         String[] features = args[4].split(",");
         var lookup = VanillaRegistries.createLookup();
+        WorldgenReferenceProbe.loadConfiguredFeaturesFromDataPack(lookup);
         var random = RandomState.create(lookup, NoiseGeneratorSettings.OVERWORLD, seed);
         var biomes = new MappedRegistry<Biome>(Registries.BIOME, com.mojang.serialization.Lifecycle.stable());
         lookup.lookupOrThrow(Registries.BIOME).listElements().forEach(

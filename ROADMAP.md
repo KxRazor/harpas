@@ -144,7 +144,9 @@ vanilla for the same seed.
   - [x] Tree decorators on the ported trees: trunk and leaf vines, cocoa, bee nests with their bees and leaf
         litter, with the shape updates of vines and cocoa, compared with vanilla's own tree features including
         bee nest block entities (`tree_feature_parity`).
-  - [ ] Fallen trees, the remaining decorators and the remaining trunk, foliage and root placers.
+  - [x] Fallen trees with their stump and log decorators (`attached_to_logs`), and mushroom survival without
+        light, compared with vanilla's own features (`tree_feature_parity`, `feature_blocks_parity`).
+  - [ ] The remaining decorators and the remaining trunk, foliage and root placers.
   - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

@@ -1,5 +1,5 @@
-//! Configured features beyond ores: `simple_block`, the three selectors, `block_column`, `disk` and `tree`
-//! (in [`crate::tree`]), with the block state providers they use.
+//! Configured features beyond ores: `simple_block`, the three selectors, `block_column`, `disk`, `tree` (in
+//! [`crate::tree`]) and `fallen_tree` (in [`crate::fallen_tree`]), with the block state providers they use.
 //!
 //! A configured feature compiles from its JSON once, with every placed feature it refers to, and fails to
 //! compile, as a whole, when any part of it is not ported yet: a feature type, a block state provider, a
@@ -19,6 +19,7 @@ use crate::data::{
     WorldgenData, WorldgenDataError, parse_block_predicate, parse_block_state_def,
     parse_int_provider, parse_noise_parameters, parse_placed_feature,
 };
+use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::placement::{
     BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
@@ -73,6 +74,8 @@ pub enum CompiledFeature {
     },
     /// `minecraft:tree`.
     Tree(Box<CompiledTree>),
+    /// `minecraft:fallen_tree`.
+    FallenTree(Box<CompiledFallenTree>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -368,6 +371,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             origin,
         ),
         CompiledFeature::Tree(tree) => place_tree(world, tree, random, origin),
+        CompiledFeature::FallenTree(tree) => place_fallen_tree(world, tree, random, origin),
         CompiledFeature::Disk {
             provider,
             target,
@@ -573,7 +577,7 @@ fn place_disk<W: FeatureWorld, R: RandomSource>(
 }
 
 /// `Feature.markAboveForPostProcessing`: up to two blocks above, stopping at air.
-fn mark_above_for_postprocessing(world: &mut impl FeatureWorld, [x, y, z]: [i32; 3]) {
+pub(crate) fn mark_above_for_postprocessing(world: &mut impl FeatureWorld, [x, y, z]: [i32; 3]) {
     for dy in 1..=2 {
         if block_states().is_air(world.block_state(x, y + dy, z)) {
             return;
@@ -854,6 +858,10 @@ impl<'a> FeatureCompiler<'a> {
             }
             "minecraft:tree" => match self.tree(name, config)? {
                 Some(tree) => CompiledFeature::Tree(Box::new(tree)),
+                None => return Ok(None),
+            },
+            "minecraft:fallen_tree" => match self.fallen_tree(name, config)? {
+                Some(tree) => CompiledFeature::FallenTree(Box::new(tree)),
                 None => return Ok(None),
             },
             _ => return Ok(None),

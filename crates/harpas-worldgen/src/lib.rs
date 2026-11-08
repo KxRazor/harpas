@@ -9,6 +9,7 @@ pub mod carver;
 pub mod configured;
 pub mod data;
 pub mod density;
+pub mod fallen_tree;
 pub mod feature;
 pub mod generator;
 pub mod java_hash;
@@ -24,6 +25,7 @@ pub mod surface;
 pub mod survival;
 pub mod template;
 pub mod tree;
+pub mod tree_decorator;
 
 pub use aquifer::{
     Aquifer, FluidStatus, GlobalFluidPicker, NoiseBasedAquifer, WAY_BELOW_MIN_Y, clamped_map, map,

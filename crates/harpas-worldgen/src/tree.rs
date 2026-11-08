@@ -1,5 +1,5 @@
 //! `minecraft:tree` (`TreeFeature`) with straight and fancy trunks, blob, fancy, spruce and pine foliage, and the
-//! `trunk_vine`, `leave_vine`, `cocoa`, `beehive` and `place_on_ground` decorators.
+//! decorators of [`crate::tree_decorator`].
 //!
 //! A tree draws its height, its foliage height and radius, checks that the column is inside the world and,
 //! shrinking the height when blocks are in the way (`getMaxFreeTreeHeight`), free of blocks a tree may not
@@ -15,21 +15,19 @@
 use std::sync::Arc;
 
 use harpas_core::block::block_states;
-use harpas_core::block_behavior::block_behavior;
 use harpas_core::math::{floor_f32, floor_f64};
-use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_core::random::{RandomSource, WorldgenRandom};
 use serde_json::Value;
 
 use crate::configured::{FeatureCompiler, StateProvider};
 use crate::data::{IntProviderDef, WorldgenData, WorldgenDataError, parse_int_provider};
 use crate::feature::FeatureWorld;
-use crate::generator::HeightmapType;
 use crate::java_hash::BlockPosSet;
 use crate::placement::{Fluid, StateSet, fluid, sample_int_provider, states_where};
 use crate::shape_update::{
     Direction, ShapeUpdates, VoxelShape, property, update_shape_at_edge, with_property,
 };
+use crate::tree_decorator::{Decorating, Decorator, DecoratorContext};
 
 /// A compiled `minecraft:tree`.
 #[derive(Debug)]
@@ -45,66 +43,6 @@ pub struct CompiledTree {
     blocks: Arc<TreeBlocks>,
 }
 
-/// `TreeDecorator`.
-#[derive(Debug)]
-enum Decorator {
-    /// `trunk_vine`: vines on the sides of the trunk.
-    TrunkVine,
-    /// `leave_vine`: vines hanging from the sides of the leaves, with the probability of each side.
-    LeaveVine(f32),
-    /// `cocoa`: cocoa beside the lowest three blocks of the trunk, with the probability of any.
-    Cocoa(f32),
-    /// `beehive`: a bee nest beside the trunk under the leaves, with its probability. The nest's block entity is
-    /// saved as `BlockEntity.saveWithFullMetadata` writes it.
-    Beehive(f32),
-    /// `place_on_ground`: blocks on solid ground around the base of the trunk.
-    PlaceOnGround {
-        tries: i32,
-        radius: i32,
-        height: i32,
-        provider: Box<StateProvider>,
-    },
-}
-
-/// `TreeDecorator.Context`: the roots, trunk and foliage of a tree, in Java's iteration order of their sets and
-/// then sorted by height, which keeps that order between blocks at the same height.
-struct DecoratorContext {
-    logs: Vec<[i32; 3]>,
-    leaves: Vec<[i32; 3]>,
-    roots: Vec<[i32; 3]>,
-}
-
-impl DecoratorContext {
-    fn new(sets: &TreeSets) -> Self {
-        let sorted = |set: &BlockPosSet| {
-            let mut positions: Vec<[i32; 3]> = set.iter().collect();
-            positions.sort_by_key(|position| position[1]);
-            positions
-        };
-        Self {
-            logs: sorted(&sets.trunk),
-            leaves: sorted(&sets.foliage),
-            roots: sorted(&sets.roots),
-        }
-    }
-
-    /// `TreeFeature.getLowestTrunkOrRootOfTree`: the trunk, without roots; with roots, the roots, after the trunk
-    /// when the lowest root and the lowest log are at the same height.
-    fn lowest_trunk_or_roots(&self) -> Vec<[i32; 3]> {
-        if self.roots.is_empty() {
-            self.logs.clone()
-        } else if self
-            .logs
-            .first()
-            .is_some_and(|log| log[1] == self.roots[0][1])
-        {
-            self.logs.iter().chain(&self.roots).copied().collect()
-        } else {
-            self.roots.clone()
-        }
-    }
-}
-
 /// The block sets every tree reads, compiled once per data pack.
 #[derive(Debug)]
 pub struct TreeBlocks {
@@ -117,13 +55,13 @@ pub struct TreeBlocks {
     /// States with leaves' `distance` property.
     leaves: StateSet,
     /// Any vine state.
-    vine: StateSet,
+    pub(crate) vine: StateSet,
     /// Shape updates for the blocks around a tree.
     updates: ShapeUpdates,
     /// The default vine, cocoa and bee nest states.
-    vine_default: u32,
-    cocoa: u32,
-    bee_nest: u32,
+    pub(crate) vine_default: u32,
+    pub(crate) cocoa: u32,
+    pub(crate) bee_nest: u32,
 }
 
 impl TreeBlocks {
@@ -156,7 +94,7 @@ impl TreeBlocks {
     }
 
     /// `TreeFeature.validTreePos`: air or `#replaceable_by_trees`.
-    fn valid(&self, state: u32) -> bool {
+    pub(crate) fn valid(&self, state: u32) -> bool {
         block_states().is_air(state) || self.replaceable.contains(state)
     }
 
@@ -314,17 +252,6 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         self.sets.trunk.insert(position);
         self.world
             .set_block_state(position[0], position[1], position[2], state);
-    }
-
-    /// The decoration setter.
-    fn set_decoration(&mut self, position: [i32; 3], state: u32) -> bool {
-        self.sets.decorations.insert(position);
-        self.world
-            .set_block_state(position[0], position[1], position[2], state)
-    }
-
-    fn is_air(&self, position: [i32; 3]) -> bool {
-        block_states().is_air(self.state(position))
     }
 
     fn set_foliage(&mut self, position: [i32; 3], state: u32) {
@@ -620,239 +547,6 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
     }
 }
 
-impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
-    /// Runs each decorator in order on the tree's blocks as they were before any decorator ran.
-    fn decorate(&mut self) {
-        let tree = self.tree;
-        if tree.decorators.is_empty() {
-            return;
-        }
-        let context = DecoratorContext::new(&self.sets);
-        for decorator in &tree.decorators {
-            match decorator {
-                Decorator::TrunkVine => self.trunk_vine(&context),
-                Decorator::LeaveVine(probability) => self.leave_vine(&context, *probability),
-                Decorator::Cocoa(probability) => self.cocoa(&context, *probability),
-                Decorator::Beehive(probability) => self.beehive(&context, *probability),
-                Decorator::PlaceOnGround {
-                    tries,
-                    radius,
-                    height,
-                    provider,
-                } => self.place_on_ground(&context, *tries, *radius, *height, provider),
-            }
-        }
-    }
-
-    /// `TreeDecorator.Context.placeVine`: a vine attached on one side.
-    fn place_vine(&mut self, position: [i32; 3], side: &str) {
-        let state = with_property(self.tree.blocks.vine_default, side, "true");
-        self.set_decoration(position, state);
-    }
-
-    /// `TrunkVineDecorator`: beside each log, in two of three cases for each side, a vine on the air there.
-    fn trunk_vine(&mut self, context: &DecoratorContext) {
-        for &log in &context.logs {
-            for (direction, side) in VINE_SIDES {
-                if self.random.next_int_bounded(3) > 0 {
-                    let position = direction.step(log);
-                    if self.is_air(position) {
-                        self.place_vine(position, side);
-                    }
-                }
-            }
-        }
-    }
-
-    /// `LeaveVineDecorator`: beside each leaf, with the probability for each side, a vine on the air there that
-    /// hangs down through up to four more blocks of air.
-    fn leave_vine(&mut self, context: &DecoratorContext, probability: f32) {
-        for &leaf in &context.leaves {
-            for (direction, side) in VINE_SIDES {
-                if self.random.next_float() < probability {
-                    let position = direction.step(leaf);
-                    if self.is_air(position) {
-                        self.hanging_vine(position, side);
-                    }
-                }
-            }
-        }
-    }
-
-    /// `LeaveVineDecorator.addHangingVine`.
-    fn hanging_vine(&mut self, mut position: [i32; 3], side: &str) {
-        self.place_vine(position, side);
-        position[1] -= 1;
-        for _ in 0..4 {
-            if !self.is_air(position) {
-                break;
-            }
-            self.place_vine(position, side);
-            position[1] -= 1;
-        }
-    }
-
-    /// `CocoaDecorator`: with the probability, on the logs up to two blocks above the lowest one, cocoa of a
-    /// random age facing the log, on the air beside it, in a quarter of the cases for each side.
-    fn cocoa(&mut self, context: &DecoratorContext, probability: f32) {
-        if self.random.next_float() >= probability {
-            return;
-        }
-        let Some(lowest) = context.logs.first() else {
-            return;
-        };
-        for &log in context.logs.iter().filter(|log| log[1] - lowest[1] <= 2) {
-            for direction in HORIZONTAL {
-                if self.random.next_float() > 0.25 {
-                    continue;
-                }
-                let position = direction.opposite().step(log);
-                if self.is_air(position) {
-                    let age = self.random.next_int_bounded(3).to_string();
-                    let state = with_property(self.tree.blocks.cocoa, "age", &age);
-                    let state = with_property(state, "facing", direction.name());
-                    self.set_decoration(position, state);
-                }
-            }
-        }
-    }
-
-    /// `BeehiveDecorator`: with the probability, a bee nest facing south with two or three bees, beside a log
-    /// below the lowest leaves (or a random log near the bottom of a tree without leaves), on the first
-    /// position in a shuffled list that is air with air to its south.
-    fn beehive(&mut self, context: &DecoratorContext, probability: f32) {
-        let (Some(first), Some(last)) = (context.logs.first(), context.logs.last()) else {
-            return;
-        };
-        if self.random.next_float() >= probability {
-            return;
-        }
-        let y = match context.leaves.first() {
-            Some(leaf) => (leaf[1] - 1).max(first[1] + 1),
-            None => (first[1] + 1 + self.random.next_int_bounded(3)).min(last[1]),
-        };
-        let mut positions: Vec<[i32; 3]> = context
-            .logs
-            .iter()
-            .filter(|log| log[1] == y)
-            .flat_map(|&log| BEE_NEST_SIDES.map(|direction| direction.step(log)))
-            .collect();
-        if positions.is_empty() {
-            return;
-        }
-        shuffle(&mut positions, self.random);
-        let Some(&nest) = positions.iter().find(|&&position| {
-            self.is_air(position) && self.is_air(Direction::South.step(position))
-        }) else {
-            return;
-        };
-        let state = with_property(self.tree.blocks.bee_nest, "facing", "south");
-        if !self.set_decoration(nest, state) {
-            return;
-        }
-        let count = 2 + self.random.next_int_bounded(2);
-        let bees: Vec<Compound> = (0..count)
-            .map(|_| bee_occupant(self.random.next_int_bounded(599)))
-            .collect();
-        let mut entity = Compound::new();
-        entity.insert("id", "minecraft:beehive");
-        entity.insert("x", nest[0]);
-        entity.insert("y", nest[1]);
-        entity.insert("z", nest[2]);
-        entity.insert("bees", Nbt::List(List::Compound(bees)));
-        entity.insert("components", Compound::new());
-        self.world
-            .set_block_entity(nest[0], nest[1], nest[2], entity);
-    }
-
-    /// `PlaceOnGroundDecorator`: tries random positions in a box around the lowest layer of the trunk (or the
-    /// roots) and places a block above each that is solid ground under air or a vine, at or above the
-    /// `MOTION_BLOCKING_NO_LEAVES` surface.
-    fn place_on_ground(
-        &mut self,
-        context: &DecoratorContext,
-        tries: i32,
-        radius: i32,
-        height: i32,
-        provider: &StateProvider,
-    ) {
-        let lowest = context.lowest_trunk_or_roots();
-        let Some(&[x, y, z]) = lowest.first() else {
-            return;
-        };
-        let (mut min_x, mut max_x, mut min_z, mut max_z) = (x, x, z, z);
-        for position in lowest.iter().filter(|position| position[1] == y) {
-            min_x = min_x.min(position[0]);
-            max_x = max_x.max(position[0]);
-            min_z = min_z.min(position[2]);
-            max_z = max_z.max(position[2]);
-        }
-        for _ in 0..tries {
-            let position = [
-                self.random
-                    .next_int_between_inclusive(min_x - radius, max_x + radius),
-                self.random
-                    .next_int_between_inclusive(y - height, y + height),
-                self.random
-                    .next_int_between_inclusive(min_z - radius, max_z + radius),
-            ];
-            let above = Direction::Up.step(position);
-            let state = self.state(above);
-            if (block_states().is_air(state) || self.tree.blocks.vine.contains(state))
-                && block_behavior().is_solid_render(self.state(position))
-                && self.world.heightmap(
-                    HeightmapType::MotionBlockingNoLeaves,
-                    position[0],
-                    position[2],
-                ) <= above[1]
-            {
-                let state = provider.state(self.world, self.random, above);
-                self.set_decoration(above, state);
-            }
-        }
-    }
-}
-
-/// The sides of a block a vine decorator tries, in vanilla's order, with the side of the vine that faces the
-/// block.
-const VINE_SIDES: [(Direction, &str); 4] = [
-    (Direction::West, "east"),
-    (Direction::East, "west"),
-    (Direction::North, "south"),
-    (Direction::South, "north"),
-];
-
-/// `Direction.Plane.HORIZONTAL`.
-const HORIZONTAL: [Direction; 4] = [
-    Direction::North,
-    Direction::East,
-    Direction::South,
-    Direction::West,
-];
-
-/// `BeehiveDecorator.SPAWN_DIRECTIONS`: the horizontal directions except the one opposite the nest's facing.
-const BEE_NEST_SIDES: [Direction; 3] = [Direction::East, Direction::South, Direction::West];
-
-/// `BeehiveBlockEntity.Occupant.create`: a bee that has spent `ticks` in the hive, saved as
-/// `BeehiveBlockEntity` saves its bees.
-fn bee_occupant(ticks: i32) -> Compound {
-    let mut entity_data = Compound::new();
-    entity_data.insert("id", "minecraft:bee");
-    let mut bee = Compound::new();
-    bee.insert("entity_data", entity_data);
-    bee.insert("ticks_in_hive", ticks);
-    bee.insert("min_ticks_in_hive", 600);
-    bee
-}
-
-/// `Util.shuffle`.
-fn shuffle<T>(values: &mut [T], random: &mut impl RandomSource) {
-    for size in (2..=values.len()).rev() {
-        let other = random.next_int_bounded(size as i32) as usize;
-        values.swap(size - 1, other);
-    }
-}
-
 fn default_state(name: &str) -> Result<u32, WorldgenDataError> {
     block_states()
         .default_state(name)
@@ -919,8 +613,22 @@ pub fn place_tree<W: FeatureWorld, R: RandomSource>(
     if !placer.place(origin) || (placer.sets.trunk.is_empty() && placer.sets.foliage.is_empty()) {
         return false;
     }
-    placer.decorate();
-    let Placer { world, sets, .. } = placer;
+    let Placer {
+        world,
+        random,
+        mut sets,
+        ..
+    } = placer;
+    if !tree.decorators.is_empty() {
+        let context = DecoratorContext::new(&sets.trunk, &sets.foliage, &sets.roots);
+        Decorating {
+            world: &mut *world,
+            random: &mut *random,
+            blocks: &tree.blocks,
+            decorations: Some(&mut sets.decorations),
+        }
+        .run(&tree.decorators, &context);
+    }
     let positions = sets
         .roots
         .iter()
@@ -1058,18 +766,9 @@ impl FeatureCompiler<'_> {
         if config.get("root_placer").is_some() {
             return Ok(None);
         }
-        let mut decorators = Vec::new();
-        for json in config
-            .get("decorators")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(decorator) = self.decorator(name, json)? else {
-                return Ok(None);
-            };
-            decorators.push(decorator);
-        }
+        let Some(decorators) = self.decorators(name, config.get("decorators"))? else {
+            return Ok(None);
+        };
         let (Some(trunk_provider), Some(foliage_provider), Some(below_trunk_provider)) = (
             self.provider(name, field("trunk_provider")?)?,
             self.provider(name, field("foliage_provider")?)?,
@@ -1097,41 +796,6 @@ impl FeatureCompiler<'_> {
             below_trunk_provider,
             decorators,
             blocks: self.tree_blocks()?,
-        }))
-    }
-
-    /// Compiles a tree decorator; None for a type not ported yet.
-    fn decorator(
-        &mut self,
-        name: &str,
-        json: &Value,
-    ) -> Result<Option<Decorator>, WorldgenDataError> {
-        let probability = || {
-            json.get("probability")
-                .and_then(Value::as_f64)
-                .map(|probability| probability as f32)
-                .ok_or_else(|| invalid(name, "a decorator needs a `probability`"))
-        };
-        Ok(Some(match kind(name, json)? {
-            "minecraft:trunk_vine" => Decorator::TrunkVine,
-            "minecraft:leave_vine" => Decorator::LeaveVine(probability()?),
-            "minecraft:cocoa" => Decorator::Cocoa(probability()?),
-            "minecraft:beehive" => Decorator::Beehive(probability()?),
-            "minecraft:place_on_ground" => {
-                let field = json
-                    .get("block_state_provider")
-                    .ok_or_else(|| invalid(name, "missing field `block_state_provider`"))?;
-                let Some(provider) = self.provider(name, field)? else {
-                    return Ok(None);
-                };
-                Decorator::PlaceOnGround {
-                    tries: integer(name, json, "tries", Some(128))?,
-                    radius: integer(name, json, "radius", Some(2))?,
-                    height: integer(name, json, "height", Some(1))?,
-                    provider: Box::new(provider),
-                }
-            }
-            _ => return Ok(None),
         }))
     }
 }

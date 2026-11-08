@@ -1,4 +1,4 @@
-//! Compares trees with vanilla's own tree configured features: many trees placed one after another in the same
+//! Compares trees and fallen trees with vanilla's own configured features: many trees placed one after another in the same
 //! chunks, each with a decoration random source seeded from the chunk and its index, so that later trees grow
 //! through, are cut short by or change the leaves of earlier ones. Each tree's result and the random values it
 //! consumed are compared, then every block that changed in the 3x3 chunks and the block entities the trees
@@ -19,8 +19,9 @@ use reference::Reference;
 
 const SEED: i64 = -4_172_144_997_902_289_642;
 /// The configured features compared, cycled through in each chunk: trees without decorators, then trees with
-/// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), and leaf litter.
-const FEATURES: [&str; 12] = [
+/// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), leaf litter, and
+/// fallen trees with vines on their stumps and mushrooms on their logs.
+const FEATURES: [&str; 17] = [
     "minecraft:oak",
     "minecraft:fancy_oak",
     "minecraft:birch",
@@ -33,8 +34,13 @@ const FEATURES: [&str; 12] = [
     "minecraft:jungle_tree",
     "minecraft:oak_leaf_litter",
     "minecraft:birch_bees_0002_leaf_litter",
+    "minecraft:fallen_oak_tree",
+    "minecraft:fallen_birch_tree",
+    "minecraft:fallen_spruce_tree",
+    "minecraft:fallen_jungle_tree",
+    "minecraft:fallen_super_birch_tree",
 ];
-const TREES_PER_CHUNK: usize = 72;
+const TREES_PER_CHUNK: usize = 102;
 /// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow and a steep mixed chunk.
 const CHUNKS: [(i32, i32); 6] = [
     (-42, 6),
@@ -46,11 +52,12 @@ const CHUNKS: [(i32, i32); 6] = [
 ];
 
 /// The blocks the decorators place, each of which vanilla's trees must place for the comparison to cover it.
-const DECORATIONS: [&str; 4] = [
+const DECORATIONS: [&str; 5] = [
     "minecraft:vine",
     "minecraft:cocoa",
     "minecraft:bee_nest",
     "minecraft:leaf_litter",
+    "minecraft:red_mushroom",
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;

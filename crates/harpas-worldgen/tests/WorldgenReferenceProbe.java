@@ -64,6 +64,9 @@ public final class WorldgenReferenceProbe {
         @Override public net.minecraft.world.ticks.LevelTickAccess<net.minecraft.world.level.material.Fluid> getFluidTicks() {
             return new net.minecraft.world.ticks.WorldGenTickAccess<>(pos -> getChunk(pos).getFluidTicks());
         }
+        // No chunk has initialized its light during FEATURES: the sky light engine reports 15 in columns it has no
+        // data for, and the block light engine 0 (LevelLightEngine.getRawBrightness). Mushrooms read it.
+        @Override public int getRawBrightness(net.minecraft.core.BlockPos pos, int darken) { return Math.max(0, 15 - darken); }
         @Override public long getGameTime() { return 0; }
         @Override public long nextSubTickCount() { return subTicks.getAndIncrement(); }
         @Override public int getMinY() { return height.getMinY(); }

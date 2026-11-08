@@ -20,8 +20,9 @@ use reference::Reference;
 const SEED: i64 = -4_172_144_997_902_289_642;
 /// The configured features compared, cycled through in each chunk: trees without decorators, then trees with
 /// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), leaf litter, and
-/// fallen trees with vines on their stumps and mushrooms on their logs.
-const FEATURES: [&str; 17] = [
+/// fallen trees with vines on their stumps and mushrooms on their logs, then acacias, jungle bushes and mega
+/// jungle trees, mega pines and mega spruces with podzol around them.
+const FEATURES: [&str; 22] = [
     "minecraft:oak",
     "minecraft:fancy_oak",
     "minecraft:birch",
@@ -39,8 +40,13 @@ const FEATURES: [&str; 17] = [
     "minecraft:fallen_spruce_tree",
     "minecraft:fallen_jungle_tree",
     "minecraft:fallen_super_birch_tree",
+    "minecraft:acacia",
+    "minecraft:jungle_bush",
+    "minecraft:mega_jungle_tree",
+    "minecraft:mega_pine",
+    "minecraft:mega_spruce",
 ];
-const TREES_PER_CHUNK: usize = 102;
+const TREES_PER_CHUNK: usize = 132;
 /// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow and a steep mixed chunk.
 const CHUNKS: [(i32, i32); 6] = [
     (-42, 6),
@@ -52,12 +58,13 @@ const CHUNKS: [(i32, i32); 6] = [
 ];
 
 /// The blocks the decorators place, each of which vanilla's trees must place for the comparison to cover it.
-const DECORATIONS: [&str; 5] = [
+const DECORATIONS: [&str; 6] = [
     "minecraft:vine",
     "minecraft:cocoa",
     "minecraft:bee_nest",
     "minecraft:leaf_litter",
     "minecraft:red_mushroom",
+    "minecraft:podzol",
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -174,6 +181,7 @@ fn trees_match_vanilla() {
     let mut placed_trees = 0;
     let mut compared_blocks = 0;
     let mut compared_entities = 0;
+    let mut placed_by_feature = [0; FEATURES.len()];
     let mut decorations = [0; DECORATIONS.len()];
     for &(cx, cz) in &CHUNKS {
         assert_eq!(lines.next(), Some(format!("chunk {cx} {cz}").as_str()));
@@ -209,6 +217,7 @@ fn trees_match_vanilla() {
                 "chunk ({cx}, {cz}) tree {index} ({name} at {origin:?}): result and next random value",
             );
             placed_trees += usize::from(result);
+            placed_by_feature[index % FEATURES.len()] += usize::from(result);
         }
         let mut expected = Blocks::new();
         while let Some(line) =
@@ -273,7 +282,9 @@ fn trees_match_vanilla() {
         compared_entities += expected_entities.len();
     }
     assert!(lines.next().is_none(), "unread vanilla output");
-    assert!(placed_trees > 0, "no tree was placed");
+    for (name, placed) in FEATURES.iter().zip(placed_by_feature) {
+        assert!(placed > 0, "vanilla placed no {name}");
+    }
     assert!(compared_entities > 0, "no bee nest was placed");
     for (name, count) in DECORATIONS.iter().zip(decorations) {
         assert!(count > 0, "vanilla placed no {name}");

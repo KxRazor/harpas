@@ -1,5 +1,5 @@
-//! Tree decorators (`TreeDecorator`): `trunk_vine`, `leave_vine`, `cocoa`, `beehive`, `place_on_ground` and
-//! `attached_to_logs`.
+//! Tree decorators (`TreeDecorator`): `trunk_vine`, `leave_vine`, `cocoa`, `beehive`, `place_on_ground`,
+//! `attached_to_logs` and `alter_ground`.
 //!
 //! A tree runs its decorators in order once its trunk and foliage are in place, and a fallen tree runs them on
 //! its stump and on its log. They read lists of the tree's logs, leaves and roots taken in Java's iteration order
@@ -40,6 +40,9 @@ pub(crate) enum Decorator {
         height: i32,
         provider: Box<StateProvider>,
     },
+    /// `alter_ground`: the ground in rounded squares around the base of the trunk, where the provider has a
+    /// state, such as podzol around giant spruces.
+    AlterGround(Box<StateProvider>),
     /// `attached_to_logs`: with the probability, a block on the air beside each log, on a side drawn from
     /// `directions`, with the logs in a shuffled order.
     AttachedToLogs {
@@ -117,6 +120,7 @@ impl<W: FeatureWorld, R: RandomSource> Decorating<'_, W, R> {
                     provider,
                     directions,
                 } => self.attached_to_logs(context, *probability, provider, directions),
+                Decorator::AlterGround(provider) => self.alter_ground(context, provider),
             }
         }
     }
@@ -306,6 +310,53 @@ impl<W: FeatureWorld, R: RandomSource> Decorating<'_, W, R> {
         }
     }
 
+    /// `AlterGroundDecorator`: around each block of the lowest layer of the trunk (or the roots), four rounded
+    /// squares at its corners, then five more at random positions on the edge of an eight-by-eight square.
+    fn alter_ground(&mut self, context: &DecoratorContext, provider: &StateProvider) {
+        let lowest = context.lowest_trunk_or_roots();
+        let Some(&[_, y, _]) = lowest.first() else {
+            return;
+        };
+        for &[x, _, z] in lowest.iter().filter(|position| position[1] == y) {
+            for [dx, dz] in [[-1, -1], [2, -1], [-1, 2], [2, 2]] {
+                self.ground_circle(provider, [x + dx, y, z + dz]);
+            }
+            for _ in 0..5 {
+                let cell = self.random.next_int_bounded(64);
+                let (cx, cz) = (cell % 8, cell / 8);
+                if cx == 0 || cx == 7 || cz == 0 || cz == 7 {
+                    self.ground_circle(provider, [x - 3 + cx, y, z - 3 + cz]);
+                }
+            }
+        }
+    }
+
+    /// `AlterGroundDecorator.placeCircle`: a five-by-five square without its corners.
+    fn ground_circle(&mut self, provider: &StateProvider, [x, y, z]: [i32; 3]) {
+        for dx in -2_i32..=2 {
+            for dz in -2_i32..=2 {
+                if dx.abs() != 2 || dz.abs() != 2 {
+                    self.ground_block(provider, [x + dx, y, z + dz]);
+                }
+            }
+        }
+    }
+
+    /// `AlterGroundDecorator.placeBlockAt`: from two blocks above down to three below, the first position where
+    /// the provider has a state takes it; below the starting height, a block that is not air stops the search.
+    fn ground_block(&mut self, provider: &StateProvider, [x, y, z]: [i32; 3]) {
+        for dy in (-3..=2).rev() {
+            let position = [x, y + dy, z];
+            if let Some(state) = provider.optional_state(self.world, self.random, position) {
+                self.set(position, state);
+                return;
+            }
+            if !self.is_air(position) && dy < 0 {
+                return;
+            }
+        }
+    }
+
     /// `AttachedToLogsDecorator`.
     fn attached_to_logs(
         &mut self,
@@ -424,6 +475,12 @@ impl FeatureCompiler<'_> {
                     height: integer("height", 1)?,
                     provider: Box::new(provider),
                 }
+            }
+            "minecraft:alter_ground" => {
+                let Some(provider) = self.decorator_provider(name, json, "provider")? else {
+                    return Ok(None);
+                };
+                Decorator::AlterGround(Box::new(provider))
             }
             "minecraft:attached_to_logs" => {
                 let Some(provider) = self.decorator_provider(name, json, "block_provider")? else {

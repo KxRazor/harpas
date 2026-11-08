@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use harpas_core::block::block_states;
-use harpas_core::math::{floor_f32, floor_f64};
+use harpas_core::math::{cos_f64, floor_f32, floor_f64, sin_f64};
 use harpas_core::random::{RandomSource, WorldgenRandom};
 use serde_json::Value;
 
@@ -27,7 +27,7 @@ use crate::placement::{Fluid, StateSet, fluid, sample_int_provider, states_where
 use crate::shape_update::{
     Direction, ShapeUpdates, VoxelShape, property, update_shape_at_edge, with_property,
 };
-use crate::tree_decorator::{Decorating, Decorator, DecoratorContext};
+use crate::tree_decorator::{Decorating, Decorator, DecoratorContext, HORIZONTAL};
 
 /// A compiled `minecraft:tree`.
 #[derive(Debug)]
@@ -122,6 +122,12 @@ enum TrunkPlacer {
     Straight(TrunkHeight),
     /// `fancy_trunk_placer`.
     Fancy(TrunkHeight),
+    /// `forking_trunk_placer`: a trunk that leans one way near its top, and may fork another way.
+    Forking(TrunkHeight),
+    /// `giant_trunk_placer`: a two-by-two trunk.
+    Giant(TrunkHeight),
+    /// `mega_jungle_trunk_placer`: a giant trunk with branches near its top.
+    MegaJungle(TrunkHeight),
 }
 
 /// A trunk placer's base height and the bounds of its two random additions.
@@ -150,6 +156,14 @@ enum FoliageKind {
     Spruce(IntProviderDef),
     /// `pine_foliage_placer`, with its height.
     Pine(IntProviderDef),
+    /// `acacia_foliage_placer`: a flat canopy.
+    Acacia,
+    /// `bush_foliage_placer`, with its fixed height.
+    Bush(i32),
+    /// `jungle_foliage_placer` (`MegaJungleFoliagePlacer`), with its fixed height.
+    Jungle(i32),
+    /// `mega_pine_foliage_placer`, with the height of its crown.
+    MegaPine(IntProviderDef),
 }
 
 /// `FeatureSize`: the radius a tree needs free at each height.
@@ -269,9 +283,13 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         let tree = self.tree;
         let tree_height = tree.trunk_placer.tree_height(self.random);
         let foliage_height = match &tree.foliage_placer.kind {
-            FoliageKind::Blob(height) | FoliageKind::Fancy(height) => *height,
+            FoliageKind::Blob(height)
+            | FoliageKind::Fancy(height)
+            | FoliageKind::Bush(height)
+            | FoliageKind::Jungle(height) => *height,
+            FoliageKind::Acacia => 0,
             FoliageKind::Spruce(trunk) => 4.max(tree_height - self.sample(trunk)),
-            FoliageKind::Pine(height) => self.sample(height),
+            FoliageKind::Pine(height) | FoliageKind::MegaPine(height) => self.sample(height),
         };
         let trunk_length = tree_height - foliage_height;
         let mut foliage_radius = self.sample(&tree.foliage_placer.radius);
@@ -295,6 +313,9 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         let attachments = match tree.trunk_placer {
             TrunkPlacer::Straight(_) => self.straight_trunk(free_height, origin),
             TrunkPlacer::Fancy(_) => self.fancy_trunk(free_height, origin),
+            TrunkPlacer::Forking(_) => self.forking_trunk(free_height, origin),
+            TrunkPlacer::Giant(_) => self.giant_trunk(free_height, origin),
+            TrunkPlacer::MegaJungle(_) => self.mega_jungle_trunk(free_height, origin),
         };
         for attachment in attachments {
             self.create_foliage(attachment, foliage_height, foliage_radius);
@@ -420,6 +441,119 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             .collect()
     }
 
+    /// `ForkingTrunkPlacer.placeTrunk`: from a random height near the top, the trunk leans up to three blocks
+    /// one way; a second branch in another random direction starts lower and leans one to three blocks.
+    fn forking_trunk(&mut self, height: i32, origin: [i32; 3]) -> Vec<Attachment> {
+        self.below_trunk([origin[0], origin[1] - 1, origin[2]]);
+        let mut attachments = Vec::new();
+        let lean = HORIZONTAL[self.random.next_int_bounded(4) as usize];
+        let lean_height = height - self.random.next_int_bounded(4) - 1;
+        let mut lean_steps = 3 - self.random.next_int_bounded(3);
+        let [mut x, _, mut z] = origin;
+        let mut top = None;
+        for dy in 0..height {
+            let y = origin[1] + dy;
+            if dy >= lean_height && lean_steps > 0 {
+                let [step_x, _, step_z] = lean.offset();
+                x += step_x;
+                z += step_z;
+                lean_steps -= 1;
+            }
+            if self.place_log([x, y, z], None) {
+                top = Some(y + 1);
+            }
+        }
+        if let Some(top) = top {
+            attachments.push(Attachment {
+                position: [x, top, z],
+                radius_offset: 1,
+                double_trunk: false,
+            });
+        }
+        [x, _, z] = origin;
+        let fork = HORIZONTAL[self.random.next_int_bounded(4) as usize];
+        if fork != lean {
+            let fork_height = lean_height - self.random.next_int_bounded(2) - 1;
+            let mut fork_steps = 1 + self.random.next_int_bounded(3);
+            let mut top = None;
+            let mut dy = fork_height;
+            while dy < height && fork_steps > 0 {
+                if dy >= 1 {
+                    let y = origin[1] + dy;
+                    let [step_x, _, step_z] = fork.offset();
+                    x += step_x;
+                    z += step_z;
+                    if self.place_log([x, y, z], None) {
+                        top = Some(y + 1);
+                    }
+                }
+                dy += 1;
+                fork_steps -= 1;
+            }
+            if let Some(top) = top {
+                attachments.push(Attachment::at([x, top, z]));
+            }
+        }
+        attachments
+    }
+
+    /// `GiantTrunkPlacer.placeTrunk`: a two-by-two trunk toward positive X and Z, whose top layer is only the
+    /// origin's column, with dirt below all four columns.
+    fn giant_trunk(&mut self, height: i32, [x, y, z]: [i32; 3]) -> Vec<Attachment> {
+        for [dx, dz] in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+            self.below_trunk([x + dx, y - 1, z + dz]);
+        }
+        for dy in 0..height {
+            self.place_log_if_free([x, y + dy, z]);
+            if dy < height - 1 {
+                self.place_log_if_free([x + 1, y + dy, z]);
+                self.place_log_if_free([x + 1, y + dy, z + 1]);
+                self.place_log_if_free([x, y + dy, z + 1]);
+            }
+        }
+        vec![Attachment {
+            position: [x, y + height, z],
+            radius_offset: 0,
+            double_trunk: true,
+        }]
+    }
+
+    /// `MegaJungleTrunkPlacer.placeTrunk`: a giant trunk, then branches of five logs leaning out from its upper
+    /// half, each with a small foliage cluster.
+    fn mega_jungle_trunk(&mut self, height: i32, origin: [i32; 3]) -> Vec<Attachment> {
+        let mut attachments = self.giant_trunk(height, origin);
+        let mut branch_y = height - 2 - self.random.next_int_bounded(4);
+        while branch_y > height / 2 {
+            let angle = self.random.next_float() * std::f32::consts::TAU;
+            let (mut dx, mut dz) = (0, 0);
+            for step in 0..5 {
+                dx = (1.5 + cos_f64(f64::from(angle)) * step as f32) as i32;
+                dz = (1.5 + sin_f64(f64::from(angle)) * step as f32) as i32;
+                let position = [
+                    origin[0] + dx,
+                    origin[1] + branch_y - 3 + step / 2,
+                    origin[2] + dz,
+                ];
+                self.place_log(position, None);
+            }
+            attachments.push(Attachment {
+                position: [origin[0] + dx, origin[1] + branch_y, origin[2] + dz],
+                radius_offset: -2,
+                double_trunk: false,
+            });
+            branch_y -= 2 + self.random.next_int_bounded(4);
+        }
+        attachments
+    }
+
+    /// `TrunkPlacer.placeLogIfFree`: a log where the position is free; `placeLog` then places it only on a
+    /// valid tree position, so an existing log stays.
+    fn place_log_if_free(&mut self, position: [i32; 3]) {
+        if self.tree.blocks.free(self.state(position)) {
+            self.place_log(position, None);
+        }
+    }
+
     /// `FancyTrunkPlacer.makeLimb`: places logs along a line, or checks that it is free.
     fn make_limb(&mut self, start: [i32; 3], end: [i32; 3], make: bool) -> bool {
         if !make && start == end {
@@ -476,6 +610,48 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
                     }
                 }
             }
+            FoliageKind::Acacia => {
+                let position = [position[0], position[1] + offset, position[2]];
+                let radius = foliage_radius + attachment.radius_offset;
+                self.leaves_row(position, radius, -1 - foliage_height, double_trunk);
+                self.leaves_row(position, foliage_radius - 1, -foliage_height, double_trunk);
+                self.leaves_row(position, radius - 1, 0, double_trunk);
+            }
+            FoliageKind::Bush(_) => {
+                for y in (offset - foliage_height..=offset).rev() {
+                    let radius = foliage_radius + attachment.radius_offset - 1 - y;
+                    self.leaves_row(position, radius, y, double_trunk);
+                }
+            }
+            FoliageKind::Jungle(_) => {
+                let height = if double_trunk {
+                    foliage_height
+                } else {
+                    1 + self.random.next_int_bounded(2)
+                };
+                for y in (offset - height..=offset).rev() {
+                    let radius = foliage_radius + attachment.radius_offset + 1 - y;
+                    self.leaves_row(position, radius, y, double_trunk);
+                }
+            }
+            FoliageKind::MegaPine(_) => {
+                // Rows from the bottom of the crown up, widening downward, with every other row one wider
+                // where the width would repeat.
+                let mut previous = 0;
+                for y in position[1] - foliage_height + offset..=position[1] + offset {
+                    let depth = position[1] - y;
+                    let radius = foliage_radius
+                        + attachment.radius_offset
+                        + floor_f32(depth as f32 / foliage_height as f32 * 3.5);
+                    let row = if depth > 0 && radius == previous && y & 1 == 0 {
+                        radius + 1
+                    } else {
+                        radius
+                    };
+                    self.leaves_row([position[0], y, position[2]], row, 0, double_trunk);
+                    previous = radius;
+                }
+            }
             FoliageKind::Pine(_) => {
                 let mut current = 0;
                 for y in (offset - foliage_height..=offset).rev() {
@@ -520,6 +696,19 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             FoliageKind::Spruce(_) | FoliageKind::Pine(_) => {
                 dx == radius && dz == radius && radius > 0
             }
+            FoliageKind::Acacia => {
+                if y == 0 {
+                    (dx > 1 || dz > 1) && dx != 0 && dz != 0
+                } else {
+                    dx == radius && dz == radius && radius > 0
+                }
+            }
+            FoliageKind::Bush(_) => {
+                dx == radius && dz == radius && self.random.next_int_bounded(2) == 0
+            }
+            FoliageKind::Jungle(_) | FoliageKind::MegaPine(_) => {
+                dx + dz >= 7 || dx * dx + dz * dz > radius * radius
+            }
         }
     }
 
@@ -556,7 +745,11 @@ fn default_state(name: &str) -> Result<u32, WorldgenDataError> {
 impl TrunkPlacer {
     /// `TrunkPlacer.getTreeHeight`.
     fn tree_height<R: RandomSource>(&self, random: &mut WorldgenRandom<R>) -> i32 {
-        let (Self::Straight(height) | Self::Fancy(height)) = self;
+        let (Self::Straight(height)
+        | Self::Fancy(height)
+        | Self::Forking(height)
+        | Self::Giant(height)
+        | Self::MegaJungle(height)) = self;
         height.base
             + random.next_int_bounded(height.rand_a + 1)
             + random.next_int_bounded(height.rand_b + 1)
@@ -844,6 +1037,9 @@ fn trunk_placer(name: &str, json: &Value) -> Result<Option<TrunkPlacer>, Worldge
     Ok(match kind(name, json)? {
         "minecraft:straight_trunk_placer" => Some(TrunkPlacer::Straight(height)),
         "minecraft:fancy_trunk_placer" => Some(TrunkPlacer::Fancy(height)),
+        "minecraft:forking_trunk_placer" => Some(TrunkPlacer::Forking(height)),
+        "minecraft:giant_trunk_placer" => Some(TrunkPlacer::Giant(height)),
+        "minecraft:mega_jungle_trunk_placer" => Some(TrunkPlacer::MegaJungle(height)),
         _ => None,
     })
 }
@@ -851,11 +1047,20 @@ fn trunk_placer(name: &str, json: &Value) -> Result<Option<TrunkPlacer>, Worldge
 fn foliage_placer(name: &str, json: &Value) -> Result<Option<FoliagePlacer>, WorldgenDataError> {
     let foliage_kind = match kind(name, json)? {
         "minecraft:blob_foliage_placer" => FoliageKind::Blob(integer(name, json, "height", None)?),
+        "minecraft:acacia_foliage_placer" => FoliageKind::Acacia,
+        "minecraft:bush_foliage_placer" => FoliageKind::Bush(integer(name, json, "height", None)?),
+        "minecraft:jungle_foliage_placer" => {
+            FoliageKind::Jungle(integer(name, json, "height", None)?)
+        }
         "minecraft:fancy_foliage_placer" => {
             FoliageKind::Fancy(integer(name, json, "height", None)?)
         }
         "minecraft:spruce_foliage_placer" => match int_provider(name, json, "trunk_height")? {
             Some(trunk) => FoliageKind::Spruce(trunk),
+            None => return Ok(None),
+        },
+        "minecraft:mega_pine_foliage_placer" => match int_provider(name, json, "crown_height")? {
+            Some(height) => FoliageKind::MegaPine(height),
             None => return Ok(None),
         },
         "minecraft:pine_foliage_placer" => match int_provider(name, json, "height")? {

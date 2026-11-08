@@ -146,7 +146,11 @@ vanilla for the same seed.
         bee nest block entities (`tree_feature_parity`).
   - [x] Fallen trees with their stump and log decorators (`attached_to_logs`), and mushroom survival without
         light, compared with vanilla's own features (`tree_feature_parity`, `feature_blocks_parity`).
-  - [ ] The remaining decorators and the remaining trunk, foliage and root placers.
+  - [x] Jungle, savanna and giant trees: forking, giant and mega jungle trunks, acacia, bush, jungle and mega pine
+        foliage and the `alter_ground` decorator, compared with vanilla's own tree features
+        (`tree_feature_parity`).
+  - [ ] The remaining decorators and the remaining trunk, foliage and root placers: dark oak, cherry, bending,
+        upwards branching and mangrove roots, and huge mushrooms.
   - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

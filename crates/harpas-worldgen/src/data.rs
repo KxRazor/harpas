@@ -20,6 +20,7 @@ use crate::biome::{Parameter, ParameterPoint, quantize_coord};
 use crate::density::{
     BinaryOp, DensityFunctionDef, MarkerKind, NoiseRouterDef, RarityValueMapper, UnaryOp,
 };
+use crate::generator::HeightmapType;
 use crate::spline::{CubicSplineDef, SplinePointDef};
 use crate::surface::{VerticalAnchor, parse_vertical_anchor};
 
@@ -346,11 +347,182 @@ pub enum PlacementModifierDef {
     HeightRange(HeightProviderDef),
     /// Places the feature only in biomes that list it (`minecraft:biome`).
     Biome,
+    /// Moves a position to the top of a heightmap (`minecraft:heightmap`).
+    Heightmap(HeightmapType),
+    /// Finds the ground of each layer of a column, a number of times per layer
+    /// (`minecraft:count_on_every_layer`).
+    CountOnEveryLayer(IntProviderDef),
+    /// Moves a position step by step until a predicate holds (`minecraft:environment_scan`).
+    EnvironmentScan {
+        /// Direction of each step.
+        direction: BlockDirection,
+        /// The predicate that ends the search with a position.
+        target: BlockPredicateDef,
+        /// The predicate every position on the way must meet.
+        allowed: BlockPredicateDef,
+        /// Largest number of steps.
+        max_steps: i32,
+    },
+    /// Runs the feature a number of times read from the biome info noise
+    /// (`minecraft:noise_based_count`).
+    NoiseBasedCount {
+        /// Scale from noise to count.
+        noise_to_count_ratio: i32,
+        /// Divisor of block coordinates before sampling.
+        noise_factor: f64,
+        /// Added to the noise before scaling.
+        noise_offset: f64,
+    },
+    /// Runs the feature one of two numbers of times, by the biome info noise
+    /// (`minecraft:noise_threshold_count`).
+    NoiseThresholdCount {
+        /// The noise value that separates the two counts.
+        noise_level: f64,
+        /// Count below the noise level.
+        below_noise: i32,
+        /// Count at or above the noise level.
+        above_noise: i32,
+    },
+    /// Offsets a position by sampled amounts (`minecraft:random_offset`).
+    RandomOffset {
+        /// Horizontal offset, sampled for X and then Z.
+        xz_spread: IntProviderDef,
+        /// Vertical offset.
+        y_spread: IntProviderDef,
+    },
+    /// Keeps positions within a range around a heightmap (`minecraft:surface_relative_threshold_filter`).
+    SurfaceRelativeThresholdFilter {
+        /// The heightmap the range is relative to.
+        heightmap: HeightmapType,
+        /// Lowest offset from the heightmap.
+        min_inclusive: i32,
+        /// Highest offset from the heightmap.
+        max_inclusive: i32,
+    },
+    /// Keeps columns whose water is at most this deep (`minecraft:surface_water_depth_filter`).
+    SurfaceWaterDepthFilter(i32),
+    /// Keeps positions that meet a block predicate (`minecraft:block_predicate_filter`).
+    BlockPredicateFilter(BlockPredicateDef),
+    /// Replaces the position with the listed positions inside its chunk (`minecraft:fixed_placement`).
+    FixedPlacement(Vec<[i32; 3]>),
     /// A modifier Harpas does not apply yet, keeping its raw JSON.
     Other {
         /// The modifier `type` identifier.
         modifier_type: String,
         /// The raw modifier object.
+        config: Value,
+    },
+}
+
+/// One of the six block directions (`Direction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockDirection {
+    /// Negative Y.
+    Down,
+    /// Positive Y.
+    Up,
+    /// Negative Z.
+    North,
+    /// Positive Z.
+    South,
+    /// Negative X.
+    West,
+    /// Positive X.
+    East,
+}
+
+impl BlockDirection {
+    /// The unit offset of one step in this direction.
+    pub const fn offset(self) -> [i32; 3] {
+        match self {
+            Self::Down => [0, -1, 0],
+            Self::Up => [0, 1, 0],
+            Self::North => [0, 0, -1],
+            Self::South => [0, 0, 1],
+            Self::West => [-1, 0, 0],
+            Self::East => [1, 0, 0],
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "down" => Self::Down,
+            "up" => Self::Up,
+            "north" => Self::North,
+            "south" => Self::South,
+            "west" => Self::West,
+            "east" => Self::East,
+            _ => return None,
+        })
+    }
+}
+
+/// A block predicate (`BlockPredicate`) from a placement modifier or feature configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockPredicateDef {
+    /// The block at an offset is one of the listed blocks (`minecraft:matching_blocks`).
+    MatchingBlocks {
+        /// Block identifiers, or one `#`-prefixed block tag.
+        blocks: Vec<String>,
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// The block at an offset is in a block tag (`minecraft:matching_block_tag`).
+    MatchingBlockTag {
+        /// The block tag, without `#`.
+        tag: String,
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// The fluid at an offset is one of the listed fluids (`minecraft:matching_fluids`).
+    MatchingFluids {
+        /// Fluid identifiers, or one `#`-prefixed fluid tag.
+        fluids: Vec<String>,
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// The block at an offset is solid (`minecraft:solid`).
+    Solid {
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// The block at an offset can be replaced (`minecraft:replaceable`).
+    Replaceable {
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// A block state could stay at an offset (`minecraft:would_survive`).
+    WouldSurvive {
+        /// The block state to test.
+        state: BlockStateDef,
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// The block at an offset has a full face in a direction (`minecraft:has_sturdy_face`).
+    HasSturdyFace {
+        /// The face that must be sturdy.
+        direction: BlockDirection,
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// The offset position is inside the world's height (`minecraft:inside_world_bounds`).
+    InsideWorldBounds {
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// Every predicate holds, tested in order (`minecraft:all_of`).
+    AllOf(Vec<BlockPredicateDef>),
+    /// Any predicate holds, tested in order (`minecraft:any_of`).
+    AnyOf(Vec<BlockPredicateDef>),
+    /// The predicate does not hold (`minecraft:not`).
+    Not(Box<BlockPredicateDef>),
+    /// Always holds (`minecraft:true`).
+    True,
+    /// A predicate Harpas does not evaluate yet, keeping its raw JSON.
+    Other {
+        /// The predicate `type` identifier.
+        predicate_type: String,
+        /// The raw predicate object.
         config: Value,
     },
 }
@@ -367,6 +539,44 @@ pub enum IntProviderDef {
         /// Largest value.
         max_inclusive: i32,
     },
+    /// A value drawn below a uniformly drawn bound (`minecraft:biased_to_bottom`).
+    BiasedToBottom {
+        /// Smallest value.
+        min_inclusive: i32,
+        /// Largest value.
+        max_inclusive: i32,
+    },
+    /// Another provider's value, clamped (`minecraft:clamped`).
+    Clamped {
+        /// The provider whose values are clamped.
+        source: Box<IntProviderDef>,
+        /// Smallest value.
+        min_inclusive: i32,
+        /// Largest value.
+        max_inclusive: i32,
+    },
+    /// A clamped normal distribution, truncated toward zero (`minecraft:clamped_normal`).
+    ClampedNormal {
+        /// Mean of the distribution.
+        mean: f32,
+        /// Standard deviation of the distribution.
+        deviation: f32,
+        /// Smallest value.
+        min_inclusive: i32,
+        /// Largest value.
+        max_inclusive: i32,
+    },
+    /// A trapezoidal distribution (`minecraft:trapezoid`).
+    Trapezoid {
+        /// Smallest value.
+        min: i32,
+        /// Largest value.
+        max: i32,
+        /// Number of values at the top of the distribution with equal probability.
+        plateau: i32,
+    },
+    /// One of several providers, chosen by weight (`minecraft:weighted_list`).
+    WeightedList(Vec<(IntProviderDef, i32)>),
     /// A provider Harpas does not evaluate yet, keeping its raw JSON.
     Other(Value),
 }
@@ -392,6 +602,26 @@ pub enum HeightProviderDef {
         /// Number of heights at the top of the distribution with equal probability.
         plateau: i32,
     },
+    /// A height drawn below a uniformly drawn bound (`minecraft:biased_to_bottom`).
+    BiasedToBottom {
+        /// Lowest height.
+        min_inclusive: VerticalAnchor,
+        /// Highest height.
+        max_inclusive: VerticalAnchor,
+        /// Smallest distance between the lowest height and the drawn bound.
+        inner: i32,
+    },
+    /// A height drawn below two nested drawn bounds (`minecraft:very_biased_to_bottom`).
+    VeryBiasedToBottom {
+        /// Lowest height.
+        min_inclusive: VerticalAnchor,
+        /// Highest height.
+        max_inclusive: VerticalAnchor,
+        /// Smallest distance between the lowest height and the drawn bounds.
+        inner: i32,
+    },
+    /// One of several providers, chosen by weight (`minecraft:weighted_list`).
+    WeightedList(Vec<(HeightProviderDef, i32)>),
     /// A provider Harpas does not evaluate yet, keeping its raw JSON.
     Other(Value),
 }
@@ -2331,8 +2561,179 @@ fn parse_placement_modifier(
             req_field(obj, "height", ctx)?,
         )?),
         "minecraft:biome" => PlacementModifierDef::Biome,
+        "minecraft:heightmap" => PlacementModifierDef::Heightmap(parse_heightmap(ctx, obj)?),
+        "minecraft:count_on_every_layer" => PlacementModifierDef::CountOnEveryLayer(
+            parse_int_provider(ctx, req_field(obj, "count", ctx)?)?,
+        ),
+        "minecraft:environment_scan" => {
+            let direction = req_str(obj, "direction_of_search", ctx)?;
+            PlacementModifierDef::EnvironmentScan {
+                direction: BlockDirection::from_name(direction)
+                    .filter(|direction| {
+                        matches!(direction, BlockDirection::Up | BlockDirection::Down)
+                    })
+                    .ok_or_else(|| invalid_def(ctx, "the search direction must be up or down"))?,
+                target: parse_block_predicate(ctx, req_field(obj, "target_condition", ctx)?)?,
+                allowed: match obj.get("allowed_search_condition") {
+                    Some(predicate) => parse_block_predicate(ctx, predicate)?,
+                    None => BlockPredicateDef::True,
+                },
+                max_steps: req_i32(obj, "max_steps", ctx)?,
+            }
+        }
+        "minecraft:noise_based_count" => PlacementModifierDef::NoiseBasedCount {
+            noise_to_count_ratio: req_i32(obj, "noise_to_count_ratio", ctx)?,
+            noise_factor: req_f64(obj, "noise_factor", ctx)?,
+            noise_offset: match obj.get("noise_offset") {
+                Some(_) => req_f64(obj, "noise_offset", ctx)?,
+                None => 0.0,
+            },
+        },
+        "minecraft:noise_threshold_count" => PlacementModifierDef::NoiseThresholdCount {
+            noise_level: req_f64(obj, "noise_level", ctx)?,
+            below_noise: req_i32(obj, "below_noise", ctx)?,
+            above_noise: req_i32(obj, "above_noise", ctx)?,
+        },
+        "minecraft:random_offset" => PlacementModifierDef::RandomOffset {
+            xz_spread: parse_int_provider(ctx, req_field(obj, "xz_spread", ctx)?)?,
+            y_spread: parse_int_provider(ctx, req_field(obj, "y_spread", ctx)?)?,
+        },
+        "minecraft:surface_relative_threshold_filter" => {
+            let bound = |key: &str, default: i32| match obj.get(key) {
+                Some(_) => req_i32(obj, key, ctx),
+                None => Ok(default),
+            };
+            PlacementModifierDef::SurfaceRelativeThresholdFilter {
+                heightmap: parse_heightmap(ctx, obj)?,
+                min_inclusive: bound("min_inclusive", i32::MIN)?,
+                max_inclusive: bound("max_inclusive", i32::MAX)?,
+            }
+        }
+        "minecraft:surface_water_depth_filter" => {
+            PlacementModifierDef::SurfaceWaterDepthFilter(req_i32(obj, "max_water_depth", ctx)?)
+        }
+        "minecraft:block_predicate_filter" => PlacementModifierDef::BlockPredicateFilter(
+            parse_block_predicate(ctx, req_field(obj, "predicate", ctx)?)?,
+        ),
+        "minecraft:fixed_placement" => {
+            let positions = req_field(obj, "positions", ctx)?
+                .as_array()
+                .ok_or_else(|| invalid_def(ctx, "`positions` must be an array"))?;
+            PlacementModifierDef::FixedPlacement(
+                positions
+                    .iter()
+                    .map(|position| parse_vec3i(ctx, position))
+                    .collect::<Result<_, _>>()?,
+            )
+        }
         other => PlacementModifierDef::Other {
             modifier_type: other.to_string(),
+            config: json.clone(),
+        },
+    })
+}
+
+fn parse_heightmap(
+    ctx: &str,
+    obj: &serde_json::Map<String, Value>,
+) -> Result<HeightmapType, WorldgenDataError> {
+    let name = req_str(obj, "heightmap", ctx)?;
+    HeightmapType::ALL
+        .into_iter()
+        .find(|kind| kind.nbt_key() == name)
+        .ok_or_else(|| invalid_def(ctx, format!("unknown heightmap `{name}`")))
+}
+
+fn parse_vec3i(ctx: &str, json: &Value) -> Result<[i32; 3], WorldgenDataError> {
+    let values = json
+        .as_array()
+        .filter(|values| values.len() == 3)
+        .ok_or_else(|| invalid_def(ctx, "a block position must be an array of 3 integers"))?;
+    let mut position = [0; 3];
+    for (axis, value) in values.iter().enumerate() {
+        position[axis] = value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| invalid_def(ctx, "a block position must be an array of 3 integers"))?;
+    }
+    Ok(position)
+}
+
+/// Parses a holder set written as one identifier, one `#`-prefixed tag or a list of identifiers.
+fn parse_holder_set(ctx: &str, json: &Value) -> Result<Vec<String>, WorldgenDataError> {
+    if let Some(entry) = json.as_str() {
+        return Ok(vec![match entry.strip_prefix('#') {
+            Some(tag) => format!("#{}", resource_name(tag)),
+            None => resource_name(entry),
+        }]);
+    }
+    json.as_array()
+        .ok_or_else(|| invalid_def(ctx, "a holder set must be a string or an array"))?
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .filter(|entry| !entry.starts_with('#'))
+                .map(resource_name)
+                .ok_or_else(|| invalid_def(ctx, "a holder set list must hold identifiers"))
+        })
+        .collect()
+}
+
+fn parse_block_predicate(ctx: &str, json: &Value) -> Result<BlockPredicateDef, WorldgenDataError> {
+    let obj = json
+        .as_object()
+        .ok_or_else(|| invalid_def(ctx, "block predicate must be an object"))?;
+    let predicate_type = req_str(obj, "type", ctx)?;
+    let offset = match obj.get("offset") {
+        Some(offset) => parse_vec3i(ctx, offset)?,
+        None => [0; 3],
+    };
+    let list = |key: &str| -> Result<Vec<BlockPredicateDef>, WorldgenDataError> {
+        req_field(obj, key, ctx)?
+            .as_array()
+            .ok_or_else(|| invalid_def(ctx, format!("`{key}` must be an array")))?
+            .iter()
+            .map(|predicate| parse_block_predicate(ctx, predicate))
+            .collect()
+    };
+    Ok(match predicate_type {
+        "minecraft:matching_blocks" => BlockPredicateDef::MatchingBlocks {
+            blocks: parse_holder_set(ctx, req_field(obj, "blocks", ctx)?)?,
+            offset,
+        },
+        "minecraft:matching_block_tag" => BlockPredicateDef::MatchingBlockTag {
+            tag: resource_name(req_str(obj, "tag", ctx)?.trim_start_matches('#')),
+            offset,
+        },
+        "minecraft:matching_fluids" => BlockPredicateDef::MatchingFluids {
+            fluids: parse_holder_set(ctx, req_field(obj, "fluids", ctx)?)?,
+            offset,
+        },
+        "minecraft:solid" => BlockPredicateDef::Solid { offset },
+        "minecraft:replaceable" => BlockPredicateDef::Replaceable { offset },
+        "minecraft:would_survive" => BlockPredicateDef::WouldSurvive {
+            state: parse_block_state_def(ctx, req_field(obj, "state", ctx)?)?,
+            offset,
+        },
+        "minecraft:has_sturdy_face" => {
+            let direction = req_str(obj, "direction", ctx)?;
+            BlockPredicateDef::HasSturdyFace {
+                direction: BlockDirection::from_name(direction)
+                    .ok_or_else(|| invalid_def(ctx, format!("unknown direction `{direction}`")))?,
+                offset,
+            }
+        }
+        "minecraft:inside_world_bounds" => BlockPredicateDef::InsideWorldBounds { offset },
+        "minecraft:all_of" => BlockPredicateDef::AllOf(list("predicates")?),
+        "minecraft:any_of" => BlockPredicateDef::AnyOf(list("predicates")?),
+        "minecraft:not" => BlockPredicateDef::Not(Box::new(parse_block_predicate(
+            ctx,
+            req_field(obj, "predicate", ctx)?,
+        )?)),
+        "minecraft:true" => BlockPredicateDef::True,
+        other => BlockPredicateDef::Other {
+            predicate_type: other.to_string(),
             config: json.clone(),
         },
     })
@@ -2348,24 +2749,92 @@ fn parse_int_provider(ctx: &str, json: &Value) -> Result<IntProviderDef, Worldge
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "integer provider must be an integer or an object"))?;
     let provider_type = req_str(obj, "type", ctx)?;
+    let ordered = |min_key: &str, max_key: &str| -> Result<(i32, i32), WorldgenDataError> {
+        let (min, max) = (req_i32(obj, min_key, ctx)?, req_i32(obj, max_key, ctx)?);
+        if min > max {
+            return Err(invalid_def(
+                ctx,
+                format!("{provider_type} integer provider has {min_key} > {max_key}"),
+            ));
+        }
+        Ok((min, max))
+    };
     Ok(match provider_type {
         "minecraft:constant" => IntProviderDef::Constant(req_i32(obj, "value", ctx)?),
         "minecraft:uniform" => {
-            let min_inclusive = req_i32(obj, "min_inclusive", ctx)?;
-            let max_inclusive = req_i32(obj, "max_inclusive", ctx)?;
-            if min_inclusive > max_inclusive {
-                return Err(invalid_def(
-                    ctx,
-                    "uniform integer provider has min_inclusive > max_inclusive",
-                ));
-            }
+            let (min_inclusive, max_inclusive) = ordered("min_inclusive", "max_inclusive")?;
             IntProviderDef::Uniform {
                 min_inclusive,
                 max_inclusive,
             }
         }
+        "minecraft:biased_to_bottom" => {
+            let (min_inclusive, max_inclusive) = ordered("min_inclusive", "max_inclusive")?;
+            IntProviderDef::BiasedToBottom {
+                min_inclusive,
+                max_inclusive,
+            }
+        }
+        "minecraft:clamped" => {
+            let (min_inclusive, max_inclusive) = ordered("min_inclusive", "max_inclusive")?;
+            IntProviderDef::Clamped {
+                source: Box::new(parse_int_provider(ctx, req_field(obj, "source", ctx)?)?),
+                min_inclusive,
+                max_inclusive,
+            }
+        }
+        "minecraft:clamped_normal" => {
+            let (min_inclusive, max_inclusive) = ordered("min_inclusive", "max_inclusive")?;
+            IntProviderDef::ClampedNormal {
+                mean: req_f64(obj, "mean", ctx)? as f32,
+                deviation: req_f64(obj, "deviation", ctx)? as f32,
+                min_inclusive,
+                max_inclusive,
+            }
+        }
+        "minecraft:trapezoid" => {
+            let (min, max) = ordered("min", "max")?;
+            let plateau = match obj.get("plateau") {
+                Some(_) => req_i32(obj, "plateau", ctx)?,
+                None => 0,
+            };
+            if !(0..=max - min).contains(&plateau) {
+                return Err(invalid_def(
+                    ctx,
+                    "trapezoid plateau must be between 0 and max - min",
+                ));
+            }
+            IntProviderDef::Trapezoid { min, max, plateau }
+        }
+        "minecraft:weighted_list" => {
+            IntProviderDef::WeightedList(parse_weighted_list(ctx, obj, parse_int_provider)?)
+        }
         _ => IntProviderDef::Other(json.clone()),
     })
+}
+
+fn parse_weighted_list<T>(
+    ctx: &str,
+    obj: &serde_json::Map<String, Value>,
+    parse: fn(&str, &Value) -> Result<T, WorldgenDataError>,
+) -> Result<Vec<(T, i32)>, WorldgenDataError> {
+    let entries = req_field(obj, "distribution", ctx)?
+        .as_array()
+        .filter(|entries| !entries.is_empty())
+        .ok_or_else(|| invalid_def(ctx, "`distribution` must be a non-empty array"))?;
+    entries
+        .iter()
+        .map(|entry| {
+            let entry = entry
+                .as_object()
+                .ok_or_else(|| invalid_def(ctx, "weighted entry must be an object"))?;
+            let weight = req_i32(entry, "weight", ctx)?;
+            if weight < 0 {
+                return Err(invalid_def(ctx, "weights must not be negative"));
+            }
+            Ok((parse(ctx, req_field(entry, "data", ctx)?)?, weight))
+        })
+        .collect()
 }
 
 fn parse_height_provider(ctx: &str, json: &Value) -> Result<HeightProviderDef, WorldgenDataError> {
@@ -2373,17 +2842,26 @@ fn parse_height_provider(ctx: &str, json: &Value) -> Result<HeightProviderDef, W
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "height provider must be an object"))?;
     let provider_type = req_str(obj, "type", ctx)?;
-    Ok(match provider_type {
-        "minecraft:constant" => {
-            HeightProviderDef::Constant(parse_vertical_anchor(ctx, req_field(obj, "value", ctx)?)?)
+    let anchor = |key: &str| parse_vertical_anchor(ctx, req_field(obj, key, ctx)?);
+    let inner = || -> Result<i32, WorldgenDataError> {
+        let inner = match obj.get("inner") {
+            Some(_) => req_i32(obj, "inner", ctx)?,
+            None => 1,
+        };
+        if inner < 1 {
+            return Err(invalid_def(ctx, "`inner` must be at least 1"));
         }
+        Ok(inner)
+    };
+    Ok(match provider_type {
+        "minecraft:constant" => HeightProviderDef::Constant(anchor("value")?),
         "minecraft:uniform" => HeightProviderDef::Uniform {
-            min_inclusive: parse_vertical_anchor(ctx, req_field(obj, "min_inclusive", ctx)?)?,
-            max_inclusive: parse_vertical_anchor(ctx, req_field(obj, "max_inclusive", ctx)?)?,
+            min_inclusive: anchor("min_inclusive")?,
+            max_inclusive: anchor("max_inclusive")?,
         },
         "minecraft:trapezoid" => HeightProviderDef::Trapezoid {
-            min_inclusive: parse_vertical_anchor(ctx, req_field(obj, "min_inclusive", ctx)?)?,
-            max_inclusive: parse_vertical_anchor(ctx, req_field(obj, "max_inclusive", ctx)?)?,
+            min_inclusive: anchor("min_inclusive")?,
+            max_inclusive: anchor("max_inclusive")?,
             plateau: match obj.get("plateau") {
                 Some(value) => value
                     .as_i64()
@@ -2392,6 +2870,19 @@ fn parse_height_provider(ctx: &str, json: &Value) -> Result<HeightProviderDef, W
                 None => 0,
             },
         },
+        "minecraft:biased_to_bottom" => HeightProviderDef::BiasedToBottom {
+            min_inclusive: anchor("min_inclusive")?,
+            max_inclusive: anchor("max_inclusive")?,
+            inner: inner()?,
+        },
+        "minecraft:very_biased_to_bottom" => HeightProviderDef::VeryBiasedToBottom {
+            min_inclusive: anchor("min_inclusive")?,
+            max_inclusive: anchor("max_inclusive")?,
+            inner: inner()?,
+        },
+        "minecraft:weighted_list" => {
+            HeightProviderDef::WeightedList(parse_weighted_list(ctx, obj, parse_height_provider)?)
+        }
         _ => HeightProviderDef::Other(json.clone()),
     })
 }

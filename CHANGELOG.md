@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Placement modifiers: all 15 vanilla types, from `heightmap`, `random_offset`, `block_predicate_filter` and
+  `surface_water_depth_filter` to the noise-driven counts, `environment_scan`, `count_on_every_layer` and
+  `fixed_placement`, with the integer providers, height providers and block predicates they use, run depth
+  first as vanilla's streams are. Placed features whose predicates need block shapes or survival rules
+  (`solid`, `replaceable`, `would_survive`, `has_sturdy_face`) are still skipped. `placement_parity` compares
+  every position of 142 Overworld placed features with vanilla's own modifiers on the same carved terrain
+  (`harpas-worldgen`).
+
 - FEATURES stage on the chunk workers, behind `generation.features = true` in `harpas.toml`: workers share the
   proto-chunks of the area being generated, decorate each chunk once its eight neighbors have completed
   carvers, and hand a chunk to the logic thread only once its eight neighbors have decorated, so no decoration

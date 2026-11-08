@@ -13,10 +13,11 @@ use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 
 use crate::biome::{BiomeManager, overworld_biome_parameters};
 use crate::data::{
-    ConfiguredFeatureDef, FeatureConfigDef, FeatureRefDef, HeightProviderDef, IntProviderDef,
-    OreFeatureDef, PlacementModifierDef, RuleTestDef, WorldgenData, WorldgenDataError,
+    ConfiguredFeatureDef, FeatureConfigDef, FeatureRefDef, OreFeatureDef, PlacementModifierDef,
+    RuleTestDef, WorldgenData, WorldgenDataError,
 };
 use crate::generator::{GeneratedChunk, HeightmapType};
+use crate::placement::{CompiledModifier, compile_placement, place_positions};
 use crate::surface::resolve_block_state;
 
 /// Number of vanilla generation steps (GenerationStep.Decoration).
@@ -294,6 +295,8 @@ pub struct FeatureIndex {
     allowed_biomes: Vec<HashSet<u32>>,
     /// Placement modifiers of every placed feature.
     placements: Vec<Vec<PlacementModifierDef>>,
+    /// Compiled placement modifiers; None when one of them is not ported yet.
+    modifiers: Vec<Option<Vec<CompiledModifier>>>,
     /// Compiled ore configs; None for feature types or rule tests not ported yet.
     ores: Vec<Option<CompiledOre>>,
 }
@@ -347,9 +350,11 @@ impl FeatureIndex {
         }
 
         let mut placements = Vec::with_capacity(placed_count);
+        let mut modifiers = Vec::with_capacity(placed_count);
         let mut ores = Vec::with_capacity(placed_count);
         for (name, placed) in &data.placed_features {
             placements.push(placed.placement.clone());
+            modifiers.push(compile_placement(name, &placed.placement, data)?);
             let configured = match &placed.feature {
                 FeatureRefDef::Reference(id) => data
                     .configured_features
@@ -383,6 +388,7 @@ impl FeatureIndex {
             biome_indices,
             allowed_biomes,
             placements,
+            modifiers,
             ores,
         })
     }
@@ -395,6 +401,11 @@ impl FeatureIndex {
     /// Placement modifiers of a placed feature.
     pub fn placement(&self, placed: usize) -> Option<&[PlacementModifierDef]> {
         self.placements.get(placed).map(Vec::as_slice)
+    }
+
+    /// Compiled placement modifiers of a placed feature, if Harpas applies all of them.
+    pub fn modifiers(&self, placed: usize) -> Option<&[CompiledModifier]> {
+        self.modifiers.get(placed)?.as_deref()
     }
 
     /// Biome feature indices of a biome and generation step.
@@ -613,73 +624,6 @@ fn invalid(context: &str, message: impl Into<String>) -> WorldgenDataError {
     }
 }
 
-/// Samples an IntProvider; None for provider types not ported yet.
-pub fn sample_int_provider<R: RandomSource>(
-    provider: &IntProviderDef,
-    random: &mut WorldgenRandom<R>,
-) -> Option<i32> {
-    match provider {
-        IntProviderDef::Constant(value) => Some(*value),
-        IntProviderDef::Uniform {
-            min_inclusive,
-            max_inclusive,
-        } => {
-            if min_inclusive > max_inclusive {
-                return None;
-            }
-            Some(
-                random.next_int_bounded(max_inclusive.wrapping_sub(*min_inclusive).wrapping_add(1))
-                    + *min_inclusive,
-            )
-        }
-        IntProviderDef::Other(_) => None,
-    }
-}
-
-/// Samples a HeightProvider; None for provider types not ported yet.
-pub fn sample_height_provider<R: RandomSource>(
-    provider: &HeightProviderDef,
-    min_y: i32,
-    height: i32,
-    random: &mut WorldgenRandom<R>,
-) -> Option<i32> {
-    match provider {
-        HeightProviderDef::Constant(anchor) => Some(anchor.resolve(min_y, height)),
-        HeightProviderDef::Uniform {
-            min_inclusive,
-            max_inclusive,
-        } => {
-            let min = min_inclusive.resolve(min_y, height);
-            let max = max_inclusive.resolve(min_y, height);
-            if max < min {
-                return Some(min);
-            }
-            Some(random.next_int_bounded(max.wrapping_sub(min).wrapping_add(1)) + min)
-        }
-        HeightProviderDef::Trapezoid {
-            min_inclusive,
-            max_inclusive,
-            plateau,
-        } => {
-            let min = min_inclusive.resolve(min_y, height);
-            let max = max_inclusive.resolve(min_y, height);
-            if max < min {
-                return Some(min);
-            }
-            let range = max - min;
-            if range == 0 {
-                return Some(min);
-            }
-            let plateau = (*plateau).clamp(0, range);
-            let half = (range - plateau) / 2;
-            let a = random.next_int_bounded(range - half + 1);
-            let b = random.next_int_bounded(half + 1);
-            Some(min + a + b)
-        }
-        HeightProviderDef::Other(_) => None,
-    }
-}
-
 /// Places one ore feature; returns whether any block was placed.
 ///
 /// This is vanilla's OreFeature.place and doPlace: a line of spheres whose bounds are sampled first, then one
@@ -882,84 +826,33 @@ pub fn apply_biome_decoration(
         }
         for position in positions {
             let placed = order[position];
-            let Some(ore) = index.ores[placed].as_ref() else {
+            let (Some(ore), Some(modifiers)) = (index.ore(placed), index.modifiers(placed)) else {
                 continue;
             };
-            let modifiers = index.placements[placed].as_slice();
-            if modifiers
-                .iter()
-                .any(|modifier| matches!(modifier, PlacementModifierDef::Other { .. }))
-            {
-                continue;
-            }
             random.set_feature_seed(decoration, position as i32, step as i32);
-            run_modifiers(
+            place_positions(
                 world,
                 &index.allowed_biomes[placed],
-                ore,
-                &mut random,
                 modifiers,
+                &mut random,
                 origin,
+                &mut |world, random, position| {
+                    place_ore(world, ore, random, position);
+                },
             );
         }
     }
     Ok(())
 }
 
-/// Runs a placed feature's remaining modifiers on one position, depth first, and places the ore at every
-/// position that comes out.
-fn run_modifiers(
-    world: &mut impl FeatureWorld,
-    allowed: &HashSet<u32>,
-    ore: &CompiledOre,
-    random: &mut WorldgenRandom<XoroshiroRandom>,
-    modifiers: &[PlacementModifierDef],
-    mut position: [i32; 3],
-) {
-    let Some((modifier, rest)) = modifiers.split_first() else {
-        place_ore(world, ore, random, position);
-        return;
-    };
-    match modifier {
-        PlacementModifierDef::Count(provider) => {
-            let count = sample_int_provider(provider, random).unwrap_or(0);
-            for _ in 0..count {
-                run_modifiers(world, allowed, ore, random, rest, position);
-            }
-            return;
-        }
-        PlacementModifierDef::RarityFilter(chance) => {
-            if random.next_float() >= 1.0 / *chance as f32 {
-                return;
-            }
-        }
-        PlacementModifierDef::InSquare => {
-            position[0] += random.next_int_bounded(16);
-            position[2] += random.next_int_bounded(16);
-        }
-        PlacementModifierDef::HeightRange(provider) => {
-            let Some(y) = sample_height_provider(provider, world.min_y(), world.height(), random)
-            else {
-                return;
-            };
-            position[1] = y;
-        }
-        PlacementModifierDef::Biome => {
-            if !allowed.contains(&world.biome(position[0], position[1], position[2])) {
-                return;
-            }
-        }
-        PlacementModifierDef::Other { .. } => return,
-    }
-    run_modifiers(world, allowed, ore, random, rest, position);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{
-        BiomeDef, BlockStateDef, OreFeatureDef, OreTargetDef, PlacedFeatureDef, TemperatureModifier,
+        BiomeDef, BlockStateDef, HeightProviderDef, IntProviderDef, OreFeatureDef, OreTargetDef,
+        PlacedFeatureDef, TemperatureModifier,
     };
+    use crate::placement::sample_height_provider;
     use crate::surface::VerticalAnchor;
     use harpas_core::random::LegacyRandom;
 

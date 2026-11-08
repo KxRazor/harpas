@@ -151,8 +151,10 @@ vanilla for the same seed.
         (`tree_feature_parity`).
   - [x] Dark oak and cherry trees and huge mushrooms, compared with vanilla's own features loaded from its data
         pack (`tree_feature_parity`, `feature_blocks_parity`).
-  - [ ] The remaining decorators and the remaining trunk, foliage and root placers: `pale_moss` and
-        `creaking_heart`, bending, upwards branching and mangrove roots.
+  - [x] Mangroves: upwards branching trunks, random spread foliage, mangrove roots and `attached_to_leaves`,
+        compared with vanilla's own features (`tree_feature_parity`, `feature_blocks_parity`).
+  - [ ] Pale oaks and azaleas: `pale_moss` and `creaking_heart` with `vegetation_patch`, pale moss carpets and the
+        region's own random source, and the bending trunk placer.
   - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

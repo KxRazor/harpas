@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Mangroves: the `upwards_branching` trunk placer, which grows through `can_grow_through` and places no block
+  below, the `random_spread` foliage placer, `mangrove_root_placer` with its simulated roots, muddy roots in mud,
+  waterlogging and moss on top, and the `attached_to_leaves` decorator, which hangs propagules. Mangrove swamps
+  now grow their trees, 116 of the 164 Overworld placed features. `tree_feature_parity` adds both mangroves, a
+  mangrove swamp, a jungle and a dark forest, and shifts each chunk's pattern of positions so that every feature
+  finds room; `feature_blocks_parity` adds a mangrove swamp where mangroves grow (`harpas-worldgen`).
+
 - Dark oak and cherry trees and huge mushrooms: the `dark_oak` and `cherry` trunk and foliage placers, with the
   cherry's branches and hanging leaves, and `huge_brown_mushroom` and `huge_red_mushroom`. Dark forests, cherry
   groves and mushroom fields now grow, 115 of the 164 Overworld placed features. The feature probes now load

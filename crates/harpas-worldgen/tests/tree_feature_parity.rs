@@ -18,16 +18,16 @@ use harpas_worldgen::{
 use reference::Reference;
 
 const SEED: i64 = -4_172_144_997_902_289_642;
-/// The configured features compared, cycled through in each chunk: huge brown and red mushrooms first, which
-/// need room for their caps, then trees without decorators, then trees with
+/// The configured features compared, cycled through in each chunk: huge brown and red mushrooms around the first
+/// oak, at positions where they find ground and room for their caps, then trees without decorators, then trees with
 /// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), leaf litter, and
 /// fallen trees with vines on their stumps and mushrooms on their logs, then acacias, jungle bushes and mega
-/// jungle trees, mega pines and mega spruces with podzol around them, and dark oaks and cherries with hanging
-/// leaves.
-const FEATURES: [&str; 27] = [
+/// jungle trees, mega pines and mega spruces with podzol around them, dark oaks and cherries with hanging
+/// leaves, and mangroves with their roots and hanging propagules.
+const FEATURES: [&str; 29] = [
     "minecraft:huge_brown_mushroom",
-    "minecraft:huge_red_mushroom",
     "minecraft:oak",
+    "minecraft:huge_red_mushroom",
     "minecraft:fancy_oak",
     "minecraft:birch",
     "minecraft:spruce",
@@ -52,20 +52,26 @@ const FEATURES: [&str; 27] = [
     "minecraft:dark_oak",
     "minecraft:cherry",
     "minecraft:cherry_bees_005",
+    "minecraft:mangrove",
+    "minecraft:tall_mangrove",
 ];
-const TREES_PER_CHUNK: usize = 162;
-/// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow and a steep mixed chunk.
-const CHUNKS: [(i32, i32); 6] = [
+const TREES_PER_CHUNK: usize = 174;
+/// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow, a steep mixed chunk, a
+/// mangrove swamp, where mangrove roots grow through mud, a jungle and a dark forest.
+const CHUNKS: [(i32, i32); 9] = [
     (-42, 6),
     (-36, -36),
     (-198, -198),
     (-108, -108),
     (-528, -480),
     (600, 312),
+    (126, 72),
+    (84, 42),
+    (-102, -114),
 ];
 
 /// The blocks the decorators place, each of which vanilla's trees must place for the comparison to cover it.
-const DECORATIONS: [&str; 9] = [
+const DECORATIONS: [&str; 11] = [
     "minecraft:vine",
     "minecraft:cocoa",
     "minecraft:bee_nest",
@@ -75,6 +81,8 @@ const DECORATIONS: [&str; 9] = [
     "minecraft:brown_mushroom_block",
     "minecraft:red_mushroom_block",
     "minecraft:mushroom_stem",
+    "minecraft:mangrove_roots",
+    "minecraft:mangrove_propagule",
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -292,7 +300,13 @@ fn trees_match_vanilla() {
         compared_entities += expected_entities.len();
     }
     assert!(lines.next().is_none(), "unread vanilla output");
-    for (name, placed) in FEATURES.iter().zip(placed_by_feature) {
+    for name in FEATURES {
+        let placed: usize = FEATURES
+            .iter()
+            .zip(placed_by_feature)
+            .filter(|(feature, _)| **feature == name)
+            .map(|(_, placed)| placed)
+            .sum();
         assert!(placed > 0, "vanilla placed no {name}");
     }
     assert!(compared_entities > 0, "no bee nest was placed");

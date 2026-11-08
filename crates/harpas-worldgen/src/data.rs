@@ -2719,7 +2719,7 @@ fn parse_vec3i(ctx: &str, json: &Value) -> Result<[i32; 3], WorldgenDataError> {
 }
 
 /// Parses a holder set written as one identifier, one `#`-prefixed tag or a list of identifiers.
-fn parse_holder_set(ctx: &str, json: &Value) -> Result<Vec<String>, WorldgenDataError> {
+pub(crate) fn parse_holder_set(ctx: &str, json: &Value) -> Result<Vec<String>, WorldgenDataError> {
     if let Some(entry) = json.as_str() {
         return Ok(vec![match entry.strip_prefix('#') {
             Some(tag) => format!("#{}", resource_name(tag)),

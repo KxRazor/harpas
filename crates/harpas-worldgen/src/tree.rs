@@ -20,7 +20,9 @@ use harpas_core::random::{RandomSource, WorldgenRandom};
 use serde_json::Value;
 
 use crate::configured::{FeatureCompiler, StateProvider};
-use crate::data::{IntProviderDef, WorldgenData, WorldgenDataError, parse_int_provider};
+use crate::data::{
+    IntProviderDef, WorldgenData, WorldgenDataError, parse_holder_set, parse_int_provider,
+};
 use crate::feature::FeatureWorld;
 use crate::java_hash::BlockPosSet;
 use crate::placement::{Fluid, StateSet, fluid, sample_int_provider, states_where};
@@ -40,7 +42,33 @@ pub struct CompiledTree {
     ignore_vines: bool,
     below_trunk_provider: StateProvider,
     decorators: Vec<Decorator>,
+    root_placer: Option<Box<MangroveRoots>>,
     blocks: Arc<TreeBlocks>,
+}
+
+/// `mangrove_root_placer`, the one root placer vanilla's trees use.
+#[derive(Debug)]
+struct MangroveRoots {
+    trunk_offset_y: IntProviderDef,
+    root_provider: StateProvider,
+    /// `above_root_placement`: its chance and provider.
+    above_root: Option<(f32, StateProvider)>,
+    can_grow_through: StateSet,
+    muddy_roots_in: StateSet,
+    muddy_roots_provider: StateProvider,
+    max_root_width: i32,
+    max_root_length: usize,
+    random_skew_chance: f32,
+}
+
+/// The branch providers of `upwards_branching_trunk_placer`.
+#[derive(Debug)]
+struct UpwardsBranches {
+    extra_branch_steps: IntProviderDef,
+    extra_branch_length: IntProviderDef,
+    place_branch_per_log_probability: f32,
+    /// `can_grow_through`, which `validTreePos` also accepts for this placer.
+    can_grow_through: StateSet,
 }
 
 /// The block sets every tree reads, compiled once per data pack.
@@ -49,7 +77,7 @@ pub struct TreeBlocks {
     /// `#replaceable_by_trees`.
     replaceable: StateSet,
     /// `#logs`.
-    logs: StateSet,
+    pub(crate) logs: StateSet,
     /// `#prevents_nearby_leaf_decay`, at distance 0 from a log.
     prevents_decay: StateSet,
     /// States with leaves' `distance` property.
@@ -101,11 +129,6 @@ impl TreeBlocks {
         block_states().is_air(state) || self.replaceable.contains(state)
     }
 
-    /// `TrunkPlacer.isFree`: a valid tree position or a log.
-    fn free(&self, state: u32) -> bool {
-        self.valid(state) || self.logs.contains(state)
-    }
-
     /// `LeavesBlock.getOptionalDistanceAt`.
     fn distance(&self, state: u32) -> Option<i32> {
         if self.prevents_decay.contains(state) {
@@ -135,6 +158,8 @@ enum TrunkPlacer {
     DarkOak(TrunkHeight),
     /// `cherry_trunk_placer`: a trunk with one or two branches that bend up or down to their foliage.
     Cherry(TrunkHeight, Box<CherryBranches>),
+    /// `upwards_branching_trunk_placer`: a trunk with branches that climb sideways.
+    UpwardsBranching(TrunkHeight, Box<UpwardsBranches>),
 }
 
 /// The branch providers of `cherry_trunk_placer`.
@@ -195,6 +220,8 @@ enum FoliageKind {
     DarkOak,
     /// `cherry_foliage_placer`.
     Cherry(Box<CherryFoliage>),
+    /// `random_spread_foliage_placer`, with its foliage height and placement attempts.
+    RandomSpread(IntProviderDef, i32),
 }
 
 /// `FeatureSize`: the radius a tree needs free at each height.
@@ -322,19 +349,30 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             FoliageKind::DarkOak => 4,
             FoliageKind::Cherry(cherry) => self.sample(&cherry.height),
             FoliageKind::Spruce(trunk) => 4.max(tree_height - self.sample(trunk)),
-            FoliageKind::Pine(height) | FoliageKind::MegaPine(height) => self.sample(height),
+            FoliageKind::Pine(height)
+            | FoliageKind::MegaPine(height)
+            | FoliageKind::RandomSpread(height, _) => self.sample(height),
         };
         let trunk_length = tree_height - foliage_height;
         let mut foliage_radius = self.sample(&tree.foliage_placer.radius);
         if matches!(tree.foliage_placer.kind, FoliageKind::Pine(_)) {
             foliage_radius += self.random.next_int_bounded((trunk_length + 1).max(1));
         }
-        let top = origin[1] + tree_height + 1;
+        // `RootPlacer.getTrunkOrigin`: a tree with roots starts its trunk above them.
+        let trunk_origin = match &tree.root_placer {
+            Some(roots) => {
+                let offset = self.sample(&roots.trunk_offset_y);
+                [origin[0], origin[1] + offset, origin[2]]
+            }
+            None => origin,
+        };
+        let bottom = origin[1].min(trunk_origin[1]);
+        let top = origin[1].max(trunk_origin[1]) + tree_height + 1;
         let world_max_y = self.world.min_y() + self.world.height() - 1;
-        if origin[1] < self.world.min_y() + 1 || top > world_max_y + 1 {
+        if bottom < self.world.min_y() + 1 || top > world_max_y + 1 {
             return false;
         }
-        let free_height = self.max_free_height(tree_height, origin);
+        let free_height = self.max_free_height(tree_height, trunk_origin);
         if free_height < tree_height
             && tree
                 .minimum_size
@@ -343,6 +381,12 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         {
             return false;
         }
+        if let Some(roots) = &tree.root_placer
+            && !self.place_roots(roots, origin, trunk_origin)
+        {
+            return false;
+        }
+        let origin = trunk_origin;
         let attachments = match tree.trunk_placer {
             TrunkPlacer::Straight(_) => self.straight_trunk(free_height, origin),
             TrunkPlacer::Fancy(_) => self.fancy_trunk(free_height, origin),
@@ -352,6 +396,9 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             TrunkPlacer::DarkOak(_) => self.dark_oak_trunk(free_height, origin),
             TrunkPlacer::Cherry(_, ref branches) => {
                 self.cherry_trunk(free_height, origin, branches)
+            }
+            TrunkPlacer::UpwardsBranching(_, ref branches) => {
+                self.upwards_branching_trunk(free_height, origin, branches)
             }
         };
         for attachment in attachments {
@@ -368,7 +415,7 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             for dx in -radius..=radius {
                 for dz in -radius..=radius {
                     let state = self.state([x + dx, y + dy, z + dz]);
-                    if !tree.blocks.free(state)
+                    if !self.trunk_free(state)
                         || (!tree.ignore_vines && tree.blocks.vine.contains(state))
                     {
                         return dy - 2;
@@ -392,7 +439,7 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
 
     /// `TrunkPlacer.placeLog`, setting the log's axis when one is given.
     fn place_log(&mut self, position: [i32; 3], axis: Option<&str>) -> bool {
-        if !self.tree.blocks.valid(self.state(position)) {
+        if !self.trunk_valid(self.state(position)) {
             return false;
         }
         let mut state = self
@@ -744,10 +791,212 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         Attachment::at([end[0], end[1] + 1, end[2]])
     }
 
+    /// `TrunkPlacer.validTreePos`, which `UpwardsBranchingTrunkPlacer` widens to its `can_grow_through`.
+    fn trunk_valid(&self, state: u32) -> bool {
+        self.tree.blocks.valid(state)
+            || matches!(&self.tree.trunk_placer,
+                TrunkPlacer::UpwardsBranching(_, branches) if branches.can_grow_through.contains(state))
+    }
+
+    /// `TrunkPlacer.isFree`: a valid trunk position or a log.
+    fn trunk_free(&self, state: u32) -> bool {
+        self.trunk_valid(state) || self.tree.blocks.logs.contains(state)
+    }
+
+    /// `UpwardsBranchingTrunkPlacer.placeTrunk`: a straight trunk with no block below it; after each log but the
+    /// top one, by chance, a branch that climbs sideways in a random direction.
+    fn upwards_branching_trunk(
+        &mut self,
+        height: i32,
+        origin: [i32; 3],
+        branches: &UpwardsBranches,
+    ) -> Vec<Attachment> {
+        let mut attachments = Vec::new();
+        for i in 0..height {
+            let y = origin[1] + i;
+            if self.place_log([origin[0], y, origin[2]], None)
+                && i < height - 1
+                && self.random.next_float() < branches.place_branch_per_log_probability
+            {
+                let direction = HORIZONTAL[self.random.next_int_bounded(4) as usize];
+                let length = self.sample(&branches.extra_branch_length);
+                let start = 0.max(length - self.sample(&branches.extra_branch_length) - 1);
+                let steps = self.sample(&branches.extra_branch_steps);
+                self.upwards_branch(height, &mut attachments, origin, y, direction, start, steps);
+            }
+            if i == height - 1 {
+                attachments.push(Attachment::at([origin[0], y + 1, origin[2]]));
+            }
+        }
+        attachments
+    }
+
+    /// `UpwardsBranchingTrunkPlacer.placeBranch`: one block sideways and up per step from the log at `y`, each
+    /// step with foliage, and two more clusters at the end of a branch that climbed more than one block.
+    #[allow(clippy::too_many_arguments)]
+    fn upwards_branch(
+        &mut self,
+        height: i32,
+        attachments: &mut Vec<Attachment>,
+        origin: [i32; 3],
+        y: i32,
+        direction: Direction,
+        start: i32,
+        mut steps: i32,
+    ) {
+        let mut last_y = y + start;
+        let (mut x, mut z) = (origin[0], origin[2]);
+        let [dx, _, dz] = direction.offset();
+        let mut i = start;
+        while i < height && steps > 0 {
+            if i >= 1 {
+                let branch_y = y + i;
+                x += dx;
+                z += dz;
+                last_y = branch_y;
+                if self.place_log([x, branch_y, z], None) {
+                    last_y += 1;
+                }
+                attachments.push(Attachment::at([x, branch_y, z]));
+            }
+            i += 1;
+            steps -= 1;
+        }
+        if last_y - y > 1 {
+            attachments.push(Attachment::at([x, last_y, z]));
+            attachments.push(Attachment::at([x, last_y - 2, z]));
+        }
+    }
+
+    /// `MangroveRootPlacer.placeRoots`: the column from the origin up to the trunk must take roots; then roots
+    /// below the trunk and on each side, spreading down and out, all simulated before any is placed.
+    fn place_roots(&mut self, roots: &MangroveRoots, origin: [i32; 3], trunk: [i32; 3]) -> bool {
+        for y in origin[1]..trunk[1] {
+            if !self.can_place_root(roots, [origin[0], y, origin[2]]) {
+                return false;
+            }
+        }
+        let mut positions = vec![[trunk[0], trunk[1] - 1, trunk[2]]];
+        for direction in HORIZONTAL {
+            let side = direction.step(trunk);
+            let mut spread = Vec::new();
+            if !self.simulate_roots(roots, side, direction, trunk, &mut spread, 0) {
+                return false;
+            }
+            positions.extend(spread);
+            positions.push(side);
+        }
+        for position in positions {
+            self.place_root(roots, position);
+        }
+        true
+    }
+
+    /// `MangroveRootPlacer.simulateRoots`.
+    fn simulate_roots(
+        &mut self,
+        roots: &MangroveRoots,
+        position: [i32; 3],
+        direction: Direction,
+        trunk: [i32; 3],
+        spread: &mut Vec<[i32; 3]>,
+        depth: usize,
+    ) -> bool {
+        if depth == roots.max_root_length || spread.len() > roots.max_root_length {
+            return false;
+        }
+        for next in self.potential_roots(roots, position, direction, trunk) {
+            if self.can_place_root(roots, next) {
+                spread.push(next);
+                if !self.simulate_roots(roots, next, direction, trunk, spread, depth + 1) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// `MangroveRootPlacer.potentialRootPositions`: near the trunk out or down, or by chance down; in the last
+    /// three blocks of the width down and, by chance, out and down; beyond it only down.
+    fn potential_roots(
+        &mut self,
+        roots: &MangroveRoots,
+        position: [i32; 3],
+        direction: Direction,
+        trunk: [i32; 3],
+    ) -> Vec<[i32; 3]> {
+        let below = Direction::Down.step(position);
+        let side = direction.step(position);
+        let distance = (0..3).map(|i| (position[i] - trunk[i]).abs()).sum::<i32>();
+        let width = roots.max_root_width;
+        if distance > width - 3 && distance <= width {
+            if self.random.next_float() < roots.random_skew_chance {
+                vec![below, Direction::Down.step(side)]
+            } else {
+                vec![below]
+            }
+        } else if distance > width || self.random.next_float() < roots.random_skew_chance {
+            vec![below]
+        } else if self.random.next_bool() {
+            vec![side]
+        } else {
+            vec![below]
+        }
+    }
+
+    /// `MangroveRootPlacer.canPlaceRoot`: a valid tree position or a block roots grow through.
+    fn can_place_root(&self, roots: &MangroveRoots, position: [i32; 3]) -> bool {
+        let state = self.state(position);
+        self.tree.blocks.valid(state) || roots.can_grow_through.contains(state)
+    }
+
+    /// `MangroveRootPlacer.placeRoot`: muddy roots in mud, otherwise a root where one can go and, by chance, a
+    /// block on the air above it.
+    fn place_root(&mut self, roots: &MangroveRoots, position: [i32; 3]) {
+        if roots.muddy_roots_in.contains(self.state(position)) {
+            let state = roots
+                .muddy_roots_provider
+                .state(self.world, self.random, position);
+            let state = self.waterlogged(position, state);
+            self.set_root(position, state);
+            return;
+        }
+        if !self.can_place_root(roots, position) {
+            return;
+        }
+        let state = roots.root_provider.state(self.world, self.random, position);
+        let state = self.waterlogged(position, state);
+        self.set_root(position, state);
+        if let Some((chance, provider)) = &roots.above_root {
+            let above = Direction::Up.step(position);
+            if self.random.next_float() < *chance && block_states().is_air(self.state(above)) {
+                let state = provider.state(self.world, self.random, above);
+                let state = self.waterlogged(above, state);
+                self.set_root(above, state);
+            }
+        }
+    }
+
+    /// `RootPlacer.getPotentiallyWaterloggedState`.
+    fn waterlogged(&self, position: [i32; 3], state: u32) -> u32 {
+        if property(state, "waterlogged").is_none() {
+            return state;
+        }
+        let water = fluid(self.state(position)) == Fluid::Water;
+        with_property(state, "waterlogged", if water { "true" } else { "false" })
+    }
+
+    /// The root setter.
+    fn set_root(&mut self, position: [i32; 3], state: u32) {
+        self.sets.roots.insert(position);
+        self.world
+            .set_block_state(position[0], position[1], position[2], state);
+    }
+
     /// `TrunkPlacer.placeLogIfFree`: a log where the position is free; `placeLog` then places it only on a
     /// valid tree position, so an existing log stays.
     fn place_log_if_free(&mut self, position: [i32; 3]) {
-        if self.tree.blocks.free(self.state(position)) {
+        if self.trunk_free(self.state(position)) {
             self.place_log(position, None);
         }
     }
@@ -766,7 +1015,7 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             if make {
                 let axis = log_axis(start, position);
                 self.place_log(position, Some(axis));
-            } else if !self.tree.blocks.free(self.state(position)) {
+            } else if !self.trunk_free(self.state(position)) {
                 return false;
             }
         }
@@ -857,6 +1106,17 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
                 let (hanging, extension) = (cherry.hanging_leaves, cherry.hanging_leaves_extension);
                 self.hanging_leaves_row(position, radius, -1, double_trunk, hanging, extension);
                 self.hanging_leaves_row(position, radius - 1, -2, double_trunk, hanging, extension);
+            }
+            FoliageKind::RandomSpread(_, attempts) => {
+                for _ in 0..attempts {
+                    let mut spread = |bound: i32| {
+                        self.random.next_int_bounded(bound) - self.random.next_int_bounded(bound)
+                    };
+                    let dx = spread(foliage_radius);
+                    let dy = spread(foliage_height);
+                    let dz = spread(foliage_radius);
+                    self.try_place_leaf([position[0] + dx, position[1] + dy, position[2] + dz]);
+                }
             }
             FoliageKind::MegaPine(_) => {
                 // Rows from the bottom of the crown up, widening downward, with every other row one wider
@@ -984,6 +1244,7 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             FoliageKind::Spruce(_) | FoliageKind::Pine(_) => {
                 dx == radius && dz == radius && radius > 0
             }
+            FoliageKind::RandomSpread(..) => false,
             FoliageKind::Acacia => {
                 if y == 0 {
                     (dx > 1 || dz > 1) && dx != 0 && dz != 0
@@ -1064,7 +1325,8 @@ impl TrunkPlacer {
         | Self::Giant(height)
         | Self::MegaJungle(height)
         | Self::DarkOak(height)
-        | Self::Cherry(height, _)) = self;
+        | Self::Cherry(height, _)
+        | Self::UpwardsBranching(height, _)) = self;
         height.base
             + random.next_int_bounded(height.rand_a + 1)
             + random.next_int_bounded(height.rand_b + 1)
@@ -1271,9 +1533,13 @@ impl FeatureCompiler<'_> {
                 .get(key)
                 .ok_or_else(|| invalid(name, format!("missing field `{key}`")))
         };
-        if config.get("root_placer").is_some() {
-            return Ok(None);
-        }
+        let root_placer = match config.get("root_placer") {
+            Some(json) => match self.mangrove_roots(name, json)? {
+                Some(roots) => Some(Box::new(roots)),
+                None => return Ok(None),
+            },
+            None => None,
+        };
         let Some(decorators) = self.decorators(name, config.get("decorators"))? else {
             return Ok(None);
         };
@@ -1285,7 +1551,7 @@ impl FeatureCompiler<'_> {
             return Ok(None);
         };
         let (Some(trunk_placer), Some(foliage_placer), Some(minimum_size)) = (
-            trunk_placer(name, field("trunk_placer")?)?,
+            self.trunk_placer(name, field("trunk_placer")?)?,
             foliage_placer(name, field("foliage_placer")?)?,
             feature_size(name, field("minimum_size")?)?,
         ) else {
@@ -1303,6 +1569,7 @@ impl FeatureCompiler<'_> {
                 .unwrap_or(false),
             below_trunk_provider,
             decorators,
+            root_placer,
             blocks: self.tree_blocks()?,
         }))
     }
@@ -1341,6 +1608,128 @@ fn kind<'a>(name: &str, json: &'a Value) -> Result<&'a str, WorldgenDataError> {
     json.get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid(name, "a tree part needs a `type`"))
+}
+
+impl FeatureCompiler<'_> {
+    /// A `HolderSet<Block>`: a `#`-prefixed tag, one block or a list of blocks.
+    fn block_set(&self, name: &str, json: &Value) -> Result<StateSet, WorldgenDataError> {
+        let mut members = vec![false; block_states().len() as usize];
+        for entry in parse_holder_set(name, json)? {
+            match entry.strip_prefix('#') {
+                Some(tag) => {
+                    for (member, tagged) in
+                        members.iter_mut().zip(self.data().block_tag_states(tag)?)
+                    {
+                        *member |= tagged;
+                    }
+                }
+                None => {
+                    for (id, member) in members.iter_mut().enumerate() {
+                        *member |= block_states()
+                            .properties(id as u32)
+                            .is_some_and(|(block, _)| block == entry);
+                    }
+                }
+            }
+        }
+        Ok(StateSet::from_membership(&members))
+    }
+
+    /// Compiles `mangrove_root_placer`; None for other root placers or parts not ported yet.
+    fn mangrove_roots(
+        &mut self,
+        name: &str,
+        json: &Value,
+    ) -> Result<Option<MangroveRoots>, WorldgenDataError> {
+        if kind(name, json)? != "minecraft:mangrove_root_placer" {
+            return Ok(None);
+        }
+        let field = |json: &'_ Value, key: &str| -> Result<Value, WorldgenDataError> {
+            json.get(key)
+                .cloned()
+                .ok_or_else(|| invalid(name, format!("missing field `{key}`")))
+        };
+        let placement = field(json, "mangrove_root_placement")?;
+        let above_root = match json.get("above_root_placement") {
+            Some(above) => {
+                let chance = above
+                    .get("above_root_placement_chance")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| invalid(name, "missing `above_root_placement_chance`"))?
+                    as f32;
+                let Some(provider) = self.provider(name, &field(above, "above_root_provider")?)?
+                else {
+                    return Ok(None);
+                };
+                Some((chance, provider))
+            }
+            None => None,
+        };
+        let (Some(trunk_offset_y), Some(root_provider), Some(muddy_roots_provider)) = (
+            int_provider(name, json, "trunk_offset_y")?,
+            self.provider(name, &field(json, "root_provider")?)?,
+            self.provider(name, &field(&placement, "muddy_roots_provider")?)?,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(MangroveRoots {
+            trunk_offset_y,
+            root_provider,
+            above_root,
+            can_grow_through: self.block_set(name, &field(&placement, "can_grow_through")?)?,
+            muddy_roots_in: self.block_set(name, &field(&placement, "muddy_roots_in")?)?,
+            muddy_roots_provider,
+            max_root_width: integer(name, &placement, "max_root_width", None)?,
+            max_root_length: integer(name, &placement, "max_root_length", None)? as usize,
+            random_skew_chance: placement
+                .get("random_skew_chance")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid(name, "missing `random_skew_chance`"))?
+                as f32,
+        }))
+    }
+
+    fn trunk_placer(
+        &self,
+        name: &str,
+        json: &Value,
+    ) -> Result<Option<TrunkPlacer>, WorldgenDataError> {
+        if kind(name, json)? == "minecraft:upwards_branching_trunk_placer" {
+            let height = trunk_height(name, json)?;
+            let (Some(extra_branch_steps), Some(extra_branch_length)) = (
+                int_provider(name, json, "extra_branch_steps")?,
+                int_provider(name, json, "extra_branch_length")?,
+            ) else {
+                return Ok(None);
+            };
+            let can_grow_through = json
+                .get("can_grow_through")
+                .ok_or_else(|| invalid(name, "missing field `can_grow_through`"))?;
+            return Ok(Some(TrunkPlacer::UpwardsBranching(
+                height,
+                Box::new(UpwardsBranches {
+                    extra_branch_steps,
+                    extra_branch_length,
+                    place_branch_per_log_probability: json
+                        .get("place_branch_per_log_probability")
+                        .and_then(Value::as_f64)
+                        .ok_or_else(|| {
+                            invalid(name, "missing `place_branch_per_log_probability`")
+                        })? as f32,
+                    can_grow_through: self.block_set(name, can_grow_through)?,
+                }),
+            )));
+        }
+        trunk_placer(name, json)
+    }
+}
+
+fn trunk_height(name: &str, json: &Value) -> Result<TrunkHeight, WorldgenDataError> {
+    Ok(TrunkHeight {
+        base: integer(name, json, "base_height", None)?,
+        rand_a: integer(name, json, "height_rand_a", None)?,
+        rand_b: integer(name, json, "height_rand_b", None)?,
+    })
 }
 
 fn trunk_placer(name: &str, json: &Value) -> Result<Option<TrunkPlacer>, WorldgenDataError> {
@@ -1389,6 +1778,15 @@ fn foliage_placer(name: &str, json: &Value) -> Result<Option<FoliagePlacer>, Wor
     let foliage_kind = match kind(name, json)? {
         "minecraft:blob_foliage_placer" => FoliageKind::Blob(integer(name, json, "height", None)?),
         "minecraft:acacia_foliage_placer" => FoliageKind::Acacia,
+        "minecraft:random_spread_foliage_placer" => {
+            match int_provider(name, json, "foliage_height")? {
+                Some(height) => FoliageKind::RandomSpread(
+                    height,
+                    integer(name, json, "leaf_placement_attempts", None)?,
+                ),
+                None => return Ok(None),
+            }
+        }
         "minecraft:dark_oak_foliage_placer" => FoliageKind::DarkOak,
         "minecraft:cherry_foliage_placer" => {
             let chance = |key: &str| {

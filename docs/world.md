@@ -295,8 +295,8 @@ and the owner **accepts it once**:
     one step ahead of those it places and shortens its layers from the base or the tip; `disk` replaces target
     blocks from the top of each column within its radius and marks up to two non-air blocks above each run of
     replaced blocks for postprocessing. `harpas_worldgen::tree` places `tree` with straight, fancy, forking, giant,
-    mega jungle, dark oak and cherry trunks and blob, fancy, spruce, pine, acacia, bush, jungle, mega pine, dark oak
-    and cherry foliage: the tree draws its height, foliage height and radius, gives up outside
+    mega jungle, dark oak, cherry and upwards branching trunks, blob, fancy, spruce, pine, acacia, bush, jungle, mega
+    pine, dark oak, cherry and random spread foliage, and mangrove roots: the tree draws its height, foliage height and radius, gives up outside
     the world's height, shortens to the free height its feature size allows (or gives up below its minimum clipped
     height), places dirt below the trunk where its provider allows, the trunk and the foliage at each attachment,
     with leaves waterlogged in water sources and persistent leaves left alone. Its blocks join four position sets
@@ -326,13 +326,16 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire,
-    dripleaves and pale moss carpets), is skipped as a whole; 115 of the 164 Overworld placed features run,
-    with the trees of every biome but mangrove swamps and pale gardens. `harpas_worldgen::huge_mushroom` places
+    dripleaves and pale moss carpets), is skipped as a whole; 116 of the 164 Overworld placed features run,
+    with the trees of every biome but pale gardens. A tree with roots starts its trunk `trunk_offset_y` above its
+    origin; `mangrove_root_placer` needs the column below the trunk to take roots, then simulates roots on each side
+    spreading out and down, failing the tree if one grows longer than its limit, and places them all, muddy roots in
+    mud and, by chance, moss on the air above. `harpas_worldgen::huge_mushroom` places
     huge brown and red mushrooms: a height of four to six blocks, doubled one time in twelve, room of air or
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 27 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 28 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
@@ -599,7 +602,7 @@ and the owner **accepts it once**:
   and other simple vegetation, mushrooms, disks, block columns and the trees and fallen trees of most biomes are
   placed so far,
   and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
-  trees of mangrove swamps and pale gardens, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  trees of pale gardens, lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

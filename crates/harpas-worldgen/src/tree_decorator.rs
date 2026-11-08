@@ -1,5 +1,5 @@
 //! Tree decorators (`TreeDecorator`): `trunk_vine`, `leave_vine`, `cocoa`, `beehive`, `place_on_ground`,
-//! `attached_to_logs` and `alter_ground`.
+//! `attached_to_logs`, `attached_to_leaves` and `alter_ground`.
 //!
 //! A tree runs its decorators in order once its trunk and foliage are in place, and a fallen tree runs them on
 //! its stump and on its log. They read lists of the tree's logs, leaves and roots taken in Java's iteration order
@@ -39,6 +39,16 @@ pub(crate) enum Decorator {
         radius: i32,
         height: i32,
         provider: Box<StateProvider>,
+    },
+    /// `attached_to_leaves`: with the probability, a block beside leaves in shuffled order, on a side drawn
+    /// from `directions` with enough air beyond it, keeping a box around each placed block free of more.
+    AttachedToLeaves {
+        probability: f32,
+        exclusion_radius_xz: i32,
+        exclusion_radius_y: i32,
+        required_empty_blocks: i32,
+        provider: Box<StateProvider>,
+        directions: Vec<Direction>,
     },
     /// `alter_ground`: the ground in rounded squares around the base of the trunk, where the provider has a
     /// state, such as podzol around giant spruces.
@@ -121,6 +131,21 @@ impl<W: FeatureWorld, R: RandomSource> Decorating<'_, W, R> {
                     directions,
                 } => self.attached_to_logs(context, *probability, provider, directions),
                 Decorator::AlterGround(provider) => self.alter_ground(context, provider),
+                Decorator::AttachedToLeaves {
+                    probability,
+                    exclusion_radius_xz,
+                    exclusion_radius_y,
+                    required_empty_blocks,
+                    provider,
+                    directions,
+                } => self.attached_to_leaves(
+                    context,
+                    *probability,
+                    [*exclusion_radius_xz, *exclusion_radius_y],
+                    *required_empty_blocks,
+                    provider,
+                    directions,
+                ),
             }
         }
     }
@@ -357,6 +382,47 @@ impl<W: FeatureWorld, R: RandomSource> Decorating<'_, W, R> {
         }
     }
 
+    /// `AttachedToLeavesDecorator`.
+    fn attached_to_leaves(
+        &mut self,
+        context: &DecoratorContext,
+        probability: f32,
+        [radius_xz, radius_y]: [i32; 2],
+        required_empty_blocks: i32,
+        provider: &StateProvider,
+        directions: &[Direction],
+    ) {
+        let mut excluded = std::collections::HashSet::new();
+        let mut leaves = context.leaves.clone();
+        shuffle(&mut leaves, self.random);
+        for leaf in leaves {
+            let direction =
+                directions[self.random.next_int_bounded(directions.len() as i32) as usize];
+            let position = direction.step(leaf);
+            if excluded.contains(&position) {
+                continue;
+            }
+            if self.random.next_float() >= probability {
+                continue;
+            }
+            let [dx, dy, dz] = direction.offset();
+            let empty = (1..=required_empty_blocks)
+                .all(|i| self.is_air([leaf[0] + dx * i, leaf[1] + dy * i, leaf[2] + dz * i]));
+            if !empty {
+                continue;
+            }
+            for x in -radius_xz..=radius_xz {
+                for y in -radius_y..=radius_y {
+                    for z in -radius_xz..=radius_xz {
+                        excluded.insert([position[0] + x, position[1] + y, position[2] + z]);
+                    }
+                }
+            }
+            let state = provider.state(self.world, self.random, position);
+            self.set(position, state);
+        }
+    }
+
     /// `AttachedToLogsDecorator`.
     fn attached_to_logs(
         &mut self,
@@ -476,6 +542,20 @@ impl FeatureCompiler<'_> {
                     provider: Box::new(provider),
                 }
             }
+            "minecraft:attached_to_leaves" => {
+                let Some(provider) = self.decorator_provider(name, json, "block_provider")? else {
+                    return Ok(None);
+                };
+                let directions = directions(name, json)?;
+                Decorator::AttachedToLeaves {
+                    probability: probability()?,
+                    exclusion_radius_xz: integer("exclusion_radius_xz", 0)?,
+                    exclusion_radius_y: integer("exclusion_radius_y", 0)?,
+                    required_empty_blocks: integer("required_empty_blocks", 0)?,
+                    provider: Box::new(provider),
+                    directions,
+                }
+            }
             "minecraft:alter_ground" => {
                 let Some(provider) = self.decorator_provider(name, json, "provider")? else {
                     return Ok(None);
@@ -486,19 +566,7 @@ impl FeatureCompiler<'_> {
                 let Some(provider) = self.decorator_provider(name, json, "block_provider")? else {
                     return Ok(None);
                 };
-                let directions = json
-                    .get("directions")
-                    .and_then(Value::as_array)
-                    .filter(|directions| !directions.is_empty())
-                    .ok_or_else(|| invalid(name, "`attached_to_logs` needs `directions`"))?
-                    .iter()
-                    .map(|direction| {
-                        direction
-                            .as_str()
-                            .and_then(Direction::from_name)
-                            .ok_or_else(|| invalid(name, "unknown direction"))
-                    })
-                    .collect::<Result<_, _>>()?;
+                let directions = directions(name, json)?;
                 Decorator::AttachedToLogs {
                     probability: probability()?,
                     provider: Box::new(provider),
@@ -520,6 +588,22 @@ impl FeatureCompiler<'_> {
             .ok_or_else(|| invalid(name, format!("missing field `{key}`")))?;
         self.provider(name, field)
     }
+}
+
+/// A decorator's non-empty `directions`.
+fn directions(name: &str, json: &Value) -> Result<Vec<Direction>, WorldgenDataError> {
+    json.get("directions")
+        .and_then(Value::as_array)
+        .filter(|directions| !directions.is_empty())
+        .ok_or_else(|| invalid(name, "a decorator needs `directions`"))?
+        .iter()
+        .map(|direction| {
+            direction
+                .as_str()
+                .and_then(Direction::from_name)
+                .ok_or_else(|| invalid(name, "unknown direction"))
+        })
+        .collect()
 }
 
 fn invalid(context: &str, message: impl Into<String>) -> WorldgenDataError {

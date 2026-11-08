@@ -1,6 +1,8 @@
 // Parity probe: generates 3x3 chunks through carvers, plants the grass blocks on top (plantGround) and places
 // vanilla's own tree configured features in the center chunk, one after another, so that later trees grow through, are cut short by or change the leaves of
-// earlier ones. Each tree gets a fresh decoration random source seeded from the chunk and its index. Writes
+// earlier ones. Each tree stands on the surface of a column chosen from its index, in a pattern that shifts from one
+// chunk to the next, or on the floor of the water there for a mangrove, as mangroves' placed features place them.
+// Each tree gets a fresh decoration random source seeded from the chunk and its index. Writes
 // each tree's origin, its result and the next value of its random source, then the blocks that changed in the
 // 3x3 chunks, then the block entities of the 3x3 chunks as they would be saved, in network NBT and hex.
 //
@@ -125,8 +127,12 @@ public final class TreeFeatureProbe {
                 for (int tree = 0; tree < trees; tree++) {
                     String name = features[tree % features.length];
                     var feature = configured.getOrThrow(ResourceKey.create(Registries.CONFIGURED_FEATURE, Identifier.parse(name)));
-                    int x = cx * 16 + (tree * 7 + 3) % 16, z = cz * 16 + (tree * 5 + 11) % 16;
-                    int y = region.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z);
+                    // The pattern of positions shifts from one chunk to the next, so that each feature tries other spots.
+                    int shift = argument - 5;
+                    int x = cx * 16 + (tree * 7 + 3 + shift * 5) % 16, z = cz * 16 + (tree * 5 + 11 + shift * 3) % 16;
+                    // Mangroves grow from the floor of the water they stand in, as their placed features place them.
+                    var heightmap = name.contains("mangrove") ? Heightmap.Types.OCEAN_FLOOR_WG : Heightmap.Types.WORLD_SURFACE_WG;
+                    int y = region.getHeight(heightmap, x, z);
                     var worldgenRandom = new WorldgenRandom(new net.minecraft.world.level.levelgen.XoroshiroRandomSource(0L));
                     long decoration = worldgenRandom.setDecorationSeed(seed, cx * 16, cz * 16);
                     worldgenRandom.setFeatureSeed(decoration, tree, 9);

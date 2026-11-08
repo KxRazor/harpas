@@ -56,6 +56,8 @@ pub struct TreeBlocks {
     leaves: StateSet,
     /// Any vine state.
     pub(crate) vine: StateSet,
+    /// `#leaves`.
+    leaves_tag: StateSet,
     /// Shape updates for the blocks around a tree.
     updates: ShapeUpdates,
     /// The default vine, cocoa and bee nest states.
@@ -87,6 +89,7 @@ impl TreeBlocks {
                     .is_some_and(|(name, _)| name == "minecraft:vine")
             }),
             updates: ShapeUpdates::new(data)?,
+            leaves_tag: tag("minecraft:leaves")?,
             vine_default: default_state("minecraft:vine")?,
             cocoa: default_state("minecraft:cocoa")?,
             bee_nest: default_state("minecraft:bee_nest")?,
@@ -128,6 +131,30 @@ enum TrunkPlacer {
     Giant(TrunkHeight),
     /// `mega_jungle_trunk_placer`: a giant trunk with branches near its top.
     MegaJungle(TrunkHeight),
+    /// `dark_oak_trunk_placer`: a two-by-two trunk that leans near its top, with short stubs around it.
+    DarkOak(TrunkHeight),
+    /// `cherry_trunk_placer`: a trunk with one or two branches that bend up or down to their foliage.
+    Cherry(TrunkHeight, Box<CherryBranches>),
+}
+
+/// The branch providers of `cherry_trunk_placer`.
+#[derive(Debug)]
+struct CherryBranches {
+    count: IntProviderDef,
+    horizontal_length: IntProviderDef,
+    /// `branch_start_offset_from_top`, a uniform range.
+    start: (i32, i32),
+    end: IntProviderDef,
+}
+
+/// The chances of `cherry_foliage_placer`.
+#[derive(Debug)]
+struct CherryFoliage {
+    height: IntProviderDef,
+    wide_bottom_layer_hole: f32,
+    corner_hole: f32,
+    hanging_leaves: f32,
+    hanging_leaves_extension: f32,
 }
 
 /// A trunk placer's base height and the bounds of its two random additions.
@@ -164,6 +191,10 @@ enum FoliageKind {
     Jungle(i32),
     /// `mega_pine_foliage_placer`, with the height of its crown.
     MegaPine(IntProviderDef),
+    /// `dark_oak_foliage_placer`.
+    DarkOak,
+    /// `cherry_foliage_placer`.
+    Cherry(Box<CherryFoliage>),
 }
 
 /// `FeatureSize`: the radius a tree needs free at each height.
@@ -288,6 +319,8 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             | FoliageKind::Bush(height)
             | FoliageKind::Jungle(height) => *height,
             FoliageKind::Acacia => 0,
+            FoliageKind::DarkOak => 4,
+            FoliageKind::Cherry(cherry) => self.sample(&cherry.height),
             FoliageKind::Spruce(trunk) => 4.max(tree_height - self.sample(trunk)),
             FoliageKind::Pine(height) | FoliageKind::MegaPine(height) => self.sample(height),
         };
@@ -316,6 +349,10 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             TrunkPlacer::Forking(_) => self.forking_trunk(free_height, origin),
             TrunkPlacer::Giant(_) => self.giant_trunk(free_height, origin),
             TrunkPlacer::MegaJungle(_) => self.mega_jungle_trunk(free_height, origin),
+            TrunkPlacer::DarkOak(_) => self.dark_oak_trunk(free_height, origin),
+            TrunkPlacer::Cherry(_, ref branches) => {
+                self.cherry_trunk(free_height, origin, branches)
+            }
         };
         for attachment in attachments {
             self.create_foliage(attachment, foliage_height, foliage_radius);
@@ -546,6 +583,167 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         attachments
     }
 
+    /// `DarkOakTrunkPlacer.placeTrunk`: a two-by-two trunk with dirt below it that leans up to two blocks one
+    /// way near its top, placed only over air or leaves, then stubs of two to four logs hanging from the top
+    /// layer in a third of the positions around the unleaned trunk, each with its own foliage.
+    fn dark_oak_trunk(&mut self, height: i32, origin: [i32; 3]) -> Vec<Attachment> {
+        let [ox, oy, oz] = origin;
+        for [dx, dz] in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+            self.below_trunk([ox + dx, oy - 1, oz + dz]);
+        }
+        let lean = HORIZONTAL[self.random.next_int_bounded(4) as usize];
+        let lean_height = height - self.random.next_int_bounded(4);
+        let mut lean_steps = 2 - self.random.next_int_bounded(3);
+        let (mut x, mut z) = (ox, oz);
+        let top = oy + height - 1;
+        for dy in 0..height {
+            if dy >= lean_height && lean_steps > 0 {
+                let [step_x, _, step_z] = lean.offset();
+                x += step_x;
+                z += step_z;
+                lean_steps -= 1;
+            }
+            let position = [x, oy + dy, z];
+            if self.is_air_or_leaves(position) {
+                for [dx, dz] in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+                    self.place_log([x + dx, oy + dy, z + dz], None);
+                }
+            }
+        }
+        let mut attachments = vec![Attachment {
+            position: [x, top, z],
+            radius_offset: 0,
+            double_trunk: true,
+        }];
+        for dx in -1..=2 {
+            for dz in -1..=2 {
+                if (0..=1).contains(&dx) && (0..=1).contains(&dz) {
+                    continue;
+                }
+                if self.random.next_int_bounded(3) > 0 {
+                    continue;
+                }
+                let length = self.random.next_int_bounded(3) + 2;
+                for i in 0..length {
+                    self.place_log([ox + dx, top - i - 1, oz + dz], None);
+                }
+                attachments.push(Attachment::at([ox + dx, top, oz + dz]));
+            }
+        }
+        attachments
+    }
+
+    /// `TreeFeature.isAirOrLeaves`.
+    fn is_air_or_leaves(&self, position: [i32; 3]) -> bool {
+        let state = self.state(position);
+        block_states().is_air(state) || self.tree.blocks.leaves_tag.contains(state)
+    }
+
+    /// `CherryTrunkPlacer.placeTrunk`: one to three branches from below the top. With three, the trunk reaches
+    /// the full height and holds foliage of its own; with two, it stops above the higher branch.
+    fn cherry_trunk(
+        &mut self,
+        height: i32,
+        origin: [i32; 3],
+        branches: &CherryBranches,
+    ) -> Vec<Attachment> {
+        self.below_trunk([origin[0], origin[1] - 1, origin[2]]);
+        let (min, max) = branches.start;
+        let first = 0.max(height - 1 + self.random.next_int_between_inclusive(min, max));
+        let mut second = 0.max(height - 1 + self.random.next_int_between_inclusive(min, max - 1));
+        if second >= first {
+            second += 1;
+        }
+        let count = self.sample(&branches.count);
+        let (three, two) = (count == 3, count >= 2);
+        let trunk_height = if three {
+            height
+        } else if two {
+            first.max(second) + 1
+        } else {
+            first + 1
+        };
+        for dy in 0..trunk_height {
+            self.place_log([origin[0], origin[1] + dy, origin[2]], None);
+        }
+        let mut attachments = Vec::new();
+        if three {
+            attachments.push(Attachment::at([
+                origin[0],
+                origin[1] + trunk_height,
+                origin[2],
+            ]));
+        }
+        let direction = HORIZONTAL[self.random.next_int_bounded(4) as usize];
+        attachments.push(self.cherry_branch(
+            height,
+            origin,
+            branches,
+            direction,
+            first,
+            first < trunk_height - 1,
+        ));
+        if two {
+            attachments.push(self.cherry_branch(
+                height,
+                origin,
+                branches,
+                direction.opposite(),
+                second,
+                second < trunk_height - 1,
+            ));
+        }
+        attachments
+    }
+
+    /// `CherryTrunkPlacer.generateBranch`: from the trunk at `start`, one or two logs sideways, then a path to
+    /// the branch's end that steps up or down with a chance that grows with the height left to cover.
+    fn cherry_branch(
+        &mut self,
+        height: i32,
+        origin: [i32; 3],
+        branches: &CherryBranches,
+        direction: Direction,
+        start: i32,
+        below_top: bool,
+    ) -> Attachment {
+        let mut position = [origin[0], origin[1] + start, origin[2]];
+        let end_height = height - 1 + self.sample(&branches.end);
+        let extend = below_top || end_height < start;
+        let length = self.sample(&branches.horizontal_length) + i32::from(extend);
+        let [dx, _, dz] = direction.offset();
+        let end = [
+            origin[0] + dx * length,
+            origin[1] + end_height,
+            origin[2] + dz * length,
+        ];
+        let axis = if dx != 0 { "x" } else { "z" };
+        for _ in 0..if extend { 2 } else { 1 } {
+            position = direction.step(position);
+            self.place_log(position, Some(axis));
+        }
+        let vertical = if end[1] > position[1] {
+            Direction::Up
+        } else {
+            Direction::Down
+        };
+        loop {
+            let distance = (0..3).map(|i| (position[i] - end[i]).abs()).sum::<i32>();
+            if distance == 0 {
+                break;
+            }
+            let chance = (end[1] - position[1]).abs() as f32 / distance as f32;
+            let up_or_down = self.random.next_float() < chance;
+            position = if up_or_down {
+                vertical.step(position)
+            } else {
+                direction.step(position)
+            };
+            self.place_log(position, if up_or_down { None } else { Some(axis) });
+        }
+        Attachment::at([end[0], end[1] + 1, end[2]])
+    }
+
     /// `TrunkPlacer.placeLogIfFree`: a log where the position is free; `placeLog` then places it only on a
     /// valid tree position, so an existing log stays.
     fn place_log_if_free(&mut self, position: [i32; 3]) {
@@ -634,6 +832,32 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
                     self.leaves_row(position, radius, y, double_trunk);
                 }
             }
+            FoliageKind::DarkOak => {
+                let position = [position[0], position[1] + offset, position[2]];
+                if double_trunk {
+                    self.leaves_row(position, foliage_radius + 2, -1, true);
+                    self.leaves_row(position, foliage_radius + 3, 0, true);
+                    self.leaves_row(position, foliage_radius + 2, 1, true);
+                    if self.random.next_bool() {
+                        self.leaves_row(position, foliage_radius, 2, true);
+                    }
+                } else {
+                    self.leaves_row(position, foliage_radius + 2, -1, false);
+                    self.leaves_row(position, foliage_radius + 1, 0, false);
+                }
+            }
+            FoliageKind::Cherry(ref cherry) => {
+                let position = [position[0], position[1] + offset, position[2]];
+                let radius = foliage_radius + attachment.radius_offset - 1;
+                self.leaves_row(position, radius - 2, foliage_height - 3, double_trunk);
+                self.leaves_row(position, radius - 1, foliage_height - 4, double_trunk);
+                for y in (0..=foliage_height - 5).rev() {
+                    self.leaves_row(position, radius, y, double_trunk);
+                }
+                let (hanging, extension) = (cherry.hanging_leaves, cherry.hanging_leaves_extension);
+                self.hanging_leaves_row(position, radius, -1, double_trunk, hanging, extension);
+                self.hanging_leaves_row(position, radius - 1, -2, double_trunk, hanging, extension);
+            }
             FoliageKind::MegaPine(_) => {
                 // Rows from the bottom of the crown up, widening downward, with every other row one wider
                 // where the width would repeat.
@@ -678,8 +902,72 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
         }
     }
 
+    /// `FoliagePlacer.placeLeavesRowWithHangingLeavesBelow`: a row, then below each leaf along its edge, by
+    /// chance, a hanging leaf, and below that, by another chance, a second one, all within six blocks of the
+    /// position below the attachment.
+    fn hanging_leaves_row(
+        &mut self,
+        position: [i32; 3],
+        radius: i32,
+        y: i32,
+        double_trunk: bool,
+        hanging: f32,
+        extension: f32,
+    ) {
+        self.leaves_row(position, radius, y, double_trunk);
+        let extra = i32::from(double_trunk);
+        let below = [position[0], position[1] - 1, position[2]];
+        for direction in HORIZONTAL {
+            let clockwise = match direction {
+                Direction::North => Direction::East,
+                Direction::East => Direction::South,
+                Direction::South => Direction::West,
+                _ => Direction::North,
+            };
+            let along = if matches!(clockwise, Direction::East | Direction::South) {
+                radius + extra
+            } else {
+                radius
+            };
+            let [cx, _, cz] = clockwise.offset();
+            let [dx, _, dz] = direction.offset();
+            let mut leaf = [
+                position[0] + cx * along - dx * radius,
+                position[1] + y - 1,
+                position[2] + cz * along - dz * radius,
+            ];
+            for _ in -radius..radius + extra {
+                let above = [leaf[0], leaf[1] + 1, leaf[2]];
+                if self.sets.foliage.contains(above) && self.hanging_extension(hanging, below, leaf)
+                {
+                    let lower = [leaf[0], leaf[1] - 1, leaf[2]];
+                    self.hanging_extension(extension, below, lower);
+                }
+                leaf = direction.step(leaf);
+            }
+        }
+    }
+
+    /// `FoliagePlacer.tryPlaceExtension`.
+    fn hanging_extension(&mut self, chance: f32, origin: [i32; 3], position: [i32; 3]) -> bool {
+        let distance = (0..3).map(|i| (position[i] - origin[i]).abs()).sum::<i32>();
+        if distance >= 7 || self.random.next_float() > chance {
+            return false;
+        }
+        self.try_place_leaf(position)
+    }
+
     /// `FoliagePlacer.shouldSkipLocationSigned`, then each placer's `shouldSkipLocation`.
     fn skip_signed(&mut self, dx: i32, y: i32, dz: i32, radius: i32, double_trunk: bool) -> bool {
+        // `DarkOakFoliagePlacer.shouldSkipLocationSigned`: the corners of the middle layer of a double trunk.
+        if matches!(self.tree.foliage_placer.kind, FoliageKind::DarkOak)
+            && y == 0
+            && double_trunk
+            && (dx == -radius || dx >= radius)
+            && (dz == -radius || dz >= radius)
+        {
+            return true;
+        }
         let (dx, dz) = if double_trunk {
             (dx.abs().min((dx - 1).abs()), dz.abs().min((dz - 1).abs()))
         } else {
@@ -708,6 +996,31 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             }
             FoliageKind::Jungle(_) | FoliageKind::MegaPine(_) => {
                 dx + dz >= 7 || dx * dx + dz * dz > radius * radius
+            }
+            FoliageKind::DarkOak => {
+                if y == -1 && !double_trunk {
+                    dx == radius && dz == radius
+                } else if y == 1 {
+                    dx + dz > radius * 2 - 2
+                } else {
+                    false
+                }
+            }
+            FoliageKind::Cherry(ref cherry) => {
+                if y == -1
+                    && (dx == radius || dz == radius)
+                    && self.random.next_float() < cherry.wide_bottom_layer_hole
+                {
+                    return true;
+                }
+                let corner = dx == radius && dz == radius;
+                if radius > 2 {
+                    corner
+                        || (dx + dz > radius * 2 - 2
+                            && self.random.next_float() < cherry.corner_hole)
+                } else {
+                    corner && self.random.next_float() < cherry.corner_hole
+                }
             }
         }
     }
@@ -749,7 +1062,9 @@ impl TrunkPlacer {
         | Self::Fancy(height)
         | Self::Forking(height)
         | Self::Giant(height)
-        | Self::MegaJungle(height)) = self;
+        | Self::MegaJungle(height)
+        | Self::DarkOak(height)
+        | Self::Cherry(height, _)) = self;
         height.base
             + random.next_int_bounded(height.rand_a + 1)
             + random.next_int_bounded(height.rand_b + 1)
@@ -1040,6 +1355,32 @@ fn trunk_placer(name: &str, json: &Value) -> Result<Option<TrunkPlacer>, Worldge
         "minecraft:forking_trunk_placer" => Some(TrunkPlacer::Forking(height)),
         "minecraft:giant_trunk_placer" => Some(TrunkPlacer::Giant(height)),
         "minecraft:mega_jungle_trunk_placer" => Some(TrunkPlacer::MegaJungle(height)),
+        "minecraft:dark_oak_trunk_placer" => Some(TrunkPlacer::DarkOak(height)),
+        "minecraft:cherry_trunk_placer" => {
+            let start = json
+                .get("branch_start_offset_from_top")
+                .and_then(|start| {
+                    let bound = |key| start.get(key)?.as_i64()?.try_into().ok();
+                    Some((bound("min_inclusive")?, bound("max_inclusive")?))
+                })
+                .ok_or_else(|| invalid(name, "`branch_start_offset_from_top` needs its bounds"))?;
+            let (Some(count), Some(horizontal_length), Some(end)) = (
+                int_provider(name, json, "branch_count")?,
+                int_provider(name, json, "branch_horizontal_length")?,
+                int_provider(name, json, "branch_end_offset_from_top")?,
+            ) else {
+                return Ok(None);
+            };
+            Some(TrunkPlacer::Cherry(
+                height,
+                Box::new(CherryBranches {
+                    count,
+                    horizontal_length,
+                    start,
+                    end,
+                }),
+            ))
+        }
         _ => None,
     })
 }
@@ -1048,6 +1389,25 @@ fn foliage_placer(name: &str, json: &Value) -> Result<Option<FoliagePlacer>, Wor
     let foliage_kind = match kind(name, json)? {
         "minecraft:blob_foliage_placer" => FoliageKind::Blob(integer(name, json, "height", None)?),
         "minecraft:acacia_foliage_placer" => FoliageKind::Acacia,
+        "minecraft:dark_oak_foliage_placer" => FoliageKind::DarkOak,
+        "minecraft:cherry_foliage_placer" => {
+            let chance = |key: &str| {
+                json.get(key)
+                    .and_then(Value::as_f64)
+                    .map(|chance| chance as f32)
+                    .ok_or_else(|| invalid(name, format!("missing field `{key}`")))
+            };
+            let Some(height) = int_provider(name, json, "height")? else {
+                return Ok(None);
+            };
+            FoliageKind::Cherry(Box::new(CherryFoliage {
+                height,
+                wide_bottom_layer_hole: chance("wide_bottom_layer_hole_chance")?,
+                corner_hole: chance("corner_hole_chance")?,
+                hanging_leaves: chance("hanging_leaves_chance")?,
+                hanging_leaves_extension: chance("hanging_leaves_extension_chance")?,
+            }))
+        }
         "minecraft:bush_foliage_placer" => FoliageKind::Bush(integer(name, json, "height", None)?),
         "minecraft:jungle_foliage_placer" => {
             FoliageKind::Jungle(integer(name, json, "height", None)?)

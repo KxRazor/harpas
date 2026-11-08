@@ -149,8 +149,10 @@ vanilla for the same seed.
   - [x] Jungle, savanna and giant trees: forking, giant and mega jungle trunks, acacia, bush, jungle and mega pine
         foliage and the `alter_ground` decorator, compared with vanilla's own tree features
         (`tree_feature_parity`).
-  - [ ] The remaining decorators and the remaining trunk, foliage and root placers: dark oak, cherry, bending,
-        upwards branching and mangrove roots, and huge mushrooms.
+  - [x] Dark oak and cherry trees and huge mushrooms, compared with vanilla's own features loaded from its data
+        pack (`tree_feature_parity`, `feature_blocks_parity`).
+  - [ ] The remaining decorators and the remaining trunk, foliage and root placers: `pale_moss` and
+        `creaking_heart`, bending, upwards branching and mangrove roots.
   - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

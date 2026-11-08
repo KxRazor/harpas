@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Dark oak and cherry trees and huge mushrooms: the `dark_oak` and `cherry` trunk and foliage placers, with the
+  cherry's branches and hanging leaves, and `huge_brown_mushroom` and `huge_red_mushroom`. Dark forests, cherry
+  groves and mushroom fields now grow, 115 of the 164 Overworld placed features. The feature probes now load
+  configured features from the jar's data pack, as a server does, instead of the registries vanilla builds in
+  code: they differ where a codec writes back another field, as the cherry's `corner_hole_chance` does.
+  `tree_feature_parity` adds dark oaks, cherries and huge mushrooms (`harpas-worldgen`).
+
 - Jungle, savanna and giant trees: the `forking`, `giant` and `mega_jungle` trunk placers, the `acacia`, `bush`,
   `jungle` and `mega_pine` foliage placers and the `alter_ground` decorator, which spreads podzol around giant
   spruces and pines. Jungles, sparse jungles, savannas, windswept savannas, both old growth taigas and bamboo

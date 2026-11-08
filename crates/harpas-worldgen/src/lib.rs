@@ -12,6 +12,7 @@ pub mod density;
 pub mod fallen_tree;
 pub mod feature;
 pub mod generator;
+pub mod huge_mushroom;
 pub mod java_hash;
 pub mod light;
 pub mod noise_chunk;

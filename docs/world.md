@@ -258,13 +258,26 @@ and the owner **accepts it once**:
     order; each is seeded with `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and
     `set_feature_seed(decoration, index, step)`, where `index` is its position in the step's global order, not
     in a biome's list. The structures of each step take indices from the same counter and are not run yet.
-    Placement modifiers run depth first, each position through the rest of the list, and `count`,
-    `rarity_filter`, `in_square`, `height_range` and `biome` are ported; a feature with another modifier or
-    another type is skipped, which changes no other feature's seed. `minecraft:ore` is placed with vanilla's
+    Placement modifiers run depth first, each position through the rest of the list and into the feature before
+    the next comes out, as vanilla's lazy streams do; only `count_on_every_layer` collects all its positions
+    first, as vanilla's does. All 15 modifier types are ported, with the integer providers `constant`,
+    `uniform`, `biased_to_bottom`, `clamped`, `clamped_normal`, `trapezoid` and `weighted_list`, and the block
+    predicates `matching_blocks`, `matching_block_tag`, `matching_fluids`, `inside_world_bounds`, `all_of`,
+    `any_of`, `not` and `true`. Fluids are read from block states: liquid blocks hold a source at level 0,
+    bubble columns, kelp and seagrass hold water, as does any `waterlogged=true` state. `solid`, `replaceable`,
+    `would_survive` and `has_sturdy_face` need block shapes and survival rules, which are not ported, so the
+    64 placed features that use them (most tree placements, sugar cane, cactus, melons and the lush cave
+    features) are skipped; skipping a feature or a type changes no other feature's seed.
+    `placement_parity` runs every Overworld placed feature's modifiers with vanilla's own on the same carved
+    terrain and random seeds and compares every position. `count_on_every_layer`, `biased_to_bottom` heights
+    and `fixed_placement` are only used in the Nether and the End, so unit tests cover them until those
+    dimensions are compared. While a chunk decorates, vanilla updates only its four final heightmaps when a
+    block changes and leaves `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` as carvers left them; Harpas updates all
+    six. Ores never change a heightmap, so this matters only once other families place blocks. `minecraft:ore` is placed with vanilla's
     vein geometry: spheres inside other spheres are dropped, the visited set is bounded only on the lower side,
     and with a discard chance a block is skipped when any of its six neighbors is air. Scattered ore (ancient
-    debris) is parsed but waits for the Nether. Height providers `constant`, `uniform` and `trapezoid` are
-    ported. `RegionFeatureWorld` routes reads and writes across the nine chunks and zooms their stored biomes
+    debris) is parsed but waits for the Nether. Height providers `constant`, `uniform`, `trapezoid`,
+    `biased_to_bottom`, `very_biased_to_bottom` and `weighted_list` are ported. `RegionFeatureWorld` routes reads and writes across the nine chunks and zooms their stored biomes
     with the world seed's `BiomeManager`. The structures of each step and the other families follow.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
     source, including the random state after the call.

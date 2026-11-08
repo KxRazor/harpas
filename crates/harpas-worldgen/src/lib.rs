@@ -13,6 +13,7 @@ pub mod generator;
 pub mod light;
 pub mod noise_chunk;
 pub mod ore_vein;
+pub mod placement;
 pub mod seed;
 pub mod spline;
 pub mod structure;
@@ -29,15 +30,16 @@ pub use biome::{
     nether_biome_parameters, overworld_biome_parameters, quantize_coord, unquantize_coord,
 };
 pub use data::{
-    BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockStateDef, BlockTagDef, BlockTagEntry,
-    ConfiguredCarverDef, ConfiguredFeatureDef, DimensionDef, ExclusionZoneDef, FeatureConfigDef,
-    FeatureRefDef, FrequencyReductionMethod, HeightProviderDef, IntProviderDef, JigsawDef,
-    MultiNoiseParameterListDef, NoiseSamplingSettings, NoiseSettingsDef, OceanRuinDef,
-    OreFeatureDef, OreTargetDef, PlacedFeatureDef, PlacementModifierDef, PoolAliasDef,
-    PoolElementDef, Projection, RuinedPortalPlacement, RuinedPortalSetupDef, RuleTestDef,
-    StartHeightDef, StructureDef, StructurePlacementCommon, StructurePlacementDef,
-    StructurePlacementKind, StructureSetDef, StructureSetEntryDef, TemperatureModifier,
-    TemplatePoolDef, WorldPresetDef, WorldgenData, WorldgenDataError,
+    BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockDirection, BlockPredicateDef,
+    BlockStateDef, BlockTagDef, BlockTagEntry, ConfiguredCarverDef, ConfiguredFeatureDef,
+    DimensionDef, ExclusionZoneDef, FeatureConfigDef, FeatureRefDef, FrequencyReductionMethod,
+    HeightProviderDef, IntProviderDef, JigsawDef, MultiNoiseParameterListDef,
+    NoiseSamplingSettings, NoiseSettingsDef, OceanRuinDef, OreFeatureDef, OreTargetDef,
+    PlacedFeatureDef, PlacementModifierDef, PoolAliasDef, PoolElementDef, Projection,
+    RuinedPortalPlacement, RuinedPortalSetupDef, RuleTestDef, StartHeightDef, StructureDef,
+    StructurePlacementCommon, StructurePlacementDef, StructurePlacementKind, StructureSetDef,
+    StructureSetEntryDef, TemperatureModifier, TemplatePoolDef, WorldPresetDef, WorldgenData,
+    WorldgenDataError,
 };
 pub use density::{
     BinaryOp, CompiledDensityGraph, CompiledNode, CompiledNoiseRouter, DensityFunctionDef,
@@ -45,13 +47,16 @@ pub use density::{
 };
 pub use feature::{
     ChunkFeatureWorld, CompiledOre, FeatureIndex, FeatureWorld, OreTarget, RegionFeatureWorld,
-    RuleTestRule, STEP_COUNT, apply_biome_decoration, place_ore, sample_height_provider,
-    sample_int_provider,
+    RuleTestRule, STEP_COUNT, apply_biome_decoration, place_ore,
 };
 pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
 pub use light::{ChunkLight, LIGHT_BYTES, LightSection, LightWorld, light_chunk};
 pub use noise_chunk::NoiseChunk;
 pub use ore_vein::{OreVeinifier, VeinType};
+pub use placement::{
+    BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
+    place_positions, sample_height_provider, sample_int_provider,
+};
 pub use seed::parse_level_seed;
 pub use spline::{CubicSpline, CubicSplineDef, SplinePointDef};
 pub use structure::{

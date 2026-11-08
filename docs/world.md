@@ -264,17 +264,24 @@ and the owner **accepts it once**:
     `uniform`, `biased_to_bottom`, `clamped`, `clamped_normal`, `trapezoid` and `weighted_list`, and the block
     predicates `matching_blocks`, `matching_block_tag`, `matching_fluids`, `inside_world_bounds`, `all_of`,
     `any_of`, `not` and `true`. Fluids are read from block states: liquid blocks hold a source at level 0,
-    bubble columns, kelp and seagrass hold water, as does any `waterlogged=true` state. `solid`, `replaceable`,
-    `would_survive` and `has_sturdy_face` need block shapes and survival rules, which are not ported, so the
-    64 placed features that use them (most tree placements, sugar cane, cactus, melons and the lush cave
-    features) are skipped; skipping a feature or a type changes no other feature's seed.
+    bubble columns, kelp and seagrass hold water, as does any `waterlogged=true` state. `solid`,
+    `replaceable` and `has_sturdy_face` read flags from `harpas_core::block_behavior`, which derives vanilla's
+    legacy solid flag, motion blocking and full faces from the collision shapes of minecraft-data, with the
+    blocks whose properties force the solid flag or whose support shape differs from their collision shape
+    listed by hand; `block_behavior_parity` compares all 29,873 states with vanilla's. `would_survive` runs the
+    survival rule of saplings, the firefly bush, the mangrove propagule, sugar cane and cactus, which read
+    `supports_*` block and fluid tags; the datapack loader now reads fluid tags too. A placed feature whose
+    `would_survive` names another block is skipped, which changes no other feature's seed; no 26.1 placed
+    feature does.
     `placement_parity` runs every Overworld placed feature's modifiers with vanilla's own on the same carved
     terrain and random seeds and compares every position. `count_on_every_layer`, `biased_to_bottom` heights
     and `fixed_placement` are only used in the Nether and the End, so unit tests cover them until those
-    dimensions are compared. While a chunk decorates, vanilla updates only its four final heightmaps when a
-    block changes and leaves `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` as carvers left them; Harpas updates all
-    six. Ores never change a heightmap, so this matters only once other families place blocks. `minecraft:ore` is placed with vanilla's
-    vein geometry: spheres inside other spheres are dropped, the visited set is bounded only on the lower side,
+    dimensions are compared. Once a chunk has run carvers, vanilla updates only its four final heightmaps when
+    a block changes and leaves `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` as carvers left them, so features and
+    structures that read them see the carved terrain; `GeneratedChunk::freeze_worldgen_heightmaps` does the
+    same for generated chunks and resumed proto-chunks. The heightmaps classify blocks with
+    `block_behavior`'s motion-blocking flag and fluids, as vanilla's do. `minecraft:ore` is placed with
+    vanilla's vein geometry: spheres inside other spheres are dropped, the visited set is bounded only on the lower side,
     and with a discard chance a block is skipped when any of its six neighbors is air. Scattered ore (ancient
     debris) is parsed but waits for the Nether. Height providers `constant`, `uniform`, `trapezoid`,
     `biased_to_bottom`, `very_biased_to_bottom` and `weighted_list` are ported. `RegionFeatureWorld` routes reads and writes across the nine chunks and zooms their stored biomes

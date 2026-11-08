@@ -444,6 +444,19 @@ impl BlockDirection {
         }
     }
 
+    /// The same direction as a block face.
+    pub const fn face(self) -> harpas_core::block_behavior::Face {
+        use harpas_core::block_behavior::Face;
+        match self {
+            Self::Down => Face::Down,
+            Self::Up => Face::Up,
+            Self::North => Face::North,
+            Self::South => Face::South,
+            Self::West => Face::West,
+            Self::East => Face::East,
+        }
+    }
+
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "down" => Self::Down,
@@ -963,6 +976,8 @@ pub struct WorldgenData {
     pub placed_features: IndexMap<String, PlacedFeatureDef>,
     /// Block tags, including nested tags used to select replaceable terrain.
     pub block_tags: IndexMap<String, BlockTagDef>,
+    /// Fluid tags, which block predicates and survival rules test.
+    pub fluid_tags: IndexMap<String, BlockTagDef>,
     /// Biome tags, including nested tags, which select where structures generate.
     pub biome_tags: IndexMap<String, BlockTagDef>,
     /// `minecraft:worldgen/structure` definitions, as far as structure placement needs them.
@@ -1095,6 +1110,10 @@ impl WorldgenData {
                     data.block_tags
                         .insert(resource_id.clone(), parse_tag(&resource_id, &json)?);
                 }
+                "fluid_tag" => {
+                    data.fluid_tags
+                        .insert(resource_id.clone(), parse_tag(&resource_id, &json)?);
+                }
                 "biome_tag" => {
                     data.biome_tags
                         .insert(resource_id.clone(), parse_tag(&resource_id, &json)?);
@@ -1174,6 +1193,22 @@ impl WorldgenData {
         )
     }
 
+    /// Resolves a fluid tag and nested references to fluid identifiers, such as `minecraft:flowing_water`.
+    /// Unknown required entries and cyclic references are errors; optional missing entries are skipped.
+    pub fn fluid_tag_members(&self, tag: &str) -> Result<HashSet<String>, WorldgenDataError> {
+        let mut fluids = HashSet::new();
+        collect_tag(
+            &self.fluid_tags,
+            "fluid",
+            &|name| FLUIDS.contains(&name),
+            tag.strip_prefix('#').unwrap_or(tag),
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            &mut fluids,
+        )?;
+        Ok(fluids)
+    }
+
     /// Resolves biome IDs and `#`-prefixed tags to biome registry IDs.
     /// Unknown required entries and cyclic references are errors; optional missing entries are skipped.
     pub fn resolve_biomes(&self, selector: &[String]) -> Result<HashSet<u32>, WorldgenDataError> {
@@ -1204,6 +1239,15 @@ impl WorldgenData {
             .collect())
     }
 }
+
+/// The fluids of the fluid registry.
+pub const FLUIDS: [&str; 5] = [
+    "minecraft:empty",
+    "minecraft:flowing_water",
+    "minecraft:water",
+    "minecraft:flowing_lava",
+    "minecraft:lava",
+];
 
 fn collect_tag(
     tags: &IndexMap<String, BlockTagDef>,
@@ -1772,6 +1816,12 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
         .and_then(|path| path.strip_suffix(".json"))
     {
         return Some((namespace, "block_tag", rel_id));
+    }
+    if let Some(rel_id) = after_ns
+        .strip_prefix("tags/fluid/")
+        .and_then(|path| path.strip_suffix(".json"))
+    {
+        return Some((namespace, "fluid_tag", rel_id));
     }
     if let Some(rel_id) = after_ns
         .strip_prefix("tags/worldgen/biome/")

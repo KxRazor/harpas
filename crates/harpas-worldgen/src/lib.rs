@@ -18,6 +18,7 @@ pub mod seed;
 pub mod spline;
 pub mod structure;
 pub mod surface;
+pub mod survival;
 pub mod template;
 
 pub use aquifer::{
@@ -68,6 +69,7 @@ pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
     SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,
 };
+pub use survival::{SurvivalRule, compile_survival};
 pub use template::{
     Facing, JigsawBlock, JointType, Mirror, Rotation, StructureTemplate, StructureTemplates,
 };

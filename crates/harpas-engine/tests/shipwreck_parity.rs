@@ -798,14 +798,15 @@ fn saved_neighbor_case(
         }
         // Raise saved ocean-floor columns to make the footprint's average differ from regenerated terrain.
         let stone = block_states().default_state("minecraft:stone").unwrap();
+        let saved = carved.get_mut(&origin).unwrap();
         for z in 0..16 {
             for x in 0..16 {
-                carved
-                    .get_mut(&origin)
-                    .unwrap()
-                    .set_block_state(x, 200, z, stone);
+                saved.set_block_state(x, 200, z, stone);
             }
         }
+        // A carved chunk's worldgen heightmaps no longer follow block changes, but a saved one gets them from
+        // its blocks again when it loads, in vanilla and in the workers.
+        saved.recompute_heightmaps();
         let mut saved_source =
             harpas_engine::worldgen::into_anvil(carved[&origin].clone()).unwrap();
         let mut records = Compound::new();

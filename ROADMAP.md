@@ -133,8 +133,8 @@ vanilla for the same seed.
         are tracked under "Structures through the complete FEATURES schedule".
   - [x] Placement modifiers: all 15 types with their integer and height providers, and the block predicates
         that need no block shapes, compared position by position with vanilla's own (`placement_parity`).
-  - [ ] Block shapes and survival rules for the `solid`, `replaceable`, `would_survive` and `has_sturdy_face`
-        predicates, and the heightmaps vanilla keeps while a chunk decorates.
+  - [x] Block shapes and survival rules for the `solid`, `replaceable`, `would_survive` and `has_sturdy_face`
+        predicates, and the heightmaps vanilla keeps while a chunk decorates (`block_behavior_parity`).
   - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

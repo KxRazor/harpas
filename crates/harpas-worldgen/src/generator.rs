@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use harpas_core::block::block_states;
+use harpas_core::block_behavior::block_behavior;
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
 use harpas_core::random::{LegacyRandom, WorldgenRandom};
 
@@ -24,6 +25,7 @@ use crate::data::{
 use crate::density::{CompiledDensityGraph, CompiledNoiseRouter};
 use crate::noise_chunk::NoiseChunk;
 use crate::ore_vein::OreVeinifier;
+use crate::placement::{Fluid, fluid};
 use crate::surface::{SurfaceChunkAccess, SurfaceRule, SurfaceSystem, resolve_block_state};
 
 /// Vanilla heightmap types tracked during chunk generation and sent in chunk packets.
@@ -54,6 +56,19 @@ impl HeightmapType {
         Self::MotionBlockingNoLeaves,
     ];
 
+    /// The 4 heightmaps that a chunk keeps once carvers have run (`ChunkStatus.FINAL_HEIGHTMAPS`).
+    pub const FINAL: [Self; 4] = [
+        Self::WorldSurface,
+        Self::OceanFloor,
+        Self::MotionBlocking,
+        Self::MotionBlockingNoLeaves,
+    ];
+
+    /// Whether this is one of the 2 heightmaps used only until carvers (`WORLD_SURFACE_WG`, `OCEAN_FLOOR_WG`).
+    pub const fn is_worldgen(self) -> bool {
+        matches!(self, Self::WorldSurfaceWg | Self::OceanFloorWg)
+    }
+
     /// NBT compound key name (`"WORLD_SURFACE_WG"`, `"MOTION_BLOCKING"`, etc.).
     pub const fn nbt_key(self) -> &'static str {
         match self {
@@ -66,8 +81,7 @@ impl HeightmapType {
         }
     }
 
-    /// Returns whether `state` satisfies this heightmap's predicate for the blocks used during terrain and
-    /// surface generation. Classification of other blocks is provisional until gameplay heightmaps are added.
+    /// Returns whether `state` satisfies this heightmap's predicate (`Heightmap.Types.isOpaque`).
     #[inline]
     pub fn matches(self, state: u32) -> bool {
         let flags = block_heightmap_flags()[state as usize];
@@ -88,72 +102,27 @@ const FLAG_HAS_FLUID: u8 = 1 << 1;
 const FLAG_BLOCKS_MOTION: u8 = 1 << 2;
 const FLAG_IS_LEAVES: u8 = 1 << 3;
 
+/// Per block state: not air (`WORLD_SURFACE`), holds a fluid, blocks motion (`OCEAN_FLOOR`; with a fluid,
+/// `MOTION_BLOCKING`) and is leaves, which `MOTION_BLOCKING_NO_LEAVES` leaves out.
 fn block_heightmap_flags() -> &'static [u8] {
     static FLAGS: OnceLock<Vec<u8>> = OnceLock::new();
     FLAGS.get_or_init(|| {
         let states = block_states();
+        let behavior = block_behavior();
         (0..states.len())
             .map(|id| {
-                let (name, props) = states.properties(id).expect("known block state");
-                let is_air = matches!(
-                    name,
-                    "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
-                );
-                if is_air {
+                if states.is_air(id) {
                     return 0;
                 }
-                let has_fluid = matches!(
-                    name,
-                    "minecraft:water"
-                        | "minecraft:lava"
-                        | "minecraft:bubble_column"
-                        | "minecraft:kelp"
-                        | "minecraft:kelp_plant"
-                        | "minecraft:seagrass"
-                        | "minecraft:tall_seagrass"
-                ) || props.contains(&("waterlogged", "true"));
-                let is_leaves = name.ends_with("_leaves");
-                let is_non_blocking = matches!(
-                    name,
-                    "minecraft:water"
-                        | "minecraft:lava"
-                        | "minecraft:bubble_column"
-                        | "minecraft:fire"
-                        | "minecraft:soul_fire"
-                        | "minecraft:cobweb"
-                        | "minecraft:short_grass"
-                        | "minecraft:tall_grass"
-                        | "minecraft:fern"
-                        | "minecraft:large_fern"
-                        | "minecraft:dead_bush"
-                        | "minecraft:seagrass"
-                        | "minecraft:tall_seagrass"
-                        | "minecraft:kelp"
-                        | "minecraft:kelp_plant"
-                        | "minecraft:vine"
-                        | "minecraft:glow_lichen"
-                        | "minecraft:sugar_cane"
-                        | "minecraft:brown_mushroom"
-                        | "minecraft:red_mushroom"
-                        | "minecraft:snow"
-                        | "minecraft:powder_snow"
-                        | "minecraft:ladder"
-                        | "minecraft:redstone_torch"
-                        | "minecraft:wall_torch"
-                        | "minecraft:torch"
-                        | "minecraft:stone_button"
-                        | "minecraft:end_portal"
-                        | "minecraft:rail"
-                        | "minecraft:potted_cactus"
-                ) || name.ends_with("_carpet");
+                let (name, _) = states.properties(id).expect("known block state");
                 let mut f = FLAG_NOT_AIR;
-                if has_fluid {
+                if fluid(id) != Fluid::Empty {
                     f |= FLAG_HAS_FLUID;
                 }
-                if !is_non_blocking {
+                if behavior.blocks_motion(id) {
                     f |= FLAG_BLOCKS_MOTION;
                 }
-                if is_leaves {
+                if name.ends_with("_leaves") {
                     f |= FLAG_IS_LEAVES;
                 }
                 f
@@ -207,6 +176,11 @@ impl Heightmaps {
     /// Fast upward-or-top-down heightmap update when filling a chunk from top to bottom or raising a pillar.
     #[inline]
     pub fn record_filled(&mut self, local_x: usize, block_y: i32, local_z: usize, state: u32) {
+        self.record(local_x, block_y, local_z, state, true);
+    }
+
+    #[inline]
+    fn record(&mut self, local_x: usize, block_y: i32, local_z: usize, state: u32, worldgen: bool) {
         let flags = block_heightmap_flags()[state as usize];
         if flags == 0 {
             return;
@@ -214,7 +188,7 @@ impl Heightmaps {
         let idx = (local_z << 4) | local_x;
         let top = block_y + 1;
         if (flags & FLAG_NOT_AIR) != 0 {
-            if top > self.world_surface_wg[idx] {
+            if worldgen && top > self.world_surface_wg[idx] {
                 self.world_surface_wg[idx] = top;
             }
             if top > self.world_surface[idx] {
@@ -222,7 +196,7 @@ impl Heightmaps {
             }
         }
         if (flags & FLAG_BLOCKS_MOTION) != 0 {
-            if top > self.ocean_floor_wg[idx] {
+            if worldgen && top > self.ocean_floor_wg[idx] {
                 self.ocean_floor_wg[idx] = top;
             }
             if top > self.ocean_floor[idx] {
@@ -283,6 +257,8 @@ pub struct GeneratedChunk {
     heightmaps: Heightmaps,
     fluid_postprocessing: Vec<(u8, i32, u8)>,
     carving_mask: Option<CarvingMask>,
+    /// Whether block changes leave `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` as they are.
+    worldgen_heightmaps_frozen: bool,
 }
 
 impl GeneratedChunk {
@@ -316,6 +292,7 @@ impl GeneratedChunk {
             heightmaps: Heightmaps::new(min_y, height),
             fluid_postprocessing: Vec::new(),
             carving_mask: None,
+            worldgen_heightmaps_frozen: false,
         }
     }
 
@@ -398,6 +375,13 @@ impl GeneratedChunk {
         self.carving_mask.as_ref()
     }
 
+    /// Stops block changes from updating `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG`, as vanilla does once a chunk
+    /// has run carvers: a proto-chunk then updates only the heightmaps its status lists, the 4 final ones.
+    /// Features and structures that read the worldgen heightmaps see the terrain carvers left.
+    pub fn freeze_worldgen_heightmaps(&mut self) {
+        self.worldgen_heightmaps_frozen = true;
+    }
+
     pub(crate) fn mark_fluid_postprocessing(&mut self, x: u8, y: i32, z: u8) {
         self.fluid_postprocessing.push((x, y, z));
     }
@@ -443,8 +427,10 @@ impl GeneratedChunk {
             return;
         }
         let top = block_y + 1;
+        let worldgen = !self.worldgen_heightmaps_frozen;
         let removed_from_heightmap = HeightmapType::ALL.into_iter().any(|kind| {
-            self.heightmaps.get(kind, local_x, local_z) == top
+            (worldgen || !kind.is_worldgen())
+                && self.heightmaps.get(kind, local_x, local_z) == top
                 && kind.matches(prev)
                 && !kind.matches(state)
         });
@@ -452,15 +438,18 @@ impl GeneratedChunk {
             self.recompute_column_heightmaps(local_x, local_z);
         } else {
             self.heightmaps
-                .record_filled(local_x, block_y, local_z, state);
+                .record(local_x, block_y, local_z, state, worldgen);
         }
     }
 
     fn recompute_column_heightmaps(&mut self, local_x: usize, local_z: usize) {
         let idx = (local_z << 4) | local_x;
-        self.heightmaps.world_surface_wg[idx] = self.min_y;
+        let worldgen = !self.worldgen_heightmaps_frozen;
+        if worldgen {
+            self.heightmaps.world_surface_wg[idx] = self.min_y;
+            self.heightmaps.ocean_floor_wg[idx] = self.min_y;
+        }
         self.heightmaps.world_surface[idx] = self.min_y;
-        self.heightmaps.ocean_floor_wg[idx] = self.min_y;
         self.heightmaps.ocean_floor[idx] = self.min_y;
         self.heightmaps.motion_blocking[idx] = self.min_y;
         self.heightmaps.motion_blocking_no_leaves[idx] = self.min_y;
@@ -469,7 +458,8 @@ impl GeneratedChunk {
         for by in (self.min_y..=top_y).rev() {
             let state = self.block_state(local_x, by, local_z);
             if state != 0 {
-                self.heightmaps.record_filled(local_x, by, local_z, state);
+                self.heightmaps
+                    .record(local_x, by, local_z, state, worldgen);
             }
         }
     }
@@ -1120,6 +1110,7 @@ impl NoiseBasedChunkGenerator {
         self.build_surface(&mut chunk, &mut noise_chunk, data);
         chunk.carving_mask =
             Some(self.apply_carvers(&mut chunk, &mut noise_chunk, &mut aquifer, data)?);
+        chunk.freeze_worldgen_heightmaps();
         Ok(chunk)
     }
 }

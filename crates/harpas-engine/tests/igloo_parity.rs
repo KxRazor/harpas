@@ -693,10 +693,11 @@ fn saved_neighbor_case(
     }
     // Raise the saved entrance column above the seed-derived surface. Target placement must read it.
     let stone = block_states().default_state("minecraft:stone").unwrap();
-    carved
-        .get_mut(&origin)
-        .unwrap()
-        .set_block_state(9, 200, 14, stone);
+    let saved = carved.get_mut(&origin).unwrap();
+    saved.set_block_state(9, 200, 14, stone);
+    // A carved chunk's worldgen heightmaps no longer follow block changes, but a saved one gets them from its
+    // blocks again when it loads, in vanilla and in the workers.
+    saved.recompute_heightmaps();
     let mut saved_source = harpas_engine::worldgen::into_anvil(carved[&origin].clone()).unwrap();
     let mut records = Compound::new();
     records.insert("starts", starts(std::slice::from_ref(&source)));

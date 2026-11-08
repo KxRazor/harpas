@@ -2,7 +2,8 @@
 // center chunk with vanilla's own classes, seeded as applyBiomeDecoration seeds each feature. The configured
 // features are not placed, so the terrain stays as carved; each modifier stream is consumed as
 // PlacedFeature.placeWithContext consumes it. Writes "feature <step> <index>" and then every position that
-// comes out, for the Rust modifiers to compare.
+// comes out, for the Rust modifiers to compare. Block and fluid tags are bound from the jar, since block
+// predicates and survival rules read both.
 import java.io.*;
 import java.util.*;
 import java.util.stream.Stream;
@@ -26,24 +27,51 @@ import net.minecraft.world.level.levelgen.placement.PlacementContext;
 import net.minecraft.world.level.levelgen.structure.Structure;
 
 public final class PlacementProbe {
-    /** The built-in registries leave block tags unbound; binds every block tag in the jar. */
-    static void bindBlockTags(String jar) throws Exception {
-        var tags = new HashMap<TagKey<Block>, List<Holder<Block>>>();
+    /** Reads a tag of a registry from the jar, following nested tags. */
+    static <T> void addTag(Registry<T> registry, String kind, String name, Set<Holder<T>> values, Set<String> visited) throws Exception {
+        if (!visited.add(name)) return;
+        var id = Identifier.parse(name);
+        var path = "/data/" + id.getNamespace() + "/tags/" + kind + "/" + id.getPath() + ".json";
+        try (var stream = PlacementProbe.class.getResourceAsStream(path)) {
+            if (stream == null) throw new IllegalArgumentException("missing tag " + name);
+            var json = com.google.gson.JsonParser.parseReader(new InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
+            for (var value : json.getAsJsonArray("values")) {
+                boolean required = true;
+                String entry;
+                if (value.isJsonPrimitive()) entry = value.getAsString();
+                else {
+                    entry = value.getAsJsonObject().get("id").getAsString();
+                    if (value.getAsJsonObject().has("required")) required = value.getAsJsonObject().get("required").getAsBoolean();
+                }
+                if (entry.startsWith("#")) {
+                    try { addTag(registry, kind, entry.substring(1), values, visited); }
+                    catch (IllegalArgumentException error) { if (required) throw error; }
+                } else {
+                    var holder = registry.get(Identifier.parse(entry));
+                    if (holder.isPresent()) values.add(holder.get());
+                    else if (required) throw new IllegalArgumentException("missing " + kind + " " + entry);
+                }
+            }
+        }
+    }
+
+    /** The built-in registries leave tags unbound; binds every tag of a registry that the jar has. */
+    static <T> void bindTags(String jar, Registry<T> registry, net.minecraft.resources.ResourceKey<? extends Registry<T>> key, String kind) throws Exception {
+        var tags = new HashMap<TagKey<T>, List<Holder<T>>>();
         try (var zip = new ZipFile(jar)) {
             var entries = zip.entries();
             while (entries.hasMoreElements()) {
                 var name = entries.nextElement().getName();
                 var parts = name.split("/", 5);
                 if (parts.length != 5 || !parts[0].equals("data") || !parts[2].equals("tags")
-                        || !parts[3].equals("block") || !name.endsWith(".json")) continue;
+                        || !parts[3].equals(kind) || !name.endsWith(".json")) continue;
                 var id = parts[1] + ":" + parts[4].substring(0, parts[4].length() - ".json".length());
-                var holders = new LinkedHashSet<Holder<Block>>();
-                WorldgenReferenceProbe.addBlockTag(id, holders, new HashSet<>());
-                tags.put(TagKey.create(Registries.BLOCK, Identifier.parse(id)), new ArrayList<>(holders));
+                var values = new LinkedHashSet<Holder<T>>();
+                addTag(registry, kind, id, values, new HashSet<>());
+                tags.put(TagKey.create(key, Identifier.parse(id)), new ArrayList<>(values));
             }
         }
-        ((MappedRegistry<Block>) BuiltInRegistries.BLOCK)
-            .prepareTagReload(new TagLoader.LoadResult<>(Registries.BLOCK, tags)).apply();
+        ((MappedRegistry<T>) registry).prepareTagReload(new TagLoader.LoadResult<>(key, tags)).apply();
     }
 
     static long key(int x, int z) { return ((long) x << 32) ^ (z & 0xffffffffL); }
@@ -52,7 +80,8 @@ public final class PlacementProbe {
         Locale.setDefault(Locale.ROOT);
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
-        bindBlockTags(args[1]);
+        bindTags(args[1], BuiltInRegistries.BLOCK, Registries.BLOCK, "block");
+        bindTags(args[1], BuiltInRegistries.FLUID, Registries.FLUID, "fluid");
         long seed = Long.parseLong(args[2]);
         var lookup = VanillaRegistries.createLookup();
         var random = RandomState.create(lookup, NoiseGeneratorSettings.OVERWORLD, seed);

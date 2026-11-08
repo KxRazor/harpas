@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use harpas_core::block::block_states;
+use harpas_core::block_behavior::block_behavior;
 use harpas_core::noise::PerlinSimplexNoise;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
@@ -19,6 +20,7 @@ use crate::data::{
 };
 use crate::feature::FeatureWorld;
 use crate::generator::HeightmapType;
+use crate::survival::{SurvivalRule, compile_survival};
 
 /// A placement modifier, compiled against the block registry.
 #[derive(Debug, Clone)]
@@ -90,10 +92,12 @@ pub enum CompiledModifier {
     FixedPlacement(Vec<[i32; 3]>),
 }
 
-/// A block predicate, compiled against the block registry (`BlockPredicate`).
+/// A block predicate, compiled against the block registry (`BlockPredicate`). `matching_blocks`,
+/// `matching_block_tag`, `solid`, `replaceable` and `has_sturdy_face` read only the block state, so they all
+/// compile to a set of states.
 #[derive(Debug, Clone)]
 pub enum BlockPredicate {
-    /// The block state at an offset is in a set: `matching_blocks` and `matching_block_tag`.
+    /// The block state at an offset is in a set.
     States {
         /// Membership by block state ID.
         states: StateSet,
@@ -104,6 +108,13 @@ pub enum BlockPredicate {
     Fluids {
         /// One bit for every [`Fluid`].
         fluids: u8,
+        /// Offset from the tested position.
+        offset: [i32; 3],
+    },
+    /// A block state could stay at the offset position: `would_survive`.
+    Survives {
+        /// The block's survival rule.
+        rule: Box<SurvivalRule>,
         /// Offset from the tested position.
         offset: [i32; 3],
     },
@@ -134,6 +145,7 @@ impl BlockPredicate {
                 let [x, y, z] = add(position, *offset);
                 fluids & (1 << fluid(world.block_state(x, y, z)) as u8) != 0
             }
+            Self::Survives { rule, offset } => rule.test(world, add(position, *offset)),
             Self::InsideWorldBounds { offset } => {
                 let y = position[1] + offset[1];
                 (world.min_y()..world.min_y() + world.height()).contains(&y)
@@ -151,7 +163,8 @@ impl BlockPredicate {
 pub struct StateSet(Arc<[u64]>);
 
 impl StateSet {
-    fn from_membership(membership: &[bool]) -> Self {
+    /// The states whose membership is true, indexed by block state ID.
+    pub fn from_membership(membership: &[bool]) -> Self {
         let mut words = vec![0_u64; membership.len().div_ceil(64)];
         for (state, _) in membership.iter().enumerate().filter(|(_, member)| **member) {
             words[state / 64] |= 1 << (state % 64);
@@ -309,8 +322,8 @@ pub fn compile_placement(
     Ok(Some(compiled))
 }
 
-/// Compiles a block predicate; None when it uses a predicate that needs block shapes or survival rules, which
-/// are not ported yet (`solid`, `replaceable`, `would_survive` and `has_sturdy_face`), or an unknown fluid tag.
+/// Compiles a block predicate; None when it uses an unknown predicate type or `would_survive` with a block whose
+/// survival rule is not ported yet.
 pub fn compile_predicate(
     name: &str,
     predicate: &BlockPredicateDef,
@@ -358,32 +371,32 @@ pub fn compile_predicate(
             states: StateSet::from_membership(&data.block_tag_states(tag)?),
             offset: *offset,
         },
-        BlockPredicateDef::MatchingFluids { fluids, offset } => {
-            let mut mask = 0_u8;
-            for entry in fluids {
-                let members: &[Fluid] = match entry.as_str() {
-                    "minecraft:empty" => &[Fluid::Empty],
-                    "minecraft:water" => &[Fluid::Water],
-                    "minecraft:flowing_water" => &[Fluid::FlowingWater],
-                    "minecraft:lava" => &[Fluid::Lava],
-                    "minecraft:flowing_lava" => &[Fluid::FlowingLava],
-                    "#minecraft:water" => &[Fluid::Water, Fluid::FlowingWater],
-                    "#minecraft:lava" => &[Fluid::Lava, Fluid::FlowingLava],
-                    other if other.starts_with('#') => return Ok(None),
-                    other => {
-                        return Err(WorldgenDataError::InvalidDefinition {
-                            context: name.to_string(),
-                            message: format!("unknown fluid {other}"),
-                        });
-                    }
-                };
-                for &member in members {
-                    mask |= 1 << member as u8;
-                }
-            }
-            BlockPredicate::Fluids {
-                fluids: mask,
+        BlockPredicateDef::MatchingFluids { fluids, offset } => BlockPredicate::Fluids {
+            fluids: fluid_mask(name, fluids, data)?,
+            offset: *offset,
+        },
+        BlockPredicateDef::Solid { offset } => BlockPredicate::States {
+            states: states_where(|state| block_behavior().is_solid(state)),
+            offset: *offset,
+        },
+        BlockPredicateDef::Replaceable { offset } => BlockPredicate::States {
+            states: states_where(|state| block_behavior().can_be_replaced(state)),
+            offset: *offset,
+        },
+        BlockPredicateDef::HasSturdyFace { direction, offset } => {
+            let face = direction.face();
+            BlockPredicate::States {
+                states: states_where(|state| block_behavior().is_face_sturdy(state, face)),
                 offset: *offset,
+            }
+        }
+        BlockPredicateDef::WouldSurvive { state, offset } => {
+            match compile_survival(name, state, data)? {
+                Some(rule) => BlockPredicate::Survives {
+                    rule: Box::new(rule),
+                    offset: *offset,
+                },
+                None => return Ok(None),
             }
         }
         BlockPredicateDef::InsideWorldBounds { offset } => {
@@ -402,12 +415,46 @@ pub fn compile_predicate(
             None => return Ok(None),
         },
         BlockPredicateDef::True => BlockPredicate::True,
-        BlockPredicateDef::Solid { .. }
-        | BlockPredicateDef::Replaceable { .. }
-        | BlockPredicateDef::WouldSurvive { .. }
-        | BlockPredicateDef::HasSturdyFace { .. }
-        | BlockPredicateDef::Other { .. } => return Ok(None),
+        BlockPredicateDef::Other { .. } => return Ok(None),
     }))
+}
+
+/// The states for which `test` holds.
+pub fn states_where(test: impl Fn(u32) -> bool) -> StateSet {
+    let membership: Vec<bool> = (0..block_states().len()).map(test).collect();
+    StateSet::from_membership(&membership)
+}
+
+/// One bit per [`Fluid`] for a holder set of fluid identifiers or one `#`-prefixed fluid tag.
+pub fn fluid_mask(
+    name: &str,
+    entries: &[String],
+    data: &WorldgenData,
+) -> Result<u8, WorldgenDataError> {
+    let mut mask = 0;
+    for entry in entries {
+        let fluids = match entry.strip_prefix('#') {
+            Some(tag) => data.fluid_tag_members(tag)?,
+            None => HashSet::from([entry.clone()]),
+        };
+        for fluid in fluids {
+            mask |= 1
+                << match fluid.as_str() {
+                    "minecraft:empty" => Fluid::Empty,
+                    "minecraft:water" => Fluid::Water,
+                    "minecraft:flowing_water" => Fluid::FlowingWater,
+                    "minecraft:lava" => Fluid::Lava,
+                    "minecraft:flowing_lava" => Fluid::FlowingLava,
+                    other => {
+                        return Err(WorldgenDataError::InvalidDefinition {
+                            context: name.to_string(),
+                            message: format!("unknown fluid {other}"),
+                        });
+                    }
+                } as u8;
+        }
+    }
+    Ok(mask)
 }
 
 fn int_ported(provider: &IntProviderDef) -> bool {

@@ -221,7 +221,8 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
             assert_blocks_match(&chunk, expected, pos);
             let actual_sections =
                 sections(&chunk, expected.min_y(), expected.height(), biomes.len());
-            for kind in HeightmapType::ALL {
+            // Chunks keep only the final heightmaps once carvers have run; the worldgen ones are not saved.
+            for kind in HeightmapType::FINAL {
                 for z in 0..16 {
                     for x in 0..16 {
                         assert_eq!(

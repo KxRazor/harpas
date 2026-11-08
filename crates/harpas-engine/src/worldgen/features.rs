@@ -512,8 +512,11 @@ fn into_proto(mut shell: Chunk, pos: ChunkPos, biome_count: usize) -> io::Result
             *slot = section.section.take();
         }
     }
-    let blocks = GeneratedChunk::from_sections(pos.x, pos.z, min_y, height, biome_count, sections)
-        .ok_or_else(|| io::Error::other("chunk sections do not fit the world height"))?;
+    let mut blocks =
+        GeneratedChunk::from_sections(pos.x, pos.z, min_y, height, biome_count, sections)
+            .ok_or_else(|| io::Error::other("chunk sections do not fit the world height"))?;
+    // A saved proto-chunk has run carvers, so its worldgen heightmaps no longer follow block changes.
+    blocks.freeze_worldgen_heightmaps();
     Ok(Proto {
         blocks,
         shell,

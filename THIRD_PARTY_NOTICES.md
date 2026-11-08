@@ -1525,8 +1525,9 @@ The Java protocol schema in `crates/harpas-protocol-java/schema/` is built from 
 `data/pc/<version>/protocol.json`, and `crates/harpas-protocol-codegen/tests/data/minecraft-data-26.1.json` is a
 subset of that file ([docs/protocol-codecs.md](docs/protocol-codecs.md)). The registry names in
 `crates/harpas-java/data/registries-26.1.txt` come from its `data/pc/26.1/loginPacket.json`
-([crates/harpas-java/data/README.md](crates/harpas-java/data/README.md)), and the block states in
-`crates/harpas-core/data/blocks-26.1.txt` from its `data/pc/26.1/blocks.json`
+([crates/harpas-java/data/README.md](crates/harpas-java/data/README.md)), the block states in
+`crates/harpas-core/data/blocks-26.1.txt` from its `data/pc/26.1/blocks.json`, and the collision shapes in
+`crates/harpas-core/data/block-shapes-26.1.txt` from its `data/pc/26.1/blockCollisionShapes.json`
 ([crates/harpas-core/data/README.md](crates/harpas-core/data/README.md)). Source:
 https://github.com/PrismarineJS/minecraft-data. Its README states the license as MIT; the repository has no
 `LICENSE` file and names no copyright holder, so the notice below names the project.

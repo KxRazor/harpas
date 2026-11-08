@@ -6,50 +6,40 @@ use std::fs;
 
 use harpas_core::random::{WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::{
-    BlockPredicateDef, FeatureIndex, FeatureWorld, NoiseBasedChunkGenerator, PlacementModifierDef,
-    RegionFeatureWorld, WorldgenData, place_positions,
+    FeatureIndex, FeatureWorld, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
+    place_positions,
 };
 use reference::Reference;
 
 /// Includes seed 0, which seeds `Xoroshiro128++` specially, and a seed that fills all 64 bits.
 const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// Far apart, to meet ocean, mountain, badlands, lush cave and mixed-biome chunks, on both sides of the origin.
-const CHUNKS: [(i32, i32); 6] = [
+/// The second group lies in a desert, swamp, mangrove swamp, badlands, cherry grove, plains, snowy plains,
+/// birch forest, jungle, dark forest, savanna and pale garden of the last seed, where the survival rules of
+/// trees, cactus and sugar cane decide which positions pass.
+const CHUNKS: [(i32, i32); 18] = [
     (0, 0),
     (-3, 7),
     (41, -26),
     (128, 64),
     (-203, -151),
     (600, 312),
+    (-66, 30),
+    (-36, -36),
+    (126, 72),
+    (162, -108),
+    (-156, 12),
+    (-42, 6),
+    (-198, -198),
+    (-108, -108),
+    (84, 42),
+    (-102, -114),
+    (-42, -12),
+    (-168, -102),
 ];
 
 /// The positions of every placed feature in one chunk, by generation step and position in the step.
 type FeaturePositions = BTreeMap<(usize, usize), Vec<[i32; 3]>>;
-
-/// Block predicates that need block shapes or survival rules, which are not ported yet.
-fn needs_block_behavior(predicate: &BlockPredicateDef) -> bool {
-    match predicate {
-        BlockPredicateDef::Solid { .. }
-        | BlockPredicateDef::Replaceable { .. }
-        | BlockPredicateDef::WouldSurvive { .. }
-        | BlockPredicateDef::HasSturdyFace { .. } => true,
-        BlockPredicateDef::AllOf(predicates) | BlockPredicateDef::AnyOf(predicates) => {
-            predicates.iter().any(needs_block_behavior)
-        }
-        BlockPredicateDef::Not(predicate) => needs_block_behavior(predicate),
-        _ => false,
-    }
-}
-
-fn needs_block_behavior_modifier(modifier: &PlacementModifierDef) -> bool {
-    match modifier {
-        PlacementModifierDef::BlockPredicateFilter(predicate) => needs_block_behavior(predicate),
-        PlacementModifierDef::EnvironmentScan {
-            target, allowed, ..
-        } => needs_block_behavior(target) || needs_block_behavior(allowed),
-        _ => false,
-    }
-}
 
 /// Every position the placed feature at `index` of `step` yields in the chunk.
 fn positions(
@@ -96,18 +86,13 @@ fn placement_modifiers_match_vanilla() {
     ]);
     let index = FeatureIndex::overworld(&data).expect("compile the feature index");
 
-    // Every placed feature compiles except those waiting for block shapes and survival rules.
+    // Every placed feature's modifiers compile.
     let names: Vec<_> = data.placed_features.keys().collect();
-    let mut waiting = Vec::new();
-    for (placed, (name, feature)) in data.placed_features.iter().enumerate() {
-        if index.modifiers(placed).is_some() {
-            continue;
-        }
+    for (placed, name) in names.iter().enumerate() {
         assert!(
-            feature.placement.iter().any(needs_block_behavior_modifier),
+            index.modifiers(placed).is_some(),
             "{name} has placement modifiers Harpas does not apply"
         );
-        waiting.push(name.as_str());
     }
 
     let mut compared = (HashSet::new(), 0, 0);
@@ -190,11 +175,9 @@ fn placement_modifiers_match_vanilla() {
     }
     assert!(compared.2 > 0, "vanilla placed nothing");
     eprintln!(
-        "Compared {} positions from {} feature runs of {} placed features; {} wait for block behavior: {}",
+        "Compared {} positions from {} feature runs of {} placed features",
         compared.2,
         compared.1,
-        compared.0.len(),
-        waiting.len(),
-        waiting.join(", ")
+        compared.0.len()
     );
 }

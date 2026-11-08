@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Block shapes and behavior: the collision shape of every 26.1 block state, from minecraft-data, and vanilla's
+  solid, replaceable, liquid and motion-blocking flags and full faces derived from them in `harpas-core`.
+  `block_behavior_parity` compares all 29,873 states with vanilla's. The `solid`, `replaceable`,
+  `has_sturdy_face` and `would_survive` block predicates now apply, with the survival rules of saplings, the
+  firefly bush, the mangrove propagule, sugar cane and cactus, so every 26.1 placed feature's placement runs;
+  `placement_parity` compares them all, in more biomes. The datapack loader reads fluid tags (`harpas-core`,
+  `harpas-worldgen`).
+
 - Placement modifiers: all 15 vanilla types, from `heightmap`, `random_offset`, `block_predicate_filter` and
   `surface_water_depth_filter` to the noise-driven counts, `environment_scan`, `count_on_every_layer` and
   `fixed_placement`, with the integer providers, height providers and block predicates they use, run depth
@@ -209,6 +217,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   remains pending (`harpas-worldgen`, `harpas-engine`).
 
 ### Changed
+
+- Generated chunks stop updating `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` once they have run carvers, as vanilla
+  does, and heightmaps classify blocks by their motion-blocking flag and fluid instead of a provisional list of
+  names (`harpas-worldgen`, `harpas-engine`).
 
 - A generated chunk that arrives after nobody wants it any more is saved instead of discarded
   (`harpas-engine`).

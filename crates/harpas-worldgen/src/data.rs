@@ -457,7 +457,7 @@ impl BlockDirection {
         }
     }
 
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "down" => Self::Down,
             "up" => Self::Up,
@@ -1937,7 +1937,10 @@ fn req_str<'a>(
         .ok_or_else(|| invalid_def(ctx, format!("field `{key}` must be a string")))
 }
 
-fn parse_noise_parameters(ctx: &str, json: &Value) -> Result<NoiseParameters, WorldgenDataError> {
+pub(crate) fn parse_noise_parameters(
+    ctx: &str,
+    json: &Value,
+) -> Result<NoiseParameters, WorldgenDataError> {
     let obj = json
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "expected JSON object for noise parameters"))?;
@@ -2273,7 +2276,10 @@ fn parse_cubic_spline(ctx: &str, json: &Value) -> Result<CubicSplineDef, Worldge
     }
 }
 
-fn parse_block_state_def(ctx: &str, json: &Value) -> Result<BlockStateDef, WorldgenDataError> {
+pub(crate) fn parse_block_state_def(
+    ctx: &str,
+    json: &Value,
+) -> Result<BlockStateDef, WorldgenDataError> {
     let obj = json
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "block state definition must be an object"))?;
@@ -2565,7 +2571,10 @@ fn parse_rule_test(ctx: &str, json: &Value) -> Result<RuleTestDef, WorldgenDataE
     })
 }
 
-fn parse_placed_feature(ctx: &str, json: &Value) -> Result<PlacedFeatureDef, WorldgenDataError> {
+pub(crate) fn parse_placed_feature(
+    ctx: &str,
+    json: &Value,
+) -> Result<PlacedFeatureDef, WorldgenDataError> {
     let obj = json
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "placed feature must be an object"))?;
@@ -2730,7 +2739,10 @@ fn parse_holder_set(ctx: &str, json: &Value) -> Result<Vec<String>, WorldgenData
         .collect()
 }
 
-fn parse_block_predicate(ctx: &str, json: &Value) -> Result<BlockPredicateDef, WorldgenDataError> {
+pub(crate) fn parse_block_predicate(
+    ctx: &str,
+    json: &Value,
+) -> Result<BlockPredicateDef, WorldgenDataError> {
     let obj = json
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "block predicate must be an object"))?;
@@ -2789,7 +2801,10 @@ fn parse_block_predicate(ctx: &str, json: &Value) -> Result<BlockPredicateDef, W
     })
 }
 
-fn parse_int_provider(ctx: &str, json: &Value) -> Result<IntProviderDef, WorldgenDataError> {
+pub(crate) fn parse_int_provider(
+    ctx: &str,
+    json: &Value,
+) -> Result<IntProviderDef, WorldgenDataError> {
     if let Some(value) = json.as_i64() {
         return i32::try_from(value)
             .map(IntProviderDef::Constant)

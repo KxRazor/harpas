@@ -125,7 +125,7 @@ vanilla for the same seed.
         (`ore_feature_parity`). Ancient debris uses `scattered_ore` and follows with the Nether.
   - [x] The FEATURES stage on chunk workers. The schedule of one chunk (global feature order per step,
         decoration and feature seeds, the biomes of the 3x3 chunks around it, placement modifiers including
-        `rarity_filter`) is compared with vanilla's `applyBiomeDecoration` for ores (`feature_stage_parity`).
+        `rarity_filter`) is compared with vanilla's `applyBiomeDecoration` for ores.
         Workers share proto-chunks, decorate each chunk once its neighbors reach `carvers` and hand out a
         chunk once its neighbors have decorated, saving proto-chunks at `carvers` or `features` and resuming
         them; final chunks match vanilla and reload unchanged (`feature_worker_parity`). Behind
@@ -135,6 +135,9 @@ vanilla for the same seed.
         that need no block shapes, compared position by position with vanilla's own (`placement_parity`).
   - [x] Block shapes and survival rules for the `solid`, `replaceable`, `would_survive` and `has_sturdy_face`
         predicates, and the heightmaps vanilla keeps while a chunk decorates (`block_behavior_parity`).
+  - [x] Simple features: `simple_block`, the three selectors, `block_column` and `disk`, with the block state
+        providers and the survival rules of the blocks they place, compared block by block with vanilla's
+        `applyBiomeDecoration` (`feature_blocks_parity`).
   - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

@@ -6,6 +6,7 @@ pub mod aquifer;
 pub mod beardifier;
 pub mod biome;
 pub mod carver;
+pub mod configured;
 pub mod data;
 pub mod density;
 pub mod feature;
@@ -29,6 +30,9 @@ pub use beardifier::Beardifier;
 pub use biome::{
     BiomeManager, MultiNoiseBiomeSource, Parameter, ParameterPoint, RTree, TargetPoint,
     nether_biome_parameters, overworld_biome_parameters, quantize_coord, unquantize_coord,
+};
+pub use configured::{
+    CompiledFeature, CompiledPlaced, FeatureCompiler, StateProvider, place_feature, place_placed,
 };
 pub use data::{
     BiomeDef, BiomeParameterEntryDef, BiomeSourceDef, BlockDirection, BlockPredicateDef,
@@ -69,7 +73,7 @@ pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,
     SurfaceSystem, VerticalAnchor, generate_bands, java_round, resolve_block_state,
 };
-pub use survival::{SurvivalRule, compile_survival};
+pub use survival::{SurvivalRule, compile_block_survival, compile_survival};
 pub use template::{
     Facing, JigsawBlock, JointType, Mirror, Rotation, StructureTemplate, StructureTemplates,
 };

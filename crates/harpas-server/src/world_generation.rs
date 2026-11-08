@@ -130,7 +130,9 @@ pub(crate) fn prepare(
         harpas_anvil::write_level(world, &new_level(properties, spawn_y))?;
     }
     let source = if features {
-        info!("New chunks run the FEATURES stage, which places only ores so far");
+        info!(
+            "New chunks run the FEATURES stage, which places only ores and simple vegetation so far"
+        );
         harpas_engine::worldgen::decorated(generator, seed, &data)?
     } else {
         harpas_engine::world::generator_source(generator)

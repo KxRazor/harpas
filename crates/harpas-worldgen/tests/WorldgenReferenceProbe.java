@@ -37,6 +37,24 @@ public final class WorldgenReferenceProbe {
         @Override public net.minecraft.world.level.ChunkPos getCenter() { return center; }
         @Override public boolean isOldChunkAround(net.minecraft.world.level.ChunkPos pos, int radius) { return false; }
         @Override public boolean ensureCanWrite(net.minecraft.core.BlockPos pos) { return true; }
+        // WorldGenRegion.setBlock without the level's points of interest, which a test region has no level for.
+        @Override public boolean setBlock(net.minecraft.core.BlockPos pos, BlockState state, int flags, int recursion) {
+            var chunk = getChunk(pos.getX() >> 4, pos.getZ() >> 4);
+            var old = chunk.setBlockState(pos, state, flags);
+            if (state.hasBlockEntity()) {
+                var tag = new net.minecraft.nbt.CompoundTag();
+                tag.putInt("x", pos.getX()); tag.putInt("y", pos.getY()); tag.putInt("z", pos.getZ());
+                tag.putString("id", "DUMMY");
+                chunk.setBlockEntityNbt(tag);
+            } else if (old != null && old.hasBlockEntity()) {
+                chunk.removeBlockEntity(pos);
+            }
+            if ((flags & 16) == 0) {
+                var post = state.getPostProcessPos(this, pos);
+                if (post != null) chunk.markPosForPostprocessing(post);
+            }
+            return true;
+        }
         @Override public int getMinY() { return height.getMinY(); }
         @Override public int getHeight() { return height.getHeight(); }
         @Override public long getSeed() { return seed; }

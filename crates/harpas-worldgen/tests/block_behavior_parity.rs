@@ -1,5 +1,5 @@
-//! Compares every block state's solid, replaceable, liquid and motion-blocking flags and full faces with
-//! vanilla's.
+//! Compares every block state's solid, replaceable, liquid and motion-blocking flags and the full and center
+//! support of each face with vanilla's.
 mod reference;
 
 use std::fs;
@@ -34,10 +34,11 @@ fn block_behavior_matches_vanilla() {
         let &[id, solid, replaceable, liquid, blocks_motion, sturdy] = fields.as_slice() else {
             panic!("malformed line {line}");
         };
-        let actual_sturdy = Face::ALL
-            .iter()
-            .filter(|&&face| behavior.is_face_sturdy(id, face))
-            .fold(0, |bits, &face| bits | 1 << face as u32);
+        let actual_sturdy = Face::ALL.iter().fold(0, |bits, &face| {
+            let full = u32::from(behavior.is_face_sturdy(id, face)) << face as u32;
+            let center = u32::from(behavior.is_face_center_sturdy(id, face)) << (8 + face as u32);
+            bits | full | center
+        });
         let actual = (
             u32::from(behavior.is_solid(id)),
             u32::from(behavior.can_be_replaced(id)),

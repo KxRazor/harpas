@@ -28,8 +28,8 @@ pub fn load(path: &Path) -> io::Result<toml::Table> {
     })
 }
 
-/// Whether new chunks run the FEATURES stage, which places only ores so far (`docs/world.md`). Off by
-/// default: a chunk saved after FEATURES never runs it again, in Harpas or vanilla.
+/// Whether new chunks run the FEATURES stage, which places ores and simple vegetation so far
+/// (`docs/world.md`). Off by default: a chunk saved after FEATURES never runs it again, in Harpas or vanilla.
 pub fn generation_features(table: &toml::Table) -> io::Result<bool> {
     let Some(generation) = table.get("generation") else {
         return Ok(false);

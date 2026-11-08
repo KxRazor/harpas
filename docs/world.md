@@ -286,6 +286,20 @@ and the owner **accepts it once**:
     debris) is parsed but waits for the Nether. Height providers `constant`, `uniform`, `trapezoid`,
     `biased_to_bottom`, `very_biased_to_bottom` and `weighted_list` are ported. `RegionFeatureWorld` routes reads and writes across the nine chunks and zooms their stored biomes
     with the world seed's `BiomeManager`. The structures of each step and the other families follow.
+    Besides ores, `harpas_worldgen::configured` places `simple_block`, `random_selector`,
+    `simple_random_selector`, `random_boolean_selector`, `block_column` and `disk`, with the simple, weighted,
+    randomized-int, noise, noise-threshold, dual-noise and rule-based block state providers. A feature runs
+    only where the region may be written at its origin, as `Feature.place` checks, before drawing anything.
+    `simple_block` places a state only where its survival rule holds, and a double plant as two halves where
+    the block above is air, each half waterlogged when it replaces water; `block_column` checks its positions
+    one step ahead of those it places and shortens its layers from the base or the tip; `disk` replaces target
+    blocks from the top of each column within its radius and marks up to two non-air blocks above each run of
+    replaced blocks for postprocessing. A configured feature with any part that is not ported, such as a tree,
+    a scheduled tick (eyeblossoms) or a block without a survival rule (mushrooms, which need light, fire,
+    dripleaves and pale moss carpets), is skipped as a whole; 83 of the 164 Overworld placed features run.
+    `feature_blocks_parity` compares every block they place in 24 decorated chunks, with vanilla running
+    the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
+    from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
     source, including the random state after the call.
   - The generation settings and seed live in `data/minecraft/world_gen_settings.dat`, separately from
@@ -546,9 +560,9 @@ and the owner **accepts it once**:
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
-  stage on the chunk workers before players receive them. It is off by default because only ores are placed so
-  far, and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never
-  get trees, vegetation, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  stage on the chunk workers before players receive them. It is off by default because only ores, flowers, grass and
+  other simple vegetation, disks and block columns are placed so far, and a chunk saved after FEATURES never
+  runs the stage again, in Harpas or in vanilla, so it would never get trees, lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

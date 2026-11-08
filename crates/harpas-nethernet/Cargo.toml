@@ -10,7 +10,7 @@ publish.workspace = true
 base64 = "0.23.1"
 getrandom = "0.4.3"
 p384 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
-str0m = { version = "0.24.1", default-features = false, features = ["rust-crypto"] }
+str0m = { version = "0.25.0", default-features = false, features = ["rust-crypto"] }
 
 [dev-dependencies]
 miniz_oxide = "0.9.1"

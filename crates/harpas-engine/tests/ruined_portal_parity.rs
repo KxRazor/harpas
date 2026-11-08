@@ -576,6 +576,46 @@ fn worker_cases(
                 }
                 let mut inp = input_with_terrain(&baseline, seed, &all, &block);
                 inp.insert("keep_neighbor_starts", 0_i8);
+                // Workers place every structure that reaches the chunk, such as an ocean monument owned by
+                // a neighbor, so vanilla must place them too. References reach at most 8 chunks.
+                let mut neighbors = Vec::new();
+                for nx in pos.x - 8..=pos.x + 8 {
+                    for nz in pos.z - 8..=pos.z + 8 {
+                        if (nx, nz) == (pos.x, pos.z) {
+                            continue;
+                        }
+                        let starts = starts_cache.entry((nx, nz)).or_insert_with(|| {
+                            state
+                                .starts_in_chunk(&terrain, data, templates, nx, nz)
+                                .unwrap()
+                        });
+                        neighbors.extend(
+                            starts
+                                .iter()
+                                .filter(|s| {
+                                    !all.iter()
+                                        .any(|a| a.structure == s.structure && a.chunk == s.chunk)
+                                        && s.bounding_box.intersects_columns(
+                                            pos.x * 16,
+                                            pos.z * 16,
+                                            pos.x * 16 + 15,
+                                            pos.z * 16 + 15,
+                                        )
+                                })
+                                .map(StructureStart::to_nbt)
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                inp.insert(
+                    "neighbor_starts",
+                    if neighbors.is_empty() {
+                        List::Empty
+                    } else {
+                        List::Compound(neighbors)
+                    },
+                );
+                inp.insert("all_structures", 1_i8);
 
                 let name = format!("worker-{seed}-{},{}", pos.x, pos.z);
                 inputs.insert(name.clone(), inp.clone());

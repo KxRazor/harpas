@@ -4,8 +4,9 @@
 //! vegetation, saplings, azaleas and dry vegetation need a supporting block below, double plants their own
 //! lower half below their upper half, a hanging mangrove propagule leaves above, sugar cane water or frosted
 //! ice beside the block below it, cactus no solid block or lava beside it and no liquid above, a lily pad water
-//! below and none at its own position, a carpet any block below, leaf litter a full top face below and a spore
-//! blossom the center of a bottom face above, out of water. Blocks without a rule of their own always survive.
+//! below and none at its own position, a carpet any block below, leaf litter a full top face below, a spore
+//! blossom the center of a bottom face above, out of water, and a mushroom a block that overrides its light
+//! requirement below, as no light is initialized while chunks decorate. Blocks without a rule of their own always survive.
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
@@ -212,6 +213,12 @@ pub fn compile_block_survival(
             blocks: tag("minecraft:supports_lily_pad")?,
             fluids: fluids("#minecraft:supports_lily_pad")?,
         },
+        // `MushroomBlock.canSurvive` also accepts a solid block below where the raw brightness is under 13. No
+        // column a FEATURES pass reads has initialized its light, so the sky light engine reports 15 there, and
+        // only the blocks that override the light requirement hold a mushroom.
+        "brown_mushroom" | "red_mushroom" => {
+            SurvivalRule::Below(tag("minecraft:overrides_mushroom_light_requirement")?)
+        }
         "moss_carpet" => SurvivalRule::NotAirBelow,
         "leaf_litter" => SurvivalRule::SturdyBelow,
         "spore_blossom" => SurvivalRule::SporeBlossom {
@@ -285,6 +292,10 @@ mod tests {
                 "data/minecraft/tags/fluid/supports_sugar_cane_adjacently.json",
                 tag(r##""#minecraft:water""##),
             ),
+            (
+                "data/minecraft/tags/block/overrides_mushroom_light_requirement.json",
+                tag(r#""minecraft:mycelium","minecraft:podzol""#),
+            ),
         ])
         .unwrap()
     }
@@ -335,6 +346,22 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn mushrooms_need_a_block_that_overrides_their_light_requirement() {
+        let mushroom = rule("minecraft:brown_mushroom", &[]);
+        assert!(survives(
+            &mushroom,
+            &world(&[([5, 0, 5], "minecraft:podzol")]),
+            [5, 1, 5]
+        ));
+        // A solid block would hold one in the dark, but nothing is lit while chunks decorate.
+        assert!(!survives(
+            &mushroom,
+            &world(&[([5, 0, 5], "minecraft:oak_log")]),
+            [5, 1, 5]
+        ));
     }
 
     #[test]

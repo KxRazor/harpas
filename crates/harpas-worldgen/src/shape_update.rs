@@ -71,6 +71,13 @@ impl Direction {
         }
     }
 
+    /// The direction with a name, as `Direction.CODEC` reads it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|direction| direction.name() == name)
+    }
+
     /// The direction's name, as a `facing` property spells it.
     pub const fn name(self) -> &'static str {
         match self {

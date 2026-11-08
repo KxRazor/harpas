@@ -312,13 +312,22 @@ and the owner **accepts it once**:
     leaves), `cocoa` grows beside the lowest three blocks of the trunk, `beehive` places a bee nest facing south
     beside a log below the lowest leaves, at the first position of a shuffled list with air in front of it, and
     `place_on_ground` scatters leaf litter on solid ground (`isSolidRender`) at or above the
-    `MOTION_BLOCKING_NO_LEAVES` surface around the trunk's base. A bee nest's block entity, with two or three bees, is kept in the chunk as vanilla saves it, and
-    the FEATURES workers carry block entities through proto-chunks, removing one when a later block replaces its
-    block. A configured feature with any part that is not ported, such as a tree with roots or other placers or
-    decorators, a fallen tree, a scheduled tick (eyeblossoms) or a block without a survival rule (mushrooms, which
-    need light, fire, dripleaves and pale moss carpets), is skipped as a whole; 87 of the 164 Overworld placed
-    features run, trees only in groves, oceans, rivers, swamps and meadows so far, since most biomes choose
-    between their trees and a fallen tree.
+    `MOTION_BLOCKING_NO_LEAVES` surface around the trunk's base (`harpas_worldgen::tree_decorator`). A bee
+    nest's block entity, with two or three bees, is kept in the chunk as vanilla saves it, and the FEATURES
+    workers carry block entities through proto-chunks, removing one when a later block replaces its block.
+    `harpas_worldgen::fallen_tree` places `fallen_tree`: a stump at the origin with its decorators, then, two or
+    three blocks away in a random horizontal direction, a log two blocks shorter than its drawn length, on the
+    first position within five blocks below the stump's top that is free for a tree over a sturdy top face. The
+    log is placed only if every block is free and no more than two in a row overhang; its blocks lie along the
+    direction's axis, mark up to two blocks above for postprocessing and run the log decorators, such as
+    `attached_to_logs`, which places mushrooms beside a shuffled copy of the logs. No light is initialized while
+    a chunk decorates: vanilla's sky light engine reports 15 in the columns it has no data for, so a mushroom
+    survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
+    log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
+    or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire,
+    dripleaves and pale moss carpets), is skipped as a whole; 105 of the 164 Overworld placed features run,
+    with the trees of most biomes; those of jungles, savannas, cherry groves, mangrove swamps, old growth taigas,
+    dark forests and pale gardens, and huge mushrooms, wait for their placers.
     `feature_blocks_parity` compares every block they place in 27 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
@@ -583,10 +592,10 @@ and the owner **accepts it once**:
   of [engine-core.md](engine-core.md#7-determinism).
 - **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
   stage on the chunk workers before players receive them. It is off by default because only ores, flowers, grass
-  and other simple vegetation, disks, block columns and the trees of groves, oceans, rivers, swamps and meadows
-  are placed so far,
+  and other simple vegetation, mushrooms, disks, block columns and the trees and fallen trees of most biomes are
+  placed so far,
   and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
-  trees of other biomes, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  trees of jungles, savannas and other biomes, lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

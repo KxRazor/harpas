@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Fallen trees: `minecraft:fallen_tree`, a stump with its decorators and, two or three blocks away in a random
+  direction, a log lying on the first free block over sturdy ground within five blocks below, placed only when
+  no more than two of its blocks in a row overhang, with mushrooms from the new `attached_to_logs` decorator.
+  Mushrooms survive only on blocks in `#overrides_mushroom_light_requirement`, since no light is initialized
+  while chunks decorate, so trees break them and the mushroom patches of eight placed features now run.
+  Decorators move to `harpas_worldgen::tree_decorator`. The trees of plains, forests, birch and flower forests,
+  taigas, snowy biomes, badlands and windswept hills now grow, 105 of the 164 Overworld placed features.
+  `tree_feature_parity` adds the five fallen trees, 102 features per chunk, and the reference region's light
+  reads as unlit (`harpas-worldgen`).
+
 - Tree decorators: `trunk_vine`, `leave_vine`, `cocoa`, `beehive` and `place_on_ground`, run in order on the
   tree's logs, leaves and roots in vanilla's `HashSet` order sorted by height. Bee nests keep their two or three
   bees in the saved block entity, which the FEATURES workers now carry through proto-chunks and remove when a

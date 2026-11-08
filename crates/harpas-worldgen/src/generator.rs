@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
+use harpas_core::nbt::Compound;
 use harpas_core::random::{LegacyRandom, WorldgenRandom};
 
 use crate::aquifer::{Aquifer, GlobalFluidPicker};
@@ -259,6 +260,8 @@ pub struct GeneratedChunk {
     carving_mask: Option<CarvingMask>,
     /// Whether block changes leave `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` as they are.
     worldgen_heightmaps_frozen: bool,
+    /// Block entities that features created, by local X, absolute Y and local Z.
+    block_entities: Vec<((u8, i32, u8), Compound)>,
 }
 
 impl GeneratedChunk {
@@ -293,6 +296,7 @@ impl GeneratedChunk {
             fluid_postprocessing: Vec::new(),
             carving_mask: None,
             worldgen_heightmaps_frozen: false,
+            block_entities: Vec::new(),
         }
     }
 
@@ -360,6 +364,27 @@ impl GeneratedChunk {
         self.sections
     }
 
+    /// Sets the saved data of the block entity at `(local_x, block_y, local_z)`, as features create them. A
+    /// later change of that block's state removes it.
+    pub fn set_block_entity(&mut self, local_x: u8, block_y: i32, local_z: u8, entity: Compound) {
+        let position = (local_x, block_y, local_z);
+        self.block_entities.retain(|(at, _)| *at != position);
+        self.block_entities.push((position, entity));
+    }
+
+    /// The block entities features created, in the order they were set.
+    pub fn block_entities(&self) -> impl Iterator<Item = &Compound> {
+        self.block_entities.iter().map(|(_, entity)| entity)
+    }
+
+    /// Takes the block entities features created, in the order they were set.
+    pub fn take_block_entities(&mut self) -> Vec<Compound> {
+        std::mem::take(&mut self.block_entities)
+            .into_iter()
+            .map(|(_, entity)| entity)
+            .collect()
+    }
+
     /// Current heightmaps of this chunk.
     pub const fn heightmaps(&self) -> &Heightmaps {
         &self.heightmaps
@@ -425,6 +450,10 @@ impl GeneratedChunk {
         let prev = self.sections[sec_idx].set_block_state(local_x, local_y, local_z, state);
         if prev == state {
             return;
+        }
+        if !self.block_entities.is_empty() {
+            let position = (local_x as u8, block_y, local_z as u8);
+            self.block_entities.retain(|(at, _)| *at != position);
         }
         let top = block_y + 1;
         let worldgen = !self.worldgen_heightmaps_frozen;

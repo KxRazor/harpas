@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use harpas_core::block::block_states;
 use harpas_core::math::sin_f32;
+use harpas_core::nbt::Compound;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 
 use crate::biome::{BiomeManager, overworld_biome_parameters};
@@ -46,6 +47,9 @@ pub trait FeatureWorld {
     fn can_write(&self, x: i32, z: i32) -> bool;
     /// Marks a block for postprocessing once its chunk is complete (`markPosForPostprocessing`).
     fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32);
+    /// Sets the saved data of the block entity at a block that was just placed, as a feature fills it in after
+    /// `getBlockEntity`; returns whether the position is inside the writable region.
+    fn set_block_entity(&mut self, x: i32, y: i32, z: i32, entity: Compound) -> bool;
 }
 
 /// A single-chunk FeatureWorld, used by tests and by callers that pass one source chunk at a time.
@@ -118,6 +122,14 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
         if let Some((lx, y, lz)) = self.local(x, y, z) {
             self.chunk.mark_fluid_postprocessing(lx as u8, y, lz as u8);
         }
+    }
+
+    fn set_block_entity(&mut self, x: i32, y: i32, z: i32, entity: Compound) -> bool {
+        let Some((lx, y, lz)) = self.local(x, y, z) else {
+            return false;
+        };
+        self.chunk.set_block_entity(lx as u8, y, lz as u8, entity);
+        true
     }
 }
 
@@ -305,6 +317,17 @@ impl FeatureWorld for RegionFeatureWorld {
         {
             chunk.mark_fluid_postprocessing(lx as u8, y, lz as u8);
         }
+    }
+
+    fn set_block_entity(&mut self, x: i32, y: i32, z: i32, entity: Compound) -> bool {
+        let Some((key, lx, y, lz)) = self.local(x, y, z) else {
+            return false;
+        };
+        let Some(chunk) = self.chunks.get_mut(&key) else {
+            return false;
+        };
+        chunk.set_block_entity(lx as u8, y, lz as u8, entity);
+        true
     }
 }
 

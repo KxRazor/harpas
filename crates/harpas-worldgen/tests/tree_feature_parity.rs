@@ -1,13 +1,15 @@
 //! Compares trees with vanilla's own tree configured features: many trees placed one after another in the same
 //! chunks, each with a decoration random source seeded from the chunk and its index, so that later trees grow
 //! through, are cut short by or change the leaves of earlier ones. Each tree's result and the random values it
-//! consumed are compared, then every block that changed in the 3x3 chunks.
+//! consumed are compared, then every block that changed in the 3x3 chunks and the block entities the trees
+//! created there.
 mod reference;
 
 use std::collections::BTreeSet;
 use std::fs;
 
 use harpas_core::block::block_states;
+use harpas_core::nbt::Nbt;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::{
     FeatureCompiler, FeatureWorld, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
@@ -16,15 +18,23 @@ use harpas_worldgen::{
 use reference::Reference;
 
 const SEED: i64 = -4_172_144_997_902_289_642;
-/// The configured features compared, cycled through in each chunk.
-const FEATURES: [&str; 5] = [
+/// The configured features compared, cycled through in each chunk: trees without decorators, then trees with
+/// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), and leaf litter.
+const FEATURES: [&str; 12] = [
     "minecraft:oak",
     "minecraft:fancy_oak",
     "minecraft:birch",
     "minecraft:spruce",
     "minecraft:pine",
+    "minecraft:fancy_oak_bees",
+    "minecraft:super_birch_bees",
+    "minecraft:jungle_tree",
+    "minecraft:swamp_oak",
+    "minecraft:jungle_tree",
+    "minecraft:oak_leaf_litter",
+    "minecraft:birch_bees_0002_leaf_litter",
 ];
-const TREES_PER_CHUNK: usize = 48;
+const TREES_PER_CHUNK: usize = 72;
 /// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow and a steep mixed chunk.
 const CHUNKS: [(i32, i32); 6] = [
     (-42, 6),
@@ -33,6 +43,14 @@ const CHUNKS: [(i32, i32); 6] = [
     (-108, -108),
     (-528, -480),
     (600, 312),
+];
+
+/// The blocks the decorators place, each of which vanilla's trees must place for the comparison to cover it.
+const DECORATIONS: [&str; 4] = [
+    "minecraft:vine",
+    "minecraft:cocoa",
+    "minecraft:bee_nest",
+    "minecraft:leaf_litter",
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -148,6 +166,8 @@ fn trees_match_vanilla() {
     let mut lines = text.lines().peekable();
     let mut placed_trees = 0;
     let mut compared_blocks = 0;
+    let mut compared_entities = 0;
+    let mut decorations = [0; DECORATIONS.len()];
     for &(cx, cz) in &CHUNKS {
         assert_eq!(lines.next(), Some(format!("chunk {cx} {cz}").as_str()));
         let chunks: Vec<_> = (-1..=1)
@@ -184,7 +204,9 @@ fn trees_match_vanilla() {
             placed_trees += usize::from(result);
         }
         let mut expected = Blocks::new();
-        while let Some(line) = lines.next_if(|line| !line.starts_with("chunk")) {
+        while let Some(line) =
+            lines.next_if(|line| !line.starts_with("chunk") && !line.starts_with("entity "))
+        {
             let mut fields = line.split(' ').map(|field| field.parse::<i64>().unwrap());
             let mut field = || fields.next().expect("block field");
             expected.insert((
@@ -214,11 +236,51 @@ fn trees_match_vanilla() {
             actual.len(),
         );
         compared_blocks += expected.len();
+        for &(_, _, _, state) in &expected {
+            let name = block_states().properties(state).map(|(name, _)| name);
+            if let Some(count) = DECORATIONS
+                .iter()
+                .position(|&decoration| Some(decoration) == name)
+            {
+                decorations[count] += 1;
+            }
+        }
+
+        let mut expected_entities = Vec::new();
+        while let Some(line) = lines.next_if(|line| line.starts_with("entity ")) {
+            let bytes = hex(&line["entity ".len()..]);
+            expected_entities.push(Nbt::read_network(&mut bytes.as_slice()).expect("vanilla NBT"));
+        }
+        let mut actual_entities: Vec<Nbt> = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dz| (cx + dx, cz + dz)))
+            .flat_map(|(x, z)| world.chunk(x, z).expect("region chunk").block_entities())
+            .map(|entity| Nbt::Compound(entity.clone()))
+            .collect();
+        let key = |entity: &Nbt| format!("{entity:?}");
+        expected_entities.sort_by_key(key);
+        actual_entities.sort_by_key(key);
+        assert_eq!(
+            actual_entities, expected_entities,
+            "chunk ({cx}, {cz}): block entities"
+        );
+        compared_entities += expected_entities.len();
     }
     assert!(lines.next().is_none(), "unread vanilla output");
     assert!(placed_trees > 0, "no tree was placed");
+    assert!(compared_entities > 0, "no bee nest was placed");
+    for (name, count) in DECORATIONS.iter().zip(decorations) {
+        assert!(count > 0, "vanilla placed no {name}");
+    }
     eprintln!(
-        "Compared {placed_trees} placed trees and {compared_blocks} blocks around {} chunks",
+        "Compared {placed_trees} placed trees, {compared_blocks} blocks and {compared_entities} block entities \
+         around {} chunks",
         CHUNKS.len()
     );
+}
+
+fn hex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&text[index..index + 2], 16).expect("a hex byte"))
+        .collect()
 }

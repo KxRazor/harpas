@@ -1,5 +1,5 @@
-//! Compares every block state's solid, replaceable, liquid and motion-blocking flags and the full and center
-//! support of each face with vanilla's.
+//! Compares every block state's solid, replaceable, liquid and motion-blocking flags, the full and center
+//! support of each face and the solid render flag with vanilla's.
 mod reference;
 
 use std::fs;
@@ -31,7 +31,16 @@ fn block_behavior_matches_vanilla() {
             .split(' ')
             .map(|field| field.parse().expect("a number"))
             .collect();
-        let &[id, solid, replaceable, liquid, blocks_motion, sturdy] = fields.as_slice() else {
+        let &[
+            id,
+            solid,
+            replaceable,
+            liquid,
+            blocks_motion,
+            sturdy,
+            solid_render,
+        ] = fields.as_slice()
+        else {
             panic!("malformed line {line}");
         };
         let actual_sturdy = Face::ALL.iter().fold(0, |bits, &face| {
@@ -45,8 +54,16 @@ fn block_behavior_matches_vanilla() {
             u32::from(behavior.is_liquid(id)),
             u32::from(behavior.blocks_motion(id)),
             actual_sturdy,
+            u32::from(behavior.is_solid_render(id)),
         );
-        let expected = (solid, replaceable, liquid, blocks_motion, sturdy);
+        let expected = (
+            solid,
+            replaceable,
+            liquid,
+            blocks_motion,
+            sturdy,
+            solid_render,
+        );
         if actual != expected {
             mismatches.push(format!(
                 "{:?}: vanilla {:?}, Harpas {actual:?}",
@@ -59,7 +76,7 @@ fn block_behavior_matches_vanilla() {
     assert_eq!(compared, states.len(), "every block state");
     assert!(
         mismatches.is_empty(),
-        "{} of {compared} states differ (solid, replaceable, liquid, blocks motion, sturdy faces):\n{}",
+        "{} of {compared} states differ (solid, replaceable, liquid, blocks motion, sturdy faces, solid render):\n{}",
         mismatches.len(),
         mismatches[..mismatches.len().min(30)].join("\n")
     );

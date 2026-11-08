@@ -14,7 +14,7 @@ use std::io;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use harpas_anvil::{Chunk, ChunkSection};
-use harpas_core::nbt::{Compound, Nbt};
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_worldgen::{
     FeatureIndex, GeneratedChunk, HeightmapType, RegionFeatureWorld, WorldgenData,
     apply_biome_decoration,
@@ -517,6 +517,29 @@ fn into_proto(mut shell: Chunk, pos: ChunkPos, biome_count: usize) -> io::Result
             .ok_or_else(|| io::Error::other("chunk sections do not fit the world height"))?;
     // A saved proto-chunk has run carvers, so its worldgen heightmaps no longer follow block changes.
     blocks.freeze_worldgen_heightmaps();
+    // Block entities move into the blocks, so that a decoration that replaces their block removes them as in
+    // vanilla; those without a position in the chunk stay in the rest of the chunk.
+    if let Some(Nbt::List(List::Compound(entities))) = shell.rest.remove("block_entities") {
+        let mut kept = Vec::new();
+        for entity in entities {
+            match entity_position(&entity) {
+                Some([x, y, z])
+                    if x.div_euclid(16) == pos.x
+                        && z.div_euclid(16) == pos.z
+                        && (min_y..min_y + height).contains(&y) =>
+                {
+                    blocks.set_block_entity(
+                        x.rem_euclid(16) as u8,
+                        y,
+                        z.rem_euclid(16) as u8,
+                        entity,
+                    );
+                }
+                _ => kept.push(entity),
+            }
+        }
+        shell.rest.insert("block_entities", entity_list(kept));
+    }
     Ok(Proto {
         blocks,
         shell,
@@ -527,11 +550,17 @@ fn into_proto(mut shell: Chunk, pos: ChunkPos, biome_count: usize) -> io::Result
 
 fn into_chunk(proto: Proto) -> io::Result<Chunk> {
     let Proto {
-        blocks,
+        mut blocks,
         mut shell,
         decorated,
         ..
     } = proto;
+    let mut entities = match shell.rest.remove("block_entities") {
+        Some(Nbt::List(List::Compound(entities))) => entities,
+        _ => Vec::new(),
+    };
+    entities.extend(blocks.take_block_entities());
+    shell.rest.insert("block_entities", entity_list(entities));
     let min_section = blocks.min_section_y();
     let mut maps = Compound::new();
     for kind in [
@@ -567,6 +596,23 @@ fn into_chunk(proto: Proto) -> io::Result<Chunk> {
     }
     shell.sections.sort_by_key(|section| section.y);
     Ok(shell)
+}
+
+/// The `x`, `y` and `z` of a saved block entity.
+fn entity_position(entity: &Compound) -> Option<[i32; 3]> {
+    let coordinate = |key: &str| match entity.get(key) {
+        Some(Nbt::Int(value)) => Some(*value),
+        _ => None,
+    };
+    Some([coordinate("x")?, coordinate("y")?, coordinate("z")?])
+}
+
+fn entity_list(entities: Vec<Compound>) -> Nbt {
+    if entities.is_empty() {
+        Nbt::List(List::Empty)
+    } else {
+        Nbt::List(List::Compound(entities))
+    }
 }
 
 #[cfg(test)]

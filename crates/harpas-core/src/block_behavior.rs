@@ -4,7 +4,8 @@
 //! legacy solid flag, forced on or off for some blocks and otherwise computed from the collision shape;
 //! `canBeReplaced` and `liquid` are set by a block's properties; `isFaceSturdy` asks whether the support shape
 //! covers a whole face, or its center. The support shape is the collision shape except for the blocks listed in
-//! [`support_shape`].
+//! [`support_shape`]. `isSolidRender` asks whether a block that occludes has a full occlusion shape, which is a
+//! full collision shape except for the blocks listed in [`is_solid_render`].
 
 use std::sync::OnceLock;
 
@@ -81,6 +82,7 @@ const SOLID: u8 = 1;
 const REPLACEABLE: u8 = 1 << 1;
 const LIQUID: u8 = 1 << 2;
 const BLOCKS_MOTION: u8 = 1 << 3;
+const SOLID_RENDER: u8 = 1 << 4;
 
 /// The collision shapes and behavior flags of every block state.
 #[derive(Debug)]
@@ -88,11 +90,13 @@ pub struct BlockBehavior {
     shapes: Vec<Vec<ShapeBox>>,
     /// For each state ID, the index of its collision shape.
     state_shapes: Vec<u16>,
-    /// For each state ID, [`SOLID`], [`REPLACEABLE`], [`LIQUID`] and [`BLOCKS_MOTION`].
+    /// For each state ID, [`SOLID`], [`REPLACEABLE`], [`LIQUID`], [`BLOCKS_MOTION`] and [`SOLID_RENDER`].
     flags: Vec<u8>,
     /// For each state ID, one bit per [`Face`] whose support shape is full, and from bit 8 one per face whose
     /// support shape covers the face's center.
     sturdy: Vec<u16>,
+    /// For each shape, its full faces as [`full_faces`] returns them.
+    shape_faces: Vec<u16>,
 }
 
 /// The block behavior of Java 26.1.
@@ -165,6 +169,9 @@ impl BlockBehavior {
             if matches!(name, "water" | "lava" | "bubble_column") {
                 flag |= LIQUID;
             }
+            if is_solid_render(name, &properties, boxes) {
+                flag |= SOLID_RENDER;
+            }
             flags.push(flag);
             sturdy.push(match support_shape(name, &properties) {
                 Some(support) => full_faces(&support),
@@ -176,6 +183,7 @@ impl BlockBehavior {
             state_shapes,
             flags,
             sturdy,
+            shape_faces,
         }
     }
 
@@ -214,6 +222,13 @@ impl BlockBehavior {
             .is_some_and(|faces| faces & (1 << face as u8) != 0)
     }
 
+    /// Whether the state's collision shape covers a whole face (`Block.isFaceFull` of `getCollisionShape`).
+    pub fn is_collision_face_full(&self, id: u32, face: Face) -> bool {
+        self.state_shapes
+            .get(id as usize)
+            .is_some_and(|&shape| self.shape_faces[shape as usize] & (1 << face as u8) != 0)
+    }
+
     /// Whether the state's support shape covers the center of a face (`isFaceSturdy` with `SupportType.CENTER`,
     /// as `Block.canSupportCenter` asks): the middle 2/16 square of the top or bottom, or the middle 2/16 strip
     /// of a side from the bottom to 10/16 up.
@@ -221,6 +236,12 @@ impl BlockBehavior {
         self.sturdy
             .get(id as usize)
             .is_some_and(|faces| faces & (1 << (8 + face as u8)) != 0)
+    }
+
+    /// Whether the state occludes the blocks beside it entirely (`BlockState.isSolidRender`): the block can
+    /// occlude and its occlusion shape is a full block.
+    pub fn is_solid_render(&self, id: u32) -> bool {
+        self.flag(id, SOLID_RENDER)
     }
 
     fn flag(&self, id: u32, flag: u8) -> bool {
@@ -291,6 +312,40 @@ fn is_solid(name: &str, boxes: &[ShapeBox]) -> bool {
     };
     let (x, y, z) = (size(0), size(1), size(2));
     (x + y + z) / 3.0 >= 0.729_166_666_666_666_6 || y >= 1.0
+}
+
+/// `BlockStateBase.isSolidRender`: blocks that can occlude (whose properties do not call `noOcclusion`) with a
+/// full occlusion shape. The occlusion shape is the full collision shape for every block whose collision shape is
+/// full, and also a full block for mud, soul sand and eight layers of snow, which are lower to walk on.
+fn is_solid_render(name: &str, properties: &[(&str, &str)], boxes: &[ShapeBox]) -> bool {
+    const FULL: ShapeBox = ShapeBox {
+        min: [0; 3],
+        max: [32; 3],
+    };
+    // The blocks with a full collision shape that do not occlude.
+    let no_occlusion = ["_leaves", "glass", "shulker_box", "copper_grate"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+        || matches!(
+            name,
+            "barrier"
+                | "beacon"
+                | "chorus_flower"
+                | "frosted_ice"
+                | "ice"
+                | "mangrove_roots"
+                | "slime_block"
+                | "spawner"
+                | "test_instance_block"
+                | "trial_spawner"
+                | "vault"
+        );
+    let full_occlusion = match name {
+        "mud" | "soul_sand" => true,
+        "snow" => properties.contains(&("layers", "8")),
+        _ => boxes == [FULL],
+    };
+    !no_occlusion && full_occlusion
 }
 
 /// Blocks whose properties call `forceSolidOn`, by name pattern. Resin brick walls are the one wall that

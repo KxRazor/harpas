@@ -303,13 +303,23 @@ and the owner **accepts it once**:
     walks them from the trunk, one set per distance, to set the `distance` of every leaf in the tree's bounds,
     including those of other trees, and `updateShapeAtEdge` updates both blocks on each side of the tree's surface
     (`harpas_worldgen::shape_update`): grass blocks, podzol and mycelium follow the snow above them, and
-    vegetation, carpets, spore blossoms and double plants break when they lose their support. Ticks that leaves
-    and liquids schedule there, and postprocessing marks, are not kept yet. A configured feature with any part
-    that is not ported, such as a tree with decorators, roots or other placers, a fallen tree, a scheduled tick
-    (eyeblossoms) or a block without a survival rule (mushrooms, which need light, fire, dripleaves and pale moss
-    carpets), is skipped as a whole; 85 of the 164 Overworld placed features run, trees only in groves, oceans and
-    rivers so far.
-    `feature_blocks_parity` compares every block they place in 26 decorated chunks, with vanilla running
+    vegetation, carpets, spore blossoms and double plants break when they lose their support, vines lose the
+    faces that no block beside them (or the vine above) holds and break without faces, and cocoa breaks when the
+    block it faces is not in `#supports_cocoa`. Ticks that leaves and liquids schedule there, and postprocessing
+    marks, are not kept yet. Before those updates the tree's decorators run in order, on lists of its logs,
+    leaves and roots taken in `HashSet` order and sorted by height, and their blocks join the decoration set:
+    `trunk_vine` and `leave_vine` attach vines beside logs and leaves (hanging down to four more blocks below
+    leaves), `cocoa` grows beside the lowest three blocks of the trunk, `beehive` places a bee nest facing south
+    beside a log below the lowest leaves, at the first position of a shuffled list with air in front of it, and
+    `place_on_ground` scatters leaf litter on solid ground (`isSolidRender`) at or above the
+    `MOTION_BLOCKING_NO_LEAVES` surface around the trunk's base. A bee nest's block entity, with two or three bees, is kept in the chunk as vanilla saves it, and
+    the FEATURES workers carry block entities through proto-chunks, removing one when a later block replaces its
+    block. A configured feature with any part that is not ported, such as a tree with roots or other placers or
+    decorators, a fallen tree, a scheduled tick (eyeblossoms) or a block without a survival rule (mushrooms, which
+    need light, fire, dripleaves and pale moss carpets), is skipped as a whole; 87 of the 164 Overworld placed
+    features run, trees only in groves, oceans, rivers, swamps and meadows so far, since most biomes choose
+    between their trees and a fallen tree.
+    `feature_blocks_parity` compares every block they place in 27 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
@@ -573,7 +583,8 @@ and the owner **accepts it once**:
   of [engine-core.md](engine-core.md#7-determinism).
 - **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
   stage on the chunk workers before players receive them. It is off by default because only ores, flowers, grass
-  and other simple vegetation, disks, block columns and the trees of groves, oceans and rivers are placed so far,
+  and other simple vegetation, disks, block columns and the trees of groves, oceans, rivers, swamps and meadows
+  are placed so far,
   and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
   trees of other biomes, lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight

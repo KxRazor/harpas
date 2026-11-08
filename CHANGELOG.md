@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Tree decorators: `trunk_vine`, `leave_vine`, `cocoa`, `beehive` and `place_on_ground`, run in order on the
+  tree's logs, leaves and roots in vanilla's `HashSet` order sorted by height. Bee nests keep their two or three
+  bees in the saved block entity, which the FEATURES workers now carry through proto-chunks and remove when a
+  later block replaces theirs. Vines lose the faces nothing holds and cocoa breaks without its log in the shape
+  updates along a tree, and `BlockBehavior` gains `isSolidRender` and full collision faces. Swamp and meadow
+  trees now grow, 87 of the 164 Overworld placed features; most other biomes' trees wait for fallen trees.
+  `tree_feature_parity` adds trees with bee nests, vines, cocoa and leaf litter and compares their block
+  entities, `feature_blocks_parity` adds a meadow with a bee nest, and `block_behavior_parity` compares
+  `isSolidRender` for all 29,873 block states (`harpas-core`, `harpas-worldgen`, `harpas-engine`).
+
 - Trees: `minecraft:tree` with straight and fancy trunks, blob, fancy, spruce and pine foliage and two- and
   three-layer feature sizes, for trees without decorators or roots. Trees shorten to the free height around
   them, set the `distance` of every leaf in their bounds walking vanilla's `HashSet` order, and update the

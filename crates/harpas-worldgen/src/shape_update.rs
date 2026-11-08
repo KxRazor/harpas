@@ -5,12 +5,14 @@
 //! ones ported here change: grass blocks, podzol and mycelium follow whether snow lies on them
 //! (`SnowyBlock`), vegetation and carpets break into air once they cannot survive (`VegetationBlock`,
 //! `CarpetBlock`), a spore blossom breaks once the block above no longer holds it, and either half of a double
-//! plant breaks without the other (`DoublePlantBlock`). Blocks that only schedule a tick, such as leaves,
-//! liquids, sugar cane or cactus, keep their state.
+//! plant breaks without the other (`DoublePlantBlock`), a vine loses the faces nothing holds and breaks
+//! without faces (`VineBlock`), and cocoa breaks once the block it faces no longer holds it (`CocoaBlock`).
+//! Blocks that only schedule a tick, such as leaves, liquids, sugar cane or cactus, keep their state.
 
 use std::collections::HashMap;
 
 use harpas_core::block::block_states;
+use harpas_core::block_behavior::{Face, block_behavior};
 
 use crate::data::{WorldgenData, WorldgenDataError};
 use crate::feature::FeatureWorld;
@@ -69,6 +71,18 @@ impl Direction {
         }
     }
 
+    /// The direction's name, as a `facing` property spells it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Down => "down",
+            Self::Up => "up",
+            Self::North => "north",
+            Self::South => "south",
+            Self::West => "west",
+            Self::East => "east",
+        }
+    }
+
     /// The position one step from `position`.
     pub const fn step(self, [x, y, z]: [i32; 3]) -> [i32; 3] {
         let [dx, dy, dz] = self.offset();
@@ -87,6 +101,10 @@ enum Update {
     SurviveFromAbove(SurvivalRule),
     /// `DoublePlantBlock`.
     DoublePlant(SurvivalRule),
+    /// `VineBlock`: each face keeps only while something supports it, and the vine is air without faces.
+    Vine,
+    /// `CocoaBlock`: air once the block it faces is not in `#supports_cocoa`, checked when that block changes.
+    Cocoa(StateSet),
 }
 
 /// The shape updates of the blocks they are ported for.
@@ -148,6 +166,13 @@ impl ShapeUpdates {
         let short = block.strip_prefix("minecraft:").unwrap_or(block);
         if matches!(short, "sugar_cane" | "cactus" | "melon" | "pumpkin") {
             return Ok(None);
+        }
+        if short == "vine" {
+            return Ok(Some(Update::Vine));
+        }
+        if short == "cocoa" {
+            let support = data.block_tag_states("minecraft:supports_cocoa")?;
+            return Ok(Some(Update::Cocoa(StateSet::from_membership(&support))));
         }
         let Some(rule) = compile_block_survival("shape updates", block, data)? else {
             return Ok(None);
@@ -218,8 +243,82 @@ impl ShapeUpdates {
                     self.air
                 }
             }
+            Update::Vine => {
+                if direction == Direction::Down {
+                    return state;
+                }
+                let updated = vine_state(world, state, position);
+                let faces = ["up", "north", "east", "south", "west"];
+                if faces
+                    .iter()
+                    .any(|face| property(updated, face) == Some("true"))
+                {
+                    updated
+                } else {
+                    self.air
+                }
+            }
+            Update::Cocoa(support) => {
+                let facing = property(state, "facing");
+                if Some(direction.name()) != facing {
+                    return state;
+                }
+                let [x, y, z] = direction.step(position);
+                if support.contains(world.block_state(x, y, z)) {
+                    state
+                } else {
+                    self.air
+                }
+            }
         }
     }
+}
+
+/// `VineBlock.getUpdatedState`: the top face keeps while the block above can be attached to, as
+/// `isAcceptableNeighbour` asks it with `DOWN`; each side face while the block on that side can be attached
+/// to, or the vine above has the same face.
+fn vine_state(world: &impl FeatureWorld, mut state: u32, position: [i32; 3]) -> u32 {
+    let above = Direction::Up.step(position);
+    let flag = |value: bool| if value { "true" } else { "false" };
+    if property(state, "up") == Some("true") {
+        state = with_property(
+            state,
+            "up",
+            flag(can_attach_to(world, above, Direction::Down)),
+        );
+    }
+    let above_state = world.block_state(above[0], above[1], above[2]);
+    for direction in [
+        Direction::North,
+        Direction::East,
+        Direction::South,
+        Direction::West,
+    ] {
+        let face = direction.name();
+        if property(state, face) != Some("true") {
+            continue;
+        }
+        let supported = can_attach_to(world, direction.step(position), direction)
+            || (same_block(above_state, state) && property(above_state, face) == Some("true"));
+        state = with_property(state, face, flag(supported));
+    }
+    state
+}
+
+/// `MultifaceBlock.canAttachTo`: whether the block at `neighbor`, reached in `direction`, has a full support or
+/// collision face towards the opposite direction.
+fn can_attach_to(world: &impl FeatureWorld, neighbor: [i32; 3], direction: Direction) -> bool {
+    let state = world.block_state(neighbor[0], neighbor[1], neighbor[2]);
+    let face = match direction.opposite() {
+        Direction::Down => Face::Down,
+        Direction::Up => Face::Up,
+        Direction::North => Face::North,
+        Direction::South => Face::South,
+        Direction::West => Face::West,
+        Direction::East => Face::East,
+    };
+    let behavior = block_behavior();
+    behavior.is_face_sturdy(state, face) || behavior.is_collision_face_full(state, face)
 }
 
 /// A property value of a block state.
@@ -384,5 +483,42 @@ impl VoxelShape {
             }
             previous = full;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::feature::RegionFeatureWorld;
+    use crate::generator::GeneratedChunk;
+
+    fn state(name: &str, properties: &[(&str, &str)]) -> u32 {
+        block_states()
+            .state(name, properties.iter().copied())
+            .unwrap()
+            .0
+    }
+
+    fn world(blocks: &[([i32; 3], u32)]) -> RegionFeatureWorld {
+        let mut chunk = GeneratedChunk::new(0, 0, -64, 384, 1);
+        for &([x, y, z], state) in blocks {
+            chunk.set_block_state(x as usize, y, z as usize, state);
+        }
+        RegionFeatureWorld::new([chunk], 0).unwrap()
+    }
+
+    #[test]
+    fn vines_keep_the_faces_something_holds() {
+        let east = state("minecraft:vine", &[("east", "true")]);
+        let leaves = state("minecraft:oak_leaves", &[]);
+        // Leaves have no support shape but a full collision shape, which holds a vine.
+        let held = world(&[([5, 70, 5], east), ([6, 70, 5], leaves)]);
+        assert_eq!(vine_state(&held, east, [5, 70, 5]), east);
+        // A vine below another with the same face hangs from it.
+        let hanging = world(&[([5, 70, 5], east), ([5, 71, 5], east)]);
+        assert_eq!(vine_state(&hanging, east, [5, 70, 5]), east);
+        let alone = world(&[([5, 70, 5], east)]);
+        let bare = vine_state(&alone, east, [5, 70, 5]);
+        assert_eq!(property(bare, "east"), Some("false"));
     }
 }

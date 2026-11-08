@@ -2,7 +2,7 @@
 // vanilla's own tree configured features in the center chunk, one after another, so that later trees grow through, are cut short by or change the leaves of
 // earlier ones. Each tree gets a fresh decoration random source seeded from the chunk and its index. Writes
 // each tree's origin, its result and the next value of its random source, then the blocks that changed in the
-// 3x3 chunks.
+// 3x3 chunks, then the block entities of the 3x3 chunks as they would be saved, in network NBT and hex.
 //
 // Arguments: the output file, the server jar, the seed, the number of trees per chunk, a comma-separated list
 // of configured features cycled through, then the chunks as x,z.
@@ -140,6 +140,13 @@ public final class TreeFeatureProbe {
                             int id = Block.getId(chunks.get(key(x >> 4, z >> 4)).getBlockState(pos.set(x, y, z)));
                             if (before[index] != id) out.println(x + " " + y + " " + z + " " + id);
                         }
+                    }
+                }
+                for (var chunk : chunks.values()) {
+                    for (var at : chunk.getBlockEntitiesPos()) {
+                        var bytes = new ByteArrayOutputStream();
+                        net.minecraft.nbt.NbtIo.writeAnyTag(chunk.getBlockEntityNbtForSaving(at, access), new DataOutputStream(bytes));
+                        out.println("entity " + HexFormat.of().formatHex(bytes.toByteArray()));
                     }
                 }
             }

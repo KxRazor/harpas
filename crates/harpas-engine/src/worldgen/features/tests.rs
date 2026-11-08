@@ -339,3 +339,40 @@ fn a_failed_generation_releases_its_chunk() {
     let blocks = expected(&square(pos, 2), &square(pos, 1));
     assert_blocks(&generated.chunk, &blocks[&pos]);
 }
+
+#[test]
+fn block_entities_follow_their_blocks_through_a_proto_chunk() {
+    let pos = ChunkPos { x: 2, z: -1 };
+    let entity = |id: &str, [x, y, z]: [i32; 3]| {
+        let mut entity = Compound::new();
+        entity.insert("id", id);
+        entity.insert("x", x);
+        entity.insert("y", y);
+        entity.insert("z", z);
+        entity
+    };
+    let chest = entity("minecraft:chest", [37, 10, -5]);
+    let elsewhere = entity("minecraft:chest", [100, 10, 100]);
+    let mut shell =
+        into_anvil_with_mask(stone_chunk(pos), CarvingMask::new(-64, 384).to_raw_data()).unwrap();
+    shell.rest.insert(
+        "block_entities",
+        List::Compound(vec![chest.clone(), elsewhere.clone()]),
+    );
+    let mut proto = into_proto(shell, pos, 1).unwrap();
+    let nest = entity("minecraft:beehive", [40, 70, -12]);
+    let replaced = entity("minecraft:beehive", [41, 70, -12]);
+    proto.blocks.set_block_entity(8, 70, 4, nest.clone());
+    proto.blocks.set_block_entity(9, 70, 4, replaced);
+    let air = block_states().default_state("minecraft:air").unwrap();
+    let stone = block_states().default_state("minecraft:stone").unwrap();
+    // Setting the same state keeps the block entity; another state removes it.
+    proto.blocks.set_block_state(5, 10, 11, stone);
+    proto.blocks.set_block_state(9, 70, 4, stone);
+    proto.blocks.set_block_state(9, 70, 4, air);
+    let chunk = into_chunk(proto).unwrap();
+    let Some(Nbt::List(List::Compound(entities))) = chunk.rest.get("block_entities") else {
+        panic!("no block entities");
+    };
+    assert_eq!(entities, &vec![elsewhere, chest, nest]);
+}

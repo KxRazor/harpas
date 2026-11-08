@@ -138,7 +138,11 @@ vanilla for the same seed.
   - [x] Simple features: `simple_block`, the three selectors, `block_column` and `disk`, with the block state
         providers and the survival rules of the blocks they place, compared block by block with vanilla's
         `applyBiomeDecoration` (`feature_blocks_parity`).
-  - [ ] Trees, vegetation, lakes, springs and the remaining feature families.
+  - [x] Trees with straight and fancy trunks and blob, fancy, spruce and pine foliage, without decorators or
+        roots: free height, leaf distances in vanilla's `HashSet` order and shape updates along the tree,
+        compared with vanilla's own tree features (`tree_feature_parity`).
+  - [ ] Fallen trees, tree decorators and the remaining trunk, foliage and root placers.
+  - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

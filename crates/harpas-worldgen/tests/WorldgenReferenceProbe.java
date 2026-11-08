@@ -55,6 +55,17 @@ public final class WorldgenReferenceProbe {
             }
             return true;
         }
+        // Ticks scheduled during generation, such as by leaves next to a new tree, go to each chunk's own ticks,
+        // as in WorldGenRegion, at game time 0. The counter is static: regions are allocated without initializers.
+        static final java.util.concurrent.atomic.AtomicLong subTicks = new java.util.concurrent.atomic.AtomicLong();
+        @Override public net.minecraft.world.ticks.LevelTickAccess<Block> getBlockTicks() {
+            return new net.minecraft.world.ticks.WorldGenTickAccess<>(pos -> getChunk(pos).getBlockTicks());
+        }
+        @Override public net.minecraft.world.ticks.LevelTickAccess<net.minecraft.world.level.material.Fluid> getFluidTicks() {
+            return new net.minecraft.world.ticks.WorldGenTickAccess<>(pos -> getChunk(pos).getFluidTicks());
+        }
+        @Override public long getGameTime() { return 0; }
+        @Override public long nextSubTickCount() { return subTicks.getAndIncrement(); }
         @Override public int getMinY() { return height.getMinY(); }
         @Override public int getHeight() { return height.getHeight(); }
         @Override public long getSeed() { return seed; }

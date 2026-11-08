@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Simple features: `simple_block`, `random_selector`, `simple_random_selector`, `random_boolean_selector`,
+  `block_column` and `disk`, with the simple, weighted, randomized-int, noise, noise-threshold, dual-noise and
+  rule-based block state providers and the survival rules of the flowers, grasses, bushes, dry vegetation,
+  azaleas, lily pads, carpets, leaf litter and spore blossoms they place. 83 of the 164 Overworld placed
+  features now run, including every flower and grass patch, sugar cane, cactus, pumpkins, melons and disks of
+  sand, clay and gravel. `feature_blocks_parity` compares every block they place in 24 chunks with vanilla's
+  own `applyBiomeDecoration`, and `feature_worker_parity` compares final chunks with all of them; the center
+  support of every block state face joins `block_behavior_parity` (`harpas-core`, `harpas-worldgen`).
+
 - Block shapes and behavior: the collision shape of every 26.1 block state, from minecraft-data, and vanilla's
   solid, replaceable, liquid and motion-blocking flags and full faces derived from them in `harpas-core`.
   `block_behavior_parity` compares all 29,873 states with vanilla's. The `solid`, `replaceable`,

@@ -28,7 +28,7 @@ Every setting lives in exactly one place.
 | File | Contents |
 |---|---|
 | **`server.properties`** | Vanilla settings, with vanilla's keys, defaults and meaning: port, MOTD, `max-players`, `online-mode`, `view-distance`, `simulation-distance`, `network-compression-threshold`, `level-name`, `level-seed`, RCON, Query, the management server, and the rest [1] |
-| **`harpas.toml`** | Harpas-only settings: `eula`, `generation.features` (new chunks run the FEATURES stage, which places only ores so far; off by default, [world.md](world.md#world-generation)), `[mods]`, `[proxy]`, `[network]`, Bedrock, per-plugin capability restrictions, metrics. It never repeats a key that belongs in `server.properties` |
+| **`harpas.toml`** | Harpas-only settings: `eula`, `generation.features` (new chunks run the FEATURES stage, which places only ores and simple vegetation so far; off by default, [world.md](world.md#world-generation)), `[mods]`, `[proxy]`, `[network]`, Bedrock, per-plugin capability restrictions, metrics. It never repeats a key that belongs in `server.properties` |
 | **`HARPAS_*` environment variables** | Override any setting from either file, for containers and hosting panels, with one naming convention (for example `HARPAS_EULA`, `HARPAS_RUNTIME_DIR`) |
 | **`ops.json`, `whitelist.json`, `banned-players.json`, `banned-ips.json`, `usercache.json`** | Vanilla's files and formats |
 

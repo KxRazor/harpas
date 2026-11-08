@@ -1,6 +1,6 @@
 // Parity probe: writes, for every block, the property flags its BlockBehaviour.Properties sets, and for every
 // block state in registry order, the flags block predicates and survival rules read: isSolid, canBeReplaced,
-// liquid, blocksMotion and isFaceSturdy for each direction.
+// liquid, blocksMotion and isFaceSturdy for each direction, with full support and then center support.
 import java.io.*;
 import java.util.Locale;
 import net.minecraft.SharedConstants;
@@ -10,6 +10,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.SupportType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 
 public final class BlockBehaviorProbe {
@@ -37,6 +38,7 @@ public final class BlockBehaviorProbe {
                     int sturdy = 0;
                     for (var direction : Direction.values()) {
                         if (state.isFaceSturdy(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, direction)) sturdy |= 1 << direction.ordinal();
+                        if (state.isFaceSturdy(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, direction, SupportType.CENTER)) sturdy |= 1 << (8 + direction.ordinal());
                     }
                     out.println(Block.getId(state) + " " + (state.isSolid() ? 1 : 0) + " " + (state.canBeReplaced() ? 1 : 0)
                         + " " + (state.liquid() ? 1 : 0) + " " + (state.blocksMotion() ? 1 : 0) + " " + sturdy);

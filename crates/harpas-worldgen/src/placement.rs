@@ -115,6 +115,8 @@ pub enum BlockPredicate {
     Survives {
         /// The block's survival rule.
         rule: Box<SurvivalRule>,
+        /// The block state tested.
+        state: u32,
         /// Offset from the tested position.
         offset: [i32; 3],
     },
@@ -145,7 +147,11 @@ impl BlockPredicate {
                 let [x, y, z] = add(position, *offset);
                 fluids & (1 << fluid(world.block_state(x, y, z)) as u8) != 0
             }
-            Self::Survives { rule, offset } => rule.test(world, add(position, *offset)),
+            Self::Survives {
+                rule,
+                state,
+                offset,
+            } => rule.test(world, add(position, *offset), *state),
             Self::InsideWorldBounds { offset } => {
                 let y = position[1] + offset[1];
                 (world.min_y()..world.min_y() + world.height()).contains(&y)
@@ -392,8 +398,9 @@ pub fn compile_predicate(
         }
         BlockPredicateDef::WouldSurvive { state, offset } => {
             match compile_survival(name, state, data)? {
-                Some(rule) => BlockPredicate::Survives {
+                Some((rule, state)) => BlockPredicate::Survives {
                     rule: Box::new(rule),
+                    state,
                     offset: *offset,
                 },
                 None => return Ok(None),
@@ -774,7 +781,7 @@ fn between_inclusive<R: RandomSource>(random: &mut WorldgenRandom<R>, min: i32, 
 }
 
 /// `WeightedList.getRandomOrThrow`: one draw below the total weight, then the entry whose share holds it.
-fn pick_weighted<'a, T, R: RandomSource>(
+pub(crate) fn pick_weighted<'a, T, R: RandomSource>(
     entries: &'a [(T, i32)],
     random: &mut WorldgenRandom<R>,
 ) -> Option<&'a T> {

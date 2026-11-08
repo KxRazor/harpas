@@ -1,4 +1,4 @@
-//! Vanilla's FEATURES stage for the feature families ported so far.
+//! Vanilla's FEATURES stage for the feature families ported so far (see [`crate::configured`]).
 //!
 //! Every chunk decorates itself once, reading and writing the 3x3 chunks around it. Its features are the
 //! ones listed by any biome in those chunks, run in the world's global order for each generation step, and
@@ -6,12 +6,14 @@
 //! then choose positions and the configured feature writes blocks through FeatureWorld.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use harpas_core::block::block_states;
 use harpas_core::math::sin_f32;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 
 use crate::biome::{BiomeManager, overworld_biome_parameters};
+use crate::configured::{CompiledPlaced, FeatureCompiler, place_feature};
 use crate::data::{
     ConfiguredFeatureDef, FeatureConfigDef, FeatureRefDef, OreFeatureDef, PlacementModifierDef,
     RuleTestDef, WorldgenData, WorldgenDataError,
@@ -39,6 +41,11 @@ pub trait FeatureWorld {
     fn heightmap(&self, kind: HeightmapType, x: i32, z: i32) -> i32;
     /// Biomes stored in the chunks within one chunk of a target, which select its features.
     fn region_biomes(&self, chunk_x: i32, chunk_z: i32) -> HashSet<u32>;
+    /// Whether the column holding a block may be written (`WorldGenRegion.ensureCanWrite`); a feature whose
+    /// origin may not be written does not run.
+    fn can_write(&self, x: i32, z: i32) -> bool;
+    /// Marks a block for postprocessing once its chunk is complete (`markPosForPostprocessing`).
+    fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32);
 }
 
 /// A single-chunk FeatureWorld, used by tests and by callers that pass one source chunk at a time.
@@ -101,6 +108,16 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
 
     fn region_biomes(&self, _chunk_x: i32, _chunk_z: i32) -> HashSet<u32> {
         HashSet::from([self.biome])
+    }
+
+    fn can_write(&self, x: i32, z: i32) -> bool {
+        self.local(x, self.chunk.min_y(), z).is_some()
+    }
+
+    fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32) {
+        if let Some((lx, y, lz)) = self.local(x, y, z) {
+            self.chunk.mark_fluid_postprocessing(lx as u8, y, lz as u8);
+        }
     }
 }
 
@@ -276,6 +293,19 @@ impl FeatureWorld for RegionFeatureWorld {
         };
         HashSet::from([biome])
     }
+
+    fn can_write(&self, x: i32, z: i32) -> bool {
+        self.chunks
+            .contains_key(&(x.div_euclid(16), z.div_euclid(16)))
+    }
+
+    fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32) {
+        if let Some((key, lx, y, lz)) = self.local(x, y, z)
+            && let Some(chunk) = self.chunks.get_mut(&key)
+        {
+            chunk.mark_fluid_postprocessing(lx as u8, y, lz as u8);
+        }
+    }
 }
 
 fn air_state() -> u32 {
@@ -297,6 +327,8 @@ pub struct FeatureIndex {
     placements: Vec<Vec<PlacementModifierDef>>,
     /// Compiled placement modifiers; None when one of them is not ported yet.
     modifiers: Vec<Option<Vec<CompiledModifier>>>,
+    /// Compiled placed features; None when part of one is not ported yet.
+    compiled: Vec<Option<Arc<CompiledPlaced>>>,
     /// Compiled ore configs; None for feature types or rule tests not ported yet.
     ores: Vec<Option<CompiledOre>>,
 }
@@ -352,7 +384,10 @@ impl FeatureIndex {
         let mut placements = Vec::with_capacity(placed_count);
         let mut modifiers = Vec::with_capacity(placed_count);
         let mut ores = Vec::with_capacity(placed_count);
+        let mut compiled = Vec::with_capacity(placed_count);
+        let mut compiler = FeatureCompiler::new(data);
         for (name, placed) in &data.placed_features {
+            compiled.push(compiler.placed(name)?);
             placements.push(placed.placement.clone());
             modifiers.push(compile_placement(name, &placed.placement, data)?);
             let configured = match &placed.feature {
@@ -389,6 +424,7 @@ impl FeatureIndex {
             allowed_biomes,
             placements,
             modifiers,
+            compiled,
             ores,
         })
     }
@@ -406,6 +442,11 @@ impl FeatureIndex {
     /// Compiled placement modifiers of a placed feature, if Harpas applies all of them.
     pub fn modifiers(&self, placed: usize) -> Option<&[CompiledModifier]> {
         self.modifiers.get(placed)?.as_deref()
+    }
+
+    /// A placed feature with its configured feature, if Harpas places all of it.
+    pub fn compiled(&self, placed: usize) -> Option<&Arc<CompiledPlaced>> {
+        self.compiled.get(placed)?.as_ref()
     }
 
     /// Biome feature indices of a biome and generation step.
@@ -562,7 +603,7 @@ fn sort_features(
     Ok(steps)
 }
 
-fn compile_ore(
+pub(crate) fn compile_ore(
     name: &str,
     configured: &ConfiguredFeatureDef,
     data: &WorldgenData,
@@ -826,18 +867,18 @@ pub fn apply_biome_decoration(
         }
         for position in positions {
             let placed = order[position];
-            let (Some(ore), Some(modifiers)) = (index.ore(placed), index.modifiers(placed)) else {
+            let Some(compiled) = index.compiled(placed) else {
                 continue;
             };
             random.set_feature_seed(decoration, position as i32, step as i32);
             place_positions(
                 world,
                 &index.allowed_biomes[placed],
-                modifiers,
+                &compiled.modifiers,
                 &mut random,
                 origin,
                 &mut |world, random, position| {
-                    place_ore(world, ore, random, position);
+                    place_feature(world, &compiled.feature, random, position);
                 },
             );
         }

@@ -3,7 +3,7 @@
 //! Shapes come from `data/block-shapes-26.1.txt`. The flags follow vanilla's `BlockStateBase`: `isSolid` is the
 //! legacy solid flag, forced on or off for some blocks and otherwise computed from the collision shape;
 //! `canBeReplaced` and `liquid` are set by a block's properties; `isFaceSturdy` asks whether the support shape
-//! covers a whole face. The support shape is the collision shape except for the blocks listed in
+//! covers a whole face, or its center. The support shape is the collision shape except for the blocks listed in
 //! [`support_shape`].
 
 use std::sync::OnceLock;
@@ -90,8 +90,9 @@ pub struct BlockBehavior {
     state_shapes: Vec<u16>,
     /// For each state ID, [`SOLID`], [`REPLACEABLE`], [`LIQUID`] and [`BLOCKS_MOTION`].
     flags: Vec<u8>,
-    /// For each state ID, one bit per [`Face`] whose support shape is full.
-    sturdy: Vec<u8>,
+    /// For each state ID, one bit per [`Face`] whose support shape is full, and from bit 8 one per face whose
+    /// support shape covers the face's center.
+    sturdy: Vec<u16>,
 }
 
 /// The block behavior of Java 26.1.
@@ -144,7 +145,7 @@ impl BlockBehavior {
             states.len() as usize,
             "one shape per block state"
         );
-        let shape_faces: Vec<u8> = shapes.iter().map(|boxes| full_faces(boxes)).collect();
+        let shape_faces: Vec<u16> = shapes.iter().map(|boxes| full_faces(boxes)).collect();
         let mut flags = Vec::with_capacity(state_shapes.len());
         let mut sturdy = Vec::with_capacity(state_shapes.len());
         for (id, &shape) in state_shapes.iter().enumerate() {
@@ -211,6 +212,15 @@ impl BlockBehavior {
         self.sturdy
             .get(id as usize)
             .is_some_and(|faces| faces & (1 << face as u8) != 0)
+    }
+
+    /// Whether the state's support shape covers the center of a face (`isFaceSturdy` with `SupportType.CENTER`,
+    /// as `Block.canSupportCenter` asks): the middle 2/16 square of the top or bottom, or the middle 2/16 strip
+    /// of a side from the bottom to 10/16 up.
+    pub fn is_face_center_sturdy(&self, id: u32, face: Face) -> bool {
+        self.sturdy
+            .get(id as usize)
+            .is_some_and(|faces| faces & (1 << (8 + face as u8)) != 0)
     }
 
     fn flag(&self, id: u32, flag: u8) -> bool {
@@ -337,34 +347,71 @@ fn has_dynamic_shape(name: &str) -> bool {
 
 /// The support shape of blocks that override `getBlockSupportShape`; None for the collision shape.
 fn support_shape(name: &str, properties: &[(&str, &str)]) -> Option<Vec<ShapeBox>> {
-    let full = || {
-        vec![ShapeBox {
-            min: [0; 3],
-            max: [32; 3],
-        }]
+    let value = |key: &str| {
+        properties
+            .iter()
+            .find(|(property, _)| *property == key)
+            .map(|(_, value)| *value)
     };
-    if name.ends_with("_leaves") || name == "chorus_flower" {
+    // A shape spanning X stays as it is for a block facing north or south, and turns to span Z otherwise.
+    let along_z = matches!(value("facing"), Some("north" | "south"));
+    let turned = |b: ShapeBox, turn: bool| {
+        if turn {
+            ShapeBox {
+                min: [b.min[2], b.min[1], b.min[0]],
+                max: [b.max[2], b.max[1], b.max[0]],
+            }
+        } else {
+            b
+        }
+    };
+    if name.ends_with("_leaves") {
         return Some(Vec::new());
     }
+    if name.ends_with("_fence_gate") {
+        return Some(if value("open") == Some("true") {
+            Vec::new()
+        } else {
+            vec![turned(column(16, 4, 5, 24), !along_z)]
+        });
+    }
+    if name.ends_with("_wall_hanging_sign") {
+        return Some(
+            [column(16, 4, 14, 16), column(14, 2, 0, 10)]
+                .map(|b| turned(b, !along_z))
+                .to_vec(),
+        );
+    }
+    if name.ends_with("_hanging_sign") {
+        // The outline shape, which only four of the sixteen rotations narrow.
+        return Some(match value("rotation") {
+            Some("0" | "8") => vec![column(14, 2, 0, 10)],
+            Some("4" | "12") => vec![turned(column(14, 2, 0, 10), true)],
+            _ => vec![column(10, 10, 0, 16)],
+        });
+    }
     match name {
-        "soul_sand" | "mud" => Some(full()),
+        "chorus_flower" => Some(vec![column(14, 14, 0, 15)]),
+        "soul_sand" | "mud" => Some(vec![column(16, 16, 0, 16)]),
         "snow" => {
-            let layers: i8 = properties
-                .iter()
-                .find(|(key, _)| *key == "layers")
-                .and_then(|(_, value)| value.parse().ok())
-                .unwrap_or(1);
-            Some(vec![ShapeBox {
-                min: [0; 3],
-                max: [32, layers * 4, 32],
-            }])
+            let layers: i8 = value("layers").and_then(|v| v.parse().ok()).unwrap_or(1);
+            Some(vec![column(16, 16, 0, layers * 2)])
         }
         _ => None,
     }
 }
 
-/// One bit per [`Face`] that the boxes cover entirely (`Block.isFaceFull`).
-fn full_faces(boxes: &[ShapeBox]) -> u8 {
+/// `Block.column(sizeX, sizeZ, minY, maxY)` in 1/16 of a block: a box centered in X and Z.
+const fn column(size_x: i8, size_z: i8, min_y: i8, max_y: i8) -> ShapeBox {
+    ShapeBox {
+        min: [16 - size_x, min_y * 2, 16 - size_z],
+        max: [16 + size_x, max_y * 2, 16 + size_z],
+    }
+}
+
+/// One bit per [`Face`] that the boxes cover entirely (`Block.isFaceFull`), and from bit 8 one per face whose
+/// center they cover (`SupportType.CENTER`).
+fn full_faces(boxes: &[ShapeBox]) -> u16 {
     let mut faces = 0;
     for face in Face::ALL {
         let (axis, negative) = face.axis();
@@ -392,6 +439,19 @@ fn full_faces(boxes: &[ShapeBox]) -> u8 {
         }
         if covered.iter().all(|row| *row == u32::MAX) {
             faces |= 1 << face as u8;
+        }
+        // The center column (`Block.column(2, 0, 10)`) is 2/16 wide in X and Z, from 7/16 to 9/16, and rises
+        // 10/16 from the bottom: on the top and bottom faces it is the middle square, on the side faces a
+        // middle strip from the bottom up.
+        const MIDDLE: u32 = (1 << 18) - (1 << 14);
+        const LOW: u32 = (1 << 20) - 1;
+        let (rows, columns) = match axis {
+            0 => (0..20, MIDDLE),
+            1 => (14..18, MIDDLE),
+            _ => (14..18, LOW),
+        };
+        if covered[rows].iter().all(|row| row & columns == columns) {
+            faces |= 1 << (8 + face as u8);
         }
     }
     faces

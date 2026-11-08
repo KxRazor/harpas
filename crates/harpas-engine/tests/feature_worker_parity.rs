@@ -15,7 +15,7 @@ use harpas_anvil::Chunk;
 use harpas_core::nbt::Nbt;
 use harpas_engine::world::{ChunkPos, ChunkState, World};
 use harpas_engine::worldgen::{decorated, overworld_generator};
-use harpas_worldgen::{NoiseBasedChunkGenerator, StructureTemplates, WorldgenData};
+use harpas_worldgen::{FeatureIndex, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData};
 use reference::Reference;
 
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
@@ -64,20 +64,20 @@ fn changed(chunk: &Chunk, carved: &harpas_worldgen::GeneratedChunk) -> Blocks {
     blocks
 }
 
-fn vanilla(reference: &Reference, seed: i64) -> Vec<Blocks> {
+fn vanilla(reference: &Reference, seed: i64, supported: &Path) -> Vec<Blocks> {
     let output = reference.temp.0.join(format!("final-features-{seed}.txt"));
     let mut args = vec![
         output.display().to_string(),
+        reference.server_jar.display().to_string(),
         seed.to_string(),
+        supported.display().to_string(),
         "final".to_string(),
     ];
     args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
-    reference.java("FeatureStageProbe", args);
+    reference.java("FeatureBlocksProbe", args);
     let text = fs::read_to_string(&output).expect("read the vanilla feature output");
     fs::remove_file(&output).unwrap();
     let mut lines = text.lines().peekable();
-    // The probe writes the order of every generation step first.
-    while lines.next_if(|line| line.starts_with("step")).is_some() {}
     CHUNKS
         .iter()
         .map(|&(x, z)| {
@@ -93,7 +93,7 @@ fn vanilla(reference: &Reference, seed: i64) -> Vec<Blocks> {
                     field() as u32,
                 ));
             }
-            assert!(!blocks.is_empty(), "vanilla placed no ores in {x}, {z}");
+            assert!(!blocks.is_empty(), "vanilla placed no features in {x}, {z}");
             blocks
         })
         .collect()
@@ -147,13 +147,28 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             include_str!("../../harpas-worldgen/tests/ChunkParityProbe.java"),
         ),
         (
-            "FeatureStageProbe.java",
-            include_str!("../../harpas-worldgen/tests/FeatureStageProbe.java"),
+            "PlacementProbe.java",
+            include_str!("../../harpas-worldgen/tests/PlacementProbe.java"),
+        ),
+        (
+            "FeatureBlocksProbe.java",
+            include_str!("../../harpas-worldgen/tests/FeatureBlocksProbe.java"),
         ),
     ]);
+    // Vanilla places the features the workers place, and no-ops at the others' indices.
+    let index = FeatureIndex::overworld(&data).expect("compile the feature index");
+    let supported: Vec<_> = data
+        .placed_features
+        .keys()
+        .enumerate()
+        .filter(|&(placed, _)| index.compiled(placed).is_some())
+        .map(|(_, name)| name.as_str())
+        .collect();
+    let supported_list = reference.temp.0.join("supported.txt");
+    fs::write(&supported_list, supported.join("\n")).unwrap();
     let mut compared = 0;
     for &seed in reference::sampled_seeds(&SEEDS) {
-        let expected = vanilla(&reference, seed);
+        let expected = vanilla(&reference, seed, &supported_list);
         let folder = reference.temp.0.join(format!("world-{seed}"));
         fs::create_dir_all(&folder).unwrap();
         let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();

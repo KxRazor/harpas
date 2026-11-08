@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Jungle, savanna and giant trees: the `forking`, `giant` and `mega_jungle` trunk placers, the `acacia`, `bush`,
+  `jungle` and `mega_pine` foliage placers and the `alter_ground` decorator, which spreads podzol around giant
+  spruces and pines. Jungles, sparse jungles, savannas, windswept savannas, both old growth taigas and bamboo
+  jungles now grow their trees, 112 of the 164 Overworld placed features. `tree_feature_parity` adds acacias,
+  jungle bushes, mega jungle trees, mega pines and mega spruces, and checks that vanilla places each of its 22
+  features (`harpas-worldgen`).
+
 - Fallen trees: `minecraft:fallen_tree`, a stump with its decorators and, two or three blocks away in a random
   direction, a log lying on the first free block over sturdy ground within five blocks below, placed only when
   no more than two of its blocks in a row overhang, with mushrooms from the new `attached_to_logs` decorator.

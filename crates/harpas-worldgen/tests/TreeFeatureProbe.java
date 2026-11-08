@@ -74,7 +74,8 @@ public final class TreeFeatureProbe {
         biomes.freeze();
         var structures = new MappedRegistry<Structure>(Registries.STRUCTURE, com.mojang.serialization.Lifecycle.stable());
         structures.freeze();
-        var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes, structures));
+        var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes, structures,
+            WorldgenReferenceProbe.configuredFeatureRegistry(lookup)));
         var factory = PalettedContainerFactory.create(access);
         var biomeSource = MultiNoiseBiomeSource.createFromPreset(
             lookup.getOrThrow(MultiNoiseBiomeSourceParameterLists.OVERWORLD));
@@ -109,7 +110,7 @@ public final class TreeFeatureProbe {
                     }
                 }
                 var target = chunks.get(key(cx, cz));
-                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed);
+                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed); region.attachGenerator(generator);
                 region.chunks.putAll(chunks);
                 region.biomes = new BiomeManager((qx, qy, qz) -> region.getChunk(qx >> 2, qz >> 2).getNoiseBiome(qx, qy, qz),
                     BiomeManager.obfuscateSeed(seed));

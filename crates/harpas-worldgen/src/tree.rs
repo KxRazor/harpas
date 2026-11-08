@@ -92,6 +92,8 @@ pub struct TreeBlocks {
     pub(crate) vine_default: u32,
     pub(crate) cocoa: u32,
     pub(crate) bee_nest: u32,
+    pub(crate) pale_hanging_moss: u32,
+    pub(crate) creaking_heart: u32,
 }
 
 impl TreeBlocks {
@@ -121,6 +123,8 @@ impl TreeBlocks {
             vine_default: default_state("minecraft:vine")?,
             cocoa: default_state("minecraft:cocoa")?,
             bee_nest: default_state("minecraft:bee_nest")?,
+            pale_hanging_moss: default_state("minecraft:pale_hanging_moss")?,
+            creaking_heart: default_state("minecraft:creaking_heart")?,
         })
     }
 

@@ -19,7 +19,28 @@ public final class WorldgenReferenceProbe {
         net.minecraft.world.level.biome.BiomeManager biomes;
         net.minecraft.world.level.ChunkPos center;
         long seed;
+        net.minecraft.server.level.ServerLevel serverLevel;
         TestRegion() { super(null, null, null, null); }
+        // Decorators such as PaleMossDecorator place configured features with the level's chunk generator. A test
+        // region has no level, so it gets an empty one whose chunk source holds only the generator.
+        void attachGenerator(net.minecraft.world.level.chunk.ChunkGenerator generator) throws Exception {
+            var unsafeClass = Class.forName("sun.misc.Unsafe");
+            var field = unsafeClass.getDeclaredField("theUnsafe"); field.setAccessible(true);
+            var unsafe = field.get(null);
+            var allocate = unsafeClass.getMethod("allocateInstance", Class.class);
+            var level = (net.minecraft.server.level.ServerLevel) allocate.invoke(unsafe, net.minecraft.server.level.ServerLevel.class);
+            var cache = (net.minecraft.server.level.ServerChunkCache) allocate.invoke(unsafe, net.minecraft.server.level.ServerChunkCache.class);
+            var map = (net.minecraft.server.level.ChunkMap) allocate.invoke(unsafe, net.minecraft.server.level.ChunkMap.class);
+            var context = new net.minecraft.world.level.chunk.status.WorldGenContext(null, generator, null, null, null, null);
+            set(net.minecraft.server.level.ChunkMap.class, "worldGenContext", map, context);
+            set(net.minecraft.server.level.ServerChunkCache.class, "chunkMap", cache, map);
+            set(net.minecraft.server.level.ServerLevel.class, "chunkSource", level, cache);
+            serverLevel = level;
+        }
+        static void set(Class<?> owner, String name, Object target, Object value) throws Exception {
+            var field = owner.getDeclaredField(name); field.setAccessible(true); field.set(target, value);
+        }
+        @Override public net.minecraft.server.level.ServerLevel getLevel() { return serverLevel; }
         static TestRegion create(net.minecraft.core.RegistryAccess access,
                                  net.minecraft.world.level.LevelHeightAccessor height,
                                  net.minecraft.world.level.chunk.PalettedContainerFactory factory,
@@ -31,6 +52,12 @@ public final class WorldgenReferenceProbe {
             region.access = access; region.height = height; region.factory = factory; region.seed = seed;
             region.chunks = new java.util.HashMap<>();
             var pos = target.getPos(); region.center = pos; region.chunks.put(((long)pos.x() << 32) ^ (pos.z() & 0xffffffffL), target);
+            // WorldGenRegion's own random source, as its constructor seeds it for the Overworld's RandomState.
+            var random = net.minecraft.server.level.WorldGenRegion.class.getDeclaredField("random");
+            random.setAccessible(true);
+            random.set(region, new net.minecraft.world.level.levelgen.XoroshiroRandomSource(seed).forkPositional()
+                .fromHashOf(net.minecraft.resources.Identifier.withDefaultNamespace("worldgen_region_random"))
+                .forkPositional().at(pos.getWorldPosition()));
             return region;
         }
         @Override public net.minecraft.world.level.biome.BiomeManager getBiomeManager() { return biomes; }
@@ -99,6 +126,18 @@ public final class WorldgenReferenceProbe {
                 value.set(holder, net.minecraft.world.level.levelgen.feature.ConfiguredFeature.DIRECT_CODEC.parse(ops, json).getOrThrow());
             }
         }
+    }
+
+    // The configured features as a frozen registry, for the regions' registry access: decorators such as
+    // PaleMossDecorator look features up there, as they do in a server's level.
+    static net.minecraft.core.Registry<net.minecraft.world.level.levelgen.feature.ConfiguredFeature<?, ?>> configuredFeatureRegistry(
+            net.minecraft.core.HolderLookup.Provider lookup) {
+        var registry = new net.minecraft.core.MappedRegistry<net.minecraft.world.level.levelgen.feature.ConfiguredFeature<?, ?>>(
+            net.minecraft.core.registries.Registries.CONFIGURED_FEATURE, com.mojang.serialization.Lifecycle.stable());
+        lookup.lookupOrThrow(net.minecraft.core.registries.Registries.CONFIGURED_FEATURE).listElements().forEach(
+            holder -> registry.register(holder.key(), holder.value(), net.minecraft.core.RegistrationInfo.BUILT_IN));
+        registry.freeze();
+        return registry;
     }
 
     static void addBlockTag(String name, java.util.Set<net.minecraft.core.Holder<Block>> blocks,

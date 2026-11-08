@@ -1,7 +1,7 @@
 // Parity probe: writes, for every block, the property flags its BlockBehaviour.Properties sets, and for every
 // block state in registry order, the flags block predicates and survival rules read: isSolid, canBeReplaced,
 // liquid, blocksMotion and isFaceSturdy for each direction, with full support and then center support, then
-// isSolidRender.
+// isSolidRender and hasBlockEntity.
 import java.io.*;
 import java.util.Locale;
 import net.minecraft.SharedConstants;
@@ -43,7 +43,7 @@ public final class BlockBehaviorProbe {
                     }
                     out.println(Block.getId(state) + " " + (state.isSolid() ? 1 : 0) + " " + (state.canBeReplaced() ? 1 : 0)
                         + " " + (state.liquid() ? 1 : 0) + " " + (state.blocksMotion() ? 1 : 0) + " " + sturdy
-                        + " " + (state.isSolidRender() ? 1 : 0));
+                        + " " + (state.isSolidRender() ? 1 : 0) + " " + (state.hasBlockEntity() ? 1 : 0));
                 }
             }
         }

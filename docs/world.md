@@ -325,9 +325,15 @@ and the owner **accepts it once**:
     a chunk decorates: vanilla's sky light engine reports 15 in the columns it has no data for, so a mushroom
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
-    or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire,
-    dripleaves and pale moss carpets), is skipped as a whole; 116 of the 164 Overworld placed features run,
-    with the trees of every biome but pale gardens. A tree with roots starts its trunk `trunk_offset_y` above its
+    or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
+    dripleaves), is skipped as a whole; 120 of the 164 Overworld placed features run, with the trees of every
+    biome and the moss patches of pale gardens and lush caves. Pale oaks' `pale_moss` decorator places the
+    `pale_moss_patch` configured feature, a `vegetation_patch` (`harpas_worldgen::vegetation_patch`), and hangs
+    pale moss below logs and leaves; `creaking_heart` turns a log surrounded by logs into a dormant creaking heart.
+    Pale moss carpets go through `MossyCarpetBlock.placeAt` (`harpas_worldgen::mossy_carpet`), whose topper keeps
+    each side by a coin flip of the decoration region's own random source, seeded like `WorldGenRegion`'s from the
+    world seed and the chunk being decorated. A block with a block entity that a feature places keeps vanilla's
+    `DUMMY` placeholder in the proto-chunk until its block entity is created. A tree with roots starts its trunk `trunk_offset_y` above its
     origin; `mangrove_root_placer` needs the column below the trunk to take roots, then simulates roots on each side
     spreading out and down, failing the tree if one grows longer than its limit, and places them all, muddy roots in
     mud and, by chance, moss on the air above. `harpas_worldgen::huge_mushroom` places
@@ -602,7 +608,7 @@ and the owner **accepts it once**:
   and other simple vegetation, mushrooms, disks, block columns and the trees and fallen trees of most biomes are
   placed so far,
   and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
-  trees of pale gardens, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  azaleas, lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

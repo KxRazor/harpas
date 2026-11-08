@@ -64,6 +64,8 @@ pub enum SurvivalRule {
     NotAirBelow,
     /// `LeafLitterBlock.canSurvive`: a full top face below.
     SturdyBelow,
+    /// `MossyCarpetBlock.canSurvive`: a carpet on anything but air, a topper on a carpet.
+    MossyCarpet,
     /// `SporeBlossomBlock.canSurvive`: the center of a bottom face above, and no water at its position.
     SporeBlossom {
         /// The `#water` fluid tag.
@@ -133,6 +135,7 @@ impl SurvivalRule {
                     && fluid(world.block_state(x, y, z)) == Fluid::Empty
             }
             Self::NotAirBelow => !block_states().is_air(world.block_state(x, y - 1, z)),
+            Self::MossyCarpet => crate::mossy_carpet::can_survive(world, [x, y, z], state),
             Self::SturdyBelow => {
                 block_behavior().is_face_sturdy(world.block_state(x, y - 1, z), Face::Up)
             }
@@ -220,6 +223,7 @@ pub fn compile_block_survival(
             SurvivalRule::Below(tag("minecraft:overrides_mushroom_light_requirement")?)
         }
         "moss_carpet" => SurvivalRule::NotAirBelow,
+        "pale_moss_carpet" => SurvivalRule::MossyCarpet,
         "leaf_litter" => SurvivalRule::SturdyBelow,
         "spore_blossom" => SurvivalRule::SporeBlossom {
             water: fluids("#minecraft:water")?,

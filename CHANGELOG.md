@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Pale gardens: the `pale_moss` and `creaking_heart` decorators, `vegetation_patch`, and pale moss carpets placed
+  through `MossyCarpetBlock.placeAt` with the decoration region's own random source (`WorldGenRegion.getRandom`),
+  which `FeatureWorld::start_region` now seeds as vanilla does. Blocks with a block entity that features place
+  keep vanilla's `DUMMY` placeholder in proto-chunks, and `BlockBehavior` gains `hasBlockEntity`, compared for
+  every block state. Pale garden trees and moss patches and the moss patches of lush caves now grow, 120 of the 164
+  Overworld placed features. The feature probes' regions now hold the
+  configured feature registry, a chunk generator and the region's random source, which decorators read
+  (`harpas-core`, `harpas-worldgen`).
+
 - Mangroves: the `upwards_branching` trunk placer, which grows through `can_grow_through` and places no block
   below, the `random_spread` foliage placer, `mangrove_root_placer` with its simulated roots, muddy roots in mud,
   waterlogging and moss on top, and the `attached_to_leaves` decorator, which hangs propagules. Mangrove swamps

@@ -365,7 +365,8 @@ impl GeneratedChunk {
     }
 
     /// Sets the saved data of the block entity at `(local_x, block_y, local_z)`, as features create them. A
-    /// later change of that block's state removes it.
+    /// later change of that block's state removes it, or for a block with a block entity, replaces it with the
+    /// `DUMMY` placeholder of a block entity not created yet.
     pub fn set_block_entity(&mut self, local_x: u8, block_y: i32, local_z: u8, entity: Compound) {
         let position = (local_x, block_y, local_z);
         self.block_entities.retain(|(at, _)| *at != position);
@@ -451,8 +452,17 @@ impl GeneratedChunk {
         if prev == state {
             return;
         }
-        if !self.block_entities.is_empty() {
-            let position = (local_x as u8, block_y, local_z as u8);
+        // `WorldGenRegion.setBlock`: a block with a block entity gets the placeholder vanilla saves until its block
+        // entity is created; any other block removes the block entity of the block it replaces.
+        let position = (local_x as u8, block_y, local_z as u8);
+        if block_behavior().has_block_entity(state) {
+            let mut dummy = Compound::new();
+            dummy.insert("x", self.chunk_x * 16 + local_x as i32);
+            dummy.insert("y", block_y);
+            dummy.insert("z", self.chunk_z * 16 + local_z as i32);
+            dummy.insert("id", "DUMMY");
+            self.set_block_entity(position.0, block_y, position.2, dummy);
+        } else if !self.block_entities.is_empty() {
             self.block_entities.retain(|(at, _)| *at != position);
         }
         let top = block_y + 1;

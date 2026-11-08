@@ -1,4 +1,5 @@
 // Test driver only: observes vanilla's placement on caller-supplied carved terrain, then saves and resumes it.
+// Ruined portals are the subject; worker cases also place the other structures that reach the chunk.
 // Arguments: <input NBT> <output NBT>. No game code or data is copied into the repository.
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
@@ -145,10 +146,31 @@ public final class RuinedPortalProbe {
                 if (start == null) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
+            // Worker chunks also hold every other structure that reaches them, including starts owned by
+            // neighbors, which are placed but not saved here. Place them all in vanilla's step and index order.
+            boolean all = input.getBooleanOr("all_structures", false);
+            var placed = new ArrayList<>(starts);
+            for (var value : input.getListOrEmpty("neighbor_starts")) {
+                var start = StructureStart.loadStaticStart(context, (CompoundTag) value, seed);
+                if (start == null) throw new AssertionError("failed to load neighbor start");
+                placed.add(start);
+            }
+            Comparator<StructureStart> step = Comparator.comparingInt(s -> s.getStructure().step().ordinal());
+            placed.sort(step.thenComparingInt(s -> structures.stream()
+                .filter(other -> other.step() == s.getStructure().step()).toList().indexOf(s.getStructure())));
             var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
+            for (var start : placed) {
                 var id = structures.getKey(start.getStructure()).toString();
-                if (!id.startsWith("minecraft:ruined_portal") || id.endsWith("_nether")) continue;
+                if (!id.startsWith("minecraft:ruined_portal") || id.endsWith("_nether")) {
+                    if (!all) continue;
+                    var random = new WorldgenRandom(new XoroshiroRandomSource(0));
+                    long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
+                    var structure = start.getStructure();
+                    int index = structures.stream().filter(s -> s.step() == structure.step()).toList().indexOf(structure);
+                    random.setFeatureSeed(decoration, index, structure.step().ordinal());
+                    start.placeInChunk(world, null, null, random, bounds, chunkPos);
+                    continue;
+                }
                 var center = start.getPieces().getFirst().getBoundingBox().getCenter();
                 var owner = new ChunkPos(center.getX() >> 4, center.getZ() >> 4);
                 var random = new WorldgenRandom(new XoroshiroRandomSource(0));

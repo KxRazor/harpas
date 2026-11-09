@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Frozen biomes: the `spike` feature of ice spike plains, `iceberg` with packed and blue ice icebergs centered at the
+  sea level, smoothed, snowed on and cut through, and `blue_ice`, which grows under packed ice in frozen oceans.
+  139 of the 164 Overworld placed features now run (`harpas-worldgen`).
+
 - Vines and glow lichen: the `vines` feature of jungles, swamps and caves, and `multiface_growth` with glow lichen,
   which attaches to stone, deepslate and the other `can_be_placed_on` blocks in caves, waterlogged in water, and
   spreads through `MultifaceSpreader` to its own block, the next one or around the corner. 135 of the 164

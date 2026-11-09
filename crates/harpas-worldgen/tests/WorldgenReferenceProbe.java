@@ -64,6 +64,8 @@ public final class WorldgenReferenceProbe {
         @Override public net.minecraft.world.level.ChunkPos getCenter() { return center; }
         @Override public boolean isOldChunkAround(net.minecraft.world.level.ChunkPos pos, int radius) { return false; }
         @Override public boolean ensureCanWrite(net.minecraft.core.BlockPos pos) { return true; }
+        // The Overworld's sea level, which WorldGenRegion asks the level for and BlueIceFeature reads.
+        @Override public int getSeaLevel() { return 63; }
         // WorldGenRegion.setBlock without the level's points of interest, which a test region has no level for.
         @Override public boolean setBlock(net.minecraft.core.BlockPos pos, BlockState state, int flags, int recursion) {
             var chunk = getChunk(pos.getX() >> 4, pos.getZ() >> 4);

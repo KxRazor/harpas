@@ -18,8 +18,9 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// disks and ice patches are placed; then a grove of the last seed and a river of seed 0, where trees grow, and a
 /// meadow of the last seed, where trees grow with bee nests, a mangrove swamp of the last seed shallow enough
 /// for mangroves, two chunks of the last seed over lush caves, where rooted azaleas grow, and a warm ocean of the
-/// last seed with sea pickles.
-const CHUNKS: [(i32, i32); 31] = [
+/// last seed with sea pickles, and two frozen oceans of the last seed with packed ice icebergs, snow on them and blue
+/// ice.
+const CHUNKS: [(i32, i32); 33] = [
     (0, 0),
     (-3, 7),
     (41, -26),
@@ -51,6 +52,8 @@ const CHUNKS: [(i32, i32); 31] = [
     (-86, 16),
     (42, -116),
     (12, 40),
+    (315, 333),
+    (294, 336),
 ];
 
 fn changed_blocks(

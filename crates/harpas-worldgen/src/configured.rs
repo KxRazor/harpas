@@ -23,6 +23,7 @@ use crate::data::{
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
+use crate::ice::{CompiledIce, place_ice};
 use crate::multiface::{CompiledMultifaceGrowth, place_multiface_growth, place_vines};
 use crate::ocean_vegetation::{CompiledOceanPlant, place_ocean_plant};
 use crate::placement::{
@@ -92,6 +93,8 @@ pub enum CompiledFeature {
     OceanPlant(Box<CompiledOceanPlant>),
     /// `minecraft:vines`.
     Vines,
+    /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
+    Ice(Box<CompiledIce>),
     /// `minecraft:multiface_growth`.
     MultifaceGrowth(Box<CompiledMultifaceGrowth>),
     /// `minecraft:disk`.
@@ -399,6 +402,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::RootSystem(roots) => place_root_system(world, roots, random, origin),
         CompiledFeature::OceanPlant(plant) => place_ocean_plant(world, plant, random, origin),
         CompiledFeature::Vines => place_vines(world, origin),
+        CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
         CompiledFeature::MultifaceGrowth(growth) => {
             place_multiface_growth(world, growth, random, origin)
         }
@@ -919,6 +923,12 @@ impl<'a> FeatureCompiler<'a> {
                 }
             }
             "minecraft:vines" => CompiledFeature::Vines,
+            kind @ ("minecraft:spike" | "minecraft:iceberg" | "minecraft:blue_ice") => {
+                match self.ice(name, kind, config)? {
+                    Some(ice) => CompiledFeature::Ice(Box::new(ice)),
+                    None => return Ok(None),
+                }
+            }
             "minecraft:multiface_growth" => match self.multiface_growth(name, config)? {
                 Some(growth) => CompiledFeature::MultifaceGrowth(Box::new(growth)),
                 None => return Ok(None),

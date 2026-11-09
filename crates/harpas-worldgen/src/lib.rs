@@ -13,6 +13,7 @@ pub mod fallen_tree;
 pub mod feature;
 pub mod generator;
 pub mod huge_mushroom;
+pub mod ice;
 pub mod java_hash;
 pub mod light;
 pub mod mossy_carpet;

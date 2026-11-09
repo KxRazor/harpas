@@ -314,9 +314,13 @@ fn empty_light() -> play::LightData {
     }
 }
 
-/// Whether the chunk stopped at carvers and still needs light computed from its blocks.
+/// Whether the chunk was generated through carvers or features, which save no light, and still needs light
+/// computed from its blocks. Keep in step with `World::needs_light`, which gathers the neighbors.
 fn is_generated(chunk: &Chunk) -> bool {
-    matches!(chunk.rest.get("Status"), Some(Nbt::String(status)) if status == "minecraft:carvers")
+    matches!(
+        chunk.rest.get("Status"),
+        Some(Nbt::String(status)) if status == "minecraft:carvers" || status == "minecraft:features"
+    )
 }
 
 struct VisibleWorld<'a> {
@@ -572,6 +576,36 @@ mod tests {
             vec![vec![255; LIGHT_BYTES], vec![1; LIGHT_BYTES]]
         );
         assert_eq!(&packet.data[..4], &[0, 3, 0, 2]);
+    }
+
+    #[test]
+    fn generated_chunks_get_computed_light_at_carvers_and_features() {
+        let light_for = |status: &str| {
+            let mut rest = Compound::new();
+            rest.insert("Status", status);
+            let chunk = Chunk {
+                sections: vec![ChunkSection {
+                    y: -4,
+                    section: Some(section()),
+                    rest: Compound::new(),
+                }],
+                rest,
+            };
+            encode(
+                VisibleChunk {
+                    position: ChunkPos { x: 0, z: 0 },
+                    chunk: Some(Arc::new(chunk)),
+                    neighbors: std::array::from_fn(|_| None),
+                },
+                &crate::block_entity_registry::Registry::default(),
+            )
+            .light
+        };
+        let carvers = light_for("minecraft:carvers");
+        assert!(!carvers.sky_light.is_empty());
+        assert_eq!(light_for("minecraft:features"), carvers);
+        // A finished chunk without saved light sends none, as before.
+        assert!(light_for("minecraft:full").sky_light.is_empty());
     }
 
     #[test]

@@ -63,5 +63,6 @@ to `deny.toml` that explains why it is compatible with [docs/licensing.md](docs/
 
 ## Changelog
 
-Every pull request that changes behavior adds an entry under `Unreleased` in [CHANGELOG.md](CHANGELOG.md)
-([docs/releases.md](docs/releases.md#changelog)).
+Every pull request that changes behavior adds its [CHANGELOG.md](CHANGELOG.md) entry as a file in
+[changelog.d/](changelog.d/README.md), `<name>.<section>.md`, so that pull requests open at the same time do not
+conflict. A release moves the files into `Unreleased` ([docs/releases.md](docs/releases.md#changelog)).

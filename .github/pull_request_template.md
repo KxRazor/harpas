@@ -13,5 +13,5 @@
 ## Checklist
 
 - [ ] Tests cover the changed behavior, or the change does not alter behavior
-- [ ] `CHANGELOG.md` has an entry under `Unreleased`, if behavior changed
+- [ ] `changelog.d/` has an entry, if behavior changed
 - [ ] Design documents are updated, if the change departs from them

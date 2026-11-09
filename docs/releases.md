@@ -81,9 +81,14 @@ Every release lists, in its release notes and in `harpas --version --verbose`:
 
 ## Changelog
 
-`CHANGELOG.md` at the repository root, in the "Keep a Changelog" format: an `Unreleased` section updated by
-every pull request that changes behavior, with `Added`, `Changed`, `Fixed`, `Removed` and `Security`
-subsections. A release moves `Unreleased` under its version and date.
+`CHANGELOG.md` at the repository root, in the "Keep a Changelog" format: an `Unreleased` section with `Added`,
+`Changed`, `Fixed`, `Removed` and `Security` subsections, which a release moves under its version and date.
+
+Every pull request that changes behavior adds its entry as a file in [changelog.d/](../changelog.d/README.md),
+`<name>.<section>.md`, rather than editing `CHANGELOG.md`. Entries added to the same place in one file would
+conflict between any two pull requests open at the same time; separate files never do. `ci/changelog.sh` moves
+the files into `Unreleased`, newest first, and CI checks their names with `ci/changelog.sh --check`. The changes
+since the last release are those in `Unreleased` and those still in `changelog.d/`.
 
 ---
 
@@ -99,7 +104,8 @@ subsections. A release moves `Unreleased` under its version and date.
    - parity harnesses against vanilla ([parity.md](parity.md));
    - plugin compatibility suite against Paper ([jvm.md](jvm.md#validation));
    - benchmarks, with no unexplained regression against the previous release.
-4. **Documentation:** move the changelog entries, publish the parity report, regenerate
+4. **Documentation:** move the entries of `changelog.d/` into `Unreleased` with `ci/changelog.sh`, then
+   `Unreleased` under the version; publish the parity report, regenerate
    `THIRD_PARTY_NOTICES.md`, and update the supported versions in the design documents.
 5. **Tag:** a signed tag `v<version>`, including the build metadata (`v0.4.0+26.1-26.60`), on the release commit.
 6. **Artifacts:** binaries per platform, the Bukkit shim (GPL-3.0, with its source), companion and client mod

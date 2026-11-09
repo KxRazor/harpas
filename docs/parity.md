@@ -153,6 +153,16 @@ Pull requests compare a **reduced sample**, one seed and smaller areas, set by `
 quick answer. Every other run compares the **full sample**, so a difference that only the full sample shows is found on
 `main` after merging.
 
+The harnesses run with [cargo-nextest](https://nexte.st) in four shards at once, each on its own runner: every
+shard builds all the harnesses and runs a quarter of the tests (`--partition slice`). The `parity` profile in
+`.config/nextest.toml` keeps running after a failure, so one run reports every difference. A test that compares
+for minutes is better split, as `structure_start_parity` is into one test per seed, so the shards can share it out.
+The check `parity against vanilla` passes when every shard passes, or when the pull request changes nothing that
+is compared.
+
+When the full sample fails on `main`, the workflow opens the issue "Parity against vanilla fails on main", comments
+on it on each later failure and closes it on the next push that passes.
+
 It does not run on a schedule. A schedule suits checks whose result changes without any change in the repository,
 like the advisories check. These compare pinned code with a pinned version, so a run at night would only repeat
 the result of the merge, after the change has landed.
@@ -171,6 +181,8 @@ you accept the [Minecraft EULA](https://aka.ms/MinecraftEULA):
 MOJANG_EULA_ACCEPTED=true ci/fetch-vanilla-server.sh 26.1 ~/harpas-vanilla
 HARPAS_VANILLA_SERVER_DIR=~/harpas-vanilla cargo test --release --workspace --locked --test '*_parity' --test world_loading
 ```
+
+`cargo nextest run --profile parity` in place of `cargo test` runs the test binaries at once, as CI does.
 
 This compares the full sample. Use `-p <crate> --test <harness>` in place of `--workspace` and the patterns to run one
 harness, and set `HARPAS_PARITY_SAMPLE=reduced` for the sample of pull requests. Java 25 must be on `PATH`.
@@ -220,11 +232,9 @@ repository's permissions next to untrusted code, which is not worth it for a che
 
 ## Open questions
 
-1. Whether the full comparison on `main` needs splitting into a matrix. `structure_start_parity` takes about half
-   of it, around 11 minutes on a hosted runner.
-2. Whether to run the comparisons in debug mode as well, for the overflow checks.
-3. The format of the published parity report, and whether a tool generates it.
-4. How to compare what a vanilla client sees.
+1. Whether to run the comparisons in debug mode as well, for the overflow checks.
+2. The format of the published parity report, and whether a tool generates it.
+3. How to compare what a vanilla client sees.
 
 ---
 

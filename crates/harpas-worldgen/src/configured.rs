@@ -23,6 +23,7 @@ use crate::data::{
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
+use crate::ocean_vegetation::{CompiledOceanPlant, place_ocean_plant};
 use crate::placement::{
     BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
     pick_weighted, place_positions, sample_int_provider,
@@ -86,6 +87,8 @@ pub enum CompiledFeature {
     VegetationPatch(Box<CompiledVegetationPatch>),
     /// `minecraft:root_system`.
     RootSystem(Box<CompiledRootSystem>),
+    /// `minecraft:seagrass`, `minecraft:kelp` and `minecraft:sea_pickle`.
+    OceanPlant(Box<CompiledOceanPlant>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -389,6 +392,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             place_vegetation_patch(world, patch, random, origin)
         }
         CompiledFeature::RootSystem(roots) => place_root_system(world, roots, random, origin),
+        CompiledFeature::OceanPlant(plant) => place_ocean_plant(world, plant, random, origin),
         CompiledFeature::Disk {
             provider,
             target,
@@ -899,6 +903,12 @@ impl<'a> FeatureCompiler<'a> {
                 Some(patch) => CompiledFeature::VegetationPatch(Box::new(patch)),
                 None => return Ok(None),
             },
+            kind @ ("minecraft:seagrass" | "minecraft:kelp" | "minecraft:sea_pickle") => {
+                match self.ocean_plant(name, kind, config)? {
+                    Some(plant) => CompiledFeature::OceanPlant(Box::new(plant)),
+                    None => return Ok(None),
+                }
+            }
             "minecraft:root_system" => match self.root_system(name, config)? {
                 Some(roots) => CompiledFeature::RootSystem(Box::new(roots)),
                 None => return Ok(None),

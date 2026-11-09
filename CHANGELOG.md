@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Ocean plants: the `seagrass`, `kelp` and `sea_pickle` features on the ocean floor of oceans, rivers and swamps,
+  with the survival rules of seagrass, tall seagrass, kelp and sea pickles. 132 of the 164 Overworld placed
+  features now run (`harpas-worldgen`).
+
 - Azaleas: the `bending_trunk` trunk placer and the `root_system` feature, which climbs from a lush cave's
   ceiling to the first spot with room for an azalea tree, places rooted dirt in the column below it and hangs roots
   around the cave ceiling. Every trunk, foliage and root placer of vanilla's trees is now ported, and rooted

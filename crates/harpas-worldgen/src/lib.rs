@@ -17,6 +17,7 @@ pub mod java_hash;
 pub mod light;
 pub mod mossy_carpet;
 pub mod noise_chunk;
+pub mod ocean_vegetation;
 pub mod ore_vein;
 pub mod placement;
 pub mod root_system;

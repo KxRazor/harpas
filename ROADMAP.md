@@ -160,6 +160,8 @@ vanilla for the same seed.
         rooted dirt and hanging roots, compared with vanilla's own features (`tree_feature_parity`,
         `feature_blocks_parity`).
   - [ ] Vegetation, lakes, springs and the remaining feature families.
+    - [x] Seagrass, kelp and sea pickles, with the survival rules of the blocks they place, compared with
+          vanilla's `applyBiomeDecoration` (`feature_blocks_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

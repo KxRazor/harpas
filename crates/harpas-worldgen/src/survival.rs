@@ -5,7 +5,9 @@
 //! lower half below their upper half, a hanging mangrove propagule leaves above, sugar cane water or frosted
 //! ice beside the block below it, cactus no solid block or lava beside it and no liquid above, a lily pad water
 //! below and none at its own position, a carpet any block below, leaf litter a full top face below, a spore
-//! blossom the center of a bottom face above, out of water, and a mushroom a block that overrides its light
+//! blossom the center of a bottom face above, out of water, seagrass a full top face below that is not in
+//! `#cannot_support_seagrass`, tall seagrass also a water source at its lower half, kelp a kelp or a full top face
+//! below that is not in `#cannot_support_kelp`, a sea pickle a top face of its collision shape below, and a mushroom a block that overrides its light
 //! requirement below, as no light is initialized while chunks decorate. Blocks without a rule of their own always survive.
 
 use harpas_core::block::block_states;
@@ -66,6 +68,21 @@ pub enum SurvivalRule {
     SturdyBelow,
     /// `MossyCarpetBlock.canSurvive`: a carpet on anything but air, a topper on a carpet.
     MossyCarpet,
+    /// `SeagrassBlock.mayPlaceOn`: a full top face below, not in `#cannot_support_seagrass`.
+    Seagrass(StateSet),
+    /// `TallSeagrassBlock.canSurvive`: the lower half needs a water source at its position and a full top face below
+    /// that is not in `#cannot_support_seagrass`, the upper half its own lower half below.
+    TallSeagrass(StateSet),
+    /// `GrowingPlantBlock.canSurvive` for kelp: below it kelp, or a full top face, in either case not in
+    /// `#cannot_support_kelp`.
+    Kelp {
+        /// Any state of kelp or kelp plant.
+        kelp: StateSet,
+        /// `#cannot_support_kelp`.
+        cannot: StateSet,
+    },
+    /// `SeaPickleBlock.mayPlaceOn`: a collision shape below whose top face is not empty, or a full top face.
+    SeaPickle,
     /// `SporeBlossomBlock.canSurvive`: the center of a bottom face above, and no water at its position.
     SporeBlossom {
         /// The `#water` fluid tag.
@@ -139,12 +156,45 @@ impl SurvivalRule {
             Self::SturdyBelow => {
                 block_behavior().is_face_sturdy(world.block_state(x, y - 1, z), Face::Up)
             }
+            Self::Seagrass(cannot) => seagrass_support(world.block_state(x, y - 1, z), cannot),
+            Self::TallSeagrass(cannot) => {
+                let below = world.block_state(x, y - 1, z);
+                if property(state, "half") == Some("upper") {
+                    same_block(below, state) && property(below, "half") == Some("lower")
+                } else {
+                    seagrass_support(below, cannot)
+                        && fluid(world.block_state(x, y, z)) == Fluid::Water
+                }
+            }
+            Self::Kelp { kelp, cannot } => {
+                let below = world.block_state(x, y - 1, z);
+                !cannot.contains(below)
+                    && (kelp.contains(below) || block_behavior().is_face_sturdy(below, Face::Up))
+            }
+            Self::SeaPickle => {
+                let below = world.block_state(x, y - 1, z);
+                has_top_face(below) || block_behavior().is_face_sturdy(below, Face::Up)
+            }
             Self::SporeBlossom { water } => {
                 block_behavior().is_face_center_sturdy(world.block_state(x, y + 1, z), Face::Down)
                     && !in_mask(*water, fluid(world.block_state(x, y, z)))
             }
         }
     }
+}
+
+/// `SeagrassBlock.mayPlaceOn`.
+fn seagrass_support(below: u32, cannot: &StateSet) -> bool {
+    block_behavior().is_face_sturdy(below, Face::Up) && !cannot.contains(below)
+}
+
+/// Whether `getCollisionShape().getFaceShape(UP)` is not empty: the shape ends exactly at the top of the block, so
+/// a shape that reaches higher, such as a fence's, has an empty top face, and some box reaches that top.
+fn has_top_face(state: u32) -> bool {
+    const TOP: i8 = 32;
+    let shape = block_behavior().collision_shape(state);
+    shape.iter().map(|shape| shape.max[1]).max() == Some(TOP)
+        && shape.iter().any(|shape| shape.min[1] < TOP)
 }
 
 /// A property value of a block state.
@@ -222,6 +272,17 @@ pub fn compile_block_survival(
         "brown_mushroom" | "red_mushroom" => {
             SurvivalRule::Below(tag("minecraft:overrides_mushroom_light_requirement")?)
         }
+        "seagrass" => SurvivalRule::Seagrass(tag("minecraft:cannot_support_seagrass")?),
+        "tall_seagrass" => SurvivalRule::TallSeagrass(tag("minecraft:cannot_support_seagrass")?),
+        "kelp" | "kelp_plant" => SurvivalRule::Kelp {
+            kelp: states_where(|id| {
+                block_states().properties(id).is_some_and(|(owner, _)| {
+                    owner == "minecraft:kelp" || owner == "minecraft:kelp_plant"
+                })
+            }),
+            cannot: tag("minecraft:cannot_support_kelp")?,
+        },
+        "sea_pickle" => SurvivalRule::SeaPickle,
         "moss_carpet" => SurvivalRule::NotAirBelow,
         "pale_moss_carpet" => SurvivalRule::MossyCarpet,
         "leaf_litter" => SurvivalRule::SturdyBelow,

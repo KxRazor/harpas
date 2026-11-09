@@ -17,6 +17,11 @@ on:
       minecraft-version:
         description: Minecraft server version to compare against
         default: "26.1"
+      sample:
+        description: Sample to compare
+        type: choice
+        options: [full, reduced]
+        default: full
 
 permissions:
   contents: read
@@ -64,13 +69,17 @@ jobs:
           fi
 
   parity:
-    # Rulesets require checks by name, so the name does not include the version. A skipped job counts as passed, so
-    # this runs unless `select` decides otherwise, even if `select` itself fails.
-    name: parity against vanilla
+    # The harnesses are split across shards that run at once; `cargo test` would run the test binaries one after
+    # another. Each shard builds every harness and runs its slice of the tests (docs/parity.md#in-ci).
+    name: parity shard ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: select
     if: ${{ !cancelled() && needs.select.outputs.compare != 'false' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       # A test that the command below does not select would skip its comparison and still pass.
@@ -88,15 +97,75 @@ jobs:
           MOJANG_EULA_ACCEPTED: ${{ vars.MOJANG_EULA_ACCEPTED }}
         run: ci/fetch-vanilla-server.sh "$MINECRAFT_VERSION" "$RUNNER_TEMP/vanilla"
       - uses: dtolnay/rust-toolchain@stable
+      # The shards build the same thing, so one of them saves the cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ matrix.shard == 1 }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
       # CI already runs the other tests. A new harness needs no change here if its name ends in `_parity`
-      # (docs/parity.md#adding-a-harness).
+      # (docs/parity.md#adding-a-harness). The `parity` profile in .config/nextest.toml runs every test even after
+      # a failure, so one run reports all the differences.
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
-          HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || 'full' }}
-        run: cargo test --release --workspace --locked --test '*_parity' --test world_loading
+          HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || inputs.sample || 'full' }}
+        run: >-
+          cargo nextest run --profile parity --release --workspace --locked --test '*_parity' --test world_loading
+          --partition slice:${{ matrix.shard }}/${{ strategy.job-total }}
+
+  result:
+    # Rulesets require checks by name, so this name does not include the version or the shards. A skipped job counts
+    # as passed, so this job always runs and fails unless every shard passed or `select` found nothing to compare.
+    name: parity against vanilla
+    needs: [select, parity]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          COMPARE: ${{ needs.select.outputs.compare }}
+          SHARDS: ${{ needs.parity.result }}
+        run: |
+          if [ "$COMPARE" = false ]; then
+            echo 'Nothing to compare.'
+          elif [ "$SHARDS" != success ]; then
+            echo "::error::The parity shards finished with: $SHARDS."
+            exit 1
+          fi
+
+  report:
+    # Pushes to main compare the full sample, which can find a difference that the reduced sample of the pull request
+    # missed. An open issue keeps that visible until a later push passes again, and is closed then.
+    name: report on main
+    needs: result
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.result.result }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          TITLE: Parity against vanilla fails on main
+        run: |
+          issue=$(gh issue list --state open --label parity --search "\"$TITLE\" in:title" --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
+          if [ "$RESULT" = success ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --comment "The full sample passes again on $SHA ($RUN)."
+            fi
+          elif [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Still failing on $SHA: $RUN"
+          else
+            gh issue create --title "$TITLE" --label parity --body "$(printf '%s\n\n%s\n' \
+              "The full sample of the parity comparison fails on $SHA: $RUN" \
+              "This issue closes itself once a push to \`main\` passes again (docs/parity.md#in-ci).")"
+          fi

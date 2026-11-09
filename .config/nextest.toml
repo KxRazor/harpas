@@ -1,0 +1,8 @@
+# Profiles for cargo-nextest. CI runs the parity harnesses with the `parity` profile (.github/workflows/parity.yml).
+
+[profile.parity]
+# Run every test even after a failure, so that one run reports all the differences with vanilla.
+fail-fast = false
+# Tests that compare with the reference server run for minutes; report them only past two.
+slow-timeout = { period = "120s" }
+failure-output = "final"

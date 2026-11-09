@@ -263,8 +263,12 @@ fn read_lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn structure_starts_and_references_match_vanilla() {
+/// Compares one seed, if the sample includes it. Each seed is its own test, so the parity shards can run them at
+/// once.
+fn compare(seed: i64) {
+    if !reference::sampled_seeds(&SEEDS).contains(&seed) {
+        return;
+    }
     let Some(reference) = Reference::from_env() else {
         eprintln!("Skipping vanilla structure starts: HARPAS_VANILLA_SERVER_DIR is not set");
         return;
@@ -288,8 +292,26 @@ fn structure_starts_and_references_match_vanilla() {
             include_str!("StructureStartProbe.java"),
         ),
     ]);
-    for &seed in reference::sampled_seeds(&SEEDS) {
-        let (lines, starts, references) = compare_seed(&reference, &data, &templates, seed);
-        eprintln!("Seed {seed}: {lines} lines match, {starts} starts and {references} references");
-    }
+    let (lines, starts, references) = compare_seed(&reference, &data, &templates, seed);
+    eprintln!("Seed {seed}: {lines} lines match, {starts} starts and {references} references");
+}
+
+#[test]
+fn structure_starts_and_references_match_vanilla_seed_0() {
+    compare(SEEDS[0]);
+}
+
+#[test]
+fn structure_starts_and_references_match_vanilla_seed_42() {
+    compare(SEEDS[1]);
+}
+
+#[test]
+fn structure_starts_and_references_match_vanilla_seed_minus_1() {
+    compare(SEEDS[2]);
+}
+
+#[test]
+fn structure_starts_and_references_match_vanilla_seed_full_64_bits() {
+    compare(SEEDS[3]);
 }

@@ -37,11 +37,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # GitHub retired macos-14 on 2026-11-02. Hosted macOS arm64 runners are short of capacity at busy hours,
-        # and GitHub cancels a job it cannot place after about 15 minutes, so the macOS job does not fail the run.
-        os: [ubuntu-latest, windows-latest, macos-15]
+        # macOS runs nightly and before releases instead, in macos.yml.
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

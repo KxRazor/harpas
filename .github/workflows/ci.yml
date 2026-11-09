@@ -29,6 +29,8 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all --check
+      - name: changelog.d/ entries
+        run: ci/changelog.sh --check
 
   check:
     name: build, clippy, test (${{ matrix.os }})

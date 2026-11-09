@@ -1,5 +1,5 @@
 //! Compares every block state's solid, replaceable, liquid and motion-blocking flags, the full and center
-//! support of each face and the solid render flag with vanilla's.
+//! support of each face, the solid render flag and whether the block has a block entity with vanilla's.
 mod reference;
 
 use std::fs;
@@ -39,6 +39,7 @@ fn block_behavior_matches_vanilla() {
             blocks_motion,
             sturdy,
             solid_render,
+            block_entity,
         ] = fields.as_slice()
         else {
             panic!("malformed line {line}");
@@ -55,6 +56,7 @@ fn block_behavior_matches_vanilla() {
             u32::from(behavior.blocks_motion(id)),
             actual_sturdy,
             u32::from(behavior.is_solid_render(id)),
+            u32::from(behavior.has_block_entity(id)),
         );
         let expected = (
             solid,
@@ -63,6 +65,7 @@ fn block_behavior_matches_vanilla() {
             blocks_motion,
             sturdy,
             solid_render,
+            block_entity,
         );
         if actual != expected {
             mismatches.push(format!(
@@ -76,7 +79,7 @@ fn block_behavior_matches_vanilla() {
     assert_eq!(compared, states.len(), "every block state");
     assert!(
         mismatches.is_empty(),
-        "{} of {compared} states differ (solid, replaceable, liquid, blocks motion, sturdy faces, solid render):\n{}",
+        "{} of {compared} states differ (solid, replaceable, liquid, blocks motion, sturdy faces, solid render, block entity):\n{}",
         mismatches.len(),
         mismatches[..mismatches.len().min(30)].join("\n")
     );

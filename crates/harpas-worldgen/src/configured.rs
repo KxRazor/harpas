@@ -30,6 +30,7 @@ use crate::placement::{
 use crate::surface::resolve_block_state;
 use crate::survival::{SurvivalRule, compile_block_survival};
 use crate::tree::{CompiledTree, TreeBlocks, place_tree};
+use crate::vegetation_patch::{CompiledVegetationPatch, place_vegetation_patch};
 
 /// A placed feature compiled with its configured feature.
 #[derive(Debug)]
@@ -80,6 +81,8 @@ pub enum CompiledFeature {
     FallenTree(Box<CompiledFallenTree>),
     /// `minecraft:huge_brown_mushroom` and `minecraft:huge_red_mushroom`.
     HugeMushroom(Box<CompiledHugeMushroom>),
+    /// `minecraft:vegetation_patch`.
+    VegetationPatch(Box<CompiledVegetationPatch>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -379,6 +382,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::HugeMushroom(mushroom) => {
             place_huge_mushroom(world, mushroom, random, origin)
         }
+        CompiledFeature::VegetationPatch(patch) => {
+            place_vegetation_patch(world, patch, random, origin)
+        }
         CompiledFeature::Disk {
             provider,
             target,
@@ -458,6 +464,20 @@ fn place_simple_block<W: FeatureWorld, R: RandomSource>(
         for (half, at) in [("lower", origin), ("upper", [x, y + 1, z])] {
             let part = with_half(state, half, world.block_state(at[0], at[1], at[2]));
             world.set_block_state(at[0], at[1], at[2], part);
+        }
+    } else if crate::mossy_carpet::is_carpet(state) {
+        // `MossyCarpetBlock.placeAt` with the region's random source; a world without one sets the carpet alone.
+        match world.region_random() {
+            Some(region) => {
+                let mut region = region.clone();
+                crate::mossy_carpet::place_at(world, origin, &mut region);
+                if let Some(shared) = world.region_random() {
+                    *shared = region;
+                }
+            }
+            None => {
+                world.set_block_state(x, y, z, state);
+            }
         }
     } else {
         world.set_block_state(x, y, z, state);
@@ -660,7 +680,7 @@ impl<'a> FeatureCompiler<'a> {
 
     /// A placed feature referred to from a configured feature: a name, or an inline definition, which may
     /// not use the biome modifier, since features place it without a biome check.
-    fn placed_ref(
+    pub(crate) fn placed_ref(
         &mut self,
         name: &str,
         json: &Value,
@@ -869,6 +889,10 @@ impl<'a> FeatureCompiler<'a> {
             },
             "minecraft:fallen_tree" => match self.fallen_tree(name, config)? {
                 Some(tree) => CompiledFeature::FallenTree(Box::new(tree)),
+                None => return Ok(None),
+            },
+            "minecraft:vegetation_patch" => match self.vegetation_patch(name, config)? {
+                Some(patch) => CompiledFeature::VegetationPatch(Box::new(patch)),
                 None => return Ok(None),
             },
             kind @ ("minecraft:huge_brown_mushroom" | "minecraft:huge_red_mushroom") => {

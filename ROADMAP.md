@@ -153,8 +153,10 @@ vanilla for the same seed.
         pack (`tree_feature_parity`, `feature_blocks_parity`).
   - [x] Mangroves: upwards branching trunks, random spread foliage, mangrove roots and `attached_to_leaves`,
         compared with vanilla's own features (`tree_feature_parity`, `feature_blocks_parity`).
-  - [ ] Pale oaks and azaleas: `pale_moss` and `creaking_heart` with `vegetation_patch`, pale moss carpets and the
-        region's own random source, and the bending trunk placer.
+  - [x] Pale oaks: `pale_moss` and `creaking_heart`, `vegetation_patch`, pale moss carpets with the region's own
+        random source, and the `DUMMY` placeholders of block entities placed by features, compared with vanilla's
+        own features (`tree_feature_parity`, `feature_blocks_parity`).
+  - [ ] Azaleas: the bending trunk placer and the `root_system` feature that grows them.
   - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

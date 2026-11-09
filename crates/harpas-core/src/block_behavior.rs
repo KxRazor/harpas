@@ -83,6 +83,7 @@ const REPLACEABLE: u8 = 1 << 1;
 const LIQUID: u8 = 1 << 2;
 const BLOCKS_MOTION: u8 = 1 << 3;
 const SOLID_RENDER: u8 = 1 << 4;
+const BLOCK_ENTITY: u8 = 1 << 5;
 
 /// The collision shapes and behavior flags of every block state.
 #[derive(Debug)]
@@ -90,7 +91,8 @@ pub struct BlockBehavior {
     shapes: Vec<Vec<ShapeBox>>,
     /// For each state ID, the index of its collision shape.
     state_shapes: Vec<u16>,
-    /// For each state ID, [`SOLID`], [`REPLACEABLE`], [`LIQUID`], [`BLOCKS_MOTION`] and [`SOLID_RENDER`].
+    /// For each state ID, [`SOLID`], [`REPLACEABLE`], [`LIQUID`], [`BLOCKS_MOTION`], [`SOLID_RENDER`] and
+    /// [`BLOCK_ENTITY`].
     flags: Vec<u8>,
     /// For each state ID, one bit per [`Face`] whose support shape is full, and from bit 8 one per face whose
     /// support shape covers the face's center.
@@ -172,6 +174,9 @@ impl BlockBehavior {
             if is_solid_render(name, &properties, boxes) {
                 flag |= SOLID_RENDER;
             }
+            if has_block_entity(name) {
+                flag |= BLOCK_ENTITY;
+            }
             flags.push(flag);
             sturdy.push(match support_shape(name, &properties) {
                 Some(support) => full_faces(&support),
@@ -244,6 +249,11 @@ impl BlockBehavior {
         self.flag(id, SOLID_RENDER)
     }
 
+    /// Whether the state's block has a block entity (`BlockState.hasBlockEntity`).
+    pub fn has_block_entity(&self, id: u32) -> bool {
+        self.flag(id, BLOCK_ENTITY)
+    }
+
     fn flag(&self, id: u32, flag: u8) -> bool {
         self.flags
             .get(id as usize)
@@ -312,6 +322,69 @@ fn is_solid(name: &str, boxes: &[ShapeBox]) -> bool {
     };
     let (x, y, z) = (size(0), size(1), size(2));
     (x + y + z) / 3.0 >= 0.729_166_666_666_666_6 || y >= 1.0
+}
+
+/// Whether a block is an `EntityBlock` (`BlockState.hasBlockEntity`), for every one of its states.
+fn has_block_entity(name: &str) -> bool {
+    const SUFFIXES: [&str; 10] = [
+        "_bed",
+        "_shelf",
+        "_sign",
+        "_skull",
+        "_banner",
+        "shulker_box",
+        "copper_chest",
+        "copper_golem_statue",
+        "command_block",
+        "_head",
+    ];
+    (name != "piston_head" && SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
+        || matches!(
+            name,
+            "barrel"
+                | "beacon"
+                | "bee_nest"
+                | "beehive"
+                | "bell"
+                | "blast_furnace"
+                | "brewing_stand"
+                | "calibrated_sculk_sensor"
+                | "campfire"
+                | "chest"
+                | "chiseled_bookshelf"
+                | "comparator"
+                | "conduit"
+                | "crafter"
+                | "creaking_heart"
+                | "daylight_detector"
+                | "decorated_pot"
+                | "dispenser"
+                | "dropper"
+                | "enchanting_table"
+                | "end_gateway"
+                | "end_portal"
+                | "ender_chest"
+                | "furnace"
+                | "hopper"
+                | "jigsaw"
+                | "jukebox"
+                | "lectern"
+                | "moving_piston"
+                | "sculk_catalyst"
+                | "sculk_sensor"
+                | "sculk_shrieker"
+                | "smoker"
+                | "soul_campfire"
+                | "spawner"
+                | "structure_block"
+                | "suspicious_gravel"
+                | "suspicious_sand"
+                | "test_block"
+                | "test_instance_block"
+                | "trapped_chest"
+                | "trial_spawner"
+                | "vault"
+        )
 }
 
 /// `BlockStateBase.isSolidRender`: blocks that can occlude (whose properties do not call `noOcclusion`) with a

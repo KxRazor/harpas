@@ -50,18 +50,39 @@ pub trait FeatureWorld {
     /// Sets the saved data of the block entity at a block that was just placed, as a feature fills it in after
     /// `getBlockEntity`; returns whether the position is inside the writable region.
     fn set_block_entity(&mut self, x: i32, y: i32, z: i32, entity: Compound) -> bool;
+    /// Starts the region of one chunk's decoration, as a `WorldGenRegion` is created for it: its own random source
+    /// is seeded from the world seed and the chunk.
+    fn start_region(&mut self, world_seed: i64, chunk_x: i32, chunk_z: i32);
+    /// `WorldGenRegion.getRandom`: the region's own random source, which some blocks draw from as features place
+    /// them; None before [`FeatureWorld::start_region`].
+    fn region_random(&mut self) -> Option<&mut XoroshiroRandom>;
+}
+
+/// `WorldGenRegion`'s random source: the world's positional random factory forked from the hash of
+/// `minecraft:worldgen_region_random`, at the lowest corner of the chunk being decorated.
+pub fn region_random(world_seed: i64, chunk_x: i32, chunk_z: i32) -> XoroshiroRandom {
+    XoroshiroRandom::new(world_seed)
+        .fork_positional()
+        .from_hash_of("minecraft:worldgen_region_random")
+        .fork_positional()
+        .at(chunk_x * 16, 0, chunk_z * 16)
 }
 
 /// A single-chunk FeatureWorld, used by tests and by callers that pass one source chunk at a time.
 pub struct ChunkFeatureWorld<'a> {
     chunk: &'a mut GeneratedChunk,
     biome: u32,
+    random: Option<XoroshiroRandom>,
 }
 
 impl<'a> ChunkFeatureWorld<'a> {
     /// Wraps chunk as a world whose blocks all belong to biome.
     pub fn new(chunk: &'a mut GeneratedChunk, biome: u32) -> Self {
-        Self { chunk, biome }
+        Self {
+            chunk,
+            biome,
+            random: None,
+        }
     }
 
     fn local(&self, x: i32, y: i32, z: i32) -> Option<(usize, i32, usize)> {
@@ -131,6 +152,13 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
         self.chunk.set_block_entity(lx as u8, y, lz as u8, entity);
         true
     }
+    fn start_region(&mut self, world_seed: i64, chunk_x: i32, chunk_z: i32) {
+        self.random = Some(region_random(world_seed, chunk_x, chunk_z));
+    }
+
+    fn region_random(&mut self) -> Option<&mut XoroshiroRandom> {
+        self.random.as_mut()
+    }
 }
 
 /// Where a RegionFeatureWorld takes its biomes from.
@@ -149,6 +177,7 @@ pub struct RegionFeatureWorld {
     biomes: RegionBiomes,
     min_y: i32,
     height: i32,
+    random: Option<XoroshiroRandom>,
 }
 
 impl RegionFeatureWorld {
@@ -189,6 +218,7 @@ impl RegionFeatureWorld {
             biomes,
             min_y,
             height,
+            random: None,
         })
     }
 
@@ -328,6 +358,13 @@ impl FeatureWorld for RegionFeatureWorld {
         };
         chunk.set_block_entity(lx as u8, y, lz as u8, entity);
         true
+    }
+    fn start_region(&mut self, world_seed: i64, chunk_x: i32, chunk_z: i32) {
+        self.random = Some(region_random(world_seed, chunk_x, chunk_z));
+    }
+
+    fn region_random(&mut self) -> Option<&mut XoroshiroRandom> {
+        self.random.as_mut()
     }
 }
 
@@ -875,6 +912,7 @@ pub fn apply_biome_decoration(
     chunk_x: i32,
     chunk_z: i32,
 ) -> Result<(), WorldgenDataError> {
+    world.start_region(world_seed, chunk_x, chunk_z);
     let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
     let origin = [chunk_x * 16, world.min_y(), chunk_z * 16];
     let decoration = random.set_decoration_seed(world_seed, origin[0], origin[2]);

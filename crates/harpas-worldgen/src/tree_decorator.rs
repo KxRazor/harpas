@@ -1,5 +1,5 @@
 //! Tree decorators (`TreeDecorator`): `trunk_vine`, `leave_vine`, `cocoa`, `beehive`, `place_on_ground`,
-//! `attached_to_logs`, `attached_to_leaves` and `alter_ground`.
+//! `attached_to_logs`, `attached_to_leaves`, `alter_ground`, `pale_moss` and `creaking_heart`.
 //!
 //! A tree runs its decorators in order once its trunk and foliage are in place, and a fallen tree runs them on
 //! its stump and on its log. They read lists of the tree's logs, leaves and roots taken in Java's iteration order
@@ -13,7 +13,9 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_core::random::{RandomSource, WorldgenRandom};
 use serde_json::Value;
 
-use crate::configured::{FeatureCompiler, StateProvider};
+use std::sync::Arc;
+
+use crate::configured::{CompiledFeature, FeatureCompiler, StateProvider, place_feature};
 use crate::data::WorldgenDataError;
 use crate::feature::FeatureWorld;
 use crate::generator::HeightmapType;
@@ -50,6 +52,17 @@ pub(crate) enum Decorator {
         provider: Box<StateProvider>,
         directions: Vec<Direction>,
     },
+    /// `pale_moss`: with `ground`, the `pale_moss_patch` configured feature above the lowest log; then pale
+    /// hanging moss below logs with `trunk` and below leaves with `leaves`.
+    PaleMoss {
+        ground: f32,
+        trunk: f32,
+        leaves: f32,
+        patch: Arc<CompiledFeature>,
+    },
+    /// `creaking_heart`: with the probability, a dormant natural creaking heart in place of a log surrounded by
+    /// logs on all six sides.
+    CreakingHeart(f32),
     /// `alter_ground`: the ground in rounded squares around the base of the trunk, where the provider has a
     /// state, such as podzol around giant spruces.
     AlterGround(Box<StateProvider>),
@@ -131,6 +144,13 @@ impl<W: FeatureWorld, R: RandomSource> Decorating<'_, W, R> {
                     directions,
                 } => self.attached_to_logs(context, *probability, provider, directions),
                 Decorator::AlterGround(provider) => self.alter_ground(context, provider),
+                Decorator::PaleMoss {
+                    ground,
+                    trunk,
+                    leaves,
+                    patch,
+                } => self.pale_moss(context, [*ground, *trunk, *leaves], patch),
+                Decorator::CreakingHeart(probability) => self.creaking_heart(context, *probability),
                 Decorator::AttachedToLeaves {
                     probability,
                     exclusion_radius_xz,
@@ -382,6 +402,74 @@ impl<W: FeatureWorld, R: RandomSource> Decorating<'_, W, R> {
         }
     }
 
+    /// `PaleMossDecorator`.
+    fn pale_moss(
+        &mut self,
+        context: &DecoratorContext,
+        [ground, trunk, leaves]: [f32; 3],
+        patch: &CompiledFeature,
+    ) {
+        let mut logs = context.logs.clone();
+        shuffle(&mut logs, self.random);
+        // `Collections.min` keeps the first of the lowest logs in the shuffled order.
+        let Some(lowest) = logs
+            .iter()
+            .copied()
+            .reduce(|lowest, log| if log[1] < lowest[1] { log } else { lowest })
+        else {
+            return;
+        };
+        if self.random.next_float() < ground {
+            place_feature(self.world, patch, self.random, Direction::Up.step(lowest));
+        }
+        for (positions, probability) in [(&context.logs, trunk), (&context.leaves, leaves)] {
+            for &position in positions {
+                if self.random.next_float() < probability {
+                    let below = Direction::Down.step(position);
+                    if self.is_air(below) {
+                        self.moss_hanger(below);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `PaleMossDecorator.addMossHanger`: hanging moss down through air, one more block at a time on a coin flip,
+    /// ending in a tip.
+    fn moss_hanger(&mut self, mut position: [i32; 3]) {
+        let moss = self.blocks.pale_hanging_moss;
+        while self.is_air(Direction::Down.step(position))
+            && f64::from(self.random.next_float()) >= 0.5
+        {
+            self.set(position, with_property(moss, "tip", "false"));
+            position = Direction::Down.step(position);
+        }
+        self.set(position, with_property(moss, "tip", "true"));
+    }
+
+    /// `CreakingHeartDecorator`.
+    fn creaking_heart(&mut self, context: &DecoratorContext, probability: f32) {
+        if context.logs.is_empty() || self.random.next_float() >= probability {
+            return;
+        }
+        let mut logs = context.logs.clone();
+        shuffle(&mut logs, self.random);
+        let Some(&heart) = logs.iter().find(|&&log| {
+            Direction::ALL.iter().all(|direction| {
+                let [x, y, z] = direction.step(log);
+                self.blocks.logs.contains(self.world.block_state(x, y, z))
+            })
+        }) else {
+            return;
+        };
+        let state = with_property(
+            self.blocks.creaking_heart,
+            "creaking_heart_state",
+            "dormant",
+        );
+        self.set(heart, with_property(state, "natural", "true"));
+    }
+
     /// `AttachedToLeavesDecorator`.
     fn attached_to_leaves(
         &mut self,
@@ -556,6 +644,24 @@ impl FeatureCompiler<'_> {
                     directions,
                 }
             }
+            "minecraft:pale_moss" => {
+                let chance = |key: &str| {
+                    json.get(key)
+                        .and_then(Value::as_f64)
+                        .map(|chance| chance as f32)
+                        .ok_or_else(|| invalid(name, format!("missing field `{key}`")))
+                };
+                let Some(patch) = self.configured("minecraft:pale_moss_patch")? else {
+                    return Ok(None);
+                };
+                Decorator::PaleMoss {
+                    ground: chance("ground_probability")?,
+                    trunk: chance("trunk_probability")?,
+                    leaves: chance("leaves_probability")?,
+                    patch,
+                }
+            }
+            "minecraft:creaking_heart" => Decorator::CreakingHeart(probability()?),
             "minecraft:alter_ground" => {
                 let Some(provider) = self.decorator_provider(name, json, "provider")? else {
                     return Ok(None);

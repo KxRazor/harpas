@@ -112,6 +112,10 @@ enum Update {
     Vine,
     /// `CocoaBlock`: air once the block it faces is not in `#supports_cocoa`, checked when that block changes.
     Cocoa(StateSet),
+    /// `MossyCarpetBlock`: its sides follow what holds them, and it is air once it cannot survive or has none.
+    MossyCarpet,
+    /// `HangingMossBlock`: a tip unless more hanging moss is below; it only schedules a tick when unsupported.
+    HangingMoss,
 }
 
 /// The shape updates of the blocks they are ported for.
@@ -176,6 +180,12 @@ impl ShapeUpdates {
         }
         if short == "vine" {
             return Ok(Some(Update::Vine));
+        }
+        if short == "pale_moss_carpet" {
+            return Ok(Some(Update::MossyCarpet));
+        }
+        if short == "pale_hanging_moss" {
+            return Ok(Some(Update::HangingMoss));
         }
         if short == "cocoa" {
             let support = data.block_tag_states("minecraft:supports_cocoa")?;
@@ -265,6 +275,14 @@ impl ShapeUpdates {
                     self.air
                 }
             }
+            Update::MossyCarpet => {
+                crate::mossy_carpet::update_shape(world, state, position, self.air)
+            }
+            Update::HangingMoss => {
+                let [x, y, z] = position;
+                let tip = !same_block(world.block_state(x, y - 1, z), state);
+                with_property(state, "tip", if tip { "true" } else { "false" })
+            }
             Update::Cocoa(support) => {
                 let facing = property(state, "facing");
                 if Some(direction.name()) != facing {
@@ -314,7 +332,11 @@ fn vine_state(world: &impl FeatureWorld, mut state: u32, position: [i32; 3]) -> 
 
 /// `MultifaceBlock.canAttachTo`: whether the block at `neighbor`, reached in `direction`, has a full support or
 /// collision face towards the opposite direction.
-fn can_attach_to(world: &impl FeatureWorld, neighbor: [i32; 3], direction: Direction) -> bool {
+pub(crate) fn can_attach_to(
+    world: &impl FeatureWorld,
+    neighbor: [i32; 3],
+    direction: Direction,
+) -> bool {
     let state = world.block_state(neighbor[0], neighbor[1], neighbor[2]);
     let face = match direction.opposite() {
         Direction::Down => Face::Down,
@@ -351,7 +373,7 @@ pub(crate) fn with_property(state: u32, key: &str, value: &str) -> u32 {
 }
 
 /// Whether two block states belong to the same block.
-fn same_block(a: u32, b: u32) -> bool {
+pub(crate) fn same_block(a: u32, b: u32) -> bool {
     let name = |state| block_states().properties(state).map(|(name, _)| name);
     name(a).is_some() && name(a) == name(b)
 }

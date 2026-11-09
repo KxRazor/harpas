@@ -57,7 +57,7 @@ public final class FeatureBlocksProbe {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 var target = chunks.get(key(cx + dx, cz + dz));
-                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed);
+                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed); region.attachGenerator(generator);
                 region.chunks.putAll(chunks);
                 region.biomes = new BiomeManager(
                     (qx, qy, qz) -> region.getChunk(qx >> 2, qz >> 2).getNoiseBiome(qx, qy, qz),
@@ -100,7 +100,8 @@ public final class FeatureBlocksProbe {
         lookup.lookupOrThrow(Registries.PLACED_FEATURE).listElements().forEach(
             holder -> placed.register(holder.key(), holder.value(), RegistrationInfo.BUILT_IN));
         placed.freeze();
-        var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes, structures, placed));
+        var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes, structures, placed,
+            WorldgenReferenceProbe.configuredFeatureRegistry(lookup)));
         var factory = PalettedContainerFactory.create(access);
         var biomeSource = MultiNoiseBiomeSource.createFromPreset(
             lookup.getOrThrow(MultiNoiseBiomeSourceParameterLists.OVERWORLD));
@@ -159,7 +160,7 @@ public final class FeatureBlocksProbe {
                     }
                 }
                 var target = chunks.get(key(cx, cz));
-                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed);
+                var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, target, seed); region.attachGenerator(generator);
                 region.chunks.putAll(chunks);
                 region.biomes = new BiomeManager((qx, qy, qz) -> region.getChunk(qx >> 2, qz >> 2).getNoiseBiome(qx, qy, qz),
                     BiomeManager.obfuscateSeed(seed));

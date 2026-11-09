@@ -15,6 +15,7 @@ pub mod generator;
 pub mod huge_mushroom;
 pub mod java_hash;
 pub mod light;
+pub mod mossy_carpet;
 pub mod noise_chunk;
 pub mod ore_vein;
 pub mod placement;
@@ -27,6 +28,7 @@ pub mod survival;
 pub mod template;
 pub mod tree;
 pub mod tree_decorator;
+pub mod vegetation_patch;
 
 pub use aquifer::{
     Aquifer, FluidStatus, GlobalFluidPicker, NoiseBasedAquifer, WAY_BELOW_MIN_Y, clamped_map, map,

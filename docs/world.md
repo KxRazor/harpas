@@ -326,8 +326,13 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 120 of the 164 Overworld placed features run, with the trees of every
-    biome and the moss patches of pale gardens and lush caves. Pale oaks' `pale_moss` decorator places the
+    dripleaves), is skipped as a whole; 121 of the 164 Overworld placed features run, with the trees of every
+    biome, the rooted azaleas above lush caves and the moss patches of pale gardens and lush caves.
+    `harpas_worldgen::root_system` climbs from a lush cave's ceiling to the first block, at most 100 above, that
+    takes an azalea over `#azalea_grows_on` with three blocks of air above it (or water in the lowest), gives up
+    above lava or a block that is not solid, and once the tree grows fills the column below it with rooted dirt at
+    random offsets and hangs roots under sturdy faces around the origin. The azalea's `bending_trunk` steps
+    sideways near its top and bends over by two or three more logs, each holding random spread foliage. Pale oaks' `pale_moss` decorator places the
     `pale_moss_patch` configured feature, a `vegetation_patch` (`harpas_worldgen::vegetation_patch`), and hangs
     pale moss below logs and leaves; `creaking_heart` turns a log surrounded by logs into a dormant creaking heart.
     Pale moss carpets go through `MossyCarpetBlock.placeAt` (`harpas_worldgen::mossy_carpet`), whose topper keeps
@@ -341,7 +346,7 @@ and the owner **accepts it once**:
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 28 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 30 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
@@ -608,7 +613,7 @@ and the owner **accepts it once**:
   and other simple vegetation, mushrooms, disks, block columns and the trees and fallen trees of most biomes are
   placed so far,
   and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
-  azaleas, lakes or springs. Without it, chunks stop at `carvers` as described below.
+  lakes or springs. Without it, chunks stop at `carvers` as described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

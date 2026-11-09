@@ -19,6 +19,7 @@ pub mod mossy_carpet;
 pub mod noise_chunk;
 pub mod ore_vein;
 pub mod placement;
+pub mod root_system;
 pub mod seed;
 pub mod shape_update;
 pub mod spline;

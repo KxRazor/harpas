@@ -23,8 +23,10 @@ const SEED: i64 = -4_172_144_997_902_289_642;
 /// bee nests every time, vines and cocoa (twice, as cocoa grows on a fifth of jungle trees), leaf litter, and
 /// fallen trees with vines on their stumps and mushrooms on their logs, then acacias, jungle bushes and mega
 /// jungle trees, mega pines and mega spruces with podzol around them, dark oaks and cherries with hanging
-/// leaves, mangroves with their roots and hanging propagules, and pale oaks with pale moss and creaking hearts.
-const FEATURES: [&str; 31] = [
+/// leaves, mangroves with their roots and hanging propagules, pale oaks with pale moss and creaking hearts, and
+/// azaleas with their bending trunks (twice, so that the 33 features cycle through every position of the
+/// pattern).
+const FEATURES: [&str; 33] = [
     "minecraft:huge_brown_mushroom",
     "minecraft:oak",
     "minecraft:huge_red_mushroom",
@@ -56,8 +58,10 @@ const FEATURES: [&str; 31] = [
     "minecraft:tall_mangrove",
     "minecraft:pale_oak",
     "minecraft:pale_oak_creaking",
+    "minecraft:azalea_tree",
+    "minecraft:azalea_tree",
 ];
-const TREES_PER_CHUNK: usize = 186;
+const TREES_PER_CHUNK: usize = 198;
 /// A plains, a swamp beside water, snowy plains, a birch forest, a grove on snow, a steep mixed chunk, a
 /// mangrove swamp, where mangrove roots grow through mud, a jungle and a dark forest.
 const CHUNKS: [(i32, i32); 9] = [

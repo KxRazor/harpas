@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Vines and glow lichen: the `vines` feature of jungles, swamps and caves, and `multiface_growth` with glow lichen,
+  which attaches to stone, deepslate and the other `can_be_placed_on` blocks in caves, waterlogged in water, and
+  spreads through `MultifaceSpreader` to its own block, the next one or around the corner. 135 of the 164
+  Overworld placed features now run (`harpas-worldgen`).
+
 - Ocean plants: the `seagrass`, `kelp` and `sea_pickle` features on the ocean floor of oceans, rivers and swamps,
   with the survival rules of seagrass, tall seagrass, kelp and sea pickles. 132 of the 164 Overworld placed
   features now run (`harpas-worldgen`).

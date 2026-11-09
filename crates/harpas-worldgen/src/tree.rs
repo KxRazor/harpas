@@ -1664,7 +1664,11 @@ fn kind<'a>(name: &str, json: &'a Value) -> Result<&'a str, WorldgenDataError> {
 
 impl FeatureCompiler<'_> {
     /// A `HolderSet<Block>`: a `#`-prefixed tag, one block or a list of blocks.
-    fn block_set(&self, name: &str, json: &Value) -> Result<StateSet, WorldgenDataError> {
+    pub(crate) fn block_set(
+        &self,
+        name: &str,
+        json: &Value,
+    ) -> Result<StateSet, WorldgenDataError> {
         let mut members = vec![false; block_states().len() as usize];
         for entry in parse_holder_set(name, json)? {
             match entry.strip_prefix('#') {

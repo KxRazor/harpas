@@ -23,6 +23,7 @@ use crate::data::{
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
+use crate::multiface::{CompiledMultifaceGrowth, place_multiface_growth, place_vines};
 use crate::ocean_vegetation::{CompiledOceanPlant, place_ocean_plant};
 use crate::placement::{
     BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
@@ -89,6 +90,10 @@ pub enum CompiledFeature {
     RootSystem(Box<CompiledRootSystem>),
     /// `minecraft:seagrass`, `minecraft:kelp` and `minecraft:sea_pickle`.
     OceanPlant(Box<CompiledOceanPlant>),
+    /// `minecraft:vines`.
+    Vines,
+    /// `minecraft:multiface_growth`.
+    MultifaceGrowth(Box<CompiledMultifaceGrowth>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -393,6 +398,10 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         }
         CompiledFeature::RootSystem(roots) => place_root_system(world, roots, random, origin),
         CompiledFeature::OceanPlant(plant) => place_ocean_plant(world, plant, random, origin),
+        CompiledFeature::Vines => place_vines(world, origin),
+        CompiledFeature::MultifaceGrowth(growth) => {
+            place_multiface_growth(world, growth, random, origin)
+        }
         CompiledFeature::Disk {
             provider,
             target,
@@ -909,6 +918,11 @@ impl<'a> FeatureCompiler<'a> {
                     None => return Ok(None),
                 }
             }
+            "minecraft:vines" => CompiledFeature::Vines,
+            "minecraft:multiface_growth" => match self.multiface_growth(name, config)? {
+                Some(growth) => CompiledFeature::MultifaceGrowth(Box::new(growth)),
+                None => return Ok(None),
+            },
             "minecraft:root_system" => match self.root_system(name, config)? {
                 Some(roots) => CompiledFeature::RootSystem(Box::new(roots)),
                 None => return Ok(None),

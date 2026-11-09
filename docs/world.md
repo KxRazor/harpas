@@ -326,10 +326,13 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 132 of the 164 Overworld placed features run, with the trees of every
+    dripleaves), is skipped as a whole; 135 of the 164 Overworld placed features run, with the trees of every
     biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
     seagrass, kelp and sea pickles of oceans, rivers and swamps (`harpas_worldgen::ocean_vegetation`), which grow
-    on the `OCEAN_FLOOR` heightmap in water where their blocks survive.
+    on the `OCEAN_FLOOR` heightmap in water where their blocks survive. `harpas_worldgen::multiface` places vines on
+    the first face, without down, they can attach to, and glow lichen on a shuffled `can_be_placed_on` neighbor of
+    an air or water block, then by `chance_of_spreading` spreads it once with `MultifaceSpreader`; vanilla's search
+    beyond the origin sets its position from the origin each time, so it tries only the six neighbors.
     `harpas_worldgen::root_system` climbs from a lush cave's ceiling to the first block, at most 100 above, that
     takes an azalea over `#azalea_grows_on` with three blocks of air above it (or water in the lowest), gives up
     above lava or a block that is not solid, and once the tree grows fills the column below it with rooted dirt at

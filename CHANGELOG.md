@@ -309,6 +309,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- With `generation.features = true`, decorated chunks saved at `minecraft:features` are sent with light computed
+  from their blocks instead of their missing saved light, which left terrain and trees dark in daylight
+  (`harpas-server`).
+
 - `WorldgenRandom` now sums the coordinate products in decoration seeds and uses vanilla's bit sampling with
   Xoroshiro sources, including its own Gaussian cache. Both source types are checked directly against 26.1
   (`harpas-core`, `harpas-worldgen`).

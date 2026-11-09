@@ -6,3 +6,8 @@ fail-fast = false
 # Tests that compare with the reference server run for minutes; report them only past two.
 slow-timeout = { period = "120s" }
 failure-output = "final"
+
+# The longest comparisons start first, so they do not keep a shard running after its other tests have finished.
+[[profile.parity.overrides]]
+filter = 'binary(structure_start_parity) | binary(ruined_portal_parity) | binary(monument_interior_parity) | binary(stronghold_parity)'
+priority = 100

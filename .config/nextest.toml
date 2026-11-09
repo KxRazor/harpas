@@ -11,3 +11,9 @@ failure-output = "final"
 [[profile.parity.overrides]]
 filter = 'binary(structure_start_parity) | binary(ruined_portal_parity) | binary(monument_interior_parity) | binary(stronghold_parity)'
 priority = 100
+
+# world_loading starts a server and waits 15 seconds for it to listen, which it can miss while other comparisons
+# keep every core busy. It runs on its own.
+[[profile.parity.overrides]]
+filter = 'binary(world_loading)'
+threads-required = "num-test-threads"

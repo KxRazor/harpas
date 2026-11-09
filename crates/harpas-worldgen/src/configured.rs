@@ -27,6 +27,7 @@ use crate::placement::{
     BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
     pick_weighted, place_positions, sample_int_provider,
 };
+use crate::root_system::{CompiledRootSystem, place_root_system};
 use crate::surface::resolve_block_state;
 use crate::survival::{SurvivalRule, compile_block_survival};
 use crate::tree::{CompiledTree, TreeBlocks, place_tree};
@@ -83,6 +84,8 @@ pub enum CompiledFeature {
     HugeMushroom(Box<CompiledHugeMushroom>),
     /// `minecraft:vegetation_patch`.
     VegetationPatch(Box<CompiledVegetationPatch>),
+    /// `minecraft:root_system`.
+    RootSystem(Box<CompiledRootSystem>),
     /// `minecraft:disk`.
     Disk {
         /// The state to place.
@@ -385,6 +388,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::VegetationPatch(patch) => {
             place_vegetation_patch(world, patch, random, origin)
         }
+        CompiledFeature::RootSystem(roots) => place_root_system(world, roots, random, origin),
         CompiledFeature::Disk {
             provider,
             target,
@@ -893,6 +897,10 @@ impl<'a> FeatureCompiler<'a> {
             },
             "minecraft:vegetation_patch" => match self.vegetation_patch(name, config)? {
                 Some(patch) => CompiledFeature::VegetationPatch(Box::new(patch)),
+                None => return Ok(None),
+            },
+            "minecraft:root_system" => match self.root_system(name, config)? {
+                Some(roots) => CompiledFeature::RootSystem(Box::new(roots)),
                 None => return Ok(None),
             },
             kind @ ("minecraft:huge_brown_mushroom" | "minecraft:huge_red_mushroom") => {

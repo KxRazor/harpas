@@ -156,7 +156,9 @@ vanilla for the same seed.
   - [x] Pale oaks: `pale_moss` and `creaking_heart`, `vegetation_patch`, pale moss carpets with the region's own
         random source, and the `DUMMY` placeholders of block entities placed by features, compared with vanilla's
         own features (`tree_feature_parity`, `feature_blocks_parity`).
-  - [ ] Azaleas: the bending trunk placer and the `root_system` feature that grows them.
+  - [x] Azaleas: the bending trunk placer and the `root_system` feature that grows them above lush caves, with
+        rooted dirt and hanging roots, compared with vanilla's own features (`tree_feature_parity`,
+        `feature_blocks_parity`).
   - [ ] Vegetation, lakes, springs and the remaining feature families.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

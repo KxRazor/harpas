@@ -10,7 +10,7 @@
 //! `updateLeaves` then gives every leaf in the tree's bounds its distance to the nearest log, walking those sets
 //! in Java's iteration order, and `updateShapeAtEdge` updates the blocks on both sides of the tree's surface.
 //!
-//! Trees with a root placer, the other trunk and foliage placers and the other decorators are not ported yet.
+//! Every trunk, foliage and root placer and every decorator of vanilla's trees is ported.
 
 use std::sync::Arc;
 
@@ -164,6 +164,16 @@ enum TrunkPlacer {
     Cherry(TrunkHeight, Box<CherryBranches>),
     /// `upwards_branching_trunk_placer`: a trunk with branches that climb sideways.
     UpwardsBranching(TrunkHeight, Box<UpwardsBranches>),
+    /// `bending_trunk_placer`: a trunk that steps one way near its top, then bends over sideways.
+    Bending(TrunkHeight, Box<BendingTrunk>),
+}
+
+/// The settings of `bending_trunk_placer`.
+#[derive(Debug)]
+struct BendingTrunk {
+    /// `min_height_for_leaves`: the first log, counted from the bottom, that holds foliage.
+    min_height_for_leaves: i32,
+    bend_length: IntProviderDef,
 }
 
 /// The branch providers of `cherry_trunk_placer`.
@@ -403,6 +413,9 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             }
             TrunkPlacer::UpwardsBranching(_, ref branches) => {
                 self.upwards_branching_trunk(free_height, origin, branches)
+            }
+            TrunkPlacer::Bending(_, ref bending) => {
+                self.bending_trunk(free_height, origin, bending)
             }
         };
         for attachment in attachments {
@@ -831,6 +844,40 @@ impl<W: FeatureWorld, R: RandomSource> Placer<'_, W, R> {
             if i == height - 1 {
                 attachments.push(Attachment::at([origin[0], y + 1, origin[2]]));
             }
+        }
+        attachments
+    }
+
+    /// `BendingTrunkPlacer.placeTrunk`: a straight trunk whose top log, and on a coin flip the one below it, steps
+    /// one block toward a random direction; then the bend, `bend_length` plus one logs in a row toward that
+    /// direction, starting right above the top log. Every log from `min_height_for_leaves` up and every log of
+    /// the bend holds foliage, whether or not it could be placed.
+    fn bending_trunk(
+        &mut self,
+        height: i32,
+        origin: [i32; 3],
+        bending: &BendingTrunk,
+    ) -> Vec<Attachment> {
+        let direction = HORIZONTAL[self.random.next_int_bounded(4) as usize];
+        let top = height - 1;
+        let mut position = origin;
+        self.below_trunk([origin[0], origin[1] - 1, origin[2]]);
+        let mut attachments = Vec::new();
+        for i in 0..=top {
+            if i + 1 >= top + self.random.next_int_bounded(2) {
+                position = direction.step(position);
+            }
+            self.place_log(position, None);
+            if i >= bending.min_height_for_leaves {
+                attachments.push(Attachment::at(position));
+            }
+            position = Direction::Up.step(position);
+        }
+        let bend = self.sample(&bending.bend_length);
+        for _ in 0..=bend {
+            self.place_log(position, None);
+            attachments.push(Attachment::at(position));
+            position = direction.step(position);
         }
         attachments
     }
@@ -1330,7 +1377,8 @@ impl TrunkPlacer {
         | Self::MegaJungle(height)
         | Self::DarkOak(height)
         | Self::Cherry(height, _)
-        | Self::UpwardsBranching(height, _)) = self;
+        | Self::UpwardsBranching(height, _)
+        | Self::Bending(height, _)) = self;
         height.base
             + random.next_int_bounded(height.rand_a + 1)
             + random.next_int_bounded(height.rand_b + 1)
@@ -1749,6 +1797,18 @@ fn trunk_placer(name: &str, json: &Value) -> Result<Option<TrunkPlacer>, Worldge
         "minecraft:giant_trunk_placer" => Some(TrunkPlacer::Giant(height)),
         "minecraft:mega_jungle_trunk_placer" => Some(TrunkPlacer::MegaJungle(height)),
         "minecraft:dark_oak_trunk_placer" => Some(TrunkPlacer::DarkOak(height)),
+        "minecraft:bending_trunk_placer" => {
+            let Some(bend_length) = int_provider(name, json, "bend_length")? else {
+                return Ok(None);
+            };
+            Some(TrunkPlacer::Bending(
+                height,
+                Box::new(BendingTrunk {
+                    min_height_for_leaves: integer(name, json, "min_height_for_leaves", Some(1))?,
+                    bend_length,
+                }),
+            ))
+        }
         "minecraft:cherry_trunk_placer" => {
             let start = json
                 .get("branch_start_offset_from_top")

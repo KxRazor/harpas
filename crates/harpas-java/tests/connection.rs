@@ -359,6 +359,51 @@ fn play_login_uses_the_world_seed_hash_and_saved_spawn() {
 }
 
 #[test]
+fn the_chunk_center_starts_at_the_spawn() {
+    let mut info = offline();
+    // Far from the origin and at negative coordinates: chunk 62, -32.
+    info.spawn_position = [1000, 70, -500];
+    for external in [false, true] {
+        let mut connection = Connection::new(Arc::new(ServerKey::generate()));
+        if external {
+            connection.use_external_chunks();
+        }
+        let mut connection = playing(&info, connection);
+        let packets: Vec<_> = frames(&connection.take_output())
+            .iter()
+            .map(|frame| play::clientbound::Packet::decode(frame).unwrap())
+            .collect();
+        let centers: Vec<_> = packets
+            .iter()
+            .filter_map(|packet| match packet {
+                play::clientbound::Packet::SetCenterChunk(center) => Some((center.x, center.z)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(centers, [(62, -32)]);
+        // The void world's columns surround the spawn, where the client keeps them.
+        let chunks: Vec<_> = packets
+            .iter()
+            .filter_map(|packet| match packet {
+                play::clientbound::Packet::ChunkDataAndUpdateLight(chunk) => {
+                    Some((chunk.x, chunk.z))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chunks.len(), if external { 0 } else { 25 });
+        assert!(
+            chunks
+                .iter()
+                .all(|(x, z)| (x - 62).abs() <= 2 && (z + 32).abs() <= 2)
+        );
+        // Standing at the spawn does not move the center again.
+        connection.update_view(1000.5, -499.5, None);
+        assert!(connection.take_output().is_empty());
+    }
+}
+
+#[test]
 fn play_uses_the_assigned_entity_id_and_forwards_movement() {
     let info = offline();
     let mut connection = playing(

@@ -31,7 +31,7 @@ are in place.
 - [x] Create the Cargo workspace with the crate layout used by the design documents (`harpas-core`,
       `harpas-protocol-java`, `harpas-protocol-bedrock`, `harpas-nethernet`, `harpas-engine`, `harpas-jvm`,
       `harpas-server`, …), each declaring `MIT OR Apache-2.0`.
-- [x] Add CI: build, `rustfmt`, `clippy`, tests, on Linux, Windows and macOS.
+- [x] Add CI: build, `rustfmt`, `clippy`, tests, on Linux and Windows for every pull request and on macOS nightly.
 - [x] Write `CONTRIBUTING.md`: how contributions are licensed ([docs/licensing.md](docs/licensing.md#contributions)),
       pull request size, tests required for behavior changes.
 - [x] Add `CHANGELOG.md` in the format described in [docs/releases.md](docs/releases.md#changelog).

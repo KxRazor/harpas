@@ -1,0 +1,74 @@
+name: macOS
+
+# Builds and tests on macOS outside pull requests. Hosted macOS arm64 runners are short of capacity at busy hours,
+# and GitHub cancels a job it cannot place after about 15 minutes, so a macOS job on every pull request failed for
+# reasons unrelated to the change. Most of Harpas is portable Rust; the part that differs on macOS is the JVM bridge
+# (libjvm.dylib and JNI), so this also runs when that changes on main, and before a release (docs/releases.md).
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  push:
+    branches: [main]
+    paths: [crates/harpas-jvm/**, crates/harpas-bench/examples/jvm-bridge/**, .github/workflows/macos.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: build, clippy, test (macos-15)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+      - run: cargo run -p harpas-bench --example jvm-bridge --locked -- --self-test -- '-Xcheck:jni'
+
+  report:
+    # An open issue keeps a failure visible until a later run passes, and is closed then. A run that GitHub cancelled
+    # because no runner was free says nothing about the code, so it neither opens nor closes the issue.
+    name: report
+    needs: check
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.check.result }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          TITLE: macOS checks fail on main
+        run: |
+          issue=$(gh issue list --state open --label bug --search "\"$TITLE\" in:title" --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
+          if [ "$RESULT" = success ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --comment "The macOS checks pass again on $SHA ($RUN)."
+            fi
+          elif [ "$RESULT" != failure ]; then
+            echo "The macOS job finished with: $RESULT. Nothing to report."
+          elif [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Still failing on $SHA: $RUN"
+          else
+            gh issue create --title "$TITLE" --label bug --body "$(printf '%s\n\n%s\n' \
+              "The macOS build or tests fail on $SHA: $RUN" \
+              "This issue closes itself once a later run of the macOS workflow passes.")"
+          fi

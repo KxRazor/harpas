@@ -44,6 +44,10 @@ use shutdown::Shutdown;
 
 /// Vanilla closes a connection that sends nothing for 30 seconds.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest a write waits for a client that has stopped reading, as long as vanilla waits for one that has stopped
+/// writing. Without it such a client would hold its thread and its place among the players for good, while what
+/// the logic thread sends it piles up.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Wake idle connections to send messages from the logic thread promptly.
 const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -437,12 +441,18 @@ fn serve(
     logic: &harpas_engine::Handle,
     permit: &mut Permit,
 ) -> io::Result<()> {
-    // Reads wake up to send the logic thread's output even when this player is idle.
-    stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
-    stream.set_nodelay(true)?;
+    configure(&stream, WRITE_TIMEOUT)?;
     let result = drive(&mut stream, environment, key, session, logic, Some(permit));
     let _ = stream.shutdown(net::Shutdown::Both);
     result
+}
+
+/// Sets a connection's timeouts: a write that makes no progress for `write_timeout` fails and ends it.
+fn configure(stream: &TcpStream, write_timeout: Duration) -> io::Result<()> {
+    // Reads wake up to send the logic thread's output even when this player is idle.
+    stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
+    stream.set_write_timeout(Some(write_timeout))?;
+    stream.set_nodelay(true)
 }
 
 /// Drives the I/O-free connection state machine over a stream. Once the player has joined, the end of the
@@ -482,7 +492,15 @@ fn lost_connection_reason(kick: Option<&str>, result: io::Result<()>) -> String 
     match (kick, result) {
         (Some(kick), _) => kick.to_owned(),
         (None, Ok(())) => "Disconnected".to_owned(),
-        (None, Err(e)) if e.kind() == io::ErrorKind::TimedOut => "Timed out".to_owned(),
+        // A write that timed out is `WouldBlock` on Unix and `TimedOut` on Windows.
+        (None, Err(e))
+            if matches!(
+                e.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ) =>
+        {
+            "Timed out".to_owned()
+        }
         (None, Err(e)) => e.to_string(),
     }
 }
@@ -910,6 +928,24 @@ mod tests {
         // A given address has one listener.
         assert_eq!(listen("127.0.0.1", 0).unwrap().len(), 1);
         assert_eq!(listen("::1", 0).map_or(1, |l| l.len()), 1);
+    }
+
+    #[test]
+    fn a_client_that_stops_reading_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        // The client connects and never reads.
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        configure(&stream, Duration::from_millis(100)).unwrap();
+        assert_eq!(
+            stream.write_timeout().unwrap(),
+            Some(Duration::from_millis(100))
+        );
+        let started = Instant::now();
+        // More than the socket buffers of both ends hold.
+        let error = stream.write_all(&vec![0; 256 * 1024 * 1024]).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(20));
+        assert_eq!(lost_connection_reason(None, Err(error)), "Timed out");
     }
 
     #[test]

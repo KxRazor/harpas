@@ -8,7 +8,10 @@ use harpas_engine::player::VisibleChunk;
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::play::{self, clientbound};
 use harpas_worldgen::{ChunkLight, LightWorld, light_chunk};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, Weak};
+
+use harpas_engine::world::ChunkPos;
 
 const MIN_SECTION: i8 = -4;
 const MAX_SECTION: i8 = 19;
@@ -351,10 +354,80 @@ impl LightWorld for VisibleWorld<'_> {
     }
 }
 
+/// Most chunks whose computed light is kept. Light of chunks no longer loaded goes first.
+const LIGHT_CACHE_CHUNKS: usize = 2048;
+
+/// The computed light of generated chunks, shared by every connection: computing it takes far longer than
+/// the rest of the packet, and every viewer of a chunk needs the same light.
+static LIGHT_CACHE: LazyLock<Mutex<HashMap<ChunkPos, CachedLight>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The light computed from one version of a chunk and of its neighbors.
+struct CachedLight {
+    chunk: Weak<Chunk>,
+    neighbors: [Option<Weak<Chunk>>; 8],
+    /// Set by the first connection that needs it; the others wait for it instead of computing it again.
+    light: Arc<OnceLock<play::LightData>>,
+}
+
+impl CachedLight {
+    fn new(visible: &VisibleChunk, chunk: &Arc<Chunk>) -> Self {
+        Self {
+            chunk: Arc::downgrade(chunk),
+            neighbors: std::array::from_fn(|index| {
+                visible.neighbors[index].as_ref().map(Arc::downgrade)
+            }),
+            light: Arc::default(),
+        }
+    }
+
+    /// Whether the light was computed from these very chunks. An edited chunk is a new allocation, and the
+    /// old one stays allocated while this entry points to it, so equal pointers are the same contents.
+    fn is_for(&self, visible: &VisibleChunk, chunk: &Arc<Chunk>) -> bool {
+        std::ptr::eq(self.chunk.as_ptr(), Arc::as_ptr(chunk))
+            && self
+                .neighbors
+                .iter()
+                .zip(&visible.neighbors)
+                .all(|(cached, neighbor)| match (cached, neighbor) {
+                    (Some(cached), Some(neighbor)) => {
+                        std::ptr::eq(cached.as_ptr(), Arc::as_ptr(neighbor))
+                    }
+                    (None, None) => true,
+                    _ => false,
+                })
+    }
+}
+
 fn computed_light(visible: &VisibleChunk) -> Option<play::LightData> {
-    let world = VisibleWorld { visible };
-    let light = light_chunk(&world, visible.position.x, visible.position.z);
-    Some(packet_light(&light))
+    let chunk = visible.chunk.as_ref()?;
+    let light = {
+        let mut cache = LIGHT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        match cache.get(&visible.position) {
+            Some(cached) if cached.is_for(visible, chunk) => Arc::clone(&cached.light),
+            _ => {
+                if cache.len() >= LIGHT_CACHE_CHUNKS {
+                    cache.retain(|_, cached| cached.chunk.strong_count() > 0);
+                    if cache.len() >= LIGHT_CACHE_CHUNKS {
+                        cache.clear();
+                    }
+                }
+                let cached = CachedLight::new(visible, chunk);
+                let light = Arc::clone(&cached.light);
+                cache.insert(visible.position, cached);
+                light
+            }
+        }
+    };
+    // Outside the lock, so that connections computing other chunks do not wait for this one.
+    Some(
+        light
+            .get_or_init(|| {
+                let world = VisibleWorld { visible };
+                packet_light(&light_chunk(&world, visible.position.x, visible.position.z))
+            })
+            .clone(),
+    )
 }
 
 /// Packs computed light like vanilla: full sky layers are omitted, all-zero layers are marked empty, and the
@@ -606,6 +679,57 @@ mod tests {
         assert_eq!(light_for("minecraft:features"), carvers);
         // A finished chunk without saved light sends none, as before.
         assert!(light_for("minecraft:full").sky_light.is_empty());
+    }
+
+    #[test]
+    fn computed_light_is_shared_until_the_chunk_or_a_neighbor_changes() {
+        let generated = |section: Section| {
+            let mut rest = Compound::new();
+            rest.insert("Status", "minecraft:features");
+            Arc::new(Chunk {
+                sections: vec![ChunkSection {
+                    y: -4,
+                    section: Some(section),
+                    rest: Compound::new(),
+                }],
+                rest,
+            })
+        };
+        // A position no other test uses: the cache is shared by the whole process.
+        let position = ChunkPos { x: 9001, z: -9001 };
+        let registry = crate::block_entity_registry::Registry::default();
+        let cached = || {
+            let cache = LIGHT_CACHE.lock().unwrap();
+            Arc::clone(&cache[&position].light)
+        };
+        let chunk = generated(section());
+        let neighbor = generated(section());
+        let visible = |chunk: &Arc<Chunk>, neighbor: &Arc<Chunk>| VisibleChunk {
+            position,
+            chunk: Some(Arc::clone(chunk)),
+            neighbors: std::array::from_fn(|_| Some(Arc::clone(neighbor))),
+        };
+        let first = encode(visible(&chunk, &neighbor), &registry);
+        let computed = cached();
+        // Another viewer of the same chunks gets the light already computed.
+        let second = encode(visible(&chunk, &neighbor), &registry);
+        assert!(Arc::ptr_eq(&computed, &cached()));
+        assert_eq!(second.light, first.light);
+
+        // A changed chunk, here full of glowstone, is lit again.
+        let states = block_states();
+        let glowstone = states.default_state("minecraft:glowstone").unwrap();
+        let bright = generated(Section::new(
+            PalettedContainer::filled(Strategy::block_states(states.global_bits()), glowstone),
+            PalettedContainer::filled(Strategy::biomes(7), 1),
+        ));
+        let changed = encode(visible(&bright, &neighbor), &registry);
+        assert!(!Arc::ptr_eq(&computed, &cached()));
+        assert_ne!(changed.light, first.light);
+        // So is a chunk whose neighbor changed.
+        let computed = cached();
+        encode(visible(&bright, &bright), &registry);
+        assert!(!Arc::ptr_eq(&computed, &cached()));
     }
 
     #[test]

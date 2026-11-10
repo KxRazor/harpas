@@ -211,24 +211,11 @@ fn run() -> io::Result<()> {
     };
     let ip = properties.string("server-ip", "");
     let port: u16 = properties.parsed("server-port", 25565);
-    // An empty `server-ip` listens on every address, as in vanilla.
-    let address = if ip.is_empty() {
-        format!("[::]:{port}")
-    } else if ip.contains(':') && !ip.starts_with('[') {
-        format!("[{ip}]:{port}")
-    } else {
-        format!("{ip}:{port}")
-    };
-    let listener = TcpListener::bind(&address).or_else(|e| {
-        // Systems without IPv6 still get every IPv4 address.
-        if ip.is_empty() {
-            TcpListener::bind(("0.0.0.0", port))
-        } else {
-            Err(e)
-        }
-    })?;
-    // Poll the listener so an asynchronous fatal world error also stops an otherwise idle server.
-    listener.set_nonblocking(true)?;
+    let listeners = listen(&ip, port)?;
+    // Poll the listeners so an asynchronous fatal world error also stops an otherwise idle server.
+    for listener in &listeners {
+        listener.set_nonblocking(true)?;
+    }
     let (logic, logic_thread) = match generator {
         Some(source) => {
             harpas_engine::start_with_world_source(&world_dir, harpas_java::biome_names(), source)?
@@ -237,7 +224,9 @@ fn run() -> io::Result<()> {
     };
     let shutdown = Shutdown::new(logic.clone(), logic_thread);
     shutdown.handle_signals()?;
-    info!("Listening for Java Edition on {}", listener.local_addr()?);
+    for listener in &listeners {
+        info!("Listening for Java Edition on {}", listener.local_addr()?);
+    }
     console::start(console::Server {
         logic: logic.clone(),
         max_players: info.max_players,
@@ -257,17 +246,9 @@ fn run() -> io::Result<()> {
         if shutdown.logic_failed() {
             return Err(io::Error::other("logic thread stopped"));
         }
-        let stream = match listener.accept() {
-            Ok((stream, _)) => stream,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(CONNECTION_POLL_INTERVAL);
-                continue;
-            }
-            Err(e) => {
-                warn!("Could not accept a connection: {e}");
-                thread::sleep(CONNECTION_POLL_INTERVAL);
-                continue;
-            }
+        let Some(stream) = accept(&listeners) else {
+            thread::sleep(CONNECTION_POLL_INTERVAL);
+            continue;
         };
         if let Err(e) = stream.set_nonblocking(false) {
             warn!("Could not configure a connection: {e}");
@@ -298,6 +279,42 @@ fn run() -> io::Result<()> {
             warn!("Could not start a thread for {peer}: {e}");
         }
     }
+}
+
+/// The listeners for `server-ip` and `server-port`. An empty `server-ip` listens on every address, as in vanilla.
+fn listen(ip: &str, port: u16) -> io::Result<Vec<TcpListener>> {
+    if !ip.is_empty() {
+        let address = if ip.contains(':') && !ip.starts_with('[') {
+            format!("[{ip}]:{port}")
+        } else {
+            format!("{ip}:{port}")
+        };
+        return Ok(vec![TcpListener::bind(address)?]);
+    }
+    // Systems without IPv6 still get every IPv4 address.
+    let Ok(all) = TcpListener::bind(("::", port)) else {
+        return Ok(vec![TcpListener::bind(("0.0.0.0", port))?]);
+    };
+    // On Linux the IPv6 listener takes IPv4 connections too, and the IPv4 port is then in use. On Windows it
+    // takes only IPv6 ones, so IPv4 needs a listener of its own on the same port.
+    let port = all.local_addr()?.port();
+    let mut listeners = vec![all];
+    if let Ok(ipv4) = TcpListener::bind(("0.0.0.0", port)) {
+        listeners.push(ipv4);
+    }
+    Ok(listeners)
+}
+
+/// The next connection waiting on any of the non-blocking `listeners`, if there is one.
+fn accept(listeners: &[TcpListener]) -> Option<TcpStream> {
+    for listener in listeners {
+        match listener.accept() {
+            Ok((stream, _)) => return Some(stream),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(e) => warn!("Could not accept a connection: {e}"),
+        }
+    }
+    None
 }
 
 /// Refuses to start on a world another Minecraft version saved (`docs/world.md#supported-world-versions`). A
@@ -863,6 +880,36 @@ mod tests {
             ))
             .enforces_secure_chat
         );
+    }
+
+    #[test]
+    fn an_empty_server_ip_accepts_ipv4_and_ipv6() {
+        let listeners = listen("", 0).unwrap();
+        for listener in &listeners {
+            listener.set_nonblocking(true).unwrap();
+        }
+        let port = listeners[0].local_addr().unwrap().port();
+        assert!(
+            listeners
+                .iter()
+                .all(|l| l.local_addr().unwrap().port() == port)
+        );
+        let mut addresses = vec!["127.0.0.1"];
+        // Machines without IPv6 have only the IPv4 listener.
+        if listeners[0].local_addr().unwrap().is_ipv6() {
+            addresses.push("::1");
+        }
+        for address in addresses {
+            let _client = TcpStream::connect((address, port)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while accept(&listeners).is_none() {
+                assert!(Instant::now() < deadline, "{address} was not accepted");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        // A given address has one listener.
+        assert_eq!(listen("127.0.0.1", 0).unwrap().len(), 1);
+        assert_eq!(listen("::1", 0).map_or(1, |l| l.len()), 1);
     }
 
     #[test]

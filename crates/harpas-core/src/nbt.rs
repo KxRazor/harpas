@@ -6,7 +6,8 @@
 //! value can never hold a list that mixes types, which the format cannot express.
 //!
 //! Readers take untrusted input: every length is checked against the bytes left before allocating, and
-//! nesting is limited to [`MAX_DEPTH`], as in vanilla.
+//! nesting is limited to [`MAX_DEPTH`], as in vanilla. Network NBT is also limited in the memory its value
+//! takes, to [`NETWORK_QUOTA`]: a list of empty compounds is one byte each on the wire and far more in memory.
 
 use std::error::Error;
 use std::fmt;
@@ -15,6 +16,28 @@ use indexmap::IndexMap;
 
 /// Deepest nesting of lists and compounds accepted, as vanilla's `NbtAccounter`.
 pub const MAX_DEPTH: usize = 512;
+
+/// Most memory a network NBT value may take once read, as the quota of vanilla's `NbtAccounter` for packets:
+/// 2 MiB.
+pub const NETWORK_QUOTA: usize = 2 * 1024 * 1024;
+
+/// What a compound's entry is counted as besides its name and value: the map's own bookkeeping.
+const ENTRY_OVERHEAD: usize = 16;
+
+/// The memory a value being read may still take.
+struct Budget(usize);
+
+impl Budget {
+    /// For files the server owner provides, which vanilla reads without a quota.
+    fn unlimited() -> Self {
+        Self(usize::MAX)
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), NbtError> {
+        self.0 = self.0.checked_sub(bytes).ok_or(NbtError::TooLarge)?;
+        Ok(())
+    }
+}
 
 /// An NBT value.
 #[derive(Debug, Clone, PartialEq)]
@@ -167,6 +190,8 @@ pub enum NbtError {
     TooDeep,
     /// A string was not valid modified UTF-8, or held an unpaired surrogate.
     InvalidString,
+    /// A network value would take more memory than [`NETWORK_QUOTA`].
+    TooLarge,
 }
 
 impl fmt::Display for NbtError {
@@ -179,6 +204,7 @@ impl fmt::Display for NbtError {
             NbtError::EndList => f.write_str("NBT list of TAG_End has elements"),
             NbtError::TooDeep => write!(f, "NBT nested deeper than {MAX_DEPTH}"),
             NbtError::InvalidString => f.write_str("NBT string is not valid modified UTF-8"),
+            NbtError::TooLarge => write!(f, "NBT takes more than {NETWORK_QUOTA} bytes of memory"),
         }
     }
 }
@@ -218,11 +244,12 @@ impl Nbt {
         }
     }
 
-    /// Reads network NBT: a tag type, then its payload, with no root name.
+    /// Reads network NBT: a tag type, then its payload, with no root name. The value may take at most
+    /// [`NETWORK_QUOTA`] bytes of memory.
     pub fn read_network(input: &mut &[u8]) -> Result<Nbt, NbtError> {
         match read_u8(input)? {
             END => Err(NbtError::EndRoot),
-            id => read_payload(input, id, 0),
+            id => read_payload(input, &mut Budget(NETWORK_QUOTA), id, 0),
         }
     }
 
@@ -231,8 +258,9 @@ impl Nbt {
         match read_u8(input)? {
             END => Err(NbtError::EndRoot),
             id => {
-                let name = read_string(input)?;
-                Ok((name, read_payload(input, id, 0)?))
+                let budget = &mut Budget::unlimited();
+                let name = read_string(input, budget)?;
+                Ok((name, read_payload(input, budget, id, 0)?))
             }
         }
     }
@@ -246,11 +274,12 @@ impl Nbt {
         self.write_payload(buf);
     }
 
-    /// Reads optional network NBT, where `TAG_End` alone means no value.
+    /// Reads optional network NBT, where `TAG_End` alone means no value. The limit of [`Nbt::read_network`]
+    /// applies.
     pub fn read_network_optional(input: &mut &[u8]) -> Result<Option<Nbt>, NbtError> {
         match read_u8(input)? {
             END => Ok(None),
-            id => read_payload(input, id, 0).map(Some),
+            id => read_payload(input, &mut Budget(NETWORK_QUOTA), id, 0).map(Some),
         }
     }
 
@@ -377,7 +406,12 @@ impl Compound {
     }
 }
 
-fn read_payload(input: &mut &[u8], id: u8, depth: usize) -> Result<Nbt, NbtError> {
+fn read_payload(
+    input: &mut &[u8],
+    budget: &mut Budget,
+    id: u8,
+    depth: usize,
+) -> Result<Nbt, NbtError> {
     Ok(match id {
         BYTE => Nbt::Byte(read_u8(input)? as i8),
         SHORT => Nbt::Short(i16::from_be_bytes(take_array(input)?)),
@@ -385,55 +419,63 @@ fn read_payload(input: &mut &[u8], id: u8, depth: usize) -> Result<Nbt, NbtError
         LONG => Nbt::Long(i64::from_be_bytes(take_array(input)?)),
         FLOAT => Nbt::Float(f32::from_be_bytes(take_array(input)?)),
         DOUBLE => Nbt::Double(f64::from_be_bytes(take_array(input)?)),
-        BYTE_ARRAY => Nbt::ByteArray(read_byte_array(input)?),
-        STRING => Nbt::String(read_string(input)?),
-        LIST => Nbt::List(read_list(input, depth + 1)?),
-        COMPOUND => Nbt::Compound(read_compound(input, depth + 1)?),
-        INT_ARRAY => Nbt::IntArray(read_int_array(input)?),
-        LONG_ARRAY => Nbt::LongArray(read_long_array(input)?),
+        BYTE_ARRAY => Nbt::ByteArray(read_byte_array(input, budget)?),
+        STRING => Nbt::String(read_string(input, budget)?),
+        LIST => Nbt::List(read_list(input, budget, depth + 1)?),
+        COMPOUND => Nbt::Compound(read_compound(input, budget, depth + 1)?),
+        INT_ARRAY => Nbt::IntArray(read_int_array(input, budget)?),
+        LONG_ARRAY => Nbt::LongArray(read_long_array(input, budget)?),
         other => return Err(NbtError::UnknownTag(other)),
     })
 }
 
-fn read_list(input: &mut &[u8], depth: usize) -> Result<List, NbtError> {
+fn read_list(input: &mut &[u8], budget: &mut Budget, depth: usize) -> Result<List, NbtError> {
     if depth > MAX_DEPTH {
         return Err(NbtError::TooDeep);
     }
     let id = read_u8(input)?;
-    let read_i32 = |input: &mut &[u8]| take_array(input).map(i32::from_be_bytes);
+    let read_i32 = |input: &mut &[u8], _: &mut Budget| take_array(input).map(i32::from_be_bytes);
     Ok(match id {
-        END => match read_i32(input)? {
+        END => match i32::from_be_bytes(take_array(input)?) {
             len if len < 0 => return Err(NbtError::NegativeLength(len)),
             0 => List::Empty,
             _ => return Err(NbtError::EndList),
         },
-        BYTE => List::Byte(read_array(input, 1, |input| Ok(read_u8(input)? as i8))?),
-        SHORT => List::Short(read_array(input, 2, |input| {
+        BYTE => List::Byte(read_array(input, budget, 1, |input, _| {
+            Ok(read_u8(input)? as i8)
+        })?),
+        SHORT => List::Short(read_array(input, budget, 2, |input, _| {
             take_array(input).map(i16::from_be_bytes)
         })?),
-        INT => List::Int(read_array(input, 4, read_i32)?),
-        LONG => List::Long(read_array(input, 8, |input| {
+        INT => List::Int(read_array(input, budget, 4, read_i32)?),
+        LONG => List::Long(read_array(input, budget, 8, |input, _| {
             take_array(input).map(i64::from_be_bytes)
         })?),
-        FLOAT => List::Float(read_array(input, 4, |input| {
+        FLOAT => List::Float(read_array(input, budget, 4, |input, _| {
             take_array(input).map(f32::from_be_bytes)
         })?),
-        DOUBLE => List::Double(read_array(input, 8, |input| {
+        DOUBLE => List::Double(read_array(input, budget, 8, |input, _| {
             take_array(input).map(f64::from_be_bytes)
         })?),
-        BYTE_ARRAY => List::ByteArray(read_array(input, 4, read_byte_array)?),
-        STRING => List::String(read_array(input, 2, read_string)?),
-        LIST => List::List(read_array(input, 5, |input| read_list(input, depth + 1))?),
-        COMPOUND => List::Compound(read_array(input, 1, |input| {
-            read_compound(input, depth + 1)
+        BYTE_ARRAY => List::ByteArray(read_array(input, budget, 4, read_byte_array)?),
+        STRING => List::String(read_array(input, budget, 2, read_string)?),
+        LIST => List::List(read_array(input, budget, 5, |input, budget| {
+            read_list(input, budget, depth + 1)
         })?),
-        INT_ARRAY => List::IntArray(read_array(input, 4, read_int_array)?),
-        LONG_ARRAY => List::LongArray(read_array(input, 4, read_long_array)?),
+        COMPOUND => List::Compound(read_array(input, budget, 1, |input, budget| {
+            read_compound(input, budget, depth + 1)
+        })?),
+        INT_ARRAY => List::IntArray(read_array(input, budget, 4, read_int_array)?),
+        LONG_ARRAY => List::LongArray(read_array(input, budget, 4, read_long_array)?),
         other => return Err(NbtError::UnknownTag(other)),
     })
 }
 
-fn read_compound(input: &mut &[u8], depth: usize) -> Result<Compound, NbtError> {
+fn read_compound(
+    input: &mut &[u8],
+    budget: &mut Budget,
+    depth: usize,
+) -> Result<Compound, NbtError> {
     if depth > MAX_DEPTH {
         return Err(NbtError::TooDeep);
     }
@@ -443,39 +485,47 @@ fn read_compound(input: &mut &[u8], depth: usize) -> Result<Compound, NbtError> 
         if id == END {
             return Ok(compound);
         }
-        let name = read_string(input)?;
-        let value = read_payload(input, id, depth)?;
+        budget.charge(size_of::<String>() + size_of::<Nbt>() + ENTRY_OVERHEAD)?;
+        let name = read_string(input, budget)?;
+        let value = read_payload(input, budget, id, depth)?;
         // A repeated name replaces the earlier value, as in vanilla's map.
         compound.0.insert(name, value);
     }
 }
 
-fn read_byte_array(input: &mut &[u8]) -> Result<Vec<i8>, NbtError> {
-    read_array(input, 1, |input| Ok(read_u8(input)? as i8))
+fn read_byte_array(input: &mut &[u8], budget: &mut Budget) -> Result<Vec<i8>, NbtError> {
+    read_array(input, budget, 1, |input, _| Ok(read_u8(input)? as i8))
 }
 
-fn read_int_array(input: &mut &[u8]) -> Result<Vec<i32>, NbtError> {
-    read_array(input, 4, |input| take_array(input).map(i32::from_be_bytes))
+fn read_int_array(input: &mut &[u8], budget: &mut Budget) -> Result<Vec<i32>, NbtError> {
+    read_array(input, budget, 4, |input, _| {
+        take_array(input).map(i32::from_be_bytes)
+    })
 }
 
-fn read_long_array(input: &mut &[u8]) -> Result<Vec<i64>, NbtError> {
-    read_array(input, 8, |input| take_array(input).map(i64::from_be_bytes))
+fn read_long_array(input: &mut &[u8], budget: &mut Budget) -> Result<Vec<i64>, NbtError> {
+    read_array(input, budget, 8, |input, _| {
+        take_array(input).map(i64::from_be_bytes)
+    })
 }
 
-/// Reads an `i32` count, then that many elements of at least `min_size` bytes each.
+/// Reads an `i32` count, then that many elements of at least `min_size` bytes each. The elements' own size
+/// in memory is charged to `budget` before they are allocated.
 fn read_array<T>(
     input: &mut &[u8],
+    budget: &mut Budget,
     min_size: usize,
-    mut read: impl FnMut(&mut &[u8]) -> Result<T, NbtError>,
+    mut read: impl FnMut(&mut &[u8], &mut Budget) -> Result<T, NbtError>,
 ) -> Result<Vec<T>, NbtError> {
     let len = i32::from_be_bytes(take_array(input)?);
     let len = usize::try_from(len).map_err(|_| NbtError::NegativeLength(len))?;
     if len.saturating_mul(min_size) > input.len() {
         return Err(NbtError::UnexpectedEnd);
     }
+    budget.charge(len.saturating_mul(size_of::<T>()))?;
     let mut items = Vec::with_capacity(len);
     for _ in 0..len {
-        items.push(read(input)?);
+        items.push(read(input, budget)?);
     }
     Ok(items)
 }
@@ -505,11 +555,12 @@ fn take_array<const N: usize>(input: &mut &[u8]) -> Result<[u8; N], NbtError> {
 }
 
 /// Reads a `u16` byte length, then a string in modified UTF-8.
-fn read_string(input: &mut &[u8]) -> Result<String, NbtError> {
+fn read_string(input: &mut &[u8], budget: &mut Budget) -> Result<String, NbtError> {
     let len = usize::from(u16::from_be_bytes(take_array(input)?));
     if len > input.len() {
         return Err(NbtError::UnexpectedEnd);
     }
+    budget.charge(len)?;
     let (bytes, rest) = input.split_at(len);
     *input = rest;
     decode_mutf8(bytes)
@@ -685,6 +736,46 @@ mod tests {
         }
         deep.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(read(&deep), Err(NbtError::TooDeep));
+    }
+
+    #[test]
+    fn network_values_are_limited_in_memory() {
+        // A megabyte of empty compounds, one byte each, would take tens of megabytes as values.
+        let count = 1024 * 1024_u32;
+        let mut bomb = vec![0x09, 0x0a];
+        bomb.extend_from_slice(&count.to_be_bytes());
+        bomb.resize(bomb.len() + count as usize, 0x00);
+        assert_eq!(Nbt::read_network(&mut &bomb[..]), Err(NbtError::TooLarge));
+        assert_eq!(
+            Nbt::read_network_optional(&mut &bomb[..]),
+            Err(NbtError::TooLarge)
+        );
+        // The same list fits while its values stay under the quota, and the quota is per value.
+        let count = (NETWORK_QUOTA / size_of::<Compound>()) as u32;
+        let mut list = vec![0x09, 0x0a];
+        list.extend_from_slice(&count.to_be_bytes());
+        list.resize(list.len() + count as usize, 0x00);
+        for _ in 0..2 {
+            assert!(matches!(
+                Nbt::read_network(&mut &list[..]),
+                Ok(Nbt::List(List::Compound(compounds))) if compounds.len() == count as usize
+            ));
+        }
+        // Entries and strings count too: 3 MiB of 64 KiB strings in one compound.
+        let mut strings = vec![0x0a];
+        for name in 0..48_u8 {
+            strings.extend_from_slice(&[0x08, 0x00, 0x01, b'0' + name, 0xff, 0xff]);
+            strings.resize(strings.len() + 0xffff, b'a');
+        }
+        strings.push(0x00);
+        assert_eq!(
+            Nbt::read_network(&mut &strings[..]),
+            Err(NbtError::TooLarge)
+        );
+        // Files of the server owner, such as chunks, have no quota, as in vanilla.
+        let mut file = vec![0x09, 0x00, 0x00];
+        file.extend_from_slice(&bomb[1..]);
+        assert!(Nbt::read_named(&mut &file[..]).is_ok());
     }
 
     #[test]

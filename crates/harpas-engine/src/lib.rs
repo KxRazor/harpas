@@ -9,7 +9,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -415,6 +415,40 @@ impl Game {
     }
 }
 
+/// One step of the logic thread: the tick that is due at `now`, or else a wait for the next event or tick.
+/// Returns whether the thread goes on.
+fn advance(
+    game: &mut Game,
+    schedule: &mut Schedule,
+    receiver: &Receiver<Event>,
+    number: &mut u64,
+    now: Instant,
+) -> bool {
+    if schedule.take_due(now) {
+        // A tick that overruns makes the next one due at once. Take what arrived meanwhile first, or a server
+        // that falls behind would stop hearing its players and the request to stop.
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => game.pending.push(event),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return false,
+            }
+        }
+        *number += 1;
+        tick(game, *number);
+        !game.stopped
+    } else {
+        // Wake for incoming events, but apply them only at the tick's connection phase. Check the
+        // deadline after each event so a busy network cannot prevent ticks from running.
+        match receiver.recv_timeout(schedule.next.saturating_duration_since(now)) {
+            Ok(event) => game.pending.push(event),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return false,
+        }
+        true
+    }
+}
+
 fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>) {
     let mut game = Game {
         pending: Vec::new(),
@@ -424,24 +458,13 @@ fn run(receiver: Receiver<Event>, online_players: Arc<AtomicU32>) {
     };
     let mut schedule = Schedule::new(Instant::now());
     let mut number = 0;
-    loop {
-        let now = Instant::now();
-        if schedule.take_due(now) {
-            number += 1;
-            tick(&mut game, number);
-            if game.stopped {
-                return;
-            }
-        } else {
-            // Wake for incoming events, but apply them only at the tick's connection phase. Check the
-            // deadline after each event so a busy network cannot prevent ticks from running.
-            match receiver.recv_timeout(schedule.next.saturating_duration_since(now)) {
-                Ok(event) => game.pending.push(event),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
-            }
-        }
-    }
+    while advance(
+        &mut game,
+        &mut schedule,
+        &receiver,
+        &mut number,
+        Instant::now(),
+    ) {}
 }
 
 #[cfg(test)]
@@ -522,6 +545,47 @@ mod tests {
         assert!(!stalled.take_due(resumed));
         assert!(!stalled.take_due(resumed + Duration::from_millis(49)));
         assert!(stalled.take_due(resumed + Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn overrunning_ticks_still_apply_the_events_that_arrived() {
+        let mut game = game();
+        let (sender, receiver) = mpsc::channel();
+        let start = Instant::now();
+        let mut schedule = Schedule::new(start);
+        let mut number = 0;
+        let _output = {
+            let (output, received) = mpsc::channel();
+            sender
+                .send(Event::Joined {
+                    entity_id: 1,
+                    profile: profile("Steve", 1),
+                    view_distance: 10,
+                    allow_flight: false,
+                    output,
+                })
+                .unwrap();
+            received
+        };
+        // Every tick is late, as when each takes longer than 50 milliseconds: one is always due.
+        let late = start + Duration::from_secs(1);
+        assert!(advance(
+            &mut game,
+            &mut schedule,
+            &receiver,
+            &mut number,
+            late
+        ));
+        assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
+        sender.send(Event::Shutdown("Server closed")).unwrap();
+        assert!(!advance(
+            &mut game,
+            &mut schedule,
+            &receiver,
+            &mut number,
+            late
+        ));
+        assert_eq!(number, 2);
     }
 
     #[test]

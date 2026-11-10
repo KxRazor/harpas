@@ -1000,14 +1000,24 @@ impl Connection {
             }
             .into(),
         );
-        self.send_play(play::clientbound::SetCenterChunk { x: 0, z: 0 }.into());
+        // The client keeps only the chunks around its center, so the center is the spawn's chunk from the start:
+        // the player does not move, and so does not correct it, until the chunk it stands in has arrived.
+        let center = (spawn_x.div_euclid(16), spawn_z.div_euclid(16));
+        self.center_chunk = center;
+        self.send_play(
+            play::clientbound::SetCenterChunk {
+                x: center.0,
+                z: center.1,
+            }
+            .into(),
+        );
         if self.external_chunks {
             return;
         }
         self.send_play(play::clientbound::ChunkBatchStart.into());
         let mut count = 0;
-        for chunk_x in -view_distance..=view_distance {
-            for chunk_z in -view_distance..=view_distance {
+        for chunk_x in center.0 - view_distance..=center.0 + view_distance {
+            for chunk_z in center.1 - view_distance..=center.1 + view_distance {
                 self.send_play(void_world::empty_chunk(chunk_x, chunk_z, biome).into());
                 count += 1;
             }

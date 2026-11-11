@@ -1,0 +1,66 @@
+# Fuzz targets for the decoders that read bytes from the network or from world files (README.md).
+# Its own workspace: libFuzzer needs a nightly toolchain, and the server's workspace builds on stable.
+[package]
+name = "harpas-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+harpas-anvil = { path = "../crates/harpas-anvil" }
+harpas-core = { path = "../crates/harpas-core" }
+harpas-java = { path = "../crates/harpas-java" }
+harpas-nethernet = { path = "../crates/harpas-nethernet" }
+harpas-protocol-java = { path = "../crates/harpas-protocol-java" }
+
+[profile.release]
+debug = true
+
+[[bin]]
+name = "nbt"
+path = "fuzz_targets/nbt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "java_packets"
+path = "fuzz_targets/java_packets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "java_connection"
+path = "fuzz_targets/java_connection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "region"
+path = "fuzz_targets/region.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nethernet_signaling"
+path = "fuzz_targets/nethernet_signaling.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nethernet_segments"
+path = "fuzz_targets/nethernet_segments.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,56 @@
+name: Fuzz
+
+# Runs each fuzz target of fuzz/ for a short time: every night on main, and on pull requests that change the
+# targets. A night finds what a minute of fuzzing finds; longer runs are done by hand (fuzz/README.md). The
+# corpus is cached between runs, so each night continues from the last.
+
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  pull_request:
+    paths: [fuzz/**, .github/workflows/fuzz.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [nbt, java_packets, java_connection, region, nethernet_signaling, nethernet_segments]
+    steps:
+      - uses: actions/checkout@v7
+      # libFuzzer's instrumentation needs nightly; the server itself builds on stable.
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/cache@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fuzz for two minutes
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "corpus/$TARGET" "seeds/$TARGET"
+          cargo +nightly fuzz run "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- -max_total_time=120 -max_len=65536
+      - name: Keep the input that failed
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}

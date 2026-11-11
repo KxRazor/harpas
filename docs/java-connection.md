@@ -192,8 +192,10 @@ Harpas uses a **mixed** model:
 
 - A connection checks the account's public-key certificate against `playerCertificateKeys` fetched from
   `https://api.minecraftservices.com/publickeys` over HTTPS at startup. If the keys cannot be fetched or
-  parsed, the server trusts no signing keys; it logs the failure and a restart retries the fetch. Test
-  authorities are generated independently and are never configured as production trust roots.
+  parsed, the server trusts no signing keys: it logs the failure, asks again every minute, and until the keys
+  load it ignores chat sessions, as vanilla does without the keys, so players chat unsigned where
+  `enforce-secure-profile` allows it. Test authorities are generated independently and are never configured as
+  production trust roots.
 - The connection verifies the sender, session, message index, timestamp, salt, text and previously seen
   signatures [7]. It checks key expiration, rejects invalid signatures and replayed session IDs, and tracks
   each recipient's 20-message acknowledgement window and pending messages. A bad acknowledgement or

@@ -3,6 +3,8 @@
 //! Requests run on the connection's own thread, never on the logic thread
 //! (`docs/java-connection.md#authentication`).
 
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use base64::Engine;
@@ -16,10 +18,14 @@ const PUBLIC_KEYS: &str = "https://api.minecraftservices.com/publickeys";
 /// Longest wait for the session server, as a whole request.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long to wait before asking Minecraft Services for the chat keys again after a failure.
+const CHAT_KEYS_RETRY: Duration = Duration::from_secs(60);
+
 /// A client for the session server.
 pub struct SessionServer {
     agent: ureq::Agent,
-    chat_authority: ChatAuthority,
+    /// Empty until Minecraft Services has answered.
+    chat_authority: Arc<Mutex<ChatAuthority>>,
 }
 
 impl SessionServer {
@@ -33,24 +39,39 @@ impl SessionServer {
             .http_status_as_error(false)
             .build()
             .new_agent();
-        let chat_authority = match load_chat_authority(&agent) {
-            Ok(authority) => authority,
+        let chat_authority = Arc::new(Mutex::new(ChatAuthority::default()));
+        match load_chat_authority(&agent) {
+            Ok(authority) => *chat_authority.lock().unwrap_or_else(|e| e.into_inner()) = authority,
             Err(error) => {
                 log::warn!(
-                    "Could not load Minecraft Services chat keys; signed chat cannot be verified: {error}"
+                    "Could not load Minecraft Services chat keys; chat is unsigned until they load: {error}"
                 );
-                ChatAuthority::default()
+                // The service may only be down for now, so keep asking instead of waiting for a restart.
+                let (agent, shared) = (agent.clone(), Arc::clone(&chat_authority));
+                thread::Builder::new()
+                    .name("harpas-chat-keys".to_owned())
+                    .spawn(move || {
+                        retry_chat_authority(&shared, CHAT_KEYS_RETRY, || {
+                            load_chat_authority(&agent)
+                        });
+                        log::info!("Loaded Minecraft Services chat keys");
+                    })
+                    .map_err(|e| format!("cannot start the chat keys thread: {e}"))?;
             }
-        };
+        }
         Ok(Self {
             agent,
             chat_authority,
         })
     }
 
-    /// The trusted player-certificate keys fetched from Minecraft Services.
+    /// The trusted player-certificate keys fetched from Minecraft Services, empty while they could not be
+    /// fetched.
     pub fn chat_authority(&self) -> ChatAuthority {
-        self.chat_authority.clone()
+        self.chat_authority
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Asks whether `request.username` joined with `request.server_hash`.
@@ -88,6 +109,21 @@ impl SessionServer {
                 log::warn!("Session server answered with an invalid profile");
                 AuthOutcome::Unavailable
             }
+        }
+    }
+}
+
+/// Asks for the chat keys every `interval` until `load` succeeds, then stores them in `shared`.
+fn retry_chat_authority(
+    shared: &Mutex<ChatAuthority>,
+    interval: Duration,
+    load: impl Fn() -> Result<ChatAuthority, String>,
+) {
+    loop {
+        thread::sleep(interval);
+        if let Ok(authority) = load() {
+            *shared.lock().unwrap_or_else(|e| e.into_inner()) = authority;
+            return;
         }
     }
 }
@@ -171,6 +207,23 @@ pub fn format_uuid(uuid: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_keys_are_asked_for_again_until_they_load() {
+        let der = harpas_java::ServerKey::generate().public_der().to_vec();
+        let shared = Mutex::new(ChatAuthority::default());
+        let attempts = std::cell::Cell::new(0);
+        retry_chat_authority(&shared, Duration::from_millis(1), || {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 3 {
+                Err("unavailable".to_owned())
+            } else {
+                ChatAuthority::from_der(std::slice::from_ref(&der)).map_err(str::to_owned)
+            }
+        });
+        assert_eq!(attempts.get(), 3);
+        assert!(!shared.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn reads_session_server_profiles() {

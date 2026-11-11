@@ -17,6 +17,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+## [0.1.1+26.1] - 2026-11-11
+
+A security release: three ways for a client to exhaust or stall a server over the network
+([GHSA-g382-rmhw-p4jg](https://github.com/KxRazor/harpas/security/advisories/GHSA-g382-rmhw-p4jg)).
+
+### Fixed
+
+- A server whose ticks take longer than 50 milliseconds keeps applying what its players send, and stops when asked
+  to. It read connection events only while waiting for the next tick, so it never read them once it fell behind
+  (`harpas-engine`).
+
+### Security
+
+- Network NBT is limited to 2 MiB of memory once read, as vanilla's quota for packets. A small compressed packet
+  holding a list of empty compounds could make the server allocate hundreds of megabytes (`harpas-core`).
+- A connection whose client stops reading is closed after 30 seconds. It used to wait forever, keeping its thread
+  and the player online while the packets for it accumulated in memory (`harpas-server`).
+
 ## [0.1.0+26.1] - 2026-11-02
 
 A Java Edition 26.1 client joins a void world in online or offline mode, moves around, sees other players and

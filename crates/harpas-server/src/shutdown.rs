@@ -60,6 +60,21 @@ impl Shutdown {
                 .is_some_and(JoinHandle::is_finished)
     }
 
+    /// Why the logic thread ended without a shutdown. Call once [`logic_failed`](Self::logic_failed) is true:
+    /// this waits for the thread.
+    pub fn logic_failure(&self) -> io::Error {
+        let logic_thread = self
+            .logic_thread
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        match logic_thread.map(JoinHandle::join) {
+            Some(Ok(Err(error))) => error,
+            Some(Err(_)) => io::Error::other("The logic thread panicked"),
+            Some(Ok(Ok(()))) | None => io::Error::other("The logic thread stopped"),
+        }
+    }
+
     /// Counts a connection until the returned guard is dropped, so that the shutdown can wait for it.
     pub fn connection(self: &Arc<Self>) -> ConnectionGuard {
         self.connections.fetch_add(1, Ordering::SeqCst);

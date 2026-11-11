@@ -142,6 +142,7 @@ fn main() {
         eprintln!("Could not open logs/latest.log: {e}");
         std::process::exit(1);
     }
+    logging::log_panics();
     let result = match command {
         Command::InstallVanillaData { from } => install_vanilla_data(&from),
         Command::GenerateRegistry { from } => generate_registry(from.as_deref()),
@@ -248,7 +249,7 @@ fn run() -> io::Result<()> {
             continue;
         }
         if shutdown.logic_failed() {
-            return Err(io::Error::other("logic thread stopped"));
+            return Err(shutdown.logic_failure());
         }
         let Some(stream) = accept(&listeners) else {
             thread::sleep(CONNECTION_POLL_INTERVAL);

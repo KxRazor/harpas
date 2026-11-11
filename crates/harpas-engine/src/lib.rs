@@ -224,6 +224,8 @@ enum Event {
     Left(i32),
     ListPlayers(Sender<Vec<String>>),
     Shutdown(&'static str),
+    #[cfg(test)]
+    Panic,
 }
 
 /// The next tick's target time. Short delays are caught up; a delay over two seconds resets the target.
@@ -411,6 +413,8 @@ impl TickWork for Game {
                         .collect();
                     let _ = reply.send(names);
                 }
+                #[cfg(test)]
+                Event::Panic => panic!("a test asked the logic thread to panic"),
                 Event::Shutdown(reason) => {
                     for state in &mut self.players {
                         if !state.disconnecting {
@@ -687,17 +691,20 @@ fn run(
     };
     let mut schedule = Schedule::new(Instant::now());
     let mut number = 0;
-    while advance(
-        &mut game,
-        &mut schedule,
-        &receiver,
-        &mut number,
-        Instant::now(),
-    ) {}
+    // A panic in a tick must not lose the world: it is saved as it stands, as vanilla saves on a crash.
+    let ticks = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        while advance(
+            &mut game,
+            &mut schedule,
+            &receiver,
+            &mut number,
+            Instant::now(),
+        ) {}
+    }));
     if let Some(world) = &mut game.world {
         world.flush()?;
     }
-    Ok(())
+    ticks.map_err(|_| io::Error::other("The logic thread panicked; the world was saved"))
 }
 
 #[cfg(test)]

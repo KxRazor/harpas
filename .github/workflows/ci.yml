@@ -36,8 +36,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS runs nightly and before releases instead, in macos.yml.
-        os: [ubuntu-latest, windows-latest]
+        # macOS on Intel, because the hosted arm64 runners are short of capacity at busy hours and GitHub cancels
+        # a job it cannot place. macOS on arm64 runs nightly and before releases instead, in macos.yml.
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

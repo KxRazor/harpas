@@ -42,8 +42,8 @@ extracted on the server owner's machine, never committed ([docs/world.md](docs/w
 
 ## Checks
 
-CI runs these on Linux and Windows for every pull request, and on macOS every night; run them locally before
-opening a pull request:
+CI runs these on Linux, Windows and macOS on Intel for every pull request, and on macOS on arm64 every night; run
+them locally before opening a pull request:
 
 ```sh
 cargo fmt --all --check

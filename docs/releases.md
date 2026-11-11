@@ -99,8 +99,8 @@ since the last release are those in `Unreleased` and those still in `changelog.d
 1. **Freeze:** create the release branch `release/<version>`; only fixes land on it.
 2. **Beta:** publish `-beta.N` builds from the branch until no blocking issue remains.
 3. **Checks, all required:**
-   - build and tests on Linux, Windows and macOS (macOS runs nightly on `main`, so start the macOS workflow by hand
-     on the release branch);
+   - build and tests on Linux, Windows and macOS (macOS on arm64 runs nightly on `main`, so start the macOS
+     workflow by hand on the release branch);
    - fuzzing smoke runs of every decoder;
    - parity harnesses against vanilla ([parity.md](parity.md));
    - plugin compatibility suite against Paper ([jvm.md](jvm.md#validation));

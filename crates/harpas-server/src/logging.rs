@@ -3,6 +3,8 @@
 //! Lines have vanilla's format, `[12:34:56] [thread/INFO]: message`. As in vanilla, `latest.log` is compressed into
 //! `logs/<date>-<n>.log.gz` when the server starts and when the day changes (`docs/operations.md`).
 
+use std::backtrace::{Backtrace, BacktraceStatus};
+use std::cell::Cell;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -11,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use chrono::{DateTime, Local, NaiveDate};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use log::{Level, LevelFilter, Log, Metadata, Record};
+use log::{Level, LevelFilter, Log, Metadata, Record, error};
 use rustyline::ExternalPrinter;
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
@@ -52,6 +54,29 @@ pub fn init(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+thread_local! {
+    /// Whether this thread is inside the logger, where a panic cannot be logged without waiting for itself.
+    static LOGGING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Logs panics as errors, with the thread and the place, so that they reach `latest.log` and not only the
+/// terminal. With `RUST_BACKTRACE` set, the backtrace follows.
+pub fn log_panics() {
+    std::panic::set_hook(Box::new(|panic| {
+        let backtrace = Backtrace::capture();
+        let trace = match backtrace.status() {
+            BacktraceStatus::Captured => format!("\n{backtrace}"),
+            _ => String::new(),
+        };
+        if LOGGING.get() {
+            eprintln!("{panic}{trace}");
+        } else {
+            error!("{panic}{trace}");
+            log::logger().flush();
+        }
+    }));
+}
+
 /// Prints console lines through `printer` from now on.
 pub fn set_printer(printer: Printer) {
     if let Some(logger) = LOGGER.get() {
@@ -66,6 +91,15 @@ impl Logger {
     }
 }
 
+/// Clears [`LOGGING`] when the logger returns or unwinds.
+struct Reset;
+
+impl Drop for Reset {
+    fn drop(&mut self) {
+        LOGGING.set(false);
+    }
+}
+
 impl Log for Logger {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
         // Harpas logs its own information; libraries only their warnings and errors.
@@ -77,6 +111,8 @@ impl Log for Logger {
         if !self.enabled(record.metadata()) {
             return;
         }
+        LOGGING.set(true);
+        let _logging = Reset;
         let now = Local::now();
         let thread = std::thread::current();
         let line = format_line(

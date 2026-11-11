@@ -2199,6 +2199,32 @@ mod tests {
     }
 
     #[test]
+    fn a_panic_on_the_logic_thread_still_saves_the_world() {
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let save = {
+            let saved = Arc::clone(&saved);
+            Arc::new(move |job: &SaveJob| {
+                saved
+                    .lock()
+                    .unwrap()
+                    .extend(job.snapshots.iter().map(|snapshot| snapshot.pos));
+                Ok(())
+            })
+        };
+        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
+        let mut world = fake_world_with_save(1, load, save);
+        let pos = ChunkPos { x: 0, z: 0 };
+        load_chunks(&mut world, &[pos]);
+        world.chunk_mut(pos).unwrap().rest.insert("Marker", 1);
+
+        let (handle, logic) = crate::start_game(Some(world)).unwrap();
+        handle.events.send(crate::Event::Panic).unwrap();
+        let error = logic.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("panicked"));
+        assert_eq!(*saved.lock().unwrap(), vec![pos]);
+    }
+
+    #[test]
     fn incompatible_chunk_stops_the_running_logic_thread() {
         let folder = Folder::new();
         save(&folder, &[(ChunkPos { x: 0, z: 0 }, DATA_VERSION - 1)]);

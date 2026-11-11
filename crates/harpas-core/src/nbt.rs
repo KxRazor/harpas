@@ -8,6 +8,7 @@
 //! Readers take untrusted input: every length is checked against the bytes left before allocating, and
 //! nesting is limited to [`MAX_DEPTH`], as in vanilla. Network NBT is also limited in the memory its value
 //! takes, to [`NETWORK_QUOTA`]: a list of empty compounds is one byte each on the wire and far more in memory.
+//! Files have no quota in vanilla; [`Nbt::read_named_within`] lets their reader set one.
 
 use std::error::Error;
 use std::fmt;
@@ -28,11 +29,6 @@ const ENTRY_OVERHEAD: usize = 16;
 struct Budget(usize);
 
 impl Budget {
-    /// For files the server owner provides, which vanilla reads without a quota.
-    fn unlimited() -> Self {
-        Self(usize::MAX)
-    }
-
     fn charge(&mut self, bytes: usize) -> Result<(), NbtError> {
         self.0 = self.0.checked_sub(bytes).ok_or(NbtError::TooLarge)?;
         Ok(())
@@ -190,7 +186,7 @@ pub enum NbtError {
     TooDeep,
     /// A string was not valid modified UTF-8, or held an unpaired surrogate.
     InvalidString,
-    /// A network value would take more memory than [`NETWORK_QUOTA`].
+    /// The value would take more memory than its reader allows: [`NETWORK_QUOTA`] for a network value.
     TooLarge,
 }
 
@@ -204,7 +200,7 @@ impl fmt::Display for NbtError {
             NbtError::EndList => f.write_str("NBT list of TAG_End has elements"),
             NbtError::TooDeep => write!(f, "NBT nested deeper than {MAX_DEPTH}"),
             NbtError::InvalidString => f.write_str("NBT string is not valid modified UTF-8"),
-            NbtError::TooLarge => write!(f, "NBT takes more than {NETWORK_QUOTA} bytes of memory"),
+            NbtError::TooLarge => f.write_str("NBT takes more memory than allowed"),
         }
     }
 }
@@ -254,11 +250,18 @@ impl Nbt {
     }
 
     /// Reads NBT as files store it: a tag type, the root's name, then its payload. Returns the name and the value.
+    /// The value has no memory quota, as in vanilla.
     pub fn read_named(input: &mut &[u8]) -> Result<(String, Nbt), NbtError> {
+        Self::read_named_within(input, usize::MAX)
+    }
+
+    /// [`Nbt::read_named`] for a value that may take at most `quota` bytes of memory, for files that may not
+    /// come from the server's owner, such as a downloaded world.
+    pub fn read_named_within(input: &mut &[u8], quota: usize) -> Result<(String, Nbt), NbtError> {
         match read_u8(input)? {
             END => Err(NbtError::EndRoot),
             id => {
-                let budget = &mut Budget::unlimited();
+                let budget = &mut Budget(quota);
                 let name = read_string(input, budget)?;
                 Ok((name, read_payload(input, budget, id, 0)?))
             }
@@ -772,10 +775,14 @@ mod tests {
             Nbt::read_network(&mut &strings[..]),
             Err(NbtError::TooLarge)
         );
-        // Files of the server owner, such as chunks, have no quota, as in vanilla.
+        // Files have no quota, as in vanilla, unless their reader sets one.
         let mut file = vec![0x09, 0x00, 0x00];
         file.extend_from_slice(&bomb[1..]);
         assert!(Nbt::read_named(&mut &file[..]).is_ok());
+        assert_eq!(
+            Nbt::read_named_within(&mut &file[..], NETWORK_QUOTA),
+            Err(NbtError::TooLarge)
+        );
     }
 
     #[test]

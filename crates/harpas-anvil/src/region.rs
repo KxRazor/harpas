@@ -18,6 +18,7 @@ use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::ZlibEncoder;
 use harpas_core::nbt::{Compound, Nbt};
 
+use crate::file::{MAX_INFLATED, inflate, read_nbt};
 use crate::journal::{self, Journal};
 
 const SECTOR: usize = 4096;
@@ -81,7 +82,7 @@ pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<C
     let compression = header[4];
     let data = if compression & EXTERNAL != 0 {
         let path = dir.join(format!("c.{chunk_x}.{chunk_z}.mcc"));
-        fs::read(&path).map_err(|error| invalid(format!("{}: {error}", path.display())))?
+        read_external(&path)?
     } else {
         if length == 0 || length > sectors * SECTOR as u64 - 4 || start + 4 + length > file_len {
             return Err(invalid(format!(
@@ -184,7 +185,7 @@ impl Region {
         let compression = file[start + 4];
         if compression & EXTERNAL != 0 {
             let path = self.external_path(index);
-            let data = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let data = read_external(&path).map_err(|e| e.to_string())?;
             return Ok((compression, data));
         }
         if length == 0 || length > sectors * SECTOR - 4 || start + 4 + length > file.len() {
@@ -345,16 +346,23 @@ impl Region {
     }
 }
 
-/// The algorithm a custom-compressed chunk names: an unsigned 16-bit length and a namespaced string.
+/// Reads the `.mcc` file of a large chunk, which may hold at most [`MAX_INFLATED`] bytes.
+fn read_external(path: &Path) -> io::Result<Vec<u8>> {
+    fs::File::open(path)
+        .and_then(|file| inflate(file, MAX_INFLATED))
+        .map_err(|error| invalid(format!("{}: {error}", path.display())))
+}
+
+/// Inflates a chunk's data and reads its NBT. The chunk may inflate to at most [`MAX_INFLATED`] bytes.
 fn decode_chunk(compression: u8, data: &[u8]) -> io::Result<Compound> {
-    let mut nbt = Vec::new();
-    match compression {
-        GZIP => GzDecoder::new(data).read_to_end(&mut nbt)?,
-        ZLIB => ZlibDecoder::new(data).read_to_end(&mut nbt)?,
-        UNCOMPRESSED => {
-            nbt.extend_from_slice(data);
-            nbt.len()
-        }
+    decode_chunk_within(compression, data, MAX_INFLATED)
+}
+
+fn decode_chunk_within(compression: u8, data: &[u8], limit: usize) -> io::Result<Compound> {
+    let nbt = match compression {
+        GZIP => inflate(GzDecoder::new(data), limit)?,
+        ZLIB => inflate(ZlibDecoder::new(data), limit)?,
+        UNCOMPRESSED => inflate(data, limit)?,
         LZ4 => {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -373,8 +381,8 @@ fn decode_chunk(compression: u8, data: &[u8]) -> io::Result<Compound> {
         }
         other => return Err(invalid(format!("unknown chunk compression {other}"))),
     };
-    match Nbt::read_named(&mut nbt.as_slice()).map_err(invalid)? {
-        (_, Nbt::Compound(chunk)) => Ok(chunk),
+    match read_nbt(&nbt).map_err(invalid)? {
+        Nbt::Compound(chunk) => Ok(chunk),
         _ => Err(invalid("the chunk's NBT root is not a compound")),
     }
 }
@@ -528,6 +536,31 @@ mod tests {
         );
         assert_eq!(read_chunk(&folder.0, -2, 64).unwrap(), None);
         assert!(region.timestamp(-1, 64).unwrap() > 1_700_000_000);
+    }
+
+    #[test]
+    fn chunks_that_inflate_past_the_limit_are_refused() {
+        let mut nbt = Vec::new();
+        Nbt::Compound(chunk(0, 0)).write_named("", &mut nbt);
+        // Zeros after the chunk compress to almost nothing, as a decompression bomb does.
+        let mut bomb = nbt.clone();
+        bomb.resize(1024 * 1024, 0);
+        let mut zlib = ZlibEncoder::new(Vec::new(), Compression::default());
+        zlib.write_all(&bomb).unwrap();
+        let zlib = zlib.finish().unwrap();
+        assert!(zlib.len() < 4096);
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&bomb).unwrap();
+        let gzip = gzip.finish().unwrap();
+        for (compression, data) in [(ZLIB, &zlib), (GZIP, &gzip), (UNCOMPRESSED, &bomb)] {
+            let error = decode_chunk_within(compression, data, bomb.len() - 1).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("inflates to more than"));
+            assert_eq!(
+                decode_chunk_within(compression, data, bomb.len()).unwrap(),
+                chunk(0, 0)
+            );
+        }
     }
 
     #[test]

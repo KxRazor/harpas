@@ -942,8 +942,12 @@ mod tests {
             Some(Duration::from_millis(100))
         );
         let started = Instant::now();
-        // More than the socket buffers of both ends hold.
-        let error = stream.write_all(&vec![0; 256 * 1024 * 1024]).unwrap_err();
+        // More than the socket buffers of both ends hold, in writes the size of a large packet: Windows
+        // takes a single write of any size whole while its buffer has room.
+        let packet = vec![0; 64 * 1024];
+        let error = (0..4096)
+            .find_map(|_| stream.write_all(&packet).err())
+            .expect("the writes stop once the buffers are full");
         assert!(started.elapsed() < Duration::from_secs(20));
         assert_eq!(lost_connection_reason(None, Err(error)), "Timed out");
     }

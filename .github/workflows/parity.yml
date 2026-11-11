@@ -96,7 +96,8 @@ jobs:
         env:
           MOJANG_EULA_ACCEPTED: ${{ vars.MOJANG_EULA_ACCEPTED }}
         run: ci/fetch-vanilla-server.sh "$MINECRAFT_VERSION" "$RUNNER_TEMP/vanilla"
-      - uses: dtolnay/rust-toolchain@stable
+      # The version and components in rust-toolchain.toml.
+      - run: rustup toolchain install
       # The shards build the same thing, so one of them saves the cache.
       - uses: Swatinem/rust-cache@v2
         with:

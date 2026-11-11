@@ -6,6 +6,7 @@ use std::sync::mpsc::Sender;
 
 use harpas_anvil::Chunk;
 
+use crate::light::Light;
 use crate::world::ChunkPos;
 
 /// A signed profile property, such as a Java player's skin.
@@ -142,9 +143,8 @@ pub struct VisibleChunk {
     pub position: ChunkPos,
     /// Existing chunk data, or none when the world has no chunk at this position.
     pub chunk: Option<Arc<Chunk>>,
-    /// The eight surrounding chunks, clockwise from the northwest, when a generated chunk needs them for its
-    /// light. They are empty for a chunk that already has saved light.
-    pub neighbors: [Option<Arc<Chunk>>; 8],
+    /// The light computed for a chunk generated without it, or none for a chunk sent with its saved light.
+    pub light: Option<Arc<Light>>,
 }
 
 /// The eight neighbours of a chunk, clockwise from the northwest.
@@ -158,17 +158,6 @@ pub const NEIGHBORS: [(i32, i32); 8] = [
     (-1, 1),
     (-1, 0),
 ];
-
-impl VisibleChunk {
-    /// The chunk at the given offset from this one, including the chunk itself at `(0, 0)`.
-    pub fn chunk_at(&self, dx: i32, dz: i32) -> Option<&Chunk> {
-        if dx == 0 && dz == 0 {
-            return self.chunk.as_deref();
-        }
-        let index = NEIGHBORS.iter().position(|&(x, z)| x == dx && z == dz)?;
-        self.neighbors[index].as_deref()
-    }
-}
 
 /// A player as seen by another player.
 #[derive(Debug, Clone, PartialEq)]

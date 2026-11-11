@@ -16,6 +16,8 @@ use harpas_anvil::{
 use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
+use crate::light::{self, Light, Lighter};
+
 /// Keep disk requests bounded even when players move faster than the disk can respond.
 const QUEUE_CAPACITY: usize = 64;
 const MAX_WORKERS: usize = 4;
@@ -328,6 +330,14 @@ struct Changes {
     unwanted_since: Option<Instant>,
 }
 
+/// Where the light of a chunk generated without it stands.
+enum LightState {
+    /// A worker has the request with this ID.
+    Computing(u64),
+    /// The light, or none when computing it failed.
+    Ready(Option<Arc<Light>>),
+}
+
 struct Snapshot {
     pos: ChunkPos,
     revision: u64,
@@ -358,9 +368,15 @@ pub struct World {
     /// made meanwhile are written together by the next one.
     saving: HashSet<(i32, i32)>,
     unload_save_delay: Duration,
+    /// The light of the loaded chunks that were generated without it.
+    light: HashMap<ChunkPos, LightState>,
+    /// The loaded chunks that need light and have not been given to the workers yet.
+    unlit: HashSet<ChunkPos>,
+    next_light_job: u64,
     source: Option<(Arc<dyn ChunkSource>, Arc<ChunkStorage>)>,
     loader: Loader,
     saver: Saver,
+    lighter: Lighter,
 }
 
 impl World {
@@ -466,9 +482,13 @@ impl World {
             changes: HashMap::new(),
             saving: HashSet::new(),
             unload_save_delay: UNLOAD_SAVE_DELAY,
+            light: HashMap::new(),
+            unlit: HashSet::new(),
+            next_light_job: 0,
             source,
             loader: Loader::start(workers, load)?,
             saver: Saver::start(save)?,
+            lighter: Lighter::start(workers, QUEUE_CAPACITY)?,
         })
     }
 
@@ -505,26 +525,122 @@ impl World {
         )
     }
 
-    /// The eight neighbours of a loaded chunk, or `None` while one is still loading.
-    pub(crate) fn light_neighbors(&self, pos: ChunkPos) -> Option<[Option<Arc<Chunk>>; 8]> {
+    /// The computed light of a chunk that needs it: `None` until the workers have it, and `Some(None)` when
+    /// computing it failed, so the chunk is sent without it.
+    pub(crate) fn light(&self, pos: ChunkPos) -> Option<Option<Arc<Light>>> {
+        match self.light.get(&pos) {
+            Some(LightState::Ready(light)) => Some(light.clone()),
+            _ => None,
+        }
+    }
+
+    /// The chunks a chunk is lit from, clockwise from the northwest, or `None` while it has to wait for
+    /// them. A generating world lights a chunk once its eight neighbors are loaded. A world that does not
+    /// generate uses them if all eight are loaded, and none otherwise, once none is still being read.
+    fn light_neighbors(&self, pos: ChunkPos) -> Option<[Option<Arc<Chunk>>; 8]> {
         let mut neighbors: [Option<Arc<Chunk>>; 8] = std::array::from_fn(|_| None);
+        let mut complete = true;
         for (index, (dx, dz)) in crate::player::NEIGHBORS.iter().enumerate() {
             let neighbor = ChunkPos {
                 x: pos.x + dx,
                 z: pos.z + dz,
             };
-            let Some(ChunkState::Loaded(chunk)) = self.chunks.get(&neighbor) else {
-                return None;
-            };
-            neighbors[index] = Some(Arc::clone(chunk));
+            match self.chunks.get(&neighbor) {
+                Some(ChunkState::Loaded(chunk)) => neighbors[index] = Some(Arc::clone(chunk)),
+                Some(ChunkState::Loading) => return None,
+                _ if self.generates => return None,
+                _ => complete = false,
+            }
         }
-        Some(neighbors)
+        Some(if complete {
+            neighbors
+        } else {
+            std::array::from_fn(|_| None)
+        })
+    }
+
+    /// Forgets the light computed from the chunk at `pos`, which changed: its own and its neighbors'.
+    fn invalidate_light(&mut self, pos: ChunkPos) {
+        let around = crate::player::NEIGHBORS.iter().chain(&[(0, 0)]);
+        for &(dx, dz) in around {
+            let pos = ChunkPos {
+                x: pos.x + dx,
+                z: pos.z + dz,
+            };
+            self.light.remove(&pos);
+            if self.needs_light(pos) {
+                self.unlit.insert(pos);
+            }
+        }
+    }
+
+    /// Takes the light the workers computed and gives them the chunks whose neighbors have arrived.
+    fn update_light(&mut self) -> io::Result<()> {
+        loop {
+            match self.lighter.completed.try_recv() {
+                Ok(lit) => {
+                    // A chunk that changed or left since the request has no entry with this request's ID.
+                    if matches!(self.light.get(&lit.pos), Some(LightState::Computing(id)) if *id == lit.id)
+                    {
+                        if lit.light.is_none() {
+                            error!(
+                                "Cannot compute the light of chunk {}, {}; it is sent without light",
+                                lit.pos.x, lit.pos.z
+                            );
+                        }
+                        self.light.insert(lit.pos, LightState::Ready(lit.light));
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(io::Error::other("chunk light workers stopped"));
+                }
+            }
+        }
+        let mut queued = Vec::new();
+        for &pos in &self.unlit {
+            let Some(ChunkState::Loaded(chunk)) = self.chunks.get(&pos) else {
+                queued.push(pos);
+                continue;
+            };
+            let Some(neighbors) = self.light_neighbors(pos) else {
+                continue;
+            };
+            let job = light::Job {
+                pos,
+                id: self.next_light_job,
+                chunk: Arc::clone(chunk),
+                neighbors,
+            };
+            match self
+                .lighter
+                .requests
+                .as_ref()
+                .expect("lighter is running")
+                .try_send(job)
+            {
+                Ok(()) => {
+                    self.light
+                        .insert(pos, LightState::Computing(self.next_light_job));
+                    self.next_light_job += 1;
+                    queued.push(pos);
+                }
+                Err(TrySendError::Full(_)) => break,
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(io::Error::other("chunk light workers stopped"));
+                }
+            }
+        }
+        for pos in queued {
+            self.unlit.remove(&pos);
+        }
+        Ok(())
     }
 
     /// Edits a loaded chunk, marking its complete contents as changed for the next save.
     /// Previously published snapshots remain immutable while the edit uses copy-on-write.
     pub fn chunk_mut(&mut self, pos: ChunkPos) -> Option<&mut Chunk> {
-        let ChunkState::Loaded(chunk) = self.chunks.get_mut(&pos)? else {
+        let ChunkState::Loaded(_) = self.chunks.get(&pos)? else {
             return None;
         };
         let changes = self.changes.entry(pos).or_default();
@@ -532,6 +648,10 @@ impl World {
             .revision
             .checked_add(1)
             .expect("chunk revision exhausted");
+        self.invalidate_light(pos);
+        let Some(ChunkState::Loaded(chunk)) = self.chunks.get_mut(&pos) else {
+            unreachable!("the chunk was loaded above");
+        };
         Some(Arc::make_mut(chunk))
     }
 
@@ -691,6 +811,7 @@ impl World {
                 ChunkState::Failed(error)
             }
         };
+        let kept = generated || wanted.contains(&pos);
         if generated {
             self.changes.insert(
                 pos,
@@ -702,6 +823,10 @@ impl World {
             self.chunks.insert(pos, state);
         } else if wanted.contains(&pos) {
             self.chunks.insert(pos, state);
+        }
+        if kept && self.needs_light(pos) {
+            self.light.remove(&pos);
+            self.unlit.insert(pos);
         }
         Ok(())
     }
@@ -727,6 +852,8 @@ impl World {
         }
         self.chunks
             .retain(|pos, _| wanted_set.contains(pos) || self.changes.contains_key(pos));
+        self.light.retain(|pos, _| self.chunks.contains_key(pos));
+        self.unlit.retain(|pos| self.chunks.contains_key(pos));
         // A region is saved once its first unwanted chunk has waited long enough, with every chunk that
         // left the views since.
         let now = Instant::now();
@@ -755,6 +882,7 @@ impl World {
                 }
             }
         }
+        self.update_light()?;
         for &pos in &wanted {
             self.chunks.entry(pos).or_insert(ChunkState::Loading);
         }
@@ -993,9 +1121,13 @@ mod tests {
             changes: HashMap::new(),
             saving: HashSet::new(),
             unload_save_delay: Duration::ZERO,
+            light: HashMap::new(),
+            unlit: HashSet::new(),
+            next_light_job: 0,
             source: None,
             loader: Loader::start(workers, load).unwrap(),
             saver: Saver::start(save).unwrap(),
+            lighter: Lighter::start(workers, QUEUE_CAPACITY).unwrap(),
         }
     }
 
@@ -1521,6 +1653,55 @@ mod tests {
             vec![positions[..2].to_vec(), positions[2..].to_vec()]
         );
         assert!(world.chunk(positions[3]).is_none());
+    }
+
+    #[test]
+    fn workers_light_generated_chunks_once_and_again_when_a_chunk_of_the_volume_changes() {
+        let load = Arc::new(|pos| {
+            let mut chunk = chunk(pos, DATA_VERSION);
+            chunk.rest.insert("Status", "minecraft:features");
+            Ok(Some((chunk, Vec::new(), false)))
+        });
+        let mut world = fake_world(2, load);
+        world.generates = true;
+        let center = ChunkPos { x: 0, z: 0 };
+        let wanted = center.view(1);
+        load_chunks(&mut world, &wanted);
+        wait_until(|| {
+            world.update(wanted.iter().copied()).unwrap();
+            world.light(center).is_some()
+        });
+        let first = world.light(center).unwrap().unwrap();
+        assert_eq!(first.sections.len(), 26);
+        // The chunks around it wait for neighbors that are not loaded.
+        let corner = ChunkPos { x: 1, z: 1 };
+        assert!(world.light(corner).is_none());
+        // The light is computed once and kept.
+        world.update(wanted.iter().copied()).unwrap();
+        assert!(Arc::ptr_eq(&first, &world.light(center).unwrap().unwrap()));
+
+        // A change in a neighbor drops the light computed from it until the workers light the chunk again.
+        world.chunk_mut(corner).unwrap().rest.insert("Marker", 1);
+        assert!(world.light(center).is_none());
+        wait_until(|| {
+            world.update(wanted.iter().copied()).unwrap();
+            world.light(center).is_some()
+        });
+        assert!(!Arc::ptr_eq(&first, &world.light(center).unwrap().unwrap()));
+
+        // The light leaves with its chunk.
+        wait_until(|| {
+            world.update([]).unwrap();
+            world.chunks.is_empty()
+        });
+        assert!(world.light.is_empty() && world.unlit.is_empty());
+
+        // A world that does not generate lights a chunk without waiting for neighbors nobody asked for.
+        world.generates = false;
+        wait_until(|| {
+            world.update([center]).unwrap();
+            world.light(center).is_some()
+        });
     }
 
     #[test]

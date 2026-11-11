@@ -671,16 +671,20 @@ and the owner **accepts it once**:
   - `harpas_worldgen::light` computes sky and block light for a chunk from its blocks and one chunk around it,
     using the block registry's per-state emission and dampening. Direct sky light falls without fading;
     dimmer light loses a level per block, and water, leaves and partial blocks dampen it. A generated chunk is
-    lit when it is sent, using its eight loaded neighbours, so a generating world keeps one extra chunk loaded
-    around each player's view. The carver chunk on disk keeps no light, leaving vanilla free to run features
-    and its own light later.
+    lit from its eight loaded neighbours, so a generating world keeps one extra chunk loaded around each
+    player's view. The carver chunk on disk keeps no light, leaving vanilla free to run features and its own
+    light later.
+  - Light workers, as many as the chunk workers, compute it once the chunk and its neighbours are loaded,
+    and the logic thread sends the chunk when its light is ready; every viewer gets the same result, and a
+    connection only packs it. The light is kept in memory while the chunk is loaded, with uniform layers as
+    one value, and computed again when the chunk or a neighbour changes.
   - `light_parity` starts the reference server, generates a 7×7 area and compares every saved sky and block
     light layer of three chunks with Harpas's engine on the same blocks. Vanilla omits a sky layer when it is
     all fifteen and a block layer when it is all zero; the harness accepts a missing layer only when Harpas's
     layer is uniform.
-  - Chunks that ran FEATURES on the workers are lit the same way when they are sent; their saved copy at
-    `features` keeps no light either.
-  - Moving the computation to the worker pool, light updates for live block changes (M4), and saving light at
+  - Chunks that ran FEATURES on the workers are lit the same way; their saved copy at `features` keeps no
+    light either.
+  - Light updates for live block changes (M4), which now light the whole chunk again, and saving light at
     the `light` stage once features are ported remain to be done.
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline
   ([qol.md](qol.md#world-pregeneration)).

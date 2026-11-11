@@ -2,6 +2,7 @@
 //!
 //! Design: `docs/engine-core.md`.
 
+pub mod light;
 pub mod player;
 pub mod world;
 pub mod worldgen;
@@ -344,20 +345,20 @@ impl TickWork for Game {
                     Some(world::ChunkState::Missing) => None,
                     _ => continue,
                 };
-                let neighbors = if world.needs_light(pos) {
-                    match world.light_neighbors(pos) {
-                        Some(neighbors) => neighbors,
-                        None if world.generates() => continue,
-                        None => std::array::from_fn(|_| None),
+                // A generated chunk waits for the workers to compute its light.
+                let light = if world.needs_light(pos) {
+                    match world.light(pos) {
+                        Some(light) => light,
+                        None => continue,
                     }
                 } else {
-                    std::array::from_fn(|_| None)
+                    None
                 };
                 player.sent_chunks.insert(pos);
                 batch.push(player::VisibleChunk {
                     position: pos,
                     chunk,
-                    neighbors,
+                    light,
                 });
                 if batch.len() == limit {
                     break;

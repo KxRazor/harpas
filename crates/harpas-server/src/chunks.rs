@@ -4,14 +4,11 @@ use harpas_anvil::{Chunk, ChunkSection};
 use harpas_core::block::block_states;
 use harpas_core::chunk::{PalettedContainer, Section};
 use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_engine::light::{Layer, Light};
 use harpas_engine::player::VisibleChunk;
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::play::{self, clientbound};
-use harpas_worldgen::{ChunkLight, LightWorld, light_chunk};
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, OnceLock, Weak};
-
-use harpas_engine::world::ChunkPos;
+use std::sync::OnceLock;
 
 const MIN_SECTION: i8 = -4;
 const MAX_SECTION: i8 = 19;
@@ -40,11 +37,11 @@ pub(crate) fn encode(
     let (heightmaps, light) = visible.chunk.as_deref().map_or_else(
         || (Vec::new(), empty_light()),
         |chunk| {
-            let light = if is_generated(chunk) {
-                computed_light(&visible).unwrap_or_else(|| light(chunk))
-            } else {
-                light(chunk)
-            };
+            // The chunk workers computed the light of a chunk generated without it.
+            let light = visible
+                .light
+                .as_deref()
+                .map_or_else(|| light(chunk), packet_light);
             (heightmaps(chunk), light)
         },
     );
@@ -317,122 +314,9 @@ fn empty_light() -> play::LightData {
     }
 }
 
-/// Whether the chunk was generated through carvers or features, which save no light, and still needs light
-/// computed from its blocks. Keep in step with `World::needs_light`, which gathers the neighbors.
-fn is_generated(chunk: &Chunk) -> bool {
-    matches!(
-        chunk.rest.get("Status"),
-        Some(Nbt::String(status)) if status == "minecraft:carvers" || status == "minecraft:features"
-    )
-}
-
-struct VisibleWorld<'a> {
-    visible: &'a VisibleChunk,
-}
-
-impl LightWorld for VisibleWorld<'_> {
-    fn min_y(&self) -> i32 {
-        i32::from(MIN_SECTION) * 16
-    }
-
-    fn height(&self) -> i32 {
-        (i32::from(MAX_SECTION) - i32::from(MIN_SECTION) + 1) * 16
-    }
-
-    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
-        let chunk_x = x.div_euclid(16) - self.visible.position.x;
-        let chunk_z = z.div_euclid(16) - self.visible.position.z;
-        let section_y = y.div_euclid(16) as i8;
-        self.visible
-            .chunk_at(chunk_x, chunk_z)
-            .and_then(|chunk| chunk.sections.iter().find(|section| section.y == section_y))
-            .and_then(|section| section.section.as_ref())
-            .map(|section| {
-                section.block_state((x & 15) as usize, (y & 15) as usize, (z & 15) as usize)
-            })
-            .unwrap_or(0)
-    }
-}
-
-/// Most chunks whose computed light is kept. Light of chunks no longer loaded goes first.
-const LIGHT_CACHE_CHUNKS: usize = 2048;
-
-/// The computed light of generated chunks, shared by every connection: computing it takes far longer than
-/// the rest of the packet, and every viewer of a chunk needs the same light.
-static LIGHT_CACHE: LazyLock<Mutex<HashMap<ChunkPos, CachedLight>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// The light computed from one version of a chunk and of its neighbors.
-struct CachedLight {
-    chunk: Weak<Chunk>,
-    neighbors: [Option<Weak<Chunk>>; 8],
-    /// Set by the first connection that needs it; the others wait for it instead of computing it again.
-    light: Arc<OnceLock<play::LightData>>,
-}
-
-impl CachedLight {
-    fn new(visible: &VisibleChunk, chunk: &Arc<Chunk>) -> Self {
-        Self {
-            chunk: Arc::downgrade(chunk),
-            neighbors: std::array::from_fn(|index| {
-                visible.neighbors[index].as_ref().map(Arc::downgrade)
-            }),
-            light: Arc::default(),
-        }
-    }
-
-    /// Whether the light was computed from these very chunks. An edited chunk is a new allocation, and the
-    /// old one stays allocated while this entry points to it, so equal pointers are the same contents.
-    fn is_for(&self, visible: &VisibleChunk, chunk: &Arc<Chunk>) -> bool {
-        std::ptr::eq(self.chunk.as_ptr(), Arc::as_ptr(chunk))
-            && self
-                .neighbors
-                .iter()
-                .zip(&visible.neighbors)
-                .all(|(cached, neighbor)| match (cached, neighbor) {
-                    (Some(cached), Some(neighbor)) => {
-                        std::ptr::eq(cached.as_ptr(), Arc::as_ptr(neighbor))
-                    }
-                    (None, None) => true,
-                    _ => false,
-                })
-    }
-}
-
-fn computed_light(visible: &VisibleChunk) -> Option<play::LightData> {
-    let chunk = visible.chunk.as_ref()?;
-    let light = {
-        let mut cache = LIGHT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        match cache.get(&visible.position) {
-            Some(cached) if cached.is_for(visible, chunk) => Arc::clone(&cached.light),
-            _ => {
-                if cache.len() >= LIGHT_CACHE_CHUNKS {
-                    cache.retain(|_, cached| cached.chunk.strong_count() > 0);
-                    if cache.len() >= LIGHT_CACHE_CHUNKS {
-                        cache.clear();
-                    }
-                }
-                let cached = CachedLight::new(visible, chunk);
-                let light = Arc::clone(&cached.light);
-                cache.insert(visible.position, cached);
-                light
-            }
-        }
-    };
-    // Outside the lock, so that connections computing other chunks do not wait for this one.
-    Some(
-        light
-            .get_or_init(|| {
-                let world = VisibleWorld { visible };
-                packet_light(&light_chunk(&world, visible.position.x, visible.position.z))
-            })
-            .clone(),
-    )
-}
-
 /// Packs computed light like vanilla: full sky layers are omitted, all-zero layers are marked empty, and the
 /// remaining arrays follow the mask bits in order.
-fn packet_light(light: &ChunkLight) -> play::LightData {
+fn packet_light(light: &Light) -> play::LightData {
     let mut result = empty_light();
     let mut sky = 0_u64;
     let mut block = 0_u64;
@@ -447,19 +331,20 @@ fn packet_light(light: &ChunkLight) -> play::LightData {
             continue;
         }
         let bit = 1_u64 << offset;
-        if !section.sky.iter().all(|value| *value == 15) {
-            if section.sky.iter().all(|value| *value == 0) {
-                empty_sky |= bit;
-            } else {
+        match &section.sky {
+            Layer::Uniform(15) => {}
+            Layer::Uniform(0) => empty_sky |= bit,
+            layer => {
                 sky |= bit;
-                result.sky_light.push(section.sky.clone());
+                result.sky_light.push(layer_bytes(layer));
             }
         }
-        if section.block.iter().all(|value| *value == 0) {
-            empty_block |= bit;
-        } else {
-            block |= bit;
-            result.block_light.push(section.block.clone());
+        match &section.block {
+            Layer::Uniform(0) => empty_block |= bit,
+            layer => {
+                block |= bit;
+                result.block_light.push(layer_bytes(layer));
+            }
         }
     }
     if sky != 0 {
@@ -475,6 +360,13 @@ fn packet_light(light: &ChunkLight) -> play::LightData {
         result.empty_block_light_mask.push(empty_block as i64);
     }
     result
+}
+
+fn layer_bytes(layer: &Layer) -> Vec<u8> {
+    match layer {
+        Layer::Uniform(level) => vec![level << 4 | level; LIGHT_BYTES],
+        Layer::Values(values) => values.to_vec(),
+    }
 }
 
 fn light(chunk: &Chunk) -> play::LightData {
@@ -630,7 +522,7 @@ mod tests {
             VisibleChunk {
                 position: ChunkPos { x: -1, z: 2 },
                 chunk: Some(Arc::new(chunk)),
-                neighbors: std::array::from_fn(|_| None),
+                light: None,
             },
             &crate::block_entity_registry::Registry::default(),
         );
@@ -652,118 +544,79 @@ mod tests {
     }
 
     #[test]
-    fn generated_chunks_get_computed_light_at_carvers_and_features() {
-        let light_for = |status: &str| {
-            let mut rest = Compound::new();
-            rest.insert("Status", status);
-            let chunk = Chunk {
-                sections: vec![ChunkSection {
-                    y: -4,
-                    section: Some(section()),
-                    rest: Compound::new(),
-                }],
-                rest,
-            };
+    fn a_generated_chunk_is_sent_with_its_computed_light() {
+        let mut rest = Compound::new();
+        rest.insert("Status", "minecraft:features");
+        let chunk = Arc::new(Chunk {
+            sections: vec![ChunkSection {
+                y: -4,
+                section: Some(section()),
+                rest: Compound::new(),
+            }],
+            rest,
+        });
+        let position = ChunkPos { x: 0, z: 0 };
+        let light_with = |light: Option<Arc<Light>>| {
             encode(
                 VisibleChunk {
-                    position: ChunkPos { x: 0, z: 0 },
-                    chunk: Some(Arc::new(chunk)),
-                    neighbors: std::array::from_fn(|_| None),
+                    position,
+                    chunk: Some(Arc::clone(&chunk)),
+                    light,
                 },
                 &crate::block_entity_registry::Registry::default(),
             )
             .light
         };
-        let carvers = light_for("minecraft:carvers");
-        assert!(!carvers.sky_light.is_empty());
-        assert_eq!(light_for("minecraft:features"), carvers);
-        // A finished chunk without saved light sends none, as before.
-        assert!(light_for("minecraft:full").sky_light.is_empty());
-    }
-
-    #[test]
-    fn computed_light_is_shared_until_the_chunk_or_a_neighbor_changes() {
-        let generated = |section: Section| {
-            let mut rest = Compound::new();
-            rest.insert("Status", "minecraft:features");
-            Arc::new(Chunk {
-                sections: vec![ChunkSection {
-                    y: -4,
-                    section: Some(section),
-                    rest: Compound::new(),
-                }],
-                rest,
-            })
-        };
-        // A position no other test uses: the cache is shared by the whole process.
-        let position = ChunkPos { x: 9001, z: -9001 };
-        let registry = crate::block_entity_registry::Registry::default();
-        let cached = || {
-            let cache = LIGHT_CACHE.lock().unwrap();
-            Arc::clone(&cache[&position].light)
-        };
-        let chunk = generated(section());
-        let neighbor = generated(section());
-        let visible = |chunk: &Arc<Chunk>, neighbor: &Arc<Chunk>| VisibleChunk {
+        let computed = Arc::new(harpas_engine::light::light(
             position,
-            chunk: Some(Arc::clone(chunk)),
-            neighbors: std::array::from_fn(|_| Some(Arc::clone(neighbor))),
-        };
-        let first = encode(visible(&chunk, &neighbor), &registry);
-        let computed = cached();
-        // Another viewer of the same chunks gets the light already computed.
-        let second = encode(visible(&chunk, &neighbor), &registry);
-        assert!(Arc::ptr_eq(&computed, &cached()));
-        assert_eq!(second.light, first.light);
-
-        // A changed chunk, here full of glowstone, is lit again.
-        let states = block_states();
-        let glowstone = states.default_state("minecraft:glowstone").unwrap();
-        let bright = generated(Section::new(
-            PalettedContainer::filled(Strategy::block_states(states.global_bits()), glowstone),
-            PalettedContainer::filled(Strategy::biomes(7), 1),
+            &chunk,
+            &std::array::from_fn(|_| None),
         ));
-        let changed = encode(visible(&bright, &neighbor), &registry);
-        assert!(!Arc::ptr_eq(&computed, &cached()));
-        assert_ne!(changed.light, first.light);
-        // So is a chunk whose neighbor changed.
-        let computed = cached();
-        encode(visible(&bright, &bright), &registry);
-        assert!(!Arc::ptr_eq(&computed, &cached()));
+        assert_eq!(
+            light_with(Some(Arc::clone(&computed))),
+            packet_light(&computed)
+        );
+        assert!(!packet_light(&computed).sky_light.is_empty());
+        // Without computed light, a chunk sends the light it was saved with: here, none.
+        assert!(light_with(None).sky_light.is_empty());
     }
 
     #[test]
     fn computed_light_omits_full_sky_and_marks_empty_layers() {
-        let mut light = ChunkLight {
-            x: 0,
-            z: 0,
+        let mut light = Light {
             sections: Vec::new(),
         };
         for y in -5..=20 {
-            let mut sky = vec![15_u8; LIGHT_BYTES];
-            let mut block = vec![0_u8; LIGHT_BYTES];
+            let mut sky = Layer::Uniform(15);
+            let mut block = Layer::Uniform(0);
             if y < 0 {
-                sky.fill(0);
+                sky = Layer::Uniform(0);
             } else if y == 0 {
-                sky[0] = 7;
+                let mut values = vec![255_u8; LIGHT_BYTES];
+                values[0] = 7;
+                sky = Layer::Values(values.into());
             } else if y == 1 {
-                block[0] = 3;
+                let mut values = vec![0_u8; LIGHT_BYTES];
+                values[0] = 3;
+                block = Layer::Values(values.into());
+            } else if y == 2 {
+                block = Layer::Uniform(9);
             }
             light
                 .sections
-                .push(harpas_worldgen::LightSection { y, sky, block });
+                .push(harpas_engine::light::SectionLight { y, sky, block });
         }
         let packet = packet_light(&light);
         assert_eq!(packet.sky_light_mask, vec![1 << 5]);
-        let mut expected_sky = vec![15_u8; LIGHT_BYTES];
+        let mut expected_sky = vec![255_u8; LIGHT_BYTES];
         expected_sky[0] = 7;
         assert_eq!(packet.sky_light, vec![expected_sky]);
-        assert_eq!(packet.block_light_mask, vec![1 << 6]);
-        assert_eq!(packet.block_light.len(), 1);
+        assert_eq!(packet.block_light_mask, vec![0b11 << 6]);
+        assert_eq!(packet.block_light[1], vec![0x99; LIGHT_BYTES]);
         assert_eq!(packet.empty_sky_light_mask, vec![0b1_1111]);
         assert_eq!(
             packet.empty_block_light_mask,
-            vec![(((1_i64 << 26) - 1) & !(1 << 6))]
+            vec![(((1_i64 << 26) - 1) & !(0b11 << 6))]
         );
     }
 
@@ -785,7 +638,7 @@ mod tests {
             VisibleChunk {
                 position: ChunkPos { x: 0, z: 0 },
                 chunk: Some(Arc::clone(&chunk)),
-                neighbors: std::array::from_fn(|_| None),
+                light: None,
             },
             &crate::block_entity_registry::Registry::synthetic(&[("minecraft:chest", 99)]),
         );

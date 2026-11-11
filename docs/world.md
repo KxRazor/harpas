@@ -120,6 +120,9 @@ block changes are part of gameplay work.
 - A chunk whose region entry cannot be read is reported when it is read, without hiding the region's other
   chunks. A save refuses to overwrite a region with an unreadable entry unless that entry is explicitly
   replaced or removed.
+- A world may be a download, so its files are read within limits that vanilla does not have: a chunk,
+  `level.dat` or a player's data may inflate to at most 256 MiB and take at most 1 GiB of memory as NBT, and
+  a `.mcc` file may hold at most 256 MiB. A file over a limit is reported as unreadable.
 
 ---
 

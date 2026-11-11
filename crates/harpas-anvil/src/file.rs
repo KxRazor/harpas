@@ -11,7 +11,35 @@ use std::path::{Path, PathBuf};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use harpas_core::nbt::{Compound, Nbt};
+use harpas_core::nbt::{Compound, Nbt, NbtError};
+
+/// The most bytes a compressed chunk or NBT file may inflate to, and the most a `.mcc` file may hold: 256 MiB.
+///
+/// Vanilla has no such limit. A world may be a download, and a megabyte of zlib can inflate to a gigabyte; a
+/// chunk that vanilla itself can still load is far smaller than this.
+pub(crate) const MAX_INFLATED: usize = 256 * 1024 * 1024;
+
+/// The most memory the NBT of a chunk or file may take once read: 1 GiB. Values take more memory than their
+/// bytes, a list of empty compounds most of all (`harpas_core::nbt`).
+const MAX_NBT_MEMORY: usize = 1024 * 1024 * 1024;
+
+/// Reads `compressed` to its end, or fails once it gives more than `limit` bytes.
+pub(crate) fn inflate(compressed: impl Read, limit: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    compressed.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("inflates to more than {limit} bytes"),
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Reads the NBT of a chunk or file within [`MAX_NBT_MEMORY`].
+pub(crate) fn read_nbt(mut nbt: &[u8]) -> Result<Nbt, NbtError> {
+    Nbt::read_named_within(&mut nbt, MAX_NBT_MEMORY).map(|(_, root)| root)
+}
 
 /// Which file a value was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,10 +70,9 @@ fn read_gzip(path: &Path) -> io::Result<Option<Compound>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
-    let mut nbt = Vec::new();
-    GzDecoder::new(file).read_to_end(&mut nbt)?;
-    match Nbt::read_named(&mut nbt.as_slice()) {
-        Ok((_, Nbt::Compound(root))) => Ok(Some(root)),
+    let nbt = inflate(GzDecoder::new(file), MAX_INFLATED).map_err(|e| invalid(path, e))?;
+    match read_nbt(&nbt) {
+        Ok(Nbt::Compound(root)) => Ok(Some(root)),
         Ok(_) => Err(invalid(path, "the NBT root is not a compound")),
         Err(e) => Err(invalid(path, e)),
     }

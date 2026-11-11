@@ -17,6 +17,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+## [0.1.2+26.1] - 2026-11-11
+
+Fixes to the network side of the server, from the same audit as 0.1.1.
+
+### Fixed
+
+- When Minecraft Services' chat keys cannot be fetched at startup, the server asks again every minute, and
+  until they load it ignores the players' chat sessions, as vanilla does without the keys. Every online-mode
+  player used to be disconnected on joining until the server was restarted (`harpas-java`, `harpas-server`).
+- A player who sends chat messages too fast is disconnected with "Kicked for spamming", by vanilla's counter:
+  each message adds 20, each tick takes one away, and 200 disconnects. Chat had no rate limit (`harpas-engine`).
+
+### Security
+
+- A player gets its entity ID when it enters Play. Every connection used to take one when it opened, server list
+  pings included, and the IDs are not reused, so enough connections left none for new players until a restart
+  (`harpas-java`, `harpas-server`).
+- The connection limits count an IPv6 address as its /64 prefix, so one host can no longer avoid them by
+  changing the rest of its address (`harpas-server`).
+- A player whose connection stops taking the server's messages, or takes them too slowly, is disconnected
+  once 60,000 are waiting, instead of the messages using more and more memory (`harpas-engine`).
+
 ## [0.1.1+26.1] - 2026-11-11
 
 A security release: three ways for a client to exhaust or stall a server over the network

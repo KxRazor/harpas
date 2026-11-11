@@ -954,11 +954,11 @@ dependencies = [
 
 [[package]]
 name = "harpas-bedrock"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "harpas-bench"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes 0.9.3",
  "cfb8",
@@ -973,18 +973,18 @@ dependencies = [
 
 [[package]]
 name = "harpas-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "indexmap",
 ]
 
 [[package]]
 name = "harpas-engine"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "harpas-java"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes 0.9.3",
  "cfb8",
@@ -1000,11 +1000,11 @@ dependencies = [
 
 [[package]]
 name = "harpas-jvm"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "harpas-nethernet"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -1015,11 +1015,11 @@ dependencies = [
 
 [[package]]
 name = "harpas-protocol-bedrock"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "harpas-protocol-codegen"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-protocol-java"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "harpas-core",
  "harpas-protocol-codegen",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "chrono",

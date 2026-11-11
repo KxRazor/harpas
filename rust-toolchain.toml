@@ -1,0 +1,6 @@
+# The Rust version every build uses, locally and in CI. A new release of Rust brings new lints, and CI denies
+# warnings, so the version changes in its own pull request rather than under an unrelated one.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

@@ -34,7 +34,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
-      - uses: dtolnay/rust-toolchain@stable
+      # The version and components in rust-toolchain.toml.
+      - run: rustup toolchain install
       - run: cargo build --release --locked --bin harpas
       - name: The binary's version is the tag's
         env:

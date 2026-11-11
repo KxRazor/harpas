@@ -22,7 +22,8 @@ Run `harpas` from the server folder; it reads `server.properties` like vanilla.
 
 ## Building
 
-Harpas needs a recent stable Rust toolchain ([rustup](https://rustup.rs)).
+Harpas builds with the Rust version in [rust-toolchain.toml](rust-toolchain.toml), which
+[rustup](https://rustup.rs) installs on the first build.
 
 ```sh
 cargo build --release

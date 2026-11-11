@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-anvil"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flate2",
  "harpas-core",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "indexmap",
  "md-5",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-java"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "cfb8",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-nethernet"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-protocol-codegen"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "harpas-protocol-java"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "harpas-core",
  "harpas-protocol-codegen",

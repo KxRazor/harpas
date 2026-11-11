@@ -199,7 +199,12 @@ pub(crate) struct PlayerState {
     pub(crate) flying: bool,
     pub(crate) tick_start: Position,
     pub(crate) disconnecting: bool,
+    /// Vanilla's chat spam counter: each message adds 20, and each tick takes one away.
+    pub(crate) chat_spam: u32,
 }
+
+const CHAT_SPAM_PER_MESSAGE: u32 = 20;
+const CHAT_SPAM_LIMIT: u32 = 200;
 
 impl PlayerState {
     pub(crate) fn new(
@@ -231,6 +236,7 @@ impl PlayerState {
             flying,
             tick_start: position,
             disconnecting: false,
+            chat_spam: 0,
         }
     }
 
@@ -312,6 +318,21 @@ impl PlayerState {
             self.disconnecting = true;
             self.send(Output::Disconnect("Flying is not enabled on this server"));
         }
+    }
+
+    /// Counts a chat message that was just delivered, and disconnects a player who sends them too fast, as
+    /// vanilla's `detectRateSpam`: ten messages at once, or more than one a second for long enough.
+    pub(crate) fn count_chat_message(&mut self) {
+        self.chat_spam += CHAT_SPAM_PER_MESSAGE;
+        if self.chat_spam >= CHAT_SPAM_LIMIT && !self.disconnecting {
+            self.disconnecting = true;
+            self.send(Output::Disconnect("Kicked for spamming"));
+        }
+    }
+
+    /// Lets the chat spam counter go down by one each tick.
+    pub(crate) fn tick_chat(&mut self) {
+        self.chat_spam = self.chat_spam.saturating_sub(1);
     }
 
     pub(crate) fn can_see(&self, other: &Player) -> bool {

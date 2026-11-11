@@ -265,18 +265,20 @@ impl TickWork for Game {
                             continue;
                         }
                         player::Input::ChatMessage(message) => {
-                            if let Some(sender) = self
+                            if let Some(index) = self
                                 .players
                                 .iter()
-                                .find(|p| p.player.entity_id == entity_id && !p.disconnecting)
+                                .position(|p| p.player.entity_id == entity_id && !p.disconnecting)
                             {
-                                let sender = sender.player.profile.clone();
+                                let sender = self.players[index].player.profile.clone();
                                 for player in &self.players {
                                     player.send(player::Output::ChatMessage {
                                         sender: sender.clone(),
                                         message: message.clone(),
                                     });
                                 }
+                                // After the message is delivered, as in vanilla.
+                                self.players[index].count_chat_message();
                             }
                             continue;
                         }
@@ -322,6 +324,7 @@ impl TickWork for Game {
         }
         for state in &mut self.players {
             state.check_flight();
+            state.tick_chat();
         }
         if tracking_changed {
             self.update_tracking(&moved);
@@ -679,6 +682,56 @@ mod tests {
             .unwrap();
         let chat = initial.iter().position(|event| matches!(event, Output::ChatSession { uuid: 1, session } if *session == chat_session)).unwrap();
         assert!(profile < chat);
+    }
+
+    #[test]
+    fn chat_spam_disconnects_like_vanilla_after_the_tenth_quick_message() {
+        let message = || {
+            Input::ChatMessage(Box::new(player::ChatMessage {
+                index: 0,
+                signature: None,
+                message: "hello".into(),
+                timestamp: 42,
+                salt: 5,
+                last_seen: vec![],
+            }))
+        };
+        let chats = |output: &Receiver<Output>| {
+            output
+                .try_iter()
+                .filter(|event| matches!(event, Output::ChatMessage { .. }))
+                .count()
+        };
+        let mut game = game();
+        let steve = join(&mut game, 1, "Steve", 10);
+        let alex = join(&mut game, 2, "Alex", 10);
+        tick(&mut game, 1);
+        steve.try_iter().for_each(drop);
+
+        // A message a second, every twentieth tick, never adds up.
+        for number in 0..40 * 20 {
+            if number % 20 == 0 {
+                input(&mut game, 1, message());
+            }
+            tick(&mut game, 2 + number);
+        }
+        assert_eq!(chats(&alex), 40);
+        assert!(
+            !steve
+                .try_iter()
+                .any(|event| matches!(event, Output::Disconnect(_)))
+        );
+
+        // Ten in one tick are all delivered, and the tenth disconnects the sender.
+        for _ in 0..12 {
+            input(&mut game, 2, message());
+        }
+        tick(&mut game, 1000);
+        assert_eq!(chats(&steve), 10);
+        assert!(
+            alex.try_iter()
+                .any(|event| event == Output::Disconnect("Kicked for spamming"))
+        );
     }
 
     #[test]

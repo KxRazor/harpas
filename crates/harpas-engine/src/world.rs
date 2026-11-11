@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn client_view_distance_applies_from_join_without_lowering_the_server_maximum() {
         let folder = Folder::new();
-        let (output, _received) = mpsc::channel();
+        let (output, _received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,
@@ -1201,7 +1201,7 @@ mod tests {
         level.insert("DataVersion", DATA_VERSION);
         level.insert("spawn", spawn);
         harpas_anvil::write_level(&folder.0, &level).unwrap();
-        let (output, _received) = mpsc::channel();
+        let (output, _received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,
@@ -1854,7 +1854,7 @@ mod tests {
         let folder = Folder::new();
         let pos = ChunkPos { x: 0, z: 0 };
         save(&folder, &[(pos, DATA_VERSION)]);
-        let (output, _received) = mpsc::channel();
+        let (output, _received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,
@@ -1928,7 +1928,7 @@ mod tests {
         let origin = ChunkPos { x: 0, z: 0 };
         let west = ChunkPos { x: -1, z: 0 };
         save(&folder, &[(origin, DATA_VERSION), (west, DATA_VERSION)]);
-        let (output, _received) = mpsc::channel();
+        let (output, _received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,
@@ -1988,7 +1988,7 @@ mod tests {
         let folder = Folder::new();
         let origin = ChunkPos { x: 0, z: 0 };
         save(&folder, &[(origin, DATA_VERSION)]);
-        let (output, received) = mpsc::channel();
+        let (output, received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,
@@ -2053,7 +2053,7 @@ mod tests {
     #[test]
     fn client_acknowledgements_control_batch_rate_and_invalid_rates_are_bounded() {
         let folder = Folder::new();
-        let (output, received) = mpsc::channel();
+        let (output, received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,
@@ -2124,7 +2124,7 @@ mod tests {
     #[test]
     fn changing_view_distance_forgets_and_resends_only_the_outer_ring() {
         let folder = Folder::new();
-        let (output, received) = mpsc::channel();
+        let (output, received) = crate::player::output_channel();
         let mut game = Game {
             pending: vec![Event::Joined {
                 entity_id: 1,

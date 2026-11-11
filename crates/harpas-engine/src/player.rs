@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use harpas_anvil::Chunk;
 
@@ -219,10 +220,94 @@ pub enum Output {
     Disconnect(&'static str),
 }
 
+/// The most messages that may wait for a player's connection to take them.
+///
+/// A connection takes its messages every tick, so only one that has stopped writing to its client, or writes
+/// more slowly than the server produces, gets this far behind. At 20 ticks a second it is 30 seconds of 100
+/// messages a tick.
+pub(crate) const MAX_QUEUED_OUTPUT: usize = 60_000;
+
+/// The reason a player whose connection fell [`MAX_QUEUED_OUTPUT`] messages behind is disconnected with, as a
+/// connection that stops answering is in vanilla.
+pub(crate) const TOO_SLOW: &str = "Timed out";
+
+#[derive(Debug, Default)]
+struct Queue {
+    len: AtomicUsize,
+    overflowed: AtomicBool,
+}
+
+/// The logic thread's end of a player's output.
+#[derive(Debug)]
+pub(crate) struct OutputSender {
+    sender: Sender<Output>,
+    queue: Arc<Queue>,
+}
+
+/// The connection's end of a player's output.
+#[derive(Debug)]
+pub(crate) struct OutputReceiver {
+    receiver: Receiver<Output>,
+    queue: Arc<Queue>,
+}
+
+/// A channel for a player's output that holds at most [`MAX_QUEUED_OUTPUT`] messages.
+pub(crate) fn output_channel() -> (OutputSender, OutputReceiver) {
+    let (sender, receiver) = mpsc::channel();
+    let queue = Arc::new(Queue::default());
+    (
+        OutputSender {
+            sender,
+            queue: Arc::clone(&queue),
+        },
+        OutputReceiver { receiver, queue },
+    )
+}
+
+impl OutputSender {
+    /// Queues `output`. A message over the limit is dropped and the queue overflows for good: the receiver
+    /// then gives only a disconnection.
+    fn send(&self, output: Output) {
+        if self.overflowed() {
+            return;
+        }
+        if self.queue.len.fetch_add(1, Ordering::Relaxed) >= MAX_QUEUED_OUTPUT {
+            self.queue.overflowed.store(true, Ordering::Relaxed);
+            return;
+        }
+        // A dropped receiver means the connection has closed; its departure is queued separately.
+        let _ = self.sender.send(output);
+    }
+
+    /// Whether the connection fell too far behind, so that the player must leave.
+    pub(crate) fn overflowed(&self) -> bool {
+        self.queue.overflowed.load(Ordering::Relaxed)
+    }
+}
+
+impl OutputReceiver {
+    /// Takes the next message, if one is ready. After an overflow that is a disconnection, whatever else is
+    /// queued.
+    pub(crate) fn try_recv(&self) -> Result<Output, TryRecvError> {
+        if self.queue.overflowed.load(Ordering::Relaxed) {
+            return Ok(Output::Disconnect(TOO_SLOW));
+        }
+        let output = self.receiver.try_recv()?;
+        self.queue.len.fetch_sub(1, Ordering::Relaxed);
+        Ok(output)
+    }
+
+    /// Takes the messages that are ready.
+    #[cfg(test)]
+    pub(crate) fn try_iter(&self) -> impl Iterator<Item = Output> + '_ {
+        std::iter::from_fn(|| self.try_recv().ok())
+    }
+}
+
 pub(crate) struct PlayerState {
     pub(crate) player: Player,
     pub(crate) chat_session: Option<ChatSession>,
-    pub(crate) output: Sender<Output>,
+    pub(crate) output: OutputSender,
     pub(crate) view_distance: u8,
     pub(crate) max_view_distance: u8,
     pub(crate) allow_flight: bool,
@@ -251,7 +336,7 @@ impl PlayerState {
         profile: Profile,
         view_distance: u8,
         allow_flight: bool,
-        output: Sender<Output>,
+        output: OutputSender,
     ) -> Self {
         let position = Position::default();
         let flying = profile.game_mode == GameMode::Spectator;
@@ -284,8 +369,7 @@ impl PlayerState {
     }
 
     pub(crate) fn send(&self, output: Output) {
-        // A dropped receiver means the connection has closed; its departure is queued separately.
-        let _ = self.output.send(output);
+        self.output.send(output);
     }
 
     pub(crate) fn accepts(&mut self, movement: Movement) -> bool {

@@ -213,7 +213,9 @@ Consequences:
 - **Round trips:** every codec decodes and re-encodes captured packets byte for byte.
 - **Cross-checks (Bedrock):** the same packets are encoded by gophertunnel or CloudburstMC/Protocol and
   compared.
-- **Fuzzing:** every decoder, generated or hand-written.
+- **Fuzzing:** every decoder, generated or hand-written. The targets are in [fuzz/](../fuzz/README.md) and run
+  each night in CI; the Java serverbound packets, NBT, a whole offline connection, region files and NetherNet's
+  signaling and segments are covered so far.
 - **Real clients:** captures from current Java and Bedrock clients on each supported protocol version.
 
 ---

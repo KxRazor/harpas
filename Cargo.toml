@@ -1,6 +1,23 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# What a plain `cargo build`, `cargo test` or `cargo clippy` covers. harpas-nethernet is left out: the server does
+# not link it yet, and its WebRTC and TLS dependencies (str0m, aws-lc-sys) are more than half of a clean build.
+# `--workspace`, which CI uses, still covers it, and so does `-p harpas-nethernet`. A new crate is added here.
+default-members = [
+    "crates/harpas-anvil",
+    "crates/harpas-bedrock",
+    "crates/harpas-bench",
+    "crates/harpas-core",
+    "crates/harpas-engine",
+    "crates/harpas-java",
+    "crates/harpas-jvm",
+    "crates/harpas-protocol-bedrock",
+    "crates/harpas-protocol-codegen",
+    "crates/harpas-protocol-java",
+    "crates/harpas-server",
+    "crates/harpas-worldgen",
+]
 
 [workspace.package]
 version = "0.1.1"

@@ -8,7 +8,7 @@ use std::collections::{HashSet, VecDeque};
 use harpas_protocol_java::v26_1::play::{self, serverbound};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::traits::PublicKeyParts;
-use rsa::{Pkcs1v15Sign, RsaPublicKey};
+use rsa::{Pkcs1v15Sign, PublicKey};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -20,7 +20,7 @@ const MAX_PENDING: usize = 4096;
 /// An empty set trusts no player key. Tests can construct a separate authority from generated keys.
 #[derive(Debug, Clone, Default)]
 pub struct ChatAuthority {
-    keys: Vec<RsaPublicKey>,
+    keys: Vec<PublicKey>,
 }
 
 impl ChatAuthority {
@@ -28,7 +28,7 @@ impl ChatAuthority {
     pub fn from_der(keys: &[Vec<u8>]) -> Result<Self, &'static str> {
         let keys: Vec<_> = keys
             .iter()
-            .map(|key| RsaPublicKey::from_public_key_der(key).map_err(|_| "invalid authority key"))
+            .map(|key| PublicKey::from_public_key_der(key).map_err(|_| "invalid authority key"))
             .collect::<Result<_, _>>()?;
         if keys.is_empty() {
             return Err("no chat authority keys");
@@ -36,11 +36,11 @@ impl ChatAuthority {
         Ok(Self { keys })
     }
 
-    fn verify(&self, player: u128, data: &play::PublicKeyData, now: i64) -> Option<RsaPublicKey> {
+    fn verify(&self, player: u128, data: &play::PublicKeyData, now: i64) -> Option<PublicKey> {
         if data.expires_at <= now {
             return None;
         }
-        let key = RsaPublicKey::from_public_key_der(&data.key).ok()?;
+        let key = PublicKey::from_public_key_der(&data.key).ok()?;
         if key.size() != 256 {
             return None;
         }
@@ -88,7 +88,7 @@ pub enum ChatEvent {
 #[derive(Debug)]
 struct Session {
     id: u128,
-    key: RsaPublicKey,
+    key: PublicKey,
     expires_at: i64,
     index: i32,
     broken: bool,
@@ -386,7 +386,7 @@ mod tests {
     use std::sync::OnceLock;
 
     use super::*;
-    use rsa::RsaPrivateKey;
+    use rsa::PrivateKey;
     use rsa::pkcs8::EncodePublicKey;
     use rsa::rand_core::UnwrapErr;
 
@@ -395,8 +395,8 @@ mod tests {
     const NOW: i64 = 1_800_000_000_000;
 
     struct Keys {
-        authority: RsaPrivateKey,
-        player: RsaPrivateKey,
+        authority: PrivateKey,
+        player: PrivateKey,
     }
 
     fn keys() -> &'static Keys {
@@ -404,8 +404,8 @@ mod tests {
         KEYS.get_or_init(|| {
             let mut rng = UnwrapErr(getrandom::SysRng);
             Keys {
-                authority: RsaPrivateKey::new(&mut rng, 2048).unwrap(),
-                player: RsaPrivateKey::new(&mut rng, 2048).unwrap(),
+                authority: PrivateKey::new(&mut rng, 2048).unwrap(),
+                player: PrivateKey::new(&mut rng, 2048).unwrap(),
             }
         })
     }

@@ -14,7 +14,7 @@ use rsa::hazmat::rsa_decrypt;
 use rsa::pkcs8::EncodePublicKey;
 use rsa::rand_core::UnwrapErr;
 use rsa::traits::PublicKeyParts;
-use rsa::{BoxedUint, RsaPrivateKey};
+use rsa::{BoxedUint, PrivateKey};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use subtle::{ConditionallySelectable, ConstantTimeEq};
@@ -26,7 +26,7 @@ const MIN_PADDING: usize = 8;
 
 /// The server's RSA key pair, generated at startup as vanilla does.
 pub struct ServerKey {
-    private: RsaPrivateKey,
+    private: PrivateKey,
     public_der: Vec<u8>,
     rejection_key: [u8; 32],
 }
@@ -41,7 +41,7 @@ impl ServerKey {
     /// Generates a 1024-bit key pair.
     pub fn generate() -> Self {
         let mut rng = UnwrapErr(SysRng);
-        let private = RsaPrivateKey::new(&mut rng, KEY_BITS).expect("an RSA key can be generated");
+        let private = PrivateKey::new(&mut rng, KEY_BITS).expect("an RSA key can be generated");
         let public_der = private
             .to_public_key()
             .to_public_key_der()

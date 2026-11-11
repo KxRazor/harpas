@@ -13,7 +13,7 @@ flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] 
 getrandom = { version = "0.4.3", features = ["sys_rng"] }
 harpas-protocol-java.workspace = true
 md-5 = "0.11.0"
-rsa = { version = "0.10.0-rc.19", features = ["hazmat"] }
+rsa = { version = "0.10.0", features = ["hazmat", "pkcs1v15"] }
 sha1 = { version = "0.11.0", features = ["oid"] }
 sha2 = { version = "0.11.1", features = ["oid"] }
 subtle = "2.6.1"

@@ -15,7 +15,7 @@ use harpas_java::{
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::{configuration, handshaking, login, play};
 use rsa::pkcs8::{DecodePublicKey, EncodePublicKey};
-use rsa::{Pkcs1v15Encrypt, Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey};
+use rsa::{Pkcs1v15Encrypt, Pkcs1v15Sign, PrivateKey, PublicKey};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -150,7 +150,7 @@ fn encrypted_login(
     assert_eq!(request.verify_token.len(), 4);
     assert!(request.should_authenticate);
 
-    let public = RsaPublicKey::from_public_key_der(&request.public_key).unwrap();
+    let public = PublicKey::from_public_key_der(&request.public_key).unwrap();
     let mut rng = rsa::rand_core::UnwrapErr(getrandom::SysRng);
     let secret = [0x42; 16];
     let mut token = request.verify_token.clone();
@@ -323,8 +323,8 @@ fn encrypted_online_session_verifies_signed_chat_and_its_acknowledgements() {
         ..ServerInfo::default()
     };
     let mut rng = rsa::rand_core::UnwrapErr(getrandom::SysRng);
-    let authority = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-    let signing = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let authority = PrivateKey::new(&mut rng, 2048).unwrap();
+    let signing = PrivateKey::new(&mut rng, 2048).unwrap();
     let root = authority
         .to_public_key()
         .to_public_key_der()

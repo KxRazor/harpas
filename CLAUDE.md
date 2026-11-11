@@ -30,6 +30,7 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 | `cargo test --workspace` | Run the tests |
 | `cargo fmt --all` | Format the code |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lint, as CI does |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | Build the documentation and check its links, as CI does |
 | `cargo deny check licenses bans sources` | Check dependency licenses and sources |
 | `ci/third-party-notices.sh` | Regenerate the Rust dependency section of THIRD_PARTY_NOTICES.md |
 

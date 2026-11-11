@@ -1,4 +1,4 @@
-//! Where structures start: vanilla's `StructurePlacement`, `ChunkGeneratorStructureState` and, in [`start`], the
+//! Where structures start: vanilla's `StructurePlacement`, `ChunkGeneratorStructureState` and, in `start`, the
 //! structures themselves.
 
 use std::collections::{HashMap, HashSet};

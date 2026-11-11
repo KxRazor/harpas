@@ -1,11 +1,12 @@
 //! Limits on connections that are not playing yet, so that floods cannot take every thread or login slot
 //!
 //! A connection counts until it reaches Play, so players behind one address, as on a school or home network, are
-//! limited only while they connect. Loopback connections, such as a proxy on the same machine, skip the
-//! per-address limits (`docs/java-connection.md`).
+//! limited only while they connect. An IPv6 address counts as its /64 prefix, the smallest block a network
+//! gives one customer, so that one host cannot avoid the limits by changing the rest of its address. Loopback
+//! connections, such as a proxy on the same machine, skip the per-address limits (`docs/java-connection.md`).
 
 use std::collections::{HashMap, VecDeque};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,18 @@ const WINDOW: Duration = Duration::from_secs(10);
 
 /// The message Bukkit and Paper give a throttled login.
 pub const THROTTLED: &str = "Connection throttled! Please wait before reconnecting.";
+
+/// The address `ip` is limited as: an IPv4 address itself, also when mapped into IPv6, and an IPv6 address's
+/// /64 prefix.
+fn limited_as(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(ip) if !ip.is_loopback() => {
+            let prefix = u128::from(ip) & !u128::from(u64::MAX);
+            IpAddr::V6(Ipv6Addr::from(prefix))
+        }
+        ip => ip,
+    }
+}
 
 /// The connection limits shared by every connection.
 #[derive(Default)]
@@ -63,7 +76,7 @@ impl Limits {
 
     /// Admits a new connection from `ip`, or returns `None` if it is over a limit and must be closed.
     pub fn connect(self: &Arc<Self>, ip: IpAddr, now: Instant) -> Option<Permit> {
-        let ip = ip.to_canonical();
+        let ip = limited_as(ip);
         let mut state = self.lock();
         state.sweep(now);
         if state.pending >= MAX_PENDING {
@@ -111,6 +124,7 @@ impl State {
 /// A connection admitted by [`Limits::connect`]; it stops counting once it reaches Play or is dropped.
 pub struct Permit {
     limits: Arc<Limits>,
+    /// The address the connection is limited as.
     ip: IpAddr,
     pending: bool,
 }
@@ -210,6 +224,26 @@ mod tests {
         assert!(limits.connect(address(1), now).is_none());
         permits.pop();
         assert!(limits.connect(address(1), now).is_some());
+    }
+
+    #[test]
+    fn ipv6_addresses_share_the_limits_of_their_64_bit_prefix() {
+        let limits = Arc::new(Limits::default());
+        let now = Instant::now();
+        let host = |prefix: u16, host: u16| -> IpAddr {
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, prefix, 0, 0, 0, host))
+        };
+        let permits: Vec<_> = (0..MAX_PENDING_PER_ADDRESS as u16)
+            .map(|i| limits.connect(host(1, i), now).unwrap())
+            .collect();
+        assert!(limits.connect(host(1, 0x100), now).is_none());
+        // Logins count for the prefix too.
+        assert!((0..LOGINS_PER_WINDOW).all(|i| permits[i].login(now)));
+        assert!(!permits[LOGINS_PER_WINDOW].login(now));
+        // Another prefix is not affected, and IPv6 loopback still skips the limits.
+        assert!(limits.connect(host(2, 0), now).is_some());
+        let local = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        assert!((0..MAX_PENDING_PER_ADDRESS * 2).all(|_| limits.connect(local, now).is_some()));
     }
 
     #[test]

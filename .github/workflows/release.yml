@@ -1,11 +1,18 @@
 name: Release
 
 # Builds the `harpas` binary for each platform when a release is published, and attaches it to the release with
-# its SHA-256 checksum (docs/releases.md#release-process). macOS joins once its hosted runners are reliable.
+# its SHA-256 checksum (docs/releases.md#release-process).
+#
+# Both macOS binaries are built on an Intel runner: the hosted arm64 runners are short of capacity, and GitHub
+# cancels a job it cannot place. The arm64 binary is cross-compiled there, so it is not run before it is attached.
+#
+# Started by hand, it builds the same archives from the chosen branch and keeps them as workflow artifacts, without
+# touching any release: a way to test a change to this workflow.
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,6 +33,13 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-15-intel
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            cross: true
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -33,15 +47,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Empty when started by hand, which checks out the chosen branch.
           ref: ${{ github.event.release.tag_name }}
       # The version and components in rust-toolchain.toml.
       - run: rustup toolchain install
-      - run: cargo build --release --locked --bin harpas
+      - run: rustup target add "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+      - run: cargo build --release --locked --bin harpas --target "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
       - name: The binary's version is the tag's
+        # A cross-compiled binary does not run on this machine.
+        if: ${{ github.event_name == 'release' && !matrix.cross }}
         env:
           TAG: ${{ github.event.release.tag_name }}
+          TARGET: ${{ matrix.target }}
         run: |
-          actual=$(target/release/harpas --version)
+          actual=$("target/$TARGET/release/harpas" --version)
           if [[ "$actual" != "harpas ${TAG#v}" ]]; then
             echo "harpas --version prints '$actual', but the tag is $TAG" >&2
             exit 1
@@ -51,21 +74,42 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
           TARGET: ${{ matrix.target }}
           ARCHIVE: ${{ matrix.archive }}
-        # Asset names leave out the build metadata: GitHub does not keep `+` in them.
+        # Asset names leave out the build metadata: GitHub does not keep `+` in them. Started by hand there is no
+        # tag, and the version is the workspace's.
         run: |
           version=${TAG#v}
+          if [[ -z "$version" ]]; then
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          fi
           name="harpas-${version%%+*}-$TARGET"
           mkdir "$name"
-          cp target/release/harpas"$([[ $TARGET == *windows* ]] && echo .exe)" "$name/"
+          cp "target/$TARGET/release/harpas$([[ $TARGET == *windows* ]] && echo .exe)" "$name/"
           cp LICENSE-MIT LICENSE-APACHE THIRD_PARTY_NOTICES.md README.md CHANGELOG.md "$name/"
           if [[ $ARCHIVE == zip ]]; then
             7z a "$name.zip" "$name" > /dev/null
           else
             tar czf "$name.tar.gz" "$name"
           fi
-          sha256sum "$name.$ARCHIVE" > "$name.$ARCHIVE.sha256"
+          # macOS has shasum, not sha256sum; both write the same line.
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$name.$ARCHIVE" > "$name.$ARCHIVE.sha256"
+          else
+            shasum -a 256 "$name.$ARCHIVE" > "$name.$ARCHIVE.sha256"
+          fi
+          cat "$name.$ARCHIVE.sha256"
           echo "ASSETS=$name.$ARCHIVE $name.$ARCHIVE.sha256" >> "$GITHUB_ENV"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Keep as a workflow artifact
+        if: ${{ github.event_name != 'release' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.NAME }}
+          path: |
+            ${{ env.NAME }}.${{ matrix.archive }}
+            ${{ env.NAME }}.${{ matrix.archive }}.sha256
+          retention-days: 3
       - name: Attach to the release
+        if: ${{ github.event_name == 'release' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}

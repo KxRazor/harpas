@@ -154,4 +154,4 @@ later, once the `0.x` milestones show where the project stands.
 
 1. What 1.0 requires, and the versioning and support rules from then on.
 2. Where releases are published beyond the repository's releases, which carry the binaries the Release
-   workflow builds for Linux and Windows (macOS once its runners are reliable): container registry, website.
+   workflow builds for Linux, Windows and macOS: container registry, website.

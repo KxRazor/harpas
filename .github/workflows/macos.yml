@@ -1,9 +1,10 @@
 name: macOS
 
-# Builds and tests on macOS outside pull requests. Hosted macOS arm64 runners are short of capacity at busy hours,
-# and GitHub cancels a job it cannot place after about 15 minutes, so a macOS job on every pull request failed for
-# reasons unrelated to the change. Most of Harpas is portable Rust; the part that differs on macOS is the JVM bridge
-# (libjvm.dylib and JNI), so this also runs when that changes on main, and before a release (docs/releases.md).
+# Builds and tests on macOS arm64 outside pull requests. Hosted macOS arm64 runners are short of capacity at busy
+# hours, and GitHub cancels a job it cannot place after about 15 minutes, so an arm64 job on every pull request
+# failed for reasons unrelated to the change. Pull requests run macOS on Intel instead, in ci.yml. Most of Harpas is
+# portable Rust; the part that differs on macOS is the JVM bridge (libjvm.dylib and JNI), so this also runs when
+# that changes on main, and before a release (docs/releases.md).
 
 on:
   schedule:

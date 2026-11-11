@@ -101,6 +101,10 @@ block changes are part of gameplay work.
   the tick does not wait for disk. Changes made while a snapshot is being written remain dirty. An unloaded
   chunk stays resident until its latest changes are saved, and shutdown waits for pending saves. A save error
   stops the server and is reported.
+- Each save rewrites its region file, so the chunks of a region are written together. A changed chunk that
+  leaves every view waits up to five seconds for the others of its region, and a region has one save queued
+  or in progress at a time: the changes made meanwhile share the next one. Autosave and shutdown do not wait.
+  Writing only the changed sectors, as vanilla does, is not implemented.
 - A region and the `.mcc` files of its large chunks are saved as one transaction, so a crash never leaves a
   half-written region or a chunk newer than the region that points to it. Every new file is written whole and
   synced under a staged name (`<name>.tmp`); then a journal, `r.x.z.mca.journal`, listing the files to install

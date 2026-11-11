@@ -371,10 +371,9 @@ fn play(
     mut permit: Option<&mut Permit>,
     departure: &mut Departure,
 ) -> io::Result<()> {
-    let entity_id = logic
-        .next_entity_id()
-        .ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
-    let mut connection = Connection::with_entity_id(key, entity_id);
+    // The player gets its entity ID when it enters Play: a server list ping or a failed login takes none.
+    let ids = logic.clone();
+    let mut connection = Connection::with_entity_ids(key, move || ids.next_entity_id());
     if permit.is_some() {
         connection.require_admission();
     }
@@ -440,7 +439,7 @@ fn play(
                 .ok_or_else(|| io::Error::other("Play without a player"))?;
             let session = logic
                 .player_joined(
-                    entity_id,
+                    connection.entity_id(),
                     player::profile(player, info.game_mode),
                     info.view_distance.clamp(2, 32) as u8,
                     info.allow_flight,
@@ -633,6 +632,8 @@ mod tests {
             wait_for_count(&logic, 0);
             assert_eq!(status_count(&info, &key, &logic), 0);
         }
+        // Only the two players took an entity ID; the five status requests took none.
+        assert_eq!(logic.next_entity_id(), Some(3));
         drop(logic);
         logic_thread.join().unwrap();
     }

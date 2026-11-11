@@ -205,6 +205,7 @@ pub struct Connection {
     pending_keepalive: Option<PendingKeepAlive>,
     keepalive_counter: i64,
     entity_id: i32,
+    entity_ids: Option<EntityIds>,
     play_input: Vec<PlayEvent>,
     chat: ChatState,
     client_view_distance: Option<u8>,
@@ -214,11 +215,38 @@ pub struct Connection {
     biome: i32,
 }
 
+/// Where a connection gets its player's entity ID when it enters Play.
+struct EntityIds(Box<dyn FnOnce() -> Option<i32> + Send>);
+
+impl fmt::Debug for EntityIds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("EntityIds")
+    }
+}
+
 impl Connection {
     /// A connection that has received nothing yet. `key` is the server's RSA key, shared by every
     /// connection.
     pub fn new(key: Arc<ServerKey>) -> Self {
         Self::with_entity_id(key, 1)
+    }
+
+    /// A connection whose player gets its runtime entity ID from `ids` when it enters Play, so that a
+    /// connection that never brings a player in, such as a server list ping, takes none. A source that has
+    /// no ID left closes the connection.
+    pub fn with_entity_ids(
+        key: Arc<ServerKey>,
+        ids: impl FnOnce() -> Option<i32> + Send + 'static,
+    ) -> Self {
+        let mut connection = Self::with_entity_id(key, 0);
+        connection.entity_ids = Some(EntityIds(Box::new(ids)));
+        connection
+    }
+
+    /// The runtime entity ID of the connection's player. With [`with_entity_ids`](Self::with_entity_ids) it
+    /// is assigned when the connection enters Play.
+    pub fn entity_id(&self) -> i32 {
+        self.entity_id
     }
 
     /// A connection with the runtime entity ID assigned to its player.
@@ -242,6 +270,7 @@ impl Connection {
             pending_keepalive: None,
             keepalive_counter: 0,
             entity_id,
+            entity_ids: None,
             play_input: Vec::new(),
             chat: ChatState::default(),
             client_view_distance: None,
@@ -864,6 +893,13 @@ impl Connection {
     fn join(&mut self, info: &ServerInfo) {
         let player = self.player.clone().expect("Login set the player");
         debug_assert_eq!(self.login, LoginStep::Done);
+        if let Some(EntityIds(next)) = self.entity_ids.take() {
+            let Some(entity_id) = next() else {
+                self.state = State::Closed;
+                return;
+            };
+            self.entity_id = entity_id;
+        }
         let dimension_type =
             registries::entry_id("minecraft:dimension_type", "minecraft:overworld")
                 .expect("the overworld dimension type is synchronized");

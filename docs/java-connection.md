@@ -244,6 +244,7 @@ Limits are chosen so that no vanilla client behavior can hit them *(measure agai
 | Login attempts | 5 per address per 10 seconds | Refused with Bukkit's "Connection throttled! Please wait before reconnecting." |
 | Packet size | Handshaking 1 KiB, Status 256 bytes, Login 32 KiB, Configuration 64 KiB, Play vanilla's 2 MiB frames and 8 MiB uncompressed | Checked on the declared length, before the bytes are buffered or inflated |
 | Time to log in | 30 seconds from the connection to Configuration | Vanilla's login timeout; Login gets `multiplayer.disconnect.slow_login`. Configuration and Play rely on Keep Alive |
+| Messages waiting for a connection | 60,000 per player | The logic thread's messages for a player that its connection has not taken yet. A connection takes them every tick, so only one that writes to its client more slowly than the server produces gets this far behind; the player then leaves and the connection closes as "Timed out". Vanilla has no such limit |
 
 Loopback connections, such as a proxy on the same machine, skip the per-address limits. Connections over a
 limit are closed as soon as they are accepted, before a thread is started for them.

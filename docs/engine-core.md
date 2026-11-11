@@ -63,7 +63,9 @@ messages into edition-specific packets. The logic thread owns each player's prof
 the online count. Player entities have distinct runtime IDs; a duplicate UUID disconnects the old session.
 All players appear in the player list, while entity tracking is per viewer, capped by both its view distance
 and 128 blocks. Spectator entities are hidden from non-spectators. A departure removes the entity and list entry
-even after an I/O or protocol error. Authentication and Keep Alive remain on the connection threads.
+even after an I/O or protocol error. Authentication and Keep Alive remain on the connection threads. A player
+whose connection has 60,000 messages waiting leaves in the next connection phase
+([java-connection.md](java-connection.md#protection-against-abuse)).
 
 For the void world, movement rejects non-finite positions or angles, clamps coordinates to vanilla's limits [3],
 and corrects a displacement over 10 blocks from the beginning of a tick. A pending teleport must be confirmed

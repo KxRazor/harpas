@@ -41,7 +41,7 @@ impl Handle {
         view_distance: u8,
         allow_flight: bool,
     ) -> Result<PlayerSession, LogicStopped> {
-        let (output, receiver) = mpsc::channel();
+        let (output, receiver) = player::output_channel();
         self.events
             .send(Event::Joined {
                 entity_id,
@@ -85,7 +85,7 @@ impl Handle {
 pub struct PlayerSession {
     entity_id: i32,
     events: Sender<Event>,
-    output: Receiver<player::Output>,
+    output: player::OutputReceiver,
 }
 
 impl PlayerSession {
@@ -147,7 +147,7 @@ enum Event {
         profile: player::Profile,
         view_distance: u8,
         allow_flight: bool,
-        output: Sender<player::Output>,
+        output: player::OutputSender,
     },
     Input {
         entity_id: i32,
@@ -209,11 +209,21 @@ struct Game {
 
 impl TickWork for Game {
     fn connections(&mut self) {
+        // A player whose connection fell too far behind leaves; its connection closes on its own.
+        let overflowed: Vec<_> = self
+            .players
+            .iter()
+            .filter(|p| p.output.overflowed())
+            .map(|p| p.player.entity_id)
+            .collect();
+        let mut tracking_changed = !overflowed.is_empty();
+        for entity_id in overflowed {
+            self.leave(entity_id);
+        }
         for state in &mut self.players {
             state.tick_start = state.player.position;
         }
         let mut moved = HashSet::new();
-        let mut tracking_changed = false;
         for event in std::mem::take(&mut self.pending) {
             match event {
                 Event::Joined {
@@ -343,7 +353,7 @@ impl Game {
         profile: player::Profile,
         view_distance: u8,
         allow_flight: bool,
-        output: Sender<player::Output>,
+        output: player::OutputSender,
     ) {
         if let Some(old) = self
             .players
@@ -493,8 +503,8 @@ mod tests {
         }
     }
 
-    fn join(game: &mut Game, id: i32, name: &str, distance: u8) -> Receiver<Output> {
-        let (output, receiver) = mpsc::channel();
+    fn join(game: &mut Game, id: i32, name: &str, distance: u8) -> player::OutputReceiver {
+        let (output, receiver) = player::output_channel();
         game.pending.push(Event::Joined {
             entity_id: id,
             profile: profile(name, id as u128),
@@ -558,7 +568,7 @@ mod tests {
         let mut schedule = Schedule::new(start);
         let mut number = 0;
         let _output = {
-            let (output, received) = mpsc::channel();
+            let (output, received) = player::output_channel();
             sender
                 .send(Event::Joined {
                     entity_id: 1,
@@ -696,7 +706,7 @@ mod tests {
                 last_seen: vec![],
             }))
         };
-        let chats = |output: &Receiver<Output>| {
+        let chats = |output: &player::OutputReceiver| {
             output
                 .try_iter()
                 .filter(|event| matches!(event, Output::ChatMessage { .. }))
@@ -880,7 +890,7 @@ mod tests {
 
         let mut spectator = profile("Spectator", 3);
         spectator.game_mode = GameMode::Spectator;
-        let (output, third) = mpsc::channel();
+        let (output, third) = player::output_channel();
         game.pending.push(Event::Joined {
             entity_id: 3,
             profile: spectator,
@@ -908,7 +918,7 @@ mod tests {
 
     #[test]
     fn finite_positions_are_clamped_to_the_world_limits() {
-        let (output, _receiver) = mpsc::channel();
+        let (output, _receiver) = player::output_channel();
         let mut state = player::PlayerState::new(1, profile("Steve", 1), 10, false, output);
         state.awaiting_teleport = None;
         state.player.position.x = 29_999_999.0;
@@ -925,8 +935,11 @@ mod tests {
 
     #[test]
     fn sustained_flight_is_checked_and_honors_server_settings_and_game_mode() {
-        fn state(mode: GameMode, allow_flight: bool) -> (player::PlayerState, Receiver<Output>) {
-            let (sender, receiver) = mpsc::channel();
+        fn state(
+            mode: GameMode,
+            allow_flight: bool,
+        ) -> (player::PlayerState, player::OutputReceiver) {
+            let (sender, receiver) = player::output_channel();
             let mut profile = profile("Steve", 1);
             profile.game_mode = mode;
             let mut state = player::PlayerState::new(1, profile, 10, allow_flight, sender);
@@ -985,7 +998,7 @@ mod tests {
     fn tick_disconnects_a_hovering_survival_player_unless_flight_is_allowed() {
         for allow_flight in [false, true] {
             let mut game = game();
-            let (output, receiver) = mpsc::channel();
+            let (output, receiver) = player::output_channel();
             let mut profile = profile("Steve", 1);
             profile.game_mode = GameMode::Survival;
             game.pending.push(Event::Joined {
@@ -1016,7 +1029,7 @@ mod tests {
         let mut game = game();
         let old = join(&mut game, 1, "Steve", 10);
         tick(&mut game, 1);
-        let (output, new) = mpsc::channel();
+        let (output, new) = player::output_channel();
         game.pending.push(Event::Joined {
             entity_id: 2,
             profile: profile("Steve", 1),
@@ -1033,6 +1046,41 @@ mod tests {
         tick(&mut game, 3);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
         assert!(new.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_player_whose_connection_falls_too_far_behind_leaves() {
+        let mut game = game();
+        let slow = join(&mut game, 1, "Steve", 10);
+        let alex = join(&mut game, 2, "Alex", 10);
+        tick(&mut game, 1);
+        alex.try_iter().for_each(drop);
+        slow.try_iter().for_each(drop);
+
+        // Steve's connection takes nothing while messages for it keep coming.
+        let steve = &game.players[0];
+        for _ in 0..player::MAX_QUEUED_OUTPUT {
+            steve.send(Output::RemoveEntity(3));
+        }
+        assert!(!steve.output.overflowed());
+        assert_eq!(slow.try_recv(), Ok(Output::RemoveEntity(3)));
+        steve.send(Output::RemoveEntity(3));
+        assert!(!steve.output.overflowed());
+        steve.send(Output::RemoveEntity(3));
+        assert!(steve.output.overflowed());
+
+        // The connection is told to close before anything else that is queued, and the player leaves.
+        assert_eq!(slow.try_recv(), Ok(Output::Disconnect(player::TOO_SLOW)));
+        tick(&mut game, 2);
+        assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
+        assert!(
+            alex.try_iter()
+                .any(|output| output == Output::RemovePlayer(1))
+        );
+        // Its connection's departure, which arrives later, changes nothing.
+        game.pending.push(Event::Left(1));
+        tick(&mut game, 3);
+        assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
     }
 
     #[test]

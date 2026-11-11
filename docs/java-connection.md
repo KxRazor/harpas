@@ -241,7 +241,7 @@ Limits are chosen so that no vanilla client behavior can hit them *(measure agai
 
 | Limit | Value | Notes |
 |---|---|---|
-| Connections not in Play | 256 in total, 8 per address | A connection stops counting when it reaches Play, so players behind one address are limited only while they connect |
+| Connections not in Play | 256 in total, 8 per address | A connection stops counting when it reaches Play, so players behind one address are limited only while they connect. An IPv6 address counts as its /64 prefix in every per-address limit |
 | New connections | 20 per address per 10 seconds | A server list refresh and a join take two |
 | Login attempts | 5 per address per 10 seconds | Refused with Bukkit's "Connection throttled! Please wait before reconnecting." |
 | Packet size | Handshaking 1 KiB, Status 256 bytes, Login 32 KiB, Configuration 64 KiB, Play vanilla's 2 MiB frames and 8 MiB uncompressed | Checked on the declared length, before the bytes are buffered or inflated |

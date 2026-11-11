@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use harpas_anvil::{
     Chunk, Region, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk,
@@ -18,6 +19,9 @@ use log::{error, warn};
 /// Keep disk requests bounded even when players move faster than the disk can respond.
 const QUEUE_CAPACITY: usize = 64;
 const MAX_WORKERS: usize = 4;
+/// How long a changed chunk that left every view waits for the other chunks of its region to leave too.
+/// Each save rewrites the whole region file, so they are written together.
+const UNLOAD_SAVE_DELAY: Duration = Duration::from_secs(5);
 
 /// Coordinates of a chunk column in the overworld.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -320,6 +324,8 @@ struct Changes {
     saved: u64,
     in_flight: bool,
     requested: bool,
+    /// When the chunk left every view with unsaved changes.
+    unwanted_since: Option<Instant>,
 }
 
 struct Snapshot {
@@ -348,6 +354,10 @@ pub struct World {
     chunks: HashMap<ChunkPos, ChunkState>,
     in_flight: HashSet<ChunkPos>,
     changes: HashMap<ChunkPos, Changes>,
+    /// The regions with a save queued or being written. A region has one save at a time, so the changes
+    /// made meanwhile are written together by the next one.
+    saving: HashSet<(i32, i32)>,
+    unload_save_delay: Duration,
     source: Option<(Arc<dyn ChunkSource>, Arc<ChunkStorage>)>,
     loader: Loader,
     saver: Saver,
@@ -454,6 +464,8 @@ impl World {
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
+            saving: HashSet::new(),
+            unload_save_delay: UNLOAD_SAVE_DELAY,
             source,
             loader: Loader::start(workers, load)?,
             saver: Saver::start(save)?,
@@ -577,7 +589,10 @@ impl World {
                     .push(pos);
             }
         }
-        for positions in regions.into_values() {
+        for (region, positions) in regions {
+            if self.saving.contains(&region) {
+                continue;
+            }
             let snapshots = positions
                 .iter()
                 .map(|pos| {
@@ -600,6 +615,7 @@ impl World {
                 .try_send(job)
             {
                 Ok(()) => {
+                    self.saving.insert(region);
                     for pos in positions {
                         let changes = self.changes.get_mut(&pos).expect("changed chunk");
                         changes.in_flight = true;
@@ -617,6 +633,10 @@ impl World {
 
     fn finish_save(&mut self, completion: Saved) -> io::Result<()> {
         let success = completion.result.is_ok();
+        if let Some(snapshot) = completion.job.snapshots.first() {
+            self.saving
+                .remove(&region_of(snapshot.pos.x, snapshot.pos.z));
+        }
         for snapshot in completion.job.snapshots {
             let changes = self
                 .changes
@@ -676,7 +696,6 @@ impl World {
                 pos,
                 Changes {
                     revision: 1,
-                    requested: !wanted.contains(&pos),
                     ..Changes::default()
                 },
             );
@@ -687,7 +706,8 @@ impl World {
         Ok(())
     }
 
-    /// Applies finished reads and writes, saves unwanted changed chunks and queues requests without waiting for disk.
+    /// Applies finished reads and writes, saves the changed chunks that left every view, one region at a
+    /// time, and queues requests without waiting for disk.
     /// An incompatible chunk or an unavailable worker pool is fatal and returned to the caller, even if the
     /// incompatible chunk is no longer wanted when its read finishes.
     pub fn update(&mut self, wanted: impl IntoIterator<Item = ChunkPos>) -> io::Result<()> {
@@ -707,8 +727,21 @@ impl World {
         }
         self.chunks
             .retain(|pos, _| wanted_set.contains(pos) || self.changes.contains_key(pos));
+        // A region is saved once its first unwanted chunk has waited long enough, with every chunk that
+        // left the views since.
+        let now = Instant::now();
+        let mut due = HashSet::new();
         for (pos, changes) in &mut self.changes {
-            if !wanted_set.contains(pos) {
+            if wanted_set.contains(pos) {
+                changes.unwanted_since = None;
+            } else if now.duration_since(*changes.unwanted_since.get_or_insert(now))
+                >= self.unload_save_delay
+            {
+                due.insert(region_of(pos.x, pos.z));
+            }
+        }
+        for (pos, changes) in &mut self.changes {
+            if changes.unwanted_since.is_some() && due.contains(&region_of(pos.x, pos.z)) {
                 changes.requested = true;
             }
         }
@@ -864,7 +897,6 @@ mod tests {
     use std::fs;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Condvar, mpsc};
-    use std::time::{Duration, Instant};
 
     use harpas_anvil::{ChunkSection, DATA_VERSION, Region, region_of};
     use harpas_core::block::block_states;
@@ -959,6 +991,8 @@ mod tests {
             chunks: HashMap::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
+            saving: HashSet::new(),
+            unload_save_delay: Duration::ZERO,
             source: None,
             loader: Loader::start(workers, load).unwrap(),
             saver: Saver::start(save).unwrap(),
@@ -1426,6 +1460,70 @@ mod tests {
     }
 
     #[test]
+    fn chunks_leaving_the_views_are_saved_together_and_a_region_has_one_save_at_a_time() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let jobs = Arc::new(Mutex::new(Vec::new()));
+        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
+        let save = {
+            let gate = Arc::clone(&gate);
+            let jobs = Arc::clone(&jobs);
+            Arc::new(move |job: &SaveJob| {
+                let mut saved: Vec<_> = job.snapshots.iter().map(|snapshot| snapshot.pos).collect();
+                saved.sort_by_key(|pos| pos.x);
+                jobs.lock().unwrap().push(saved);
+                let (lock, signal) = &*gate;
+                let guard = lock.lock().unwrap();
+                let _ = signal
+                    .wait_timeout_while(guard, Duration::from_secs(5), |open| !*open)
+                    .unwrap();
+                Ok(())
+            })
+        };
+        let mut world = fake_world_with_save(1, load, save);
+        world.unload_save_delay = Duration::from_secs(3600);
+        let positions: Vec<_> = (0..4).map(|x| ChunkPos { x, z: 0 }).collect();
+        load_chunks(&mut world, &positions);
+        for pos in &positions {
+            world.chunk_mut(*pos).unwrap().rest.insert("Marker", 1);
+        }
+
+        // Two chunks leave the views one after the other and wait, still resident, for the delay.
+        world.update(positions[1..].iter().copied()).unwrap();
+        world.update(positions[2..].iter().copied()).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        world.update(positions[2..].iter().copied()).unwrap();
+        assert!(jobs.lock().unwrap().is_empty());
+        assert!(matches!(
+            world.chunk(positions[0]),
+            Some(ChunkState::Loaded(_))
+        ));
+
+        // Once the delay has passed, one save writes both.
+        world.unload_save_delay = Duration::ZERO;
+        world.update(positions[2..].iter().copied()).unwrap();
+        wait_until(|| jobs.lock().unwrap().len() == 1);
+        assert_eq!(jobs.lock().unwrap()[0], positions[..2]);
+
+        // The chunks that leave while the region is being written share its next save.
+        world.update(positions[3..].iter().copied()).unwrap();
+        world.update([]).unwrap();
+        world.update([]).unwrap();
+        assert_eq!(jobs.lock().unwrap().len(), 1);
+        let (lock, signal) = &*gate;
+        *lock.lock().unwrap() = true;
+        signal.notify_all();
+        wait_until(|| {
+            world.update([]).unwrap();
+            world.changes.is_empty()
+        });
+        assert_eq!(
+            *jobs.lock().unwrap(),
+            vec![positions[..2].to_vec(), positions[2..].to_vec()]
+        );
+        assert!(world.chunk(positions[3]).is_none());
+    }
+
+    #[test]
     fn autosave_queue_is_bounded_and_flushes_every_region() {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let (started, received) = mpsc::channel();
@@ -1538,6 +1636,7 @@ mod tests {
         );
 
         world.chunk_mut(b).unwrap().rest.insert("Marker", 2);
+        world.unload_save_delay = Duration::ZERO;
         wait_until(|| {
             world.update([a, c, neighbor]).unwrap();
             world.chunk(b).is_none()

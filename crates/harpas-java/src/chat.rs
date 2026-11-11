@@ -17,7 +17,9 @@ const MAX_PENDING: usize = 4096;
 
 /// The certificate authorities obtained from Minecraft Services over HTTPS.
 ///
-/// An empty set trusts no player key. Tests can construct a separate authority from generated keys.
+/// An empty set, the default, means the keys could not be fetched: no player key can be verified, and chat
+/// sessions are ignored, as vanilla ignores them without the service's key. Tests can construct a separate
+/// authority from generated keys.
 #[derive(Debug, Clone, Default)]
 pub struct ChatAuthority {
     keys: Vec<RsaPublicKey>,
@@ -34,6 +36,11 @@ impl ChatAuthority {
             return Err("no chat authority keys");
         }
         Ok(Self { keys })
+    }
+
+    /// Whether the service's keys are missing.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
     }
 
     fn verify(&self, player: u128, data: &play::PublicKeyData, now: i64) -> Option<RsaPublicKey> {
@@ -156,6 +163,11 @@ impl ChatState {
         packet: serverbound::PlayerSession,
         now: i64,
     ) -> Result<(), &'static str> {
+        // Without the service's keys the session cannot be checked. Vanilla ignores it and leaves the player
+        // without a session, so the player chats unsigned where the server allows it.
+        if self.authority.is_empty() {
+            return Ok(());
+        }
         if self.sessions.len() >= 128 || self.sessions.contains(&packet.session_id) {
             return Err("Invalid chat session");
         }
@@ -527,6 +539,17 @@ mod tests {
         );
         assert!(ChatAuthority::from_der(&[]).is_err());
         assert!(ChatAuthority::from_der(&[vec![1, 2, 3]]).is_err());
+    }
+
+    #[test]
+    fn a_session_is_ignored_while_the_service_keys_are_missing() {
+        let mut state = ChatState::default();
+        state.session(PLAYER, session(NOW + 60_000), NOW).unwrap();
+        assert!(state.take_events().is_empty());
+        // With the keys, the same session is verified and published.
+        state.authority(authority());
+        state.session(PLAYER, session(NOW + 60_000), NOW).unwrap();
+        assert!(matches!(&state.take_events()[..], [ChatEvent::Session(_)]));
     }
 
     #[test]

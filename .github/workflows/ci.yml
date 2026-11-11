@@ -54,6 +54,19 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo run -p harpas-bench --example jvm-bridge --locked -- --self-test -- '-Xcheck:jni'
 
+  docs:
+    name: documentation
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+      # The version and components in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # A link to an item that was renamed, removed or made private fails here.
+      - run: cargo doc --workspace --no-deps --locked
+
   licenses:
     name: dependency licenses
     runs-on: ubuntu-latest

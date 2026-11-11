@@ -4,8 +4,8 @@
 //! legacy solid flag, forced on or off for some blocks and otherwise computed from the collision shape;
 //! `canBeReplaced` and `liquid` are set by a block's properties; `isFaceSturdy` asks whether the support shape
 //! covers a whole face, or its center. The support shape is the collision shape except for the blocks listed in
-//! [`support_shape`]. `isSolidRender` asks whether a block that occludes has a full occlusion shape, which is a
-//! full collision shape except for the blocks listed in [`is_solid_render`].
+//! `support_shape`. `isSolidRender` asks whether a block that occludes has a full occlusion shape, which is a
+//! full collision shape except for the blocks listed in `is_solid_render`.
 
 use std::sync::OnceLock;
 

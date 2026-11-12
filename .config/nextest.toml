@@ -1,4 +1,5 @@
-# Profiles for cargo-nextest. CI runs the parity harnesses with the `parity` profile (.github/workflows/parity.yml).
+# Profiles for cargo-nextest. CI runs the tests with the default profile (.github/workflows/ci.yml) and the parity
+# harnesses with the `parity` profile (.github/workflows/parity.yml).
 
 [profile.parity]
 # Run every test even after a failure, so that one run reports all the differences with vanilla.

@@ -27,7 +27,8 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 |---|---|
 | `cargo build --workspace` | Build everything |
 | `cargo run --bin harpas` | Run the server |
-| `cargo test --workspace` | Run the tests |
+| `cargo nextest run --workspace` | Run the tests, as CI does; `cargo test --workspace` runs the same ones without cargo-nextest |
+| `cargo test --workspace --doc` | Run the documentation tests, which cargo-nextest leaves out |
 | `cargo fmt --all` | Format the code |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lint, as CI does |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | Build the documentation and check its links, as CI does |

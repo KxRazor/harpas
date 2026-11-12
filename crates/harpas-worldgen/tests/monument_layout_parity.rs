@@ -87,11 +87,9 @@ fn start(x: i32, z: i32, orientation: Option<Direction>, chunk: (i32, i32)) -> S
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn monument_layouts_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping monument layouts: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut cases = String::new();
     let seeds = [0, 1, -1, 42, i64::MIN, i64::MAX, 0x1234_5678_9abc_def0];
     let count = if reference::reduced_sample() { 16 } else { 256 };

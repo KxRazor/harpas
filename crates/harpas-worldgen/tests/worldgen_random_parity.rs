@@ -5,11 +5,9 @@ use harpas_core::random::{AnyRandom, LegacyRandom, RandomSource, WorldgenRandom,
 use reference::Reference;
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn worldgen_random_bit_sampling_matches_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping worldgen RNG: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     reference.compile(&[(
         "WorldgenRandomProbe.java",
         include_str!("WorldgenRandomProbe.java"),

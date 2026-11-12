@@ -169,20 +169,22 @@ the result of the merge, after the change has landed.
 
 ### Locally
 
-`cargo test` skips the comparisons with the reference server when `HARPAS_VANILLA_SERVER_DIR` is not set, and those
-tests still report `ok`. A passing `cargo test` says nothing about them. The tests that only need vanilla's files also
-accept the pack of a local test server, `test-environment/.harpas/vanilla-data/26.1.zip`, which is git-ignored and so
-never in CI.
+The tests that compare with the reference server, or need vanilla's files, are marked `#[ignore]`: `cargo test` and
+`cargo nextest run` report them as ignored or skipped instead of `ok`, so a passing run does not claim them. Run on
+purpose without `HARPAS_VANILLA_SERVER_DIR`, they fail. The tests that only need vanilla's files also accept the
+pack of a local test server, `test-environment/.harpas/vanilla-data/26.1.zip`, which is git-ignored and so never in
+CI.
 
 To run them, download the server to a folder outside the repository. Setting `MOJANG_EULA_ACCEPTED=true` means that
 you accept the [Minecraft EULA](https://aka.ms/MinecraftEULA):
 
 ```sh
 MOJANG_EULA_ACCEPTED=true ci/fetch-vanilla-server.sh 26.1 ~/harpas-vanilla
-HARPAS_VANILLA_SERVER_DIR=~/harpas-vanilla cargo test --release --workspace --locked --test '*_parity' --test world_loading
+HARPAS_VANILLA_SERVER_DIR=~/harpas-vanilla cargo test --release --workspace --locked --test '*_parity' --test world_loading -- --include-ignored
 ```
 
-`cargo nextest run --profile parity` in place of `cargo test` runs the test binaries at once, as CI does.
+`cargo nextest run --profile parity`, with `--run-ignored all` in place of `-- --include-ignored`, runs the test
+binaries at once, as CI does.
 
 This compares the full sample. Use `-p <crate> --test <harness>` in place of `--workspace` and the patterns to run one
 harness, and set `HARPAS_PARITY_SAMPLE=reduced` for the sample of pull requests. Java 25 must be on `PATH`.
@@ -206,10 +208,12 @@ repository's permissions next to untrusted code, which is not worth it for a che
 
 1. Put it in the `tests/` folder of the crate it checks, in a file named `<name>_parity.rs`. **The workflow only runs
    test files with that name**, and fails if another file reads `HARPAS_VANILLA_SERVER_DIR` or calls
-   `Reference::from_env`. Read one of them, and without it print why the test is skipped and return. If it takes more
-   than a moment, make it compare less with the reduced sample. The same goes for a test that only needs vanilla's
-   files: a unit test in `src/` is outside what the workflow selects, so it would skip there and still pass.
-   `VanillaData` in `crates/harpas-worldgen/tests/reference/mod.rs` finds the files.
+   `Reference::from_env`, `Reference::required` or `VanillaData`. Get the server with `Reference::required()` and
+   mark the test `#[ignore = "needs Mojang's server: docs/parity.md#locally"]`, so that it is reported as skipped
+   where there is no server and fails if it is run without one. If it takes more than a moment, make it compare
+   less with the reduced sample. The same goes for a test that only needs vanilla's files, which
+   `VanillaData::required()` in `crates/harpas-worldgen/tests/reference/mod.rs` finds: a unit test in `src/` is
+   outside what the workflow selects, so it would never run.
 2. Make the vanilla side repeatable. When vanilla depends on something like its thread history, the probe fixes that
    state and the document says so, as with [biome ties](#known-differences).
 3. **Prove that it can fail.** Break the Harpas side on purpose and check that the harness notices, and say so in the

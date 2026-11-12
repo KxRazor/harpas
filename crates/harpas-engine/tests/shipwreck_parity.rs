@@ -123,11 +123,9 @@ fn snapshot(
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn shipwreck_blocks_and_metadata_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping shipwreck placement: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
     data.structure_sets.shift_remove("minecraft:mineshafts");

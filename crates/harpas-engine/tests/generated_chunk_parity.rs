@@ -16,11 +16,9 @@ use harpas_worldgen::{StructureTemplates, WorldgenData};
 use reference::VanillaData;
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_generate_and_persist_a_real_chunk() {
-    let Some(vanilla) = VanillaData::find() else {
-        eprintln!("Skipping generated chunks: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let vanilla = VanillaData::required();
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let folder = std::env::temp_dir().join(format!(
         "harpas-generated-chunk-{}-{}",
@@ -65,16 +63,14 @@ fn workers_generate_and_persist_a_real_chunk() {
 
 /// Uses the actual worker entry point, then checks its terrain and saved structure records against vanilla.
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_apply_structure_terrain_and_persist_starts_and_references() {
     use harpas_core::nbt::Compound;
     use harpas_worldgen::{NoiseBasedChunkGenerator, StructureState};
     use reference::Reference;
     use std::collections::{BTreeMap, BTreeSet};
 
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping structure workers: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     // Terrain adaptation is compared here; mine block placement has its own harness.
     data.structure_sets.shift_remove("minecraft:mineshafts");

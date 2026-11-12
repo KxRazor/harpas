@@ -93,11 +93,9 @@ fn snapshot(chunk: &GeneratedChunk, own: &[StructureStart], entities: Vec<Compou
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn treasure_blocks_metadata_workers_and_vanilla_resumption_match() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping treasure placement: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut inputs = Compound::new();
     let mut expected = Compound::new();
     let states = block_states();

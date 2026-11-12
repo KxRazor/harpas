@@ -360,11 +360,10 @@ fn assert_updates_match(expected: &[play::ChunkBlockEntity], actual: &[play::Chu
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_block_entities_match_vanilla_chunk_updates() {
-    let Some(reference) = std::env::var_os("HARPAS_VANILLA_SERVER_DIR") else {
-        eprintln!("Skipping parity test: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = std::env::var_os("HARPAS_VANILLA_SERVER_DIR")
+        .expect("HARPAS_VANILLA_SERVER_DIR is not set (docs/parity.md#locally)");
     let reference = PathBuf::from(reference);
     let eula = fs::read_to_string(reference.join("eula.txt")).expect("reference EULA");
     assert!(

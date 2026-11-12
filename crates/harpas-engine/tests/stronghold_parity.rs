@@ -202,10 +202,9 @@ fn input_with_terrain(
     tag
 }
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn stronghold_blocks_and_metadata_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        return;
-    };
+    let reference = Reference::required();
     let data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     let templates = StructureTemplates::from_zip_path(&reference.server_jar).unwrap();
     compile_probe(&reference);
@@ -466,10 +465,9 @@ fn compile_probe(reference: &Reference) {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn natural_strongholds_on_workers_match_vanilla_and_survive_anvil_reload() {
-    let Some(reference) = Reference::from_env() else {
-        return;
-    };
+    let reference = Reference::required();
     let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     // Isolate this structure pass; other harnesses compare the remaining structure types.
     data.structure_sets.retain(|_, set| {
@@ -681,10 +679,9 @@ fn wait(world: &mut World, positions: &[ChunkPos]) {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
-    let Some(reference) = Reference::from_env() else {
-        return;
-    };
+    let reference = Reference::required();
     let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();

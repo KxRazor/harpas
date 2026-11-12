@@ -85,11 +85,9 @@ fn changed_blocks(
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn feature_blocks_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping feature blocks: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data =
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
     reference.compile(&[

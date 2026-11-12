@@ -92,6 +92,12 @@ pub struct Reference {
 }
 
 impl Reference {
+    /// [`Reference::from_env`] for a test that cannot run without the server. Such a test is `#[ignore]`d, so
+    /// that it is reported as skipped where there is no server, and fails here if it is run without one.
+    pub fn required() -> Self {
+        Self::from_env().expect("HARPAS_VANILLA_SERVER_DIR is not set (docs/parity.md#locally)")
+    }
+
     /// Unpacks the server in `HARPAS_VANILLA_SERVER_DIR`, or returns `None` if the variable is not set.
     pub fn from_env() -> Option<Self> {
         let directory = PathBuf::from(std::env::var_os("HARPAS_VANILLA_SERVER_DIR")?);
@@ -145,6 +151,13 @@ pub struct VanillaData {
 
 #[allow(dead_code)]
 impl VanillaData {
+    /// [`VanillaData::find`] for a test that cannot run without the files; see [`Reference::required`].
+    pub fn required() -> Self {
+        Self::find().expect(
+            "neither HARPAS_VANILLA_SERVER_DIR nor a local test server's data (docs/parity.md#locally)",
+        )
+    }
+
     /// The reference server's game jar, or else the pack of a local test server, which CI does not have.
     pub fn find() -> Option<Self> {
         if let Some(reference) = Reference::from_env() {

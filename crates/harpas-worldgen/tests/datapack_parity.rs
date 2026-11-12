@@ -13,11 +13,9 @@ use harpas_worldgen::{
 use reference::VanillaData;
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn loads_and_evaluates_the_26_1_datapack() {
-    let Some(vanilla) = VanillaData::find() else {
-        eprintln!("Skipping the vanilla datapack: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let vanilla = VanillaData::required();
 
     let data = WorldgenData::from_zip_path(&vanilla.path).expect("load 26.1.zip");
     assert_eq!(data.biomes.len(), 65);

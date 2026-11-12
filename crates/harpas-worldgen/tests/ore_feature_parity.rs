@@ -19,11 +19,9 @@ const CASES: [(i64, i32, i32, u32, i32); 4] = [
 ];
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn ore_features_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping ore features: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     reference.compile(&[("OreFeatureProbe.java", include_str!("OreFeatureProbe.java"))]);
     let output = reference.temp.0.join("ore-features.txt");
     reference.java("OreFeatureProbe", [output.display().to_string()]);

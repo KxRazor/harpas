@@ -447,6 +447,20 @@ impl TickWork for Game {
                 }
                 Event::Input { entity_id, input } => {
                     match input {
+                        player::Input::ChatSessionEnded => {
+                            if let Some(state) = self
+                                .players
+                                .iter_mut()
+                                .find(|p| p.player.entity_id == entity_id && !p.disconnecting)
+                            {
+                                state.chat_session = None;
+                                let uuid = state.player.profile.uuid;
+                                for player in &self.players {
+                                    player.send(player::Output::ChatSessionEnded { uuid });
+                                }
+                            }
+                            continue;
+                        }
                         player::Input::ChatSession(session) => {
                             if let Some(state) = self
                                 .players
@@ -490,7 +504,9 @@ impl TickWork for Game {
                         .find(|p| p.player.entity_id == entity_id)
                     {
                         match input {
-                            player::Input::ChatSession(_) | player::Input::ChatMessage(_) => {
+                            player::Input::ChatSession(_)
+                            | player::Input::ChatSessionEnded
+                            | player::Input::ChatMessage(_) => {
                                 unreachable!()
                             }
                             player::Input::Movement(movement) => {

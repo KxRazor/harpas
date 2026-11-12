@@ -199,23 +199,37 @@ Harpas uses a **mixed** model:
   `enforce-secure-profile` allows it. Test authorities are generated independently and are never configured as
   production trust roots.
 - The connection verifies the sender, session, message index, timestamp, salt, text and previously seen
-  signatures [7]. It checks key expiration, rejects invalid signatures and replayed session IDs, and tracks
-  each recipient's 20-message acknowledgement window and pending messages. A bad acknowledgement or
-  checksum closes that connection. A bad signature breaks the signing chain until the player starts a new
-  session; a missing signature or expired key refuses the message. The receiving client determines whether
-  an old message is trustworthy.
+  signatures [7], and tracks each recipient's 20-message acknowledgement window and pending messages. What
+  it answers to chat it does not accept is what a vanilla server answers, which the `chat_parity` harness
+  compares case by case ([parity.md](parity.md)):
+  - **Keys.** A key that Mojang did not certify disconnects the player
+    (`multiplayer.disconnect.invalid_public_key_signature`). A certified key that has expired disconnects a
+    player who is signing (`multiplayer.disconnect.expired_public_key`); a player without a session stays,
+    has no session for the other players either, and nothing it sends is accepted until it sends a key in
+    force. The key a player already signs with changes nothing, under any session ID; a new key starts a new
+    signing chain.
+  - **Acknowledgements.** A bad acknowledgement or checksum disconnects the player
+    (`multiplayer.disconnect.chat_validation_failed`).
+  - **Messages.** A refused message gets a red system message and the player stays: a message older than
+    the one before (`chat.disabled.out_of_order_chat`) or with a wrong signature
+    (`chat.disabled.invalid_signature`) breaks the signing chain, and every message after it is refused
+    (`chat.disabled.chain_broken`) until a session with a new key; a message without a signature in a
+    signing session (`chat.disabled.missingProfileKey`) or signed with a key that has since expired
+    (`chat.disabled.expiredProfileKey`) is refused and leaves the chain as it is.
 - The logic thread distributes verified session information before signed messages, including to players
   who join later. It sends each original message to all players, including the sender, subject to their chat
   visibility setting. Signatures are sent in full rather than through the optional signature cache.
-- With `online-mode=true` and `enforce-secure-profile=true`, a message without a verified session and
-  signature is rejected. Players can join before sending a session. In offline mode, messages are relayed
-  unsigned and `enforcesSecureChat` is false. With secure profiles disabled, an online player without a
-  session can send unsigned messages; an established session cannot silently downgrade to unsigned chat.
+- With `online-mode=true` and `enforce-secure-profile=true`, a message from a player without a session is
+  refused (`chat.disabled.missingProfileKey`). Players can join before sending a session. In offline mode,
+  messages are relayed unsigned and `enforcesSecureChat` is false. With secure profiles disabled, an online
+  player without a session chats unsigned: a signature it sends is dropped, and its messages are not held to
+  their order. An established session cannot silently downgrade to unsigned chat.
 - Commands and Bedrock chat are not implemented yet. Signed commands are discarded but their acknowledgement
   and signing indices are tracked so they do not break later player messages.
 
 Automated tests use generated player and authority keys, including an encrypted online connection with a
-simulated session server; they are not a substitute for two real premium clients. A real online exchange,
+simulated session server, and the `chat_parity` harness sends the same signed chat to a vanilla server that
+trusts the test's key; they are not a substitute for two real premium clients. A real online exchange,
 including verification/reportability and "Only Show Secure Chat", remains to be checked when available.
 
 ---

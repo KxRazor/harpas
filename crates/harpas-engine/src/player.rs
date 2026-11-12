@@ -124,6 +124,8 @@ pub struct Movement {
 pub enum Input {
     /// Publish a verified signing session.
     ChatSession(ChatSession),
+    /// Publish that the player no longer has a signing session.
+    ChatSessionEnded,
     /// Broadcast an accepted message.
     ChatMessage(Box<ChatMessage>),
     /// The player moved or rotated.
@@ -181,6 +183,11 @@ pub enum Output {
         uuid: u128,
         /// Verified signing session.
         session: ChatSession,
+    },
+    /// Publish that a player no longer has a signing session.
+    ChatSessionEnded {
+        /// Player who owned the session.
+        uuid: u128,
     },
     /// Deliver a player message, including to its sender.
     ChatMessage {

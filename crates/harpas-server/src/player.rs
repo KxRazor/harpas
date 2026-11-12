@@ -75,6 +75,7 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                     key_signature: session.public_key.key_signature,
                 })
             }
+            PlayEvent::Chat(ChatEvent::SessionEnded) => Input::ChatSessionEnded,
             PlayEvent::Chat(ChatEvent::Message(message)) => {
                 Input::ChatMessage(Box::new(player::ChatMessage {
                     index: message.index,
@@ -127,6 +128,20 @@ pub(crate) fn send(
 ) -> Option<&'static str> {
     while let Some(output) = session.try_recv() {
         let packet = match output {
+            Output::ChatSessionEnded { uuid } => clientbound::PlayerInfoUpdate {
+                updates: play::PlayerInfoUpdates {
+                    actions: play::PlayerInfoActions {
+                        initialize_chat: true,
+                        ..Default::default()
+                    },
+                    entries: vec![play::PlayerInfoEntry {
+                        uuid,
+                        chat_session: None,
+                        ..Default::default()
+                    }],
+                },
+            }
+            .into(),
             Output::ChatSession { uuid, session } => clientbound::PlayerInfoUpdate {
                 updates: play::PlayerInfoUpdates {
                     actions: play::PlayerInfoActions {

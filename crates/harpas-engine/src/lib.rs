@@ -483,7 +483,7 @@ impl TickWork for Game {
                                 unreachable!()
                             }
                             player::Input::Movement(movement) => {
-                                if state.accepts(movement) {
+                                if state.accepts(movement, self.world.as_ref()) {
                                     let center = world::ChunkPos::at(
                                         state.player.position.x,
                                         state.player.position.z,
@@ -1192,11 +1192,14 @@ mod tests {
         state.player.position.x = 29_999_999.0;
         state.player.position.y = 19_999_999.0;
         state.tick_start = state.player.position;
-        assert!(state.accepts(Movement {
-            position: Some([30_000_001.0, 20_000_001.0, 0.5]),
-            rotation: None,
-            on_ground: false,
-        }));
+        assert!(state.accepts(
+            Movement {
+                position: Some([30_000_001.0, 20_000_001.0, 0.5]),
+                rotation: None,
+                on_ground: false,
+            },
+            None
+        ));
         assert_eq!(state.player.position.x, 30_000_000.0);
         assert_eq!(state.player.position.y, 20_000_000.0);
     }
@@ -1212,11 +1215,14 @@ mod tests {
             profile.game_mode = mode;
             let mut state = player::PlayerState::new(1, profile, 10, allow_flight, sender);
             state.awaiting_teleport = None;
-            state.accepts(Movement {
-                position: Some([0.5, 65.0, 0.5]),
-                rotation: None,
-                on_ground: false,
-            });
+            state.accepts(
+                Movement {
+                    position: Some([0.5, 65.0, 0.5]),
+                    rotation: None,
+                    on_ground: false,
+                },
+                None,
+            );
             (state, receiver)
         }
 
@@ -1247,11 +1253,14 @@ mod tests {
         for _ in 0..80 {
             falling.check_flight();
         }
-        falling.accepts(Movement {
-            position: Some([0.5, 64.0, 0.5]),
-            rotation: None,
-            on_ground: false,
-        });
+        falling.accepts(
+            Movement {
+                position: Some([0.5, 64.0, 0.5]),
+                rotation: None,
+                on_ground: false,
+            },
+            None,
+        );
         for _ in 0..100 {
             falling.check_flight();
         }

@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use harpas_anvil::Chunk;
 
 use crate::light::Light;
-use crate::world::ChunkPos;
+use crate::world::{ChunkPos, World};
 
 /// A signed profile property, such as a Java player's skin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -372,7 +372,9 @@ impl PlayerState {
         self.output.send(output);
     }
 
-    pub(crate) fn accepts(&mut self, movement: Movement) -> bool {
+    /// Applies a movement packet and returns whether the player moved. `world` tells whether the player is
+    /// next to a block, which is not floating; without a world there are no blocks.
+    pub(crate) fn accepts(&mut self, movement: Movement, world: Option<&World>) -> bool {
         if self.disconnecting {
             return false;
         }
@@ -416,7 +418,11 @@ impl PlayerState {
         }
         next.on_ground = movement.on_ground;
         if movement.position.is_some() {
-            self.client_floating = !next.on_ground && next.y - self.player.position.y >= -0.03125;
+            // Vanilla's `clientIsFloating`: not falling, off the ground and touching nothing but air, so that
+            // swimming, climbing and standing on a block the client reports as not ground do not count.
+            self.client_floating = !next.on_ground
+                && next.y - self.player.position.y >= -0.03125
+                && world.is_none_or(|world| world.no_blocks_around(&next));
         } else if next.on_ground {
             self.client_floating = false;
         }

@@ -3,8 +3,9 @@ name: Dependabot notices
 # Dependabot changes Cargo.lock but cannot regenerate THIRD_PARTY_NOTICES.md, so its pull requests would fail
 # the notices check in CI. This workflow regenerates the file on the pull request branch and commits it.
 #
-# Commits pushed with GITHUB_TOKEN do not trigger workflows, so CI and the parity comparison are started again
-# explicitly on the branch; their checks then report on the new commit.
+# GitHub holds the workflow runs that this commit starts on the pull request until a maintainer approves them
+# with "Approve and run" on the pull request, because the commit is pushed with GITHUB_TOKEN. The checks then
+# report on the new commit (CONTRIBUTING.md#checks).
 
 on:
   pull_request:
@@ -20,7 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -31,9 +31,8 @@ jobs:
         with:
           tool: cargo-about
       - run: ci/third-party-notices.sh
-      - name: Commit and restart the checks
+      - name: Commit
         env:
-          GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ github.head_ref }}
         run: |
           if git diff --quiet THIRD_PARTY_NOTICES.md; then
@@ -44,5 +43,3 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "deps: regenerate third-party notices"
           git push origin "HEAD:$BRANCH"
-          gh workflow run ci.yml --ref "$BRANCH"
-          gh workflow run parity.yml --ref "$BRANCH"

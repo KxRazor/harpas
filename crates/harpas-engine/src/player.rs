@@ -324,6 +324,16 @@ impl OutputReceiver {
     }
 }
 
+/// The chunks a player sees, kept from tick to tick while the player stays in its chunk.
+#[derive(Debug, Default)]
+pub(crate) struct View {
+    /// The chunk the player is in and its view distance, or none for a player that sees nothing: one that
+    /// is leaving, or whose view has not been computed yet.
+    pub(crate) key: Option<(ChunkPos, u8)>,
+    /// The chunks of the view, nearest first.
+    pub(crate) chunks: Vec<ChunkPos>,
+}
+
 pub(crate) struct PlayerState {
     pub(crate) player: Player,
     pub(crate) chat_session: Option<ChatSession>,
@@ -335,6 +345,7 @@ pub(crate) struct PlayerState {
     pub(crate) floating_ticks: u32,
     pub(crate) tracked: HashSet<i32>,
     pub(crate) sent_chunks: HashSet<ChunkPos>,
+    pub(crate) view: View,
     pub(crate) awaiting_chunk_batch: bool,
     pub(crate) chunks_per_tick: f32,
     pub(crate) chunk_credit: f32,
@@ -375,6 +386,7 @@ impl PlayerState {
             floating_ticks: 0,
             tracked: HashSet::new(),
             sent_chunks: HashSet::new(),
+            view: View::default(),
             awaiting_chunk_batch: false,
             chunks_per_tick: 8.0,
             chunk_credit: 8.0,
@@ -488,15 +500,14 @@ impl PlayerState {
         self.chat_spam = self.chat_spam.saturating_sub(1);
     }
 
-    pub(crate) fn can_see(&self, other: &Player) -> bool {
-        if other.profile.game_mode == GameMode::Spectator
-            && self.player.profile.game_mode != GameMode::Spectator
-        {
+    /// Whether this player sees a player in `mode` at `position`.
+    pub(crate) fn can_see(&self, mode: GameMode, position: Position) -> bool {
+        if mode == GameMode::Spectator && self.player.profile.game_mode != GameMode::Spectator {
             return false;
         }
         // A player is tracked within its observer's view distance, up to the player tracking range.
         let range = (f64::from(self.view_distance) * 16.0).min(128.0);
-        (self.player.position.x - other.position.x).abs() <= range
-            && (self.player.position.z - other.position.z).abs() <= range
+        (self.player.position.x - position.x).abs() <= range
+            && (self.player.position.z - position.z).abs() <= range
     }
 }

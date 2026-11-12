@@ -278,6 +278,8 @@ struct Game {
     players: Vec<player::PlayerState>,
     online_players: Arc<AtomicU32>,
     world: Option<world::World>,
+    /// The players whose views the world's wanted chunks were last computed from, in order.
+    viewers: Vec<i32>,
     stopped: bool,
 }
 
@@ -286,62 +288,68 @@ impl TickWork for Game {
         let Some(world) = &mut self.world else {
             return;
         };
-        let views: Vec<_> = self
-            .players
-            .iter()
-            .map(|p| {
-                if p.disconnecting {
-                    Vec::new()
-                } else {
-                    world::ChunkPos::at(p.player.position.x, p.player.position.z)
-                        .view(p.view_distance)
-                }
-            })
-            .collect();
-        // A generated chunk's light reads one chunk around it, so a generating world keeps that border
-        // loaded without sending it.
-        let load_views: Vec<_> = if world.generates() {
-            self.players
+        // Most ticks no player enters another chunk, and the views and the chunks the world keeps loaded
+        // stay as they are.
+        let mut moved = false;
+        for player in &mut self.players {
+            let key = (!player.disconnecting).then(|| {
+                let center =
+                    world::ChunkPos::at(player.player.position.x, player.player.position.z);
+                (center, player.view_distance)
+            });
+            if player.view.key == key {
+                continue;
+            }
+            moved = true;
+            player.view.key = key;
+            player.view.chunks =
+                key.map_or_else(Vec::new, |(center, distance)| center.view(distance));
+            if let Some((center, distance)) = key {
+                player
+                    .sent_chunks
+                    .retain(|pos| pos.within(center, distance));
+            }
+        }
+        let viewers: Vec<_> = self.players.iter().map(|p| p.player.entity_id).collect();
+        if moved || viewers != self.viewers {
+            self.viewers = viewers;
+            // A generated chunk's light reads one chunk around it, so a generating world keeps that border
+            // loaded without sending it.
+            let border = u8::from(world.generates());
+            let load_views: Vec<_> = self
+                .players
                 .iter()
-                .map(|p| {
-                    if p.disconnecting {
-                        Vec::new()
-                    } else {
-                        world::ChunkPos::at(p.player.position.x, p.player.position.z)
-                            .view(p.view_distance.saturating_add(1))
-                    }
+                .map(|p| match p.view.key {
+                    Some((center, distance)) if border > 0 => center.view(distance + border),
+                    _ => p.view.chunks.clone(),
                 })
-                .collect()
-        } else {
-            views.clone()
-        };
-        // Interleave each player's nearest-first view so one large view cannot monopolize the work queue.
-        let longest = load_views.iter().map(Vec::len).max().unwrap_or(0);
-        let wanted = (0..longest).flat_map(|index| {
-            load_views
-                .iter()
-                .filter_map(move |view| view.get(index).copied())
-        });
-        if let Err(error) = world.update(wanted) {
+                .collect();
+            // Interleave each player's nearest-first view so one large view cannot monopolize the work
+            // queue.
+            let longest = load_views.iter().map(Vec::len).max().unwrap_or(0);
+            world.want((0..longest).flat_map(|index| {
+                load_views
+                    .iter()
+                    .filter_map(move |view| view.get(index).copied())
+            }));
+        }
+        if let Err(error) = world.advance() {
             self.fail_world(error);
             return;
         }
-        for (player, view) in self.players.iter_mut().zip(views) {
-            let center = world::ChunkPos::at(player.player.position.x, player.player.position.z);
-            player
-                .sent_chunks
-                .retain(|pos| pos.within(center, player.view_distance));
+        for player in &mut self.players {
             if player.disconnecting || player.awaiting_chunk_batch {
                 continue;
             }
             player.chunk_credit =
                 (player.chunk_credit + player.chunks_per_tick).min(CHUNKS_PER_BATCH as f32);
             let limit = (player.chunk_credit as usize).min(CHUNKS_PER_BATCH);
-            if limit == 0 {
+            // Every chunk sent is in the view, so a player with as many has them all.
+            if limit == 0 || player.sent_chunks.len() >= player.view.chunks.len() {
                 continue;
             }
             let mut batch = Vec::with_capacity(limit);
-            for pos in view {
+            for &pos in &player.view.chunks {
                 if player.sent_chunks.contains(&pos) {
                     continue;
                 }
@@ -629,27 +637,42 @@ impl Game {
     }
 
     fn update_tracking(&mut self, moved: &HashSet<i32>) {
-        let players: Vec<_> = self.players.iter().map(|p| p.player.clone()).collect();
-        for viewer in &mut self.players {
-            for target in &players {
-                if viewer.player.entity_id == target.entity_id {
+        // What visibility depends on. A profile, with its skin, is copied only for a player that comes
+        // into view.
+        let targets: Vec<_> = self
+            .players
+            .iter()
+            .map(|p| {
+                (
+                    p.player.entity_id,
+                    p.player.profile.game_mode,
+                    p.player.position,
+                )
+            })
+            .collect();
+        for viewer in 0..self.players.len() {
+            for (target, &(entity_id, mode, position)) in targets.iter().enumerate() {
+                if viewer == target {
                     continue;
                 }
-                let visible = viewer.can_see(target);
-                let tracked = viewer.tracked.contains(&target.entity_id);
+                let visible = self.players[viewer].can_see(mode, position);
+                let tracked = self.players[viewer].tracked.contains(&entity_id);
                 match (visible, tracked) {
                     (true, false) => {
-                        viewer.tracked.insert(target.entity_id);
-                        viewer.send(player::Output::Spawn(target.clone()));
+                        let spawned = self.players[target].player.clone();
+                        let viewer = &mut self.players[viewer];
+                        viewer.tracked.insert(entity_id);
+                        viewer.send(player::Output::Spawn(spawned));
                     }
                     (false, true) => {
-                        viewer.tracked.remove(&target.entity_id);
-                        viewer.send(player::Output::RemoveEntity(target.entity_id));
+                        let viewer = &mut self.players[viewer];
+                        viewer.tracked.remove(&entity_id);
+                        viewer.send(player::Output::RemoveEntity(entity_id));
                     }
-                    (true, true) if moved.contains(&target.entity_id) => {
-                        viewer.send(player::Output::MoveEntity {
-                            entity_id: target.entity_id,
-                            position: target.position,
+                    (true, true) if moved.contains(&entity_id) => {
+                        self.players[viewer].send(player::Output::MoveEntity {
+                            entity_id,
+                            position,
                         });
                     }
                     _ => {}
@@ -703,6 +726,7 @@ fn run(
         players: Vec::new(),
         online_players,
         world,
+        viewers: Vec::new(),
         stopped: false,
     };
     let mut schedule = Schedule::new(Instant::now());
@@ -743,6 +767,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(AtomicU32::new(0)),
             world: None,
+            viewers: Vec::new(),
             stopped: false,
         }
     }

@@ -113,6 +113,8 @@ The logic thread is attached to the JVM at startup when Java plugins are present
 
 The current chunk loader uses up to four workers and a bounded queue. The logic thread requests each player's
 view, interleaving viewers and prioritizing nearby chunks, and applies completed reads in the dimension phase.
+A player's view is computed again only when the player enters another chunk or changes its view distance, and
+the chunks the world keeps loaded only when some view changed or a player joined or left.
 Shared requests are deduplicated; results no longer needed are discarded, except that discovering an
 incompatible chunk still stops the server. Java connections encode chunks in batches of at most eight, wait for
 the client's acknowledgement and honor its requested chunk rate; the Java configuration registry supplies the biome ID order. Missing

@@ -372,6 +372,9 @@ pub struct World {
     spawn: [i32; 3],
     generates: bool,
     chunks: HashMap<ChunkPos, ChunkState>,
+    /// The chunks to keep loaded, most wanted first and each once, as [`World::want`] left them.
+    wanted: Vec<ChunkPos>,
+    wanted_set: HashSet<ChunkPos>,
     in_flight: HashSet<ChunkPos>,
     changes: HashMap<ChunkPos, Changes>,
     /// The regions with a save queued or being written. A region has one save at a time, so the changes
@@ -488,6 +491,8 @@ impl World {
             spawn,
             generates,
             chunks: HashMap::new(),
+            wanted: Vec::new(),
+            wanted_set: HashSet::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
             saving: HashSet::new(),
@@ -882,16 +887,42 @@ impl World {
         Ok(())
     }
 
+    /// [Wants](World::want) `wanted` and [advances](World::advance) the world.
+    pub fn update(&mut self, wanted: impl IntoIterator<Item = ChunkPos>) -> io::Result<()> {
+        self.want(wanted);
+        self.advance()
+    }
+
+    /// Sets the chunks to keep loaded, most wanted first. They stay wanted until the next call, so a caller
+    /// whose views did not change only [advances](World::advance) the world.
+    pub fn want(&mut self, wanted: impl IntoIterator<Item = ChunkPos>) {
+        self.wanted.clear();
+        self.wanted_set.clear();
+        for pos in wanted {
+            if self.wanted_set.insert(pos) {
+                self.wanted.push(pos);
+            }
+        }
+    }
+
     /// Applies finished reads and writes, saves the changed chunks that left every view, one region at a
     /// time, and queues requests without waiting for disk.
     /// An incompatible chunk or an unavailable worker pool is fatal and returned to the caller, even if the
     /// incompatible chunk is no longer wanted when its read finishes.
-    pub fn update(&mut self, wanted: impl IntoIterator<Item = ChunkPos>) -> io::Result<()> {
-        let mut wanted_set = HashSet::new();
-        let wanted: Vec<_> = wanted
-            .into_iter()
-            .filter(|pos| wanted_set.insert(*pos))
-            .collect();
+    pub fn advance(&mut self) -> io::Result<()> {
+        let wanted = std::mem::take(&mut self.wanted);
+        let wanted_set = std::mem::take(&mut self.wanted_set);
+        let result = self.advance_for(&wanted, &wanted_set);
+        self.wanted = wanted;
+        self.wanted_set = wanted_set;
+        result
+    }
+
+    fn advance_for(
+        &mut self,
+        wanted: &[ChunkPos],
+        wanted_set: &HashSet<ChunkPos>,
+    ) -> io::Result<()> {
         loop {
             match self.saver.completed.try_recv() {
                 Ok(completion) => self.finish_save(completion)?,
@@ -926,7 +957,7 @@ impl World {
         self.queue_saves()?;
         loop {
             match self.loader.completed.try_recv() {
-                Ok(completion) => self.finish_load(completion, &wanted_set)?,
+                Ok(completion) => self.finish_load(completion, wanted_set)?,
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     return Err(io::Error::other("chunk workers stopped"));
@@ -934,10 +965,10 @@ impl World {
             }
         }
         self.update_light()?;
-        for &pos in &wanted {
+        for &pos in wanted {
             self.chunks.entry(pos).or_insert(ChunkState::Loading);
         }
-        for pos in wanted {
+        for &pos in wanted {
             let state = &self.chunks[&pos];
             if !matches!(state, ChunkState::Loading) || self.in_flight.contains(&pos) {
                 continue;
@@ -1169,6 +1200,8 @@ mod tests {
             spawn: [0, 65, 0],
             generates: false,
             chunks: HashMap::new(),
+            wanted: Vec::new(),
+            wanted_set: HashSet::new(),
             in_flight: HashSet::new(),
             changes: HashMap::new(),
             saving: HashSet::new(),
@@ -1320,6 +1353,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1);
@@ -1329,6 +1363,71 @@ mod tests {
         let world = game.world.as_ref().unwrap();
         assert_eq!(world.chunks.len(), 25);
         assert!(world.chunk(ChunkPos { x: 3, z: 0 }).is_none());
+    }
+
+    #[test]
+    fn a_view_is_kept_within_a_chunk_and_follows_the_player_into_the_next() {
+        let folder = Folder::new();
+        let (output, _received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 0;
+        let mut move_to = |game: &mut Game, x: f64| {
+            game.pending.push(Event::Input {
+                entity_id: 1,
+                input: Input::Movement(Movement {
+                    position: Some([x, 65.0, 0.5]),
+                    rotation: None,
+                    on_ground: true,
+                }),
+            });
+            // The move is applied after the first tick's dimension phase.
+            for _ in 0..2 {
+                number += 1;
+                tick(game, number);
+            }
+        };
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ConfirmTeleport(1),
+        });
+        move_to(&mut game, 0.5);
+        let origin = ChunkPos { x: 0, z: 0 };
+        assert_eq!(game.players[0].view.key, Some((origin, 2)));
+        let view = game.players[0].view.chunks.as_ptr();
+
+        move_to(&mut game, 3.5);
+        assert_eq!(game.players[0].view.key, Some((origin, 2)));
+        assert_eq!(game.players[0].view.chunks.as_ptr(), view);
+        assert_eq!(game.world.as_ref().unwrap().chunks.len(), 25);
+
+        move_to(&mut game, -0.5);
+        let west = ChunkPos { x: -1, z: 0 };
+        assert_eq!(game.players[0].view.key, Some((west, 2)));
+        assert_eq!(game.players[0].view.chunks, west.view(2));
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(world.chunks.len(), 25);
+        assert!(world.chunk(ChunkPos { x: -3, z: 0 }).is_some());
+        assert!(world.chunk(ChunkPos { x: 2, z: 0 }).is_none());
+        assert!(
+            game.players[0]
+                .sent_chunks
+                .iter()
+                .all(|pos| pos.within(west, 2))
+        );
     }
 
     #[test]
@@ -1354,6 +1453,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1);
@@ -2007,6 +2107,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1);
@@ -2081,6 +2182,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1); // Joining happens after the dimension phase.
@@ -2141,6 +2243,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1);
@@ -2206,6 +2309,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1);
@@ -2277,6 +2381,7 @@ mod tests {
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
             stopped: false,
         };
         tick(&mut game, 1);

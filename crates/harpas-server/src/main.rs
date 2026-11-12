@@ -2,8 +2,8 @@
 //!
 //! Listens for Java Edition connections on `server-ip` and `server-port` from `server.properties`, answers the
 //! server list, logs players in (online mode through Mojang's session server, or offline mode) and brings them
-//! into the configured overworld. The engine runs on one logic thread; there is one thread per connection for now. The
-//! network runtime comes with the protection against abusive connections (`docs/java-connection.md`). Settings
+//! into the configured overworld. The engine runs on one logic thread; each connection has a thread and a second
+//! one that reads its socket, for now. The network runtime comes with the protection against abusive connections (`docs/java-connection.md`). Settings
 //! come from `server.properties`, `harpas.toml` and `HARPAS_*` environment variables; the log goes to the
 //! console and `logs/latest.log`. The server starts only once the owner has accepted Mojang's EULA.
 //!
@@ -21,11 +21,12 @@ mod player;
 mod properties;
 mod session;
 mod shutdown;
+mod socket;
 mod vanilla_data;
 mod world_generation;
 
 use std::io::{self, Read, Write};
-use std::net::{self, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,6 +42,7 @@ use limits::{Limits, Permit};
 use properties::Properties;
 use session::{SessionServer, format_uuid};
 use shutdown::Shutdown;
+use socket::Socket;
 
 /// Vanilla closes a connection that sends nothing for 30 seconds.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -48,7 +50,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// writing. Without it such a client would hold its thread and its place among the players for good, while what
 /// the logic thread sends it piles up.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Wake idle connections to send messages from the logic thread promptly.
+/// How often the server looks for new connections, and an idle connection checks its timeouts. Bytes from the
+/// client and messages from the logic thread wake a connection without waiting for it (`socket`).
 const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Revision of PrismarineJS/minecraft-data the Java codecs were built from, as in
@@ -435,25 +438,16 @@ struct ConnectionEnvironment {
 }
 
 fn serve(
-    mut stream: TcpStream,
+    stream: TcpStream,
     environment: &ConnectionEnvironment,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
     permit: &mut Permit,
 ) -> io::Result<()> {
-    configure(&stream, WRITE_TIMEOUT)?;
-    let result = drive(&mut stream, environment, key, session, logic, Some(permit));
-    let _ = stream.shutdown(net::Shutdown::Both);
-    result
-}
-
-/// Sets a connection's timeouts: a write that makes no progress for `write_timeout` fails and ends it.
-fn configure(stream: &TcpStream, write_timeout: Duration) -> io::Result<()> {
-    // Reads wake up to send the logic thread's output even when this player is idle.
-    stream.set_read_timeout(Some(CONNECTION_POLL_INTERVAL))?;
-    stream.set_write_timeout(Some(write_timeout))?;
-    stream.set_nodelay(true)
+    // Dropping the socket closes the connection.
+    let mut socket = Socket::new(stream, WRITE_TIMEOUT, CONNECTION_POLL_INTERVAL)?;
+    drive(&mut socket, environment, key, session, logic, Some(permit))
 }
 
 /// Drives the I/O-free connection state machine over a stream. Once the player has joined, the end of the
@@ -942,12 +936,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         // The client connects and never reads.
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut stream, _) = listener.accept().unwrap();
-        configure(&stream, Duration::from_millis(100)).unwrap();
-        assert_eq!(
-            stream.write_timeout().unwrap(),
-            Some(Duration::from_millis(100))
-        );
+        let (stream, _) = listener.accept().unwrap();
+        let mut stream =
+            Socket::new(stream, Duration::from_millis(100), CONNECTION_POLL_INTERVAL).unwrap();
         let started = Instant::now();
         // More than the socket buffers of both ends hold, in writes the size of a large packet: Windows
         // takes a single write of any size whole while its buffer has room.

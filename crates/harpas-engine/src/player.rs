@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::Thread;
 
 use harpas_anvil::Chunk;
 
@@ -242,6 +243,8 @@ struct Queue {
 pub(crate) struct OutputSender {
     sender: Sender<Output>,
     queue: Arc<Queue>,
+    /// The connection's thread, which parks while it has nothing to do.
+    connection: Option<Thread>,
 }
 
 /// The connection's end of a player's output.
@@ -252,13 +255,25 @@ pub(crate) struct OutputReceiver {
 }
 
 /// A channel for a player's output that holds at most [`MAX_QUEUED_OUTPUT`] messages.
+#[cfg(test)]
 pub(crate) fn output_channel() -> (OutputSender, OutputReceiver) {
+    channel(None)
+}
+
+/// A channel like [`output_channel`]'s that also unparks `connection` for every message, so that a connection
+/// thread parked while its player is idle sends the message at once.
+pub(crate) fn output_channel_waking(connection: Thread) -> (OutputSender, OutputReceiver) {
+    channel(Some(connection))
+}
+
+fn channel(connection: Option<Thread>) -> (OutputSender, OutputReceiver) {
     let (sender, receiver) = mpsc::channel();
     let queue = Arc::new(Queue::default());
     (
         OutputSender {
             sender,
             queue: Arc::clone(&queue),
+            connection,
         },
         OutputReceiver { receiver, queue },
     )
@@ -273,10 +288,15 @@ impl OutputSender {
         }
         if self.queue.len.fetch_add(1, Ordering::Relaxed) >= MAX_QUEUED_OUTPUT {
             self.queue.overflowed.store(true, Ordering::Relaxed);
-            return;
+        } else {
+            // A dropped receiver means the connection has closed; its departure is queued separately.
+            let _ = self.sender.send(output);
         }
-        // A dropped receiver means the connection has closed; its departure is queued separately.
-        let _ = self.sender.send(output);
+        // After the message is queued, so the connection finds it. Unparking a running thread costs no
+        // system call.
+        if let Some(connection) = &self.connection {
+            connection.unpark();
+        }
     }
 
     /// Whether the connection fell too far behind, so that the player must leave.

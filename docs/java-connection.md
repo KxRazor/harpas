@@ -40,7 +40,9 @@ Every connection starts in Handshaking and moves through the states vanilla defi
 
 - **No I/O in the state machine.** `harpas_java::Connection` takes the bytes read from the socket and produces
   the bytes to send, like the NetherNet transport ([nethernet.md](nethernet.md)). The `harpas` binary drives
-  it with one thread per connection, which the connection limits below keep bounded; a network runtime that
+  it with one thread per connection, which the connection limits below keep bounded, and a second thread
+  that reads the connection's socket. The connection's thread sleeps until the client sends bytes or the
+  logic thread queues a message for the player, so neither waits for a timer. A network runtime that
   replaces those threads is chosen when the number of connections calls for it (open question 2). Connections queue player events for the logic thread's packet phase
   and send its updates to clients; the resulting online count is used in server-list responses
   ([engine-core.md](engine-core.md#1-vanilla-tick-order-on-one-logic-thread)).

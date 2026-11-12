@@ -48,9 +48,14 @@ them locally before opening a pull request:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace
+cargo test --workspace --doc
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
+
+The tests run with [cargo-nextest](https://nexte.st) (`cargo install --locked cargo-nextest`), which runs the test
+binaries at once and so takes about half the time of `cargo test`. It does not run documentation tests, hence
+the second command. Without it, `cargo test --workspace` runs the same tests.
 
 Adding or updating a Rust dependency also needs:
 

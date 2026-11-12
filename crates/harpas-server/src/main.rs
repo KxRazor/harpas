@@ -540,6 +540,11 @@ fn play(
     let mut player_session = None;
     let mut uuid_logged = false;
     while !connection.is_closed() {
+        if permit.as_ref().is_some_and(|p| p.evicted()) {
+            return Err(io::Error::other(
+                "gave up its place among the connections that are not playing yet",
+            ));
+        }
         let result = match stream.read(&mut buf) {
             Ok(0) => return Ok(()),
             Ok(read) => {

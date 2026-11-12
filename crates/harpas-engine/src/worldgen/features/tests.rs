@@ -246,6 +246,70 @@ fn concurrent_workers_decorate_each_chunk_once() {
 }
 
 #[test]
+fn a_worker_generates_the_rest_while_another_is_busy_with_a_chunk_they_share() {
+    let folder = Folder::new();
+    let storage = folder.storage();
+    let counts = Counts::default();
+    // The first chunk asked for is not generated until the gate opens.
+    let (first, gate) = (Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)));
+    let generator: Arc<ChunkGenerator> = {
+        let (counts, first, gate) = (Arc::clone(&counts), Arc::clone(&first), Arc::clone(&gate));
+        Arc::new(move |pos: ChunkPos, _: &ChunkReader<'_>| {
+            if first.lock().unwrap().get_or_insert(pos) == &pos {
+                while !gate.load(Ordering::Relaxed) {
+                    thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            *counts.lock().unwrap().entry(pos).or_default() += 1;
+            into_anvil_with_mask(stone_chunk(pos), CarvingMask::new(-64, 384).to_raw_data())
+        })
+    };
+    let decorator = Decorator::new(generator, SEED, feature_index(), 1, CAPACITY);
+    let wait_until = |condition: &dyn Fn() -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !condition() {
+            assert!(std::time::Instant::now() < deadline, "timed out");
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+    let wanted = [ChunkPos { x: 0, z: 0 }, ChunkPos { x: 1, z: 0 }];
+    /// Opens the gate when the test ends, also by a failure, so the workers do not wait forever.
+    struct Open(Arc<AtomicBool>);
+    impl Drop for Open {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let chunks = thread::scope(|scope| {
+        let _open = Open(Arc::clone(&gate));
+        let (decorator, storage) = (&decorator, &storage);
+        let held = scope.spawn(move || decorator.complete(wanted[0], storage).unwrap().chunk);
+        wait_until(&|| first.lock().unwrap().is_some());
+        let other = scope.spawn(move || decorator.complete(wanted[1], storage).unwrap().chunk);
+        // The second worker needs the 5x5 chunks around its own, one of which the first is busy with. It
+        // generates the other 24 meanwhile.
+        wait_until(&|| counts.lock().unwrap().len() == 24);
+        assert!(!held.is_finished() && !other.is_finished());
+        gate.store(true, Ordering::Relaxed);
+        [held.join().unwrap(), other.join().unwrap()]
+    });
+    let decorated: BTreeSet<_> = wanted
+        .iter()
+        .flat_map(|&pos| square(pos, 1))
+        .map(|pos| (pos.x, pos.z))
+        .collect();
+    let decorated: Vec<_> = decorated
+        .into_iter()
+        .map(|(x, z)| ChunkPos { x, z })
+        .collect();
+    let blocks = expected(&square(ChunkPos { x: 0, z: 0 }, 3), &decorated);
+    for (pos, chunk) in wanted.iter().zip(&chunks) {
+        assert_blocks(chunk, &blocks[pos]);
+    }
+    assert!(counts.lock().unwrap().values().all(|&count| count == 1));
+}
+
+#[test]
 fn proto_chunks_saved_when_memory_runs_short_resume_unchanged() {
     let folder = Folder::new();
     let storage = folder.storage();

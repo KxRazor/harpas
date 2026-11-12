@@ -6,6 +6,9 @@
 //! or saved to its region file with vanilla's `carvers` or `features` status when memory runs short or the
 //! server stops, so either Harpas or vanilla can resume it.
 //!
+//! Workers that complete nearby chunks need the same chunks. A worker that finds one of them in another
+//! worker's hands goes on with the others it needs, and waits only when every chunk it still needs is taken.
+//!
 //! The logic thread receives only final chunks, and a chunk leaves this store when it does. Every
 //! decoration finds its 3x3 chunks here, so a decoration never writes into a chunk the logic thread owns.
 
@@ -194,8 +197,22 @@ impl Decorator {
 
     /// Decorates every chunk around `pos`, then takes `pos` out of the store.
     fn complete(&self, pos: ChunkPos, storage: &ChunkStorage) -> io::Result<Generated> {
-        for target in around(pos) {
-            self.decorate(target, storage)?;
+        // A target whose chunks other workers are busy with is left for later while another can go on. Only
+        // when none can does the worker wait.
+        let mut targets: Vec<_> = around(pos).collect();
+        while !targets.is_empty() {
+            let waiting = targets.len();
+            let mut later = Vec::new();
+            for target in targets {
+                if !self.decorate(target, false, storage)? {
+                    later.push(target);
+                }
+            }
+            targets = later;
+            if targets.len() == waiting {
+                let target = targets.remove(0);
+                self.decorate(target, true, storage)?;
+            }
         }
         let mut state = self.lock();
         let proto = loop {
@@ -235,27 +252,39 @@ impl Decorator {
         Ok(generated)
     }
 
-    /// Runs the FEATURES stage of `target` unless it has run already, loading or generating its 3x3 chunks.
-    fn decorate(&self, target: ChunkPos, storage: &ChunkStorage) -> io::Result<()> {
+    /// Runs the FEATURES stage of `target` unless it has run already, loading or generating its 3x3 chunks,
+    /// and returns true. Without `wait`, it returns false where it would have to wait for another worker.
+    fn decorate(&self, target: ChunkPos, wait: bool, storage: &ChunkStorage) -> io::Result<bool> {
         loop {
             let mut state = self.lock();
             if state.handed_out.contains(&target) || state.decorated.contains(&target) {
-                return Ok(());
-            }
-            if let Some(Slot::Ready(proto)) = state.slots.get(&target)
-                && proto.decorated
-            {
-                return Ok(());
-            }
-            if around(target).any(|pos| matches!(state.slots.get(&pos), Some(Slot::Busy))) {
-                drop(self.wait(state));
-                continue;
+                return Ok(true);
             }
             // The target first: when its saved copy has decorated, its neighbors may be final and must not
             // be loaded.
-            let missing = std::iter::once(target)
-                .chain(around(target))
-                .find(|pos| !state.slots.contains_key(pos));
+            let missing = match state.slots.get(&target) {
+                None => Some(target),
+                Some(Slot::Busy) => {
+                    if !wait {
+                        return Ok(false);
+                    }
+                    drop(self.wait(state));
+                    continue;
+                }
+                Some(Slot::Ready(proto)) if proto.decorated => return Ok(true),
+                // A missing neighbor is loaded or generated while other workers are busy with the rest:
+                // waiting for them first would leave this worker idle and the chunks generated one by one.
+                Some(Slot::Ready(_)) => around(target).find(|pos| !state.slots.contains_key(pos)),
+            };
+            if missing.is_none()
+                && around(target).any(|pos| matches!(state.slots.get(&pos), Some(Slot::Busy)))
+            {
+                if !wait {
+                    return Ok(false);
+                }
+                drop(self.wait(state));
+                continue;
+            }
             if let Some(missing) = missing {
                 if state.handed_out.contains(&missing) {
                     return Err(io::Error::other(format!(
@@ -301,7 +330,7 @@ impl Decorator {
             };
             let protos = self.run_features(target, protos)?;
             claim.release(protos);
-            return Ok(());
+            return Ok(true);
         }
     }
 

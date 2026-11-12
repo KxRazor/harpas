@@ -111,7 +111,11 @@ Work that cannot change the result of the tick runs in parallel, off the logic t
 
 The logic thread is attached to the JVM at startup when Java plugins are present ([jvm.md](jvm.md#threads)).
 
-The current chunk loader uses up to four workers and a bounded queue. The logic thread requests each player's
+The current chunk loader uses a bounded queue and two workers for every three hardware threads, at
+most 16: 8 on a machine with 12. Generating a view of 441 chunks on such a machine (6 cores) went from 71
+chunks a second with 4 workers to 81 with 8 and 83 with 12, and with the features stage from 21 to 35 and 45;
+from 10 workers on, the logic thread waited up to 5 ms for a processor. Limited to 4 hardware threads, 2
+workers generated as fast as 4. The logic thread requests each player's
 view, interleaving viewers and prioritizing nearby chunks, and applies completed reads in the dimension phase.
 A player's view is computed again only when the player enters another chunk or changes its view distance, and
 the chunks the world keeps loaded only when some view changed or a player joined or left.

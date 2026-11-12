@@ -21,7 +21,14 @@ use crate::light::{self, Light, Lighter};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
 const QUEUE_CAPACITY: usize = 64;
-const MAX_WORKERS: usize = 4;
+/// Most workers that read and generate chunks, and as many that light them. More than this was not measured.
+const MAX_WORKERS: usize = 16;
+
+/// The chunk workers for a machine with `parallelism` hardware threads: two thirds of them. Generation gains
+/// little from the rest, which the logic thread and the connections need (`docs/engine-core.md`).
+fn worker_count(parallelism: usize) -> usize {
+    (parallelism * 2 / 3).clamp(1, MAX_WORKERS)
+}
 /// How long a changed chunk that left every view waits for the other chunks of its region to leave too.
 /// Each save rewrites the whole region file, so they are written together.
 const UNLOAD_SAVE_DELAY: Duration = Duration::from_secs(5);
@@ -483,9 +490,7 @@ impl World {
                 .collect();
             storage.write(&chunks)
         });
-        let workers = thread::available_parallelism()
-            .map_or(1, usize::from)
-            .min(MAX_WORKERS);
+        let workers = worker_count(thread::available_parallelism().map_or(1, usize::from));
         Ok(Self {
             region_dir,
             spawn,
@@ -1320,6 +1325,12 @@ mod tests {
         let water = states.default_state("minecraft:water").unwrap();
         set(&mut world, stone, [8, 10, 8], water);
         assert!(!hover(&world));
+    }
+
+    #[test]
+    fn two_thirds_of_the_hardware_threads_work_on_chunks() {
+        let counts = [1, 2, 3, 4, 6, 8, 12, 16, 24, 96].map(worker_count);
+        assert_eq!(counts, [1, 1, 2, 2, 4, 5, 8, 10, 16, 16]);
     }
 
     #[test]

@@ -10,8 +10,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use harpas_anvil::{
-    Chunk, Region, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk,
-    read_level, recover, region_of,
+    Chunk, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk, read_level,
+    recover, region_of, write_chunks,
 };
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, Nbt};
@@ -230,11 +230,12 @@ impl ChunkStorage {
                 .for_region(x, z)
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
-            let mut region = Region::open(&self.dir, x, z)?;
-            for (pos, chunk) in chunks {
-                region.set_chunk(pos.x, pos.z, &chunk.to_nbt(&biomes));
-            }
-            region.save()?;
+            let chunks: Vec<_> = chunks
+                .iter()
+                .map(|(pos, chunk)| ((pos.x, pos.z), chunk.to_nbt(&biomes)))
+                .collect();
+            let chunks: Vec<_> = chunks.iter().map(|(pos, nbt)| (*pos, nbt)).collect();
+            write_chunks(&self.dir, x, z, &chunks)?;
         }
         Ok(())
     }
@@ -2154,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_neighbor_stops_shutdown_without_overwriting_the_region() {
+    fn a_damaged_neighbor_is_left_as_it_is_when_the_region_is_saved() {
         let folder = Folder::new();
         let pos = ChunkPos { x: 0, z: 0 };
         let neighbor = ChunkPos { x: 1, z: 0 };
@@ -2165,6 +2166,32 @@ mod tests {
         let path = folder.region_dir().join("r.0.0.mca");
         let mut damaged = fs::read(&path).unwrap();
         damaged[4..8].copy_from_slice(&0x0000_0101_u32.to_be_bytes());
+        fs::write(&path, &damaged).unwrap();
+        let (handle, logic) = crate::start_game(Some(world)).unwrap();
+        handle.shutdown("Server closed").unwrap();
+        logic.join().unwrap().unwrap();
+        // The save wrote the changed chunk beside the damaged entry, which is still there to repair.
+        let saved = fs::read(path).unwrap();
+        assert_eq!(saved[4..8], damaged[4..8]);
+        let region = Region::open(&folder.region_dir(), 0, 0).unwrap();
+        assert!(region.chunk(neighbor.x, neighbor.z).is_err());
+        let chunk = region.chunk(pos.x, pos.z).unwrap().unwrap();
+        assert_eq!(chunk.get("Marker"), Some(&Nbt::Int(1)));
+    }
+
+    #[test]
+    fn a_region_with_an_entry_past_its_end_stops_shutdown_without_being_overwritten() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        let neighbor = ChunkPos { x: 1, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION), (neighbor, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        world.chunk_mut(pos).unwrap().rest.insert("Marker", 1);
+        let path = folder.region_dir().join("r.0.0.mca");
+        let mut damaged = fs::read(&path).unwrap();
+        // A new chunk written at the end of the file would otherwise be read as this one.
+        damaged[4..8].copy_from_slice(&0x0010_0001_u32.to_be_bytes());
         fs::write(&path, &damaged).unwrap();
         let (handle, logic) = crate::start_game(Some(world)).unwrap();
         handle.shutdown("Server closed").unwrap();

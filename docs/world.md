@@ -101,16 +101,25 @@ block changes are part of gameplay work.
   the tick does not wait for disk. Changes made while a snapshot is being written remain dirty. An unloaded
   chunk stays resident until its latest changes are saved, and shutdown waits for pending saves. A save error
   stops the server and is reported.
-- Each save rewrites its region file, so the chunks of a region are written together. A changed chunk that
-  leaves every view waits up to five seconds for the others of its region, and a region has one save queued
-  or in progress at a time: the changes made meanwhile share the next one. Autosave and shutdown do not wait.
-  Writing only the changed sectors, as vanilla does, is not implemented.
-- A region and the `.mcc` files of its large chunks are saved as one transaction, so a crash never leaves a
-  half-written region or a chunk newer than the region that points to it. Every new file is written whole and
-  synced under a staged name (`<name>.tmp`); then a journal, `r.x.z.mca.journal`, listing the files to install
-  and the `.mcc` files to remove, is synced and renamed into place, which commits the save; then the staged
-  files are renamed over the current ones, stale `.mcc` files removed and the journal removed. The folder is
-  synced between these steps, on Unix, so they reach the disk in this order.
+- A save writes only the chunks that changed, as vanilla does, without reading or rewriting the rest of
+  their region. Each chunk goes into sectors that no chunk uses, never over the chunk it replaces, and the
+  region's header then points to it; the sectors of the replaced chunk are free for a later save, so a file
+  is at most one copy of the saved chunks larger than vanilla would leave it. Saving one chunk of a full
+  12 MiB region takes 7 ms on a disk, where rewriting the region took 160 ms.
+- Every save of a region ends with several syncs, so the chunks of a region are written together. A changed
+  chunk that leaves every view waits up to five seconds for the others of its region, and a region has one
+  save queued or in progress at a time: the changes made meanwhile share the next one. Autosave and shutdown
+  do not wait.
+- The chunks of a region and the `.mcc` files of its large chunks are saved as one transaction, so a crash
+  never leaves some chunks of a save without the others, or a chunk newer than the region that points to it.
+  The chunks are written into free sectors and synced, which changes nothing a reader sees; the region's new
+  header and every new `.mcc` file are written whole and synced under staged names (`r.x.z.mca.header.tmp`,
+  `<name>.tmp`); then a journal, `r.x.z.mca.journal`, listing the header to write, the files to install and
+  the `.mcc` files to remove, is synced and renamed into place, which commits the save; then the header is
+  written over the region's and synced, the staged files are renamed over the current ones, stale `.mcc`
+  files removed and the journal removed. The folder is synced between these steps, on Unix, so they reach the
+  disk in this order. Tools that save a whole region (`harpas_anvil::Region`) stage the region file instead
+  of its header, through the same journal.
 - On start, before any chunk is read, the server completes the committed saves it finds and removes the files
   of saves interrupted before their commit, with a warning for each. Opening a region completes its own
   committed save, and reading one chunk of a region with a committed save still pending is an error instead
@@ -118,8 +127,10 @@ block changes are part of gameplay work.
   after a crash before it is opened with vanilla. Tests interrupt a save before each change it makes to the
   disk and check that the region reads entirely as before or entirely as after.
 - A chunk whose region entry cannot be read is reported when it is read, without hiding the region's other
-  chunks. A save refuses to overwrite a region with an unreadable entry unless that entry is explicitly
-  replaced or removed.
+  chunks. A save of other chunks leaves the entry as it is, to be repaired. The exception is an entry that
+  points past the end of the file, where the next chunk written would be read as that one: the save is
+  refused until the entry's own chunk is saved. Saving a whole region with an unreadable entry is refused
+  unless that entry is explicitly replaced or removed.
 - A world may be a download, so its files are read within limits that vanilla does not have: a chunk,
   `level.dat` or a player's data may inflate to at most 256 MiB and take at most 1 GiB of memory as NBT, and
   a `.mcc` file may hold at most 256 MiB. A file over a limit is reported as unreadable.

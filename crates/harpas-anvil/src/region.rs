@@ -5,9 +5,12 @@
 //! than 255 sectors is stored in its own `c.x.z.mcc` file, and the region keeps only the compression byte with
 //! 128 added. Harpas writes zlib, as vanilla does, and reads gzip, zlib and uncompressed chunks.
 //!
-//! Individual chunks can be read without loading their whole region. A region is saved whole, together with the
-//! `.mcc` files of its large chunks, as one transaction through a journal (`docs/world.md#saving`).
+//! Individual chunks can be read without loading their whole region, and written without rewriting it
+//! ([`write_chunks`]): the new chunks go into free sectors and only the header changes. A [`Region`] is saved
+//! whole. Either save, together with the `.mcc` files of its large chunks, is one transaction through a
+//! journal (`docs/world.md#saving`).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -94,6 +97,189 @@ pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<C
         data
     };
     decode_chunk(compression & !EXTERNAL, &data).map(Some)
+}
+
+/// Writes `chunks`, by chunk coordinates, into region `x`, `z` of the folder `dir` without reading or rewriting
+/// the region's other chunks. Like [`Region::save`], it is one transaction: an interruption at any point
+/// leaves either the previous chunks or, once the region is next opened or [`recover`](crate::recover) runs,
+/// the new ones. No other thread may read or save the region meanwhile.
+///
+/// The new chunks go into sectors no chunk uses, so the chunks they replace stay readable until the header
+/// that points to the new ones is committed; a later save reuses the sectors freed. Entries that cannot be
+/// read are left as they are, except one that points past the end of the file, which the save refuses to
+/// write beside.
+///
+/// # Panics
+///
+/// If a chunk is not in the region.
+pub fn write_chunks(
+    dir: &Path,
+    x: i32,
+    z: i32,
+    chunks: &[((i32, i32), &Compound)],
+) -> io::Result<()> {
+    write_chunks_with(dir, x, z, chunks, &mut || Ok(()))
+}
+
+/// [`write_chunks`], running `step` before each change to the disk. An error from `step` stops the save where
+/// it is, as a crash would.
+fn write_chunks_with(
+    dir: &Path,
+    x: i32,
+    z: i32,
+    chunks: &[((i32, i32), &Compound)],
+    step: &mut dyn FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    // A chunk given twice is written once, as given last.
+    let mut new = BTreeMap::new();
+    for &((chunk_x, chunk_z), chunk) in chunks {
+        assert_eq!(
+            region_of(chunk_x, chunk_z),
+            (x, z),
+            "chunk {chunk_x} {chunk_z} is not in region {x} {z}"
+        );
+        new.insert(
+            (chunk_x & 31) as usize + (chunk_z & 31) as usize * 32,
+            (chunk_x, chunk_z, chunk),
+        );
+    }
+    let name = format!("r.{x}.{z}.mca");
+    let path = dir.join(&name);
+    fs::create_dir_all(dir)?;
+    // A previous save of this region that failed after its commit is completed before staging anew.
+    journal::complete(dir, x, z)?;
+    step()?;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    let len = file.metadata()?.len();
+    let mut header = vec![0; 2 * SECTOR];
+    if len == 0 {
+        // A new region starts as an empty one.
+        file.write_all(&header)?;
+    } else if len < (2 * SECTOR) as u64 {
+        // Refuse to overwrite a truncated file as though it were a new, empty region.
+        return Err(invalid(format!(
+            "{}: incomplete region header",
+            path.display()
+        )));
+    } else {
+        file.read_exact(&mut header)?;
+    }
+    // The sectors that the header or a chunk uses, the replaced chunks included.
+    let sectors = usize::try_from(len.div_ceil(SECTOR as u64))
+        .map_err(invalid)?
+        .max(2);
+    let mut used = vec![false; sectors];
+    used[..2].fill(true);
+    for index in 0..CHUNKS {
+        let location = be_u32(&header, index * 4);
+        let offset = (location >> 8) as usize;
+        let count = (location & 0xff) as usize;
+        if location == 0 || offset < 2 {
+            continue;
+        }
+        if offset + count > sectors && !new.contains_key(&index) {
+            let chunk_x = x * 32 + (index % 32) as i32;
+            let chunk_z = z * 32 + (index / 32) as i32;
+            return Err(invalid(format!(
+                "cannot save {}: chunk {chunk_x}, {chunk_z}: location {offset}+{count} is outside the region file",
+                path.display()
+            )));
+        }
+        let end = (offset + count).min(sectors);
+        if offset < end {
+            used[offset..end].fill(true);
+        }
+    }
+
+    let mut journal = Journal::default();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs() as u32);
+    for (&index, &(chunk_x, chunk_z, chunk)) in &new {
+        let external_name = format!("c.{chunk_x}.{chunk_z}.mcc");
+        let was_external = stored_externally(&mut file, be_u32(&header, index * 4), len)?;
+        let data = compress(chunk);
+        let mut record = Vec::with_capacity((data.len() + 5).next_multiple_of(SECTOR));
+        let external = (data.len() + 5).div_ceil(SECTOR) > MAX_SECTORS;
+        if external {
+            step()?;
+            journal.stage(dir, external_name.clone(), &data)?;
+            record.extend_from_slice(&1u32.to_be_bytes());
+            record.push(ZLIB | EXTERNAL);
+        } else {
+            record.extend_from_slice(&(data.len() as u32 + 1).to_be_bytes());
+            record.push(ZLIB);
+            record.extend_from_slice(&data);
+        }
+        record.resize(record.len().next_multiple_of(SECTOR), 0);
+        let count = record.len() / SECTOR;
+        let offset = free_sectors(&used, count);
+        if offset + count > 1 << 24 {
+            return Err(invalid("region file larger than its locations can address"));
+        }
+        if used.len() < offset + count {
+            used.resize(offset + count, false);
+        }
+        used[offset..offset + count].fill(true);
+        step()?;
+        file.seek(SeekFrom::Start((offset * SECTOR) as u64))?;
+        file.write_all(&record)?;
+        let location = (offset as u32) << 8 | count as u32;
+        header[index * 4..index * 4 + 4].copy_from_slice(&location.to_be_bytes());
+        header[SECTOR + index * 4..SECTOR + index * 4 + 4]
+            .copy_from_slice(&timestamp.to_be_bytes());
+        if was_external && !external {
+            journal.remove(external_name);
+        }
+    }
+    // The chunks reach the disk before the header that points to them is committed.
+    step()?;
+    file.sync_all()?;
+    drop(file);
+    step()?;
+    journal.stage_header(dir, name, &header)?;
+    journal.commit(dir, x, z, step)
+}
+
+/// The first of `count` sectors in a row that nothing uses, which may be the end of the file.
+fn free_sectors(used: &[bool], count: usize) -> usize {
+    let mut start = 0;
+    for (sector, &used) in used.iter().enumerate() {
+        if used {
+            start = sector + 1;
+        } else if sector + 1 - start == count {
+            return start;
+        }
+    }
+    start
+}
+
+/// Whether the chunk at `location` of a region file `len` bytes long is stored in a `.mcc` file.
+fn stored_externally(file: &mut fs::File, location: u32, len: u64) -> io::Result<bool> {
+    let start = u64::from(location >> 8) * SECTOR as u64;
+    if location >> 8 < 2 || start + 5 > len {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::Start(start + 4))?;
+    let mut compression = [0];
+    file.read_exact(&mut compression)?;
+    Ok(compression[0] & EXTERNAL != 0)
+}
+
+/// A chunk's NBT compressed with zlib, as vanilla stores it.
+fn compress(chunk: &Compound) -> Vec<u8> {
+    let mut nbt = Vec::new();
+    Nbt::Compound(chunk.clone()).write_named("", &mut nbt);
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(&nbt)
+        .expect("writing to a Vec cannot fail");
+    encoder.finish().expect("writing to a Vec cannot fail")
 }
 
 /// What a region holds for one chunk.
@@ -250,13 +436,7 @@ impl Region {
     /// Sets the chunk's NBT, compressed with zlib as vanilla does, and stamps it with the current time.
     pub fn set_chunk(&mut self, chunk_x: i32, chunk_z: i32, chunk: &Compound) {
         let index = self.index(chunk_x, chunk_z);
-        let mut nbt = Vec::new();
-        Nbt::Compound(chunk.clone()).write_named("", &mut nbt);
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-        encoder
-            .write_all(&nbt)
-            .expect("writing to a Vec cannot fail");
-        let data = encoder.finish().expect("writing to a Vec cannot fail");
+        let data = compress(chunk);
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |time| time.as_secs() as u32);
@@ -857,6 +1037,245 @@ mod tests {
         }
     }
 
+    /// `chunks` as [`write_chunks`] takes them.
+    fn borrowed(chunks: &[((i32, i32), Compound)]) -> Vec<((i32, i32), &Compound)> {
+        chunks.iter().map(|(pos, chunk)| (*pos, chunk)).collect()
+    }
+
+    /// The sectors each chunk of a region file uses, checking that the file is sector aligned and that no
+    /// two chunks share a sector, as vanilla requires.
+    fn layout(path: &Path) -> BTreeMap<usize, (usize, usize)> {
+        let file = fs::read(path).unwrap();
+        assert_eq!(file.len() % SECTOR, 0);
+        let mut used = vec![false; file.len() / SECTOR];
+        used[..2].fill(true);
+        let mut layout = BTreeMap::new();
+        for index in 0..CHUNKS {
+            let location = be_u32(&file, index * 4);
+            if location == 0 {
+                continue;
+            }
+            let (offset, count) = ((location >> 8) as usize, (location & 0xff) as usize);
+            for sector in &mut used[offset..offset + count] {
+                assert!(!std::mem::replace(sector, true), "chunk {index} overlaps");
+            }
+            layout.insert(index, (offset, count));
+        }
+        layout
+    }
+
+    #[test]
+    fn written_chunks_read_back_beside_the_chunks_already_there() {
+        let folder = Folder::new();
+        let mut region = Region::open(&folder.0, 0, 0).unwrap();
+        region.set_chunk(0, 0, &versioned(0, 0, 1, false));
+        region.set_chunk(1, 0, &versioned(1, 0, 1, false));
+        region.save().unwrap();
+        let before = fs::read(folder.0.join("r.0.0.mca")).unwrap();
+
+        // The same chunk twice is written as given last.
+        let new = [
+            ((1, 0), versioned(1, 0, 2, false)),
+            ((5, 7), versioned(5, 7, 2, false)),
+            ((5, 7), versioned(5, 7, 3, false)),
+        ];
+        write_chunks(&folder.0, 0, 0, &borrowed(&new)).unwrap();
+        assert_eq!(file_names(&folder.0), ["r.0.0.mca"]);
+        let after = fs::read(folder.0.join("r.0.0.mca")).unwrap();
+        // The chunks already there were not moved or rewritten, the replaced one included.
+        assert_eq!(after[2 * SECTOR..before.len()], before[2 * SECTOR..]);
+        assert_eq!(after[..4], before[..4]);
+        layout(&folder.0.join("r.0.0.mca"));
+        let region = Region::open(&folder.0, 0, 0).unwrap();
+        for (x, z, version) in [(0, 0, 1), (1, 0, 2), (5, 7, 3)] {
+            let chunk = versioned(x, z, version, false);
+            assert_eq!(region.chunk(x, z).unwrap().as_ref(), Some(&chunk));
+            assert_eq!(read_chunk(&folder.0, x, z).unwrap(), Some(chunk));
+        }
+        assert!(region.timestamp(5, 7).unwrap() > 1_700_000_000);
+
+        // A region that does not exist yet is created, in a folder that may not exist either.
+        let dir = folder.0.join("new");
+        write_chunks(&dir, -1, 2, &borrowed(&[((-1, 64), chunk(-1, 64))])).unwrap();
+        assert_eq!(file_names(&dir), ["r.-1.2.mca"]);
+        assert_eq!(
+            layout(&dir.join("r.-1.2.mca")),
+            BTreeMap::from([(31, (2, 1))])
+        );
+        assert_eq!(read_chunk(&dir, -1, 64).unwrap(), Some(chunk(-1, 64)));
+    }
+
+    #[test]
+    fn the_sectors_of_replaced_chunks_are_used_again() {
+        let folder = Folder::new();
+        let path = folder.0.join("r.0.0.mca");
+        let first = [((0, 0), chunk(0, 0)), ((1, 0), chunk(1, 0))];
+        write_chunks(&folder.0, 0, 0, &borrowed(&first)).unwrap();
+        assert_eq!(layout(&path), BTreeMap::from([(0, (2, 1)), (1, (3, 1))]));
+
+        // The replaced chunk stays where it was until the save commits, so its replacement goes after it.
+        write_chunks(&folder.0, 0, 0, &borrowed(&first[..1])).unwrap();
+        assert_eq!(layout(&path), BTreeMap::from([(0, (4, 1)), (1, (3, 1))]));
+        // The next saves alternate between the two sectors instead of growing the file.
+        for offset in [2, 4, 2] {
+            write_chunks(&folder.0, 0, 0, &borrowed(&first[..1])).unwrap();
+            assert_eq!(layout(&path)[&0], (offset, 1));
+            assert_eq!(fs::metadata(&path).unwrap().len(), 5 * SECTOR as u64);
+        }
+
+        // A chunk that needs more sectors than the free one at the end starts there and grows the file.
+        let mut grown = chunk(0, 0);
+        grown.insert("Noise", Nbt::ByteArray(noise(6_000)));
+        write_chunks(&folder.0, 0, 0, &borrowed(&[((0, 0), grown.clone())])).unwrap();
+        assert_eq!(layout(&path), BTreeMap::from([(0, (4, 2)), (1, (3, 1))]));
+        // One that needs more than a gap between chunks has goes after them all.
+        let mut larger = chunk(1, 0);
+        larger.insert("Noise", Nbt::ByteArray(noise(6_000)));
+        write_chunks(&folder.0, 0, 0, &borrowed(&[((2, 0), chunk(2, 0))])).unwrap();
+        write_chunks(&folder.0, 0, 0, &borrowed(&[((1, 0), larger.clone())])).unwrap();
+        assert_eq!(
+            layout(&path),
+            BTreeMap::from([(0, (4, 2)), (1, (6, 2)), (2, (2, 1))])
+        );
+        assert_eq!(read_chunk(&folder.0, 1, 0).unwrap(), Some(larger));
+        assert_eq!(read_chunk(&folder.0, 2, 0).unwrap(), Some(chunk(2, 0)));
+        assert_eq!(read_chunk(&folder.0, 0, 0).unwrap(), Some(grown));
+    }
+
+    #[test]
+    fn unreadable_entries_are_left_alone_unless_they_point_past_the_file() {
+        let folder = Folder::new();
+        let path = folder.0.join("r.0.0.mca");
+        let chunks = [((0, 0), chunk(0, 0)), ((1, 0), chunk(1, 0))];
+        write_chunks(&folder.0, 0, 0, &borrowed(&chunks)).unwrap();
+        let damage = |location: u32| {
+            let mut file = fs::read(&path).unwrap();
+            file[4..8].copy_from_slice(&location.to_be_bytes());
+            fs::write(&path, &file).unwrap();
+        };
+
+        // A location inside the header, and a length that does not fit its sectors.
+        damage(0x0000_0101);
+        write_chunks(&folder.0, 0, 0, &borrowed(&chunks[..1])).unwrap();
+        damage(0x0000_0301);
+        let mut file = fs::read(&path).unwrap();
+        file[3 * SECTOR..3 * SECTOR + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        fs::write(&path, &file).unwrap();
+        write_chunks(&folder.0, 0, 0, &borrowed(&chunks[..1])).unwrap();
+        assert_eq!(be_u32(&fs::read(&path).unwrap(), 4), 0x0000_0301);
+        assert!(read_chunk(&folder.0, 1, 0).is_err());
+        assert_eq!(read_chunk(&folder.0, 0, 0).unwrap(), Some(chunk(0, 0)));
+
+        // A chunk written at the end of the file would be read as the entry that points there.
+        damage(0x0000_4001);
+        let before = fs::read(&path).unwrap();
+        let error = write_chunks(&folder.0, 0, 0, &borrowed(&chunks[..1])).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("chunk 1, 0"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        // Writing the chunk itself replaces the entry.
+        write_chunks(&folder.0, 0, 0, &borrowed(&chunks[1..])).unwrap();
+        assert_eq!(read_chunk(&folder.0, 1, 0).unwrap(), Some(chunk(1, 0)));
+        layout(&path);
+
+        fs::write(&path, [0; 100]).unwrap();
+        let error = write_chunks(&folder.0, 0, 0, &borrowed(&chunks)).unwrap_err();
+        assert!(error.to_string().contains("incomplete region header"));
+        assert_eq!(fs::read(&path).unwrap(), [0; 100]);
+    }
+
+    #[test]
+    fn a_write_interrupted_at_any_step_leaves_the_old_or_the_new_chunks() {
+        let generations = [generation(1), generation(2)];
+        let template = Folder::new();
+        write_chunks(&template.0, 0, 0, &borrowed(&generations[0])).unwrap();
+        // A chunk the save does not write, which must read the same throughout.
+        let bystander = versioned(9, 9, 1, false);
+        write_chunks(&template.0, 0, 0, &borrowed(&[((9, 9), bystander.clone())])).unwrap();
+        assert_eq!(
+            file_names(&template.0),
+            ["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
+        );
+
+        let mut new_from = None;
+        for stop in 0.. {
+            let folder = Folder::new();
+            let dir = folder.0.join("region");
+            fs::create_dir_all(&dir).unwrap();
+            for name in file_names(&template.0) {
+                fs::copy(template.0.join(&name), dir.join(&name)).unwrap();
+            }
+
+            let journal = dir.join("r.0.0.mca.journal");
+            let mut steps = 0;
+            // Whether the save reached its commit, which may be followed by the journal's removal.
+            let mut committed = false;
+            let result = write_chunks_with(&dir, 0, 0, &borrowed(&generations[1]), &mut || {
+                committed |= journal.exists();
+                steps += 1;
+                if steps > stop {
+                    Err(io::Error::other("crash"))
+                } else {
+                    Ok(())
+                }
+            });
+            let new = committed || result.is_ok();
+            let pending = journal.exists();
+            if pending {
+                assert!(read_chunk(&dir, 0, 0).is_err(), "stop {stop}");
+            } else {
+                // Before the commit and after the save, the region reads without any recovery.
+                assert_eq!(
+                    read_chunk(&dir, 3, 0).unwrap(),
+                    Some(versioned(3, 0, 1 + i32::from(new), false)),
+                    "stop {stop}"
+                );
+            }
+
+            // Recovery happens either for the whole folder or when the region is next opened.
+            if stop % 2 == 0 {
+                let recovery = recover(&dir).unwrap();
+                assert_eq!(recovery.completed.len(), usize::from(pending));
+                assert_eq!(
+                    file_names(&dir),
+                    if new {
+                        ["c.0.0.mcc", "c.1.0.mcc", "r.0.0.mca"]
+                    } else {
+                        ["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
+                    },
+                    "stop {stop}"
+                );
+            }
+            let version = read_generation(&dir, &generations);
+            assert_eq!(version == 2, new, "stop {stop}");
+            match new_from {
+                None if version == 2 => new_from = Some(stop),
+                Some(_) => assert_eq!(version, 2, "stop {stop}: back to the old chunks"),
+                None => {}
+            }
+            assert_eq!(read_chunk(&dir, 9, 9).unwrap().as_ref(), Some(&bystander));
+
+            // Saving again leaves no trace of the interruption.
+            let again = versioned(3, 0, 3, false);
+            write_chunks(&dir, 0, 0, &borrowed(&[((3, 0), again.clone())])).unwrap();
+            recover(&dir).unwrap();
+            let expected: &[&str] = if version == 2 {
+                &["c.0.0.mcc", "c.1.0.mcc", "r.0.0.mca"]
+            } else {
+                &["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
+            };
+            assert_eq!(file_names(&dir), expected, "stop {stop}");
+            assert_eq!(read_chunk(&dir, 3, 0).unwrap(), Some(again));
+            assert_eq!(read_chunk(&dir, 9, 9).unwrap().as_ref(), Some(&bystander));
+            layout(&dir.join("r.0.0.mca"));
+
+            if result.is_ok() {
+                assert!(new_from.unwrap() > 0, "every stop completed the save");
+                break;
+            }
+        }
+    }
+
     #[test]
     fn recovery_discards_uncommitted_files_and_refuses_damaged_journals() {
         let folder = Folder::new();
@@ -868,13 +1287,18 @@ mod tests {
         let mut region = Region::open(&folder.0, 0, 0).unwrap();
         region.set_chunk(0, 0, &chunk(0, 0));
         region.save().unwrap();
-        for name in ["r.0.0.mca.tmp", "c.5.5.mcc.tmp", "r.0.0.mca.journal.tmp"] {
+        for name in [
+            "r.0.0.mca.tmp",
+            "c.5.5.mcc.tmp",
+            "r.0.0.mca.journal.tmp",
+            "r.0.0.mca.header.tmp",
+        ] {
             fs::write(folder.0.join(name), b"staged").unwrap();
         }
         fs::write(folder.0.join("notes.tmp"), b"not ours").unwrap();
         let recovery = recover(&folder.0).unwrap();
         assert_eq!(recovery.completed, Vec::<PathBuf>::new());
-        assert_eq!(recovery.discarded.len(), 3);
+        assert_eq!(recovery.discarded.len(), 4);
         assert_eq!(file_names(&folder.0), ["notes.tmp", "r.0.0.mca"]);
 
         // A journal Harpas cannot read stops the region from opening rather than being guessed at.

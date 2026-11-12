@@ -1146,8 +1146,10 @@ mod tests {
         }
     }
 
+    /// Waits for the chunk workers, which a loaded CI runner can take many seconds to schedule. The wait ends as
+    /// soon as `condition` holds, so the limit only costs time when a test fails.
     fn wait_until(mut condition: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while !condition() {
             assert!(
                 Instant::now() < deadline,

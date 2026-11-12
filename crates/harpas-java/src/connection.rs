@@ -9,7 +9,7 @@ use harpas_protocol_java::codec::{self, DecodeError, Nbt};
 use harpas_protocol_java::v26_1::{self, configuration, handshaking, login, play, status};
 use md5::{Digest, Md5};
 
-use crate::chat::{ChatAuthority, ChatEvent, ChatState, MessageError};
+use crate::chat::{ChatAuthority, ChatEvent, ChatState, MessageError, VALIDATION_FAILED};
 use crate::compression::{Compression, CompressionError};
 use crate::crypto::{Encryption, ServerKey, ct_equal, server_hash};
 use crate::frame::{FrameError, FrameReader, write_frame};
@@ -376,6 +376,19 @@ impl Connection {
             self.send_play(
                 play::clientbound::Disconnect {
                     reason: Nbt::from(reason),
+                }
+                .into(),
+            );
+            self.state = State::Closed;
+        }
+    }
+
+    /// Disconnects a player in Play with a reason the client translates, as vanilla's are.
+    fn disconnect_play_translated(&mut self, key: &'static str) {
+        if self.state == State::Play {
+            self.send_play(
+                play::clientbound::Disconnect {
+                    reason: Nbt::Compound([("translate", key)].into_iter().collect()),
                 }
                 .into(),
             );
@@ -1072,7 +1085,7 @@ impl Connection {
             Packet::PlayerSession(session) if info.online_mode => {
                 let uuid = self.player.as_ref().expect("Play has a player").uuid;
                 if let Err(reason) = self.chat.session(uuid, session, unix_millis()) {
-                    self.disconnect_play(reason);
+                    self.disconnect_play_translated(reason);
                 }
             }
             Packet::ChatMessage(message) => {
@@ -1095,21 +1108,13 @@ impl Connection {
                         .into()
                     };
                     match error {
-                        MessageError::Fatal(reason) => self.disconnect_play(reason),
-                        MessageError::Refused(reason) => self.send_play(refusal(("text", reason))),
-                        MessageError::IllegalCharacters => {
-                            if self.state == State::Play {
-                                let reason =
-                                    ("translate", "multiplayer.disconnect.illegal_characters");
-                                self.send_play(
-                                    play::clientbound::Disconnect {
-                                        reason: Nbt::Compound([reason].into_iter().collect()),
-                                    }
-                                    .into(),
-                                );
-                                self.state = State::Closed;
-                            }
+                        MessageError::Fatal(reason) => self.disconnect_play_translated(reason),
+                        MessageError::Refused(reason) => {
+                            self.send_play(refusal(("translate", reason)));
                         }
+                        MessageError::IllegalCharacters => self.disconnect_play_translated(
+                            "multiplayer.disconnect.illegal_characters",
+                        ),
                         MessageError::ChatDisabled => {
                             self.send_play(refusal(("translate", "chat.disabled.options")));
                         }
@@ -1118,14 +1123,15 @@ impl Connection {
             }
             Packet::MessageAcknowledgment(ack) => {
                 if let Err(reason) = self.chat.offset(ack.offset) {
-                    self.disconnect_play(reason);
+                    self.disconnect_play_translated(reason);
                 }
             }
-            Packet::SignedChatCommand(command) => {
-                if let Err(reason) = self.chat.ignored_command(command) {
-                    self.disconnect_play(reason);
-                }
-            }
+            Packet::SignedChatCommand(command) => match self.chat.ignored_command(command) {
+                Err(VALIDATION_FAILED) => self.disconnect_play_translated(VALIDATION_FAILED),
+                // Commands are not run yet, and vanilla's answers to their other faults are not known.
+                Err(reason) => self.disconnect_play(reason),
+                Ok(()) => {}
+            },
             Packet::ClientInformation(ref settings) => {
                 self.chat
                     .enabled(matches!(settings.chat_mode, play::ChatMode::Enabled));

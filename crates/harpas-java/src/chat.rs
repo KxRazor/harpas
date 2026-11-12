@@ -3,7 +3,7 @@
 //! The protocol's signing layout is documented by the community packet reference for 26.1:
 //! <https://github.com/xKumorio/Minecraft-Packet-ID-Reference/blob/main/versions/26.1.md>.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use harpas_protocol_java::v26_1::play::{self, serverbound};
 use rsa::pkcs8::DecodePublicKey;
@@ -43,10 +43,9 @@ impl ChatAuthority {
         self.keys.is_empty()
     }
 
-    fn verify(&self, player: u128, data: &play::PublicKeyData, now: i64) -> Option<PublicKey> {
-        if data.expires_at <= now {
-            return None;
-        }
+    /// The player's key, if one of the service's keys certifies it for the player until its expiry time,
+    /// which may have passed.
+    fn certified(&self, player: u128, data: &play::PublicKeyData) -> Option<PublicKey> {
         let key = PublicKey::from_public_key_der(&data.key).ok()?;
         if key.size() != 256 {
             return None;
@@ -88,21 +87,47 @@ pub struct VerifiedMessage {
 pub enum ChatEvent {
     /// A verified player session, to publish before its messages.
     Session(play::ChatSession),
+    /// The player no longer has a session, to publish as well.
+    SessionEnded,
     /// An accepted message.
     Message(Box<VerifiedMessage>),
+}
+
+/// Vanilla's answers to chat it does not accept, as translation keys. Each was observed on a vanilla server
+/// by the `chat_parity` harness.
+pub(crate) const VALIDATION_FAILED: &str = "multiplayer.disconnect.chat_validation_failed";
+pub(crate) const INVALID_KEY: &str = "multiplayer.disconnect.invalid_public_key_signature";
+pub(crate) const EXPIRED_KEY: &str = "multiplayer.disconnect.expired_public_key";
+const OUT_OF_ORDER: &str = "chat.disabled.out_of_order_chat";
+const MISSING_KEY: &str = "chat.disabled.missingProfileKey";
+const EXPIRED: &str = "chat.disabled.expiredProfileKey";
+const CHAIN_BROKEN: &str = "chat.disabled.chain_broken";
+const INVALID_SIGNATURE: &str = "chat.disabled.invalid_signature";
+
+/// The signing session of a connection.
+#[derive(Debug, Default)]
+enum Signing {
+    /// The player has sent no key, and chats unsigned where the server allows it.
+    #[default]
+    None,
+    /// The player's last key had expired when it arrived: nothing it sends is accepted until a new key.
+    Expired,
+    Session(Session),
 }
 
 #[derive(Debug)]
 struct Session {
     id: u128,
     key: PublicKey,
+    /// The key as the client sent it.
+    der: Vec<u8>,
     expires_at: i64,
     index: i32,
     broken: bool,
 }
 
 /// Some invalid chat input closes the connection; a failed signing chain instead refuses messages
-/// until a new session is received.
+/// until a session with a new key is received. Both carry the translation key of vanilla's answer.
 #[derive(Debug)]
 pub(crate) enum MessageError {
     Fatal(&'static str),
@@ -124,8 +149,7 @@ struct Seen {
 #[derive(Debug)]
 pub(crate) struct ChatState {
     authority: ChatAuthority,
-    session: Option<Session>,
-    sessions: HashSet<u128>,
+    session: Signing,
     seen: VecDeque<Option<Seen>>,
     last_timestamp: Option<i64>,
     global_index: i32,
@@ -137,8 +161,7 @@ impl Default for ChatState {
     fn default() -> Self {
         Self {
             authority: ChatAuthority::default(),
-            session: None,
-            sessions: HashSet::new(),
+            session: Signing::None,
             seen: std::iter::repeat_with(|| None).take(WINDOW).collect(),
             last_timestamp: None,
             global_index: 0,
@@ -172,17 +195,30 @@ impl ChatState {
         if self.authority.is_empty() {
             return Ok(());
         }
-        if self.sessions.len() >= 128 || self.sessions.contains(&packet.session_id) {
-            return Err("Invalid chat session");
-        }
         let key = self
             .authority
-            .verify(player, &packet.public_key, now)
-            .ok_or("Invalid or expired chat public key")?;
-        self.sessions.insert(packet.session_id);
-        self.session = Some(Session {
+            .certified(player, &packet.public_key)
+            .ok_or(INVALID_KEY)?;
+        if packet.public_key.expires_at <= now {
+            // An expired key ends the connection of a player who was signing. A player without a session
+            // stays, and has none.
+            if matches!(self.session, Signing::Session(_)) {
+                return Err(EXPIRED_KEY);
+            }
+            self.session = Signing::Expired;
+            self.events.push(ChatEvent::SessionEnded);
+            return Ok(());
+        }
+        // The key the player already signs with changes nothing, whatever the session ID: the chain goes on.
+        if let Signing::Session(session) = &self.session
+            && session.der == packet.public_key.key
+        {
+            return Ok(());
+        }
+        self.session = Signing::Session(Session {
             id: packet.session_id,
             key,
+            der: packet.public_key.key.clone(),
             expires_at: packet.public_key.expires_at,
             index: 0,
             broken: false,
@@ -195,9 +231,9 @@ impl ChatState {
     }
 
     pub(crate) fn offset(&mut self, offset: i32) -> Result<(), &'static str> {
-        let offset = usize::try_from(offset).map_err(|_| "Invalid chat acknowledgement")?;
+        let offset = usize::try_from(offset).map_err(|_| VALIDATION_FAILED)?;
         if offset > self.seen.len() - WINDOW {
-            return Err("Invalid chat acknowledgement");
+            return Err(VALIDATION_FAILED);
         }
         self.seen.drain(..offset);
         Ok(())
@@ -212,7 +248,9 @@ impl ChatState {
         self.check_timestamp(packet.timestamp)?;
         self.acknowledge(packet.offset, packet.acknowledged, packet.checksum)?;
         if !packet.argument_signatures.is_empty() {
-            let session = self.session.as_mut().ok_or("Missing chat session")?;
+            let Signing::Session(session) = &mut self.session else {
+                return Err("Missing chat session");
+            };
             session.index = session
                 .index
                 .checked_add(packet.argument_signatures.len() as i32)
@@ -236,23 +274,23 @@ impl ChatState {
         checksum: u8,
     ) -> Result<Vec<[u8; 256]>, &'static str> {
         if bits[2] & 0xf0 != 0 {
-            return Err("Invalid chat acknowledgement");
+            return Err(VALIDATION_FAILED);
         }
         self.offset(offset)?;
         let mut last_seen = Vec::new();
         for (index, slot) in self.seen.iter_mut().take(WINDOW).enumerate() {
             if bits[index / 8] & (1 << (index % 8)) != 0 {
-                let entry = slot.as_mut().ok_or("Invalid chat acknowledgement")?;
+                let entry = slot.as_mut().ok_or(VALIDATION_FAILED)?;
                 entry.pending = false;
                 last_seen.push(entry.signature);
             } else if slot.as_ref().is_some_and(|entry| !entry.pending) {
-                return Err("Invalid chat acknowledgement");
+                return Err(VALIDATION_FAILED);
             } else {
                 *slot = None;
             }
         }
         if checksum != 0 && checksum != chat_checksum(&last_seen) {
-            return Err("Invalid chat checksum");
+            return Err(VALIDATION_FAILED);
         }
         Ok(last_seen)
     }
@@ -280,27 +318,23 @@ impl ChatState {
         if !self.enabled {
             return Err(MessageError::ChatDisabled);
         }
-        if self.check_timestamp(packet.timestamp).is_err() {
-            if let Some(session) = &mut self.session {
-                session.broken = true;
-            }
-            return Err(MessageError::Refused("Chat message is out of order"));
-        }
-        if !online {
-            // Offline UUIDs are not authenticated identities. Never relay their signatures as trusted.
-            packet.signature = None;
-        }
+        let in_order = self.check_timestamp(packet.timestamp).is_ok();
         let index = match &mut self.session {
-            Some(session) if online => {
+            Signing::Session(session) if online => {
+                // Only the messages of a signing session are held to their order.
+                if !in_order {
+                    session.broken = true;
+                    return Err(MessageError::Refused(OUT_OF_ORDER));
+                }
                 let signature = packet
                     .signature
                     .as_ref()
-                    .ok_or(MessageError::Refused("Missing chat signature"))?;
+                    .ok_or(MessageError::Refused(MISSING_KEY))?;
                 if session.expires_at <= now {
-                    return Err(MessageError::Refused("Expired chat public key"));
+                    return Err(MessageError::Refused(EXPIRED));
                 }
                 if session.broken {
-                    return Err(MessageError::Refused("Chat signing chain is broken"));
+                    return Err(MessageError::Refused(CHAIN_BROKEN));
                 }
                 let payload =
                     signed_payload(player, session.id, session.index, &packet, &last_seen);
@@ -311,21 +345,32 @@ impl ChatState {
                     .is_err()
                 {
                     session.broken = true;
-                    return Err(MessageError::Refused("Invalid chat signature"));
+                    return Err(MessageError::Refused(INVALID_SIGNATURE));
                 }
                 let index = session.index;
+                // Vanilla has no answer of its own for a session out of indices; its chain cannot go on.
                 session.index = session
                     .index
                     .checked_add(1)
-                    .ok_or(MessageError::Refused("Chat session exhausted"))?;
+                    .ok_or(MessageError::Refused(CHAIN_BROKEN))?;
+                self.last_timestamp = Some(packet.timestamp);
                 index
             }
-            _ if secure_required || packet.signature.is_some() => {
-                return Err(MessageError::Refused("Missing chat session"));
+            Signing::Expired if online => {
+                return Err(MessageError::Refused(if packet.signature.is_some() {
+                    EXPIRED
+                } else {
+                    MISSING_KEY
+                }));
             }
-            _ => 0,
+            _ if secure_required => return Err(MessageError::Refused(MISSING_KEY)),
+            // Without a session a signature proves nothing, and the message is relayed unsigned. Offline
+            // UUIDs are not authenticated identities either: their signatures are never relayed as trusted.
+            _ => {
+                packet.signature = None;
+                0
+            }
         };
-        self.last_timestamp = Some(packet.timestamp);
         self.events
             .push(ChatEvent::Message(Box::new(VerifiedMessage {
                 index,
@@ -413,6 +458,8 @@ mod tests {
     struct Keys {
         authority: PrivateKey,
         player: PrivateKey,
+        /// The key the player signs with once the first is replaced.
+        renewed: PrivateKey,
     }
 
     fn keys() -> &'static Keys {
@@ -422,6 +469,7 @@ mod tests {
             Keys {
                 authority: PrivateKey::new(&mut rng, 2048).unwrap(),
                 player: PrivateKey::new(&mut rng, 2048).unwrap(),
+                renewed: PrivateKey::new(&mut rng, 2048).unwrap(),
             }
         })
     }
@@ -436,8 +484,11 @@ mod tests {
     }
 
     fn session(expires_at: i64) -> serverbound::PlayerSession {
-        let key = keys()
-            .player
+        session_of(&keys().player, SESSION, expires_at)
+    }
+
+    fn session_of(player: &PrivateKey, id: u128, expires_at: i64) -> serverbound::PlayerSession {
+        let key = player
             .to_public_key()
             .to_public_key_der()
             .unwrap()
@@ -451,7 +502,7 @@ mod tests {
             .sign(Pkcs1v15Sign::new::<Sha1>(), &Sha1::digest(certificate))
             .unwrap();
         serverbound::PlayerSession {
-            session_id: SESSION,
+            session_id: id,
             public_key: play::PublicKeyData {
                 expires_at,
                 key,
@@ -482,6 +533,16 @@ mod tests {
     }
 
     fn sign_in(
+        packet: serverbound::ChatMessage,
+        index: i32,
+        previous: &[[u8; 256]],
+        session: u128,
+    ) -> serverbound::ChatMessage {
+        sign_with(&keys().player, packet, index, previous, session)
+    }
+
+    fn sign_with(
+        player: &PrivateKey,
         mut packet: serverbound::ChatMessage,
         index: i32,
         previous: &[[u8; 256]],
@@ -500,8 +561,7 @@ mod tests {
             bytes.extend(item);
         }
         packet.signature = Some(
-            keys()
-                .player
+            player
                 .sign(Pkcs1v15Sign::new::<Sha256>(), &Sha256::digest(bytes))
                 .unwrap()
                 .try_into()
@@ -522,23 +582,14 @@ mod tests {
     fn certificates_bind_player_key_expiry_and_authority() {
         let authority = authority();
         let good = session(NOW + 60_000);
-        assert!(authority.verify(PLAYER, &good.public_key, NOW).is_some());
-        assert!(
-            authority
-                .verify(PLAYER + 1, &good.public_key, NOW)
-                .is_none()
-        );
-        assert!(
-            authority
-                .verify(PLAYER, &good.public_key, NOW + 60_000)
-                .is_none()
-        );
+        assert!(authority.certified(PLAYER, &good.public_key).is_some());
+        assert!(authority.certified(PLAYER + 1, &good.public_key).is_none());
         let mut changed = good.public_key.clone();
         changed.expires_at += 1;
-        assert!(authority.verify(PLAYER, &changed, NOW).is_none());
+        assert!(authority.certified(PLAYER, &changed).is_none());
         assert!(
             ChatAuthority::default()
-                .verify(PLAYER, &good.public_key, NOW)
+                .certified(PLAYER, &good.public_key)
                 .is_none()
         );
         assert!(ChatAuthority::from_der(&[]).is_err());
@@ -573,30 +624,79 @@ mod tests {
         modified.message.push('!');
         assert!(matches!(
             fresh.message(PLAYER, modified, true, true, NOW),
-            Err(MessageError::Refused("Invalid chat signature"))
+            Err(MessageError::Refused(INVALID_SIGNATURE))
         ));
         assert!(matches!(
             fresh.message(PLAYER, sign(packet("valid"), 0, &[]), true, true, NOW),
-            Err(MessageError::Refused("Chat signing chain is broken"))
+            Err(MessageError::Refused(CHAIN_BROKEN))
         ));
-        let mut replacement = session(NOW + 60_000);
-        replacement.session_id = SESSION + 1;
-        fresh.session(PLAYER, replacement, NOW).unwrap();
-        fresh
-            .message(
-                PLAYER,
-                sign_in(packet("new session"), 0, &[], SESSION + 1),
-                true,
-                true,
-                NOW,
-            )
-            .unwrap();
+        // The key the player signs with starts no new chain, under any session ID.
+        let same_key = session_of(&keys().player, SESSION + 1, NOW + 60_000);
+        fresh.session(PLAYER, same_key, NOW).unwrap();
+        assert!(fresh.take_events().is_empty());
+        let message = sign_in(packet("same key"), 0, &[], SESSION + 1);
+        assert!(matches!(
+            fresh.message(PLAYER, message, true, true, NOW),
+            Err(MessageError::Refused(CHAIN_BROKEN))
+        ));
+        // A new key does.
+        let renewed = &keys().renewed;
+        let new_key = session_of(renewed, SESSION + 1, NOW + 60_000);
+        fresh.session(PLAYER, new_key, NOW).unwrap();
         assert!(
-            state
-                .message(PLAYER, packet("unsigned"), true, false, NOW)
-                .is_err()
+            matches!(&fresh.take_events()[..], [ChatEvent::Session(session)] if session.session_id == SESSION + 1)
         );
-        assert!(state.session(PLAYER, session(NOW + 60_000), NOW).is_err());
+        let message = sign_with(renewed, packet("new key"), 0, &[], SESSION + 1);
+        fresh.message(PLAYER, message, true, true, NOW).unwrap();
+        // An unsigned message in a signing session is refused and leaves the chain as it is.
+        assert!(matches!(
+            state.message(PLAYER, packet("unsigned"), true, false, NOW),
+            Err(MessageError::Refused(MISSING_KEY))
+        ));
+        let mut older = packet("older");
+        older.timestamp -= 1;
+        assert!(matches!(
+            state.message(PLAYER, sign(older, 1, &[]), true, true, NOW),
+            Err(MessageError::Refused(OUT_OF_ORDER))
+        ));
+        assert!(matches!(
+            state.message(PLAYER, sign(packet("next"), 1, &[]), true, true, NOW),
+            Err(MessageError::Refused(CHAIN_BROKEN))
+        ));
+    }
+
+    #[test]
+    fn keys_that_are_not_certified_or_have_expired_follow_vanilla() {
+        let mut forged = session(NOW + 60_000);
+        forged.public_key.key_signature[0] ^= 1;
+        let mut state = ChatState::default();
+        state.authority(authority());
+        assert_eq!(state.session(PLAYER, forged, NOW), Err(INVALID_KEY));
+        // An expired key is checked first for its certificate.
+        let mut forged = session(NOW - 1);
+        forged.public_key.key_signature[0] ^= 1;
+        assert_eq!(state.session(PLAYER, forged, NOW), Err(INVALID_KEY));
+
+        // A player without a session stays, and nothing it sends is accepted, even where unsigned chat is.
+        state.session(PLAYER, session(NOW - 1), NOW).unwrap();
+        assert_eq!(state.take_events(), [ChatEvent::SessionEnded]);
+        assert!(matches!(
+            state.message(PLAYER, sign(packet("signed"), 0, &[]), true, false, NOW),
+            Err(MessageError::Refused(EXPIRED))
+        ));
+        assert!(matches!(
+            state.message(PLAYER, packet("unsigned"), true, false, NOW),
+            Err(MessageError::Refused(MISSING_KEY))
+        ));
+        // A key in force puts that right.
+        state.session(PLAYER, session(NOW + 60_000), NOW).unwrap();
+        assert!(matches!(&state.take_events()[..], [ChatEvent::Session(_)]));
+        let message = sign(packet("signed"), 0, &[]);
+        state.message(PLAYER, message, true, false, NOW).unwrap();
+
+        // A player who is signing is disconnected for an expired key.
+        let expired = session_of(&keys().renewed, SESSION + 1, NOW - 1);
+        assert_eq!(state.session(PLAYER, expired, NOW), Err(EXPIRED_KEY));
     }
 
     #[test]
@@ -675,17 +775,11 @@ mod tests {
     #[test]
     fn an_expired_session_cannot_sign_even_if_it_was_valid_at_join() {
         let mut state = connected();
-        assert!(
-            state
-                .message(
-                    PLAYER,
-                    sign(packet("late"), 0, &[]),
-                    true,
-                    true,
-                    NOW + 60_000
-                )
-                .is_err()
-        );
+        let late = sign(packet("late"), 0, &[]);
+        assert!(matches!(
+            state.message(PLAYER, late, true, true, NOW + 60_000),
+            Err(MessageError::Refused(EXPIRED))
+        ));
     }
 
     #[test]
@@ -698,19 +792,25 @@ mod tests {
             matches!(&offline.take_events()[..], [ChatEvent::Message(message)] if message.signature.is_none())
         );
         let mut online = ChatState::default();
-        assert!(
-            online
-                .message(PLAYER, packet("unsigned"), true, true, NOW)
-                .is_err()
-        );
+        for message in [packet("unsigned"), sign(packet("signed"), 0, &[])] {
+            assert!(matches!(
+                online.message(PLAYER, message, true, true, NOW),
+                Err(MessageError::Refused(MISSING_KEY))
+            ));
+        }
         assert!(
             online
                 .message(PLAYER, packet("unsigned"), true, false, NOW)
                 .is_ok()
         );
-        let mut old = packet("old");
+        // Where unsigned chat is allowed, a player without a session is not held to the order of its
+        // messages, and a signature it sends is dropped.
+        let mut old = sign(packet("old"), 0, &[]);
         old.timestamp -= 1;
-        assert!(online.message(PLAYER, old, true, false, NOW).is_err());
+        assert!(online.message(PLAYER, old, true, false, NOW).is_ok());
+        assert!(
+            matches!(&online.take_events()[..], [_, ChatEvent::Message(message)] if message.signature.is_none())
+        );
         for illegal in [
             "bad\ntext",
             "bad\u{a7}text",

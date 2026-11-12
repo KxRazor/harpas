@@ -110,7 +110,10 @@ since the last release are those in `Unreleased` and those still in `changelog.d
    `THIRD_PARTY_NOTICES.md`, and update the supported versions in the design documents.
 5. **Tag:** a signed tag `v<version>`, including the build metadata (`v0.4.0+26.1-26.60`), on the release commit.
 6. **Artifacts:** binaries per platform, the Bukkit shim (GPL-3.0, with its source), companion and client mod
-   builds, the container image, SHA-256 checksums and their signature.
+   builds, the container image, SHA-256 checksums and their signature. The Release workflow attaches the
+   binaries with their checksums and attests each archive's build provenance, so that
+   `gh attestation verify <archive> --repo KxRazor/harpas` proves it was built by that workflow from this
+   repository.
 7. **Publish:** release notes with what the release declares (above), migration notes for breaking changes,
    and the changelog section.
 

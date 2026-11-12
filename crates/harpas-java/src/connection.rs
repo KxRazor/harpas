@@ -1084,17 +1084,35 @@ impl Connection {
                     info.online_mode && info.enforces_secure_chat,
                     unix_millis(),
                 ) {
+                    // The refusals are red system messages, as in vanilla.
+                    let refusal = |content: (&'static str, &'static str)| {
+                        play::clientbound::SystemChatMessage {
+                            content: Nbt::Compound(
+                                [content, ("color", "red")].into_iter().collect(),
+                            ),
+                            overlay: false,
+                        }
+                        .into()
+                    };
                     match error {
                         MessageError::Fatal(reason) => self.disconnect_play(reason),
-                        MessageError::Refused(reason) => self.send_play(
-                            play::clientbound::SystemChatMessage {
-                                content: Nbt::Compound(
-                                    [("text", reason), ("color", "red")].into_iter().collect(),
-                                ),
-                                overlay: false,
+                        MessageError::Refused(reason) => self.send_play(refusal(("text", reason))),
+                        MessageError::IllegalCharacters => {
+                            if self.state == State::Play {
+                                let reason =
+                                    ("translate", "multiplayer.disconnect.illegal_characters");
+                                self.send_play(
+                                    play::clientbound::Disconnect {
+                                        reason: Nbt::Compound([reason].into_iter().collect()),
+                                    }
+                                    .into(),
+                                );
+                                self.state = State::Closed;
                             }
-                            .into(),
-                        ),
+                        }
+                        MessageError::ChatDisabled => {
+                            self.send_play(refusal(("translate", "chat.disabled.options")));
+                        }
                     }
                 }
             }

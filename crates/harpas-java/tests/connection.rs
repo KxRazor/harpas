@@ -489,6 +489,84 @@ fn chat_and_movement_reach_the_logic_thread_in_arrival_order() {
 }
 
 #[test]
+fn chat_is_refused_with_vanillas_translated_messages() {
+    use harpas_protocol_java::codec::Nbt;
+    let info = offline();
+    let mut connection = playing(&info, new_connection());
+    connection.take_output();
+    let chat = |text: &str, timestamp: i64| {
+        let packet: play::serverbound::Packet = play::serverbound::ChatMessage {
+            message: text.into(),
+            timestamp,
+            salt: 2,
+            signature: None,
+            offset: 0,
+            acknowledged: [0; 3],
+            checksum: 1,
+        }
+        .into();
+        frame(packet, |p, b| p.encode(b))
+    };
+    let component =
+        |fields: &[(&'static str, &'static str)]| Nbt::Compound(fields.iter().copied().collect());
+    let answer = |connection: &mut Connection| {
+        let output = frames(&connection.take_output());
+        assert_eq!(output.len(), 1);
+        play::clientbound::Packet::decode(&output[0]).unwrap()
+    };
+
+    // The C1 control characters are chat like any other.
+    connection
+        .receive(&chat("a\u{80}\u{9f}b", 1), &info)
+        .unwrap();
+    assert!(matches!(
+        &connection.take_play_events()[..],
+        [PlayEvent::Chat(harpas_java::ChatEvent::Message(message))] if message.message == "a\u{80}\u{9f}b"
+    ));
+    assert!(connection.take_output().is_empty());
+
+    // With chat hidden in the client's settings, a message is answered with a red system message.
+    let settings: play::serverbound::Packet = play::serverbound::ClientInformation {
+        locale: "en_us".into(),
+        view_distance: 10,
+        chat_mode: play::ChatMode::Hidden,
+        chat_colors: true,
+        displayed_skin_parts: 0,
+        main_hand: play::MainHand::Right,
+        enable_text_filtering: false,
+        allow_server_listings: true,
+        particle_status: play::ParticleStatus::All,
+    }
+    .into();
+    connection
+        .receive(&frame(settings, |p, b| p.encode(b)), &info)
+        .unwrap();
+    connection.take_output();
+    connection.take_play_events();
+    connection.receive(&chat("hidden", 2), &info).unwrap();
+    assert!(connection.take_play_events().is_empty());
+    assert_eq!(
+        answer(&mut connection),
+        play::clientbound::SystemChatMessage {
+            content: component(&[("translate", "chat.disabled.options"), ("color", "red")]),
+            overlay: false,
+        }
+        .into()
+    );
+
+    // A character vanilla does not allow closes the connection.
+    connection.receive(&chat("a\u{7f}b", 3), &info).unwrap();
+    assert_eq!(
+        answer(&mut connection),
+        play::clientbound::Disconnect {
+            reason: component(&[("translate", "multiplayer.disconnect.illegal_characters")]),
+        }
+        .into()
+    );
+    assert!(connection.is_closed());
+}
+
+#[test]
 fn moving_to_an_adjacent_chunk_updates_only_the_entering_and_leaving_columns() {
     let info = offline();
     let mut connection = playing(&info, new_connection());

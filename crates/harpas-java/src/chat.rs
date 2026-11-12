@@ -107,6 +107,10 @@ struct Session {
 pub(crate) enum MessageError {
     Fatal(&'static str),
     Refused(&'static str),
+    /// The message has a character vanilla does not allow in chat; it closes the connection.
+    IllegalCharacters,
+    /// The client's settings have chat disabled; the message is refused.
+    ChatDisabled,
 }
 
 #[derive(Debug, Clone)]
@@ -264,17 +268,17 @@ impl ChatState {
         let last_seen = self
             .acknowledge(packet.offset, packet.acknowledged, packet.checksum)
             .map_err(MessageError::Fatal)?;
+        // Vanilla's `isAllowedChatCharacter`: the section sign, the ASCII control characters and DEL are not
+        // allowed. The C1 control characters, U+0080 to U+009F, are.
         if packet
             .message
             .chars()
-            .any(|c| c == '\u{a7}' || c.is_control())
+            .any(|c| c == '\u{a7}' || c < ' ' || c == '\u{7f}')
         {
-            return Err(MessageError::Fatal("Invalid chat message"));
+            return Err(MessageError::IllegalCharacters);
         }
         if !self.enabled {
-            return Err(MessageError::Refused(
-                "Chat is disabled in your client settings",
-            ));
+            return Err(MessageError::ChatDisabled);
         }
         if self.check_timestamp(packet.timestamp).is_err() {
             if let Some(session) = &mut self.session {
@@ -707,18 +711,29 @@ mod tests {
         let mut old = packet("old");
         old.timestamp -= 1;
         assert!(online.message(PLAYER, old, true, false, NOW).is_err());
-        assert!(
-            online
-                .message(PLAYER, packet("bad\ntext"), true, false, NOW)
-                .is_err()
-        );
+        for illegal in [
+            "bad\ntext",
+            "bad\u{a7}text",
+            "bad\u{7f}text",
+            "bad\u{1f}text",
+        ] {
+            assert!(matches!(
+                online.message(PLAYER, packet(illegal), true, false, NOW),
+                Err(MessageError::IllegalCharacters)
+            ));
+        }
+        // Vanilla allows the C1 control characters.
+        let mut c1 = packet("fine\u{80}\u{9f}text");
+        c1.timestamp += 1;
+        assert!(online.message(PLAYER, c1, true, false, NOW).is_ok());
         online.enabled(false);
         assert_eq!(online.outgoing(None).unwrap(), None);
-        assert!(
-            online
-                .message(PLAYER, packet("hidden"), true, false, NOW)
-                .is_err()
-        );
+        let mut hidden = packet("hidden");
+        hidden.timestamp += 2;
+        assert!(matches!(
+            online.message(PLAYER, hidden, true, false, NOW),
+            Err(MessageError::ChatDisabled)
+        ));
     }
 
     #[test]

@@ -2514,10 +2514,9 @@ mod tests {
         let (handle, logic) = crate::start_with_world(&folder.0, BIOMES).unwrap();
         let session = handle.player_joined(1, profile(), 10, false).unwrap();
         wait_until(|| logic.is_finished());
-        assert!(matches!(
-            session.try_recv(),
-            Some(Output::Disconnect("Cannot access the world"))
-        ));
+        // The chunks around the incompatible one may be read, and sent, a tick before it.
+        let mut outputs = std::iter::from_fn(|| session.try_recv());
+        assert!(outputs.any(|output| output == Output::Disconnect("Cannot access the world")));
         logic.join().unwrap().unwrap();
     }
 

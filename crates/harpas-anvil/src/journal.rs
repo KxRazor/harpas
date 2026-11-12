@@ -9,13 +9,18 @@
 //! 3. The staged files are renamed over the current ones, the stale `.mcc` files removed and the journal
 //!    removed, the folder being synced between steps so they reach the disk in this order.
 //!
+//! A save that writes only some chunks of a region ([`write_chunks`](crate::write_chunks)) does not stage the
+//! region file. It writes the chunks into free sectors of the region, which changes nothing a reader sees, and
+//! stages the region's new header as `r.x.z.mca.header.tmp`. Applying the journal writes that header over the
+//! region's, syncs the region and removes the staged header, before the other files are installed.
+//!
 //! An interruption before the commit leaves the previous files untouched, with staged files that are ignored
 //! and overwritten by the next save or removed by [`recover`]. An interruption after it is completed the next
 //! time the region is opened or [`recover`] runs: installing a file whose staged copy is gone is skipped, so
 //! completing a journal twice is harmless. Design: `docs/world.md#saving`.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::file::write_synced;
@@ -25,6 +30,10 @@ const HEADER: &str = "harpas region journal 1";
 const END: &str = "end";
 const STAGED: &str = ".tmp";
 const JOURNAL: &str = ".journal";
+/// Added to a region's name for the staged copy of its header.
+const HEADER_PATCH: &str = ".header";
+/// The location and timestamp sectors of a region file.
+const HEADER_LEN: usize = 8192;
 
 /// What an interrupted save left in a region folder, and what [`recover`] did with it.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -68,6 +77,10 @@ pub fn recover(dir: &Path) -> io::Result<Recovery> {
             || staged
                 .strip_suffix(JOURNAL)
                 .and_then(parse_region)
+                .is_some()
+            || staged
+                .strip_suffix(HEADER_PATCH)
+                .and_then(parse_region)
                 .is_some();
         let path = dir.join(name);
         if ours && remove_if_present(&path)? {
@@ -83,6 +96,8 @@ pub fn recover(dir: &Path) -> io::Result<Recovery> {
 /// The files one region save installs and removes, by name in the region's folder.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Journal {
+    /// The regions whose header is replaced by its staged copy.
+    header: Vec<String>,
     install: Vec<String>,
     remove: Vec<String>,
 }
@@ -95,6 +110,19 @@ impl Journal {
         Ok(())
     }
 
+    /// Writes `header` synced as the staged header of the region file `name`, to replace the region's when
+    /// the journal is applied.
+    pub(crate) fn stage_header(
+        &mut self,
+        dir: &Path,
+        name: String,
+        header: &[u8],
+    ) -> io::Result<()> {
+        write_synced(&staged_header(dir, &name), header)?;
+        self.header.push(name);
+        Ok(())
+    }
+
     /// Removes `name` when the journal is applied.
     pub(crate) fn remove(&mut self, name: String) {
         self.remove.push(name);
@@ -102,6 +130,9 @@ impl Journal {
 
     fn encode(&self) -> String {
         let mut text = format!("{HEADER}\n");
+        for name in &self.header {
+            text += &format!("header {name}\n");
+        }
         for name in &self.install {
             text += &format!("install {name}\n");
         }
@@ -131,6 +162,7 @@ impl Journal {
                 return Err(format!("the journal names another region's file, {name}"));
             }
             match action {
+                "header" if parse_region(name).is_some() => journal.header.push(name.to_owned()),
                 "install" => journal.install.push(name.to_owned()),
                 "remove" => journal.remove.push(name.to_owned()),
                 _ => return Err(format!("unreadable journal line {line:?}")),
@@ -171,6 +203,27 @@ impl Journal {
         journal: &Path,
         step: &mut dyn FnMut() -> io::Result<()>,
     ) -> io::Result<()> {
+        for name in &self.header {
+            step()?;
+            let staged = staged_header(dir, name);
+            // A header that is gone was written and synced before it was removed.
+            let header = match fs::read(&staged) {
+                Ok(header) => header,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            if header.len() != HEADER_LEN {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: not a region header", staged.display()),
+                ));
+            }
+            let mut region = fs::OpenOptions::new().write(true).open(dir.join(name))?;
+            region.write_all(&header)?;
+            region.sync_all()?;
+            step()?;
+            fs::remove_file(&staged)?;
+        }
         for name in &self.install {
             step()?;
             let path = dir.join(name);
@@ -229,6 +282,11 @@ pub(crate) fn complete(dir: &Path, x: i32, z: i32) -> io::Result<bool> {
 /// `r.x.z.mca.journal` in `dir`.
 fn journal_path(dir: &Path, x: i32, z: i32) -> PathBuf {
     dir.join(format!("r.{x}.{z}.mca{JOURNAL}"))
+}
+
+/// The staged header of the region file `name` in `dir`.
+fn staged_header(dir: &Path, name: &str) -> PathBuf {
+    dir.join(staged(&format!("{name}{HEADER_PATCH}")))
 }
 
 fn staged(name: &str) -> String {
@@ -309,6 +367,7 @@ mod tests {
     #[test]
     fn journals_read_back_and_refuse_other_files() {
         let mut journal = Journal::default();
+        journal.header.push("r.1.-1.mca".to_owned());
         journal.install.push("c.33.-1.mcc".to_owned());
         journal.install.push("r.1.-1.mca".to_owned());
         journal.remove("c.40.-2.mcc".to_owned());
@@ -321,6 +380,8 @@ mod tests {
         assert!(Journal::decode(&escape, 1, -1).is_err());
         let other = format!("{HEADER}\nremove c.0.0.mcc\n{END}\n");
         assert!(Journal::decode(&other, 1, -1).is_err());
+        let chunk_header = format!("{HEADER}\nheader c.33.-1.mcc\n{END}\n");
+        assert!(Journal::decode(&chunk_header, 1, -1).is_err());
         assert!(Journal::decode("", 1, -1).is_err());
     }
 }

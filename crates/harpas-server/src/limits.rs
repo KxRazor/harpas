@@ -4,9 +4,14 @@
 //! limited only while they connect. An IPv6 address counts as its /64 prefix, the smallest block a network
 //! gives one customer, so that one host cannot avoid the limits by changing the rest of its address. Loopback
 //! connections, such as a proxy on the same machine, skip the per-address limits (`docs/java-connection.md`).
+//!
+//! When the total is reached, a new connection takes the place of the oldest one of the address that holds the
+//! most, if that address holds at least two more than the newcomer's. A few addresses that fill every place
+//! therefore cannot keep everyone else out; only as many addresses as there are places can.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv6Addr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -46,11 +51,13 @@ struct State {
     pending: usize,
     addresses: HashMap<IpAddr, Address>,
     last_sweep: Option<Instant>,
+    next_permit: u64,
 }
 
 #[derive(Default)]
 struct Address {
-    pending: usize,
+    /// The connections not yet in Play, oldest first: each permit's number and its flag to give up its place.
+    pending: VecDeque<(u64, Arc<AtomicBool>)>,
     connections: VecDeque<Instant>,
     logins: VecDeque<Instant>,
 }
@@ -65,7 +72,7 @@ impl Address {
     }
 
     fn is_idle(&self) -> bool {
-        self.pending == 0 && self.connections.is_empty() && self.logins.is_empty()
+        self.pending.is_empty() && self.connections.is_empty() && self.logins.is_empty()
     }
 }
 
@@ -79,30 +86,59 @@ impl Limits {
         let ip = limited_as(ip);
         let mut state = self.lock();
         state.sweep(now);
-        if state.pending >= MAX_PENDING {
-            return None;
-        }
+        let mut holds = 0;
         if !ip.is_loopback() {
             let address = state.addresses.entry(ip).or_default();
             address.forget_before(now.checked_sub(WINDOW).unwrap_or(now));
-            if address.pending >= MAX_PENDING_PER_ADDRESS
+            if address.pending.len() >= MAX_PENDING_PER_ADDRESS
                 || address.connections.len() >= CONNECTIONS_PER_WINDOW
             {
                 return None;
             }
+            holds = address.pending.len();
+        }
+        if state.pending >= MAX_PENDING && !state.make_room(holds) {
+            return None;
+        }
+        let number = state.next_permit;
+        state.next_permit += 1;
+        let evicted = Arc::new(AtomicBool::new(false));
+        if !ip.is_loopback() {
+            let address = state.addresses.entry(ip).or_default();
             address.connections.push_back(now);
-            address.pending += 1;
+            address.pending.push_back((number, Arc::clone(&evicted)));
         }
         state.pending += 1;
         Some(Permit {
             limits: Arc::clone(self),
             ip,
+            number,
+            evicted,
             pending: true,
         })
     }
 }
 
 impl State {
+    /// Frees a place for a connection whose address holds `holds` of them: the oldest connection of the address
+    /// that holds the most gives up its place, if that leaves the address with no fewer than the newcomer's.
+    /// Returns whether a place was freed.
+    fn make_room(&mut self, holds: usize) -> bool {
+        let Some(most) = self
+            .addresses
+            .values_mut()
+            .max_by_key(|address| address.pending.len())
+            .filter(|address| address.pending.len() >= holds + 2)
+        else {
+            return false;
+        };
+        if let Some((_, evicted)) = most.pending.pop_front() {
+            evicted.store(true, Ordering::Relaxed);
+            self.pending -= 1;
+        }
+        true
+    }
+
     /// Forgets addresses with nothing recent, at most once per window, so that the table cannot grow without
     /// bound.
     fn sweep(&mut self, now: Instant) {
@@ -126,6 +162,8 @@ pub struct Permit {
     limits: Arc<Limits>,
     /// The address the connection is limited as.
     ip: IpAddr,
+    number: u64,
+    evicted: Arc<AtomicBool>,
     pending: bool,
 }
 
@@ -145,15 +183,32 @@ impl Permit {
         true
     }
 
+    /// Whether the connection lost its place to another address's while the server was full of connections
+    /// that are not playing yet, and must be closed.
+    pub fn evicted(&self) -> bool {
+        self.evicted.load(Ordering::Relaxed)
+    }
+
     /// The connection has reached Play and no longer counts against the limits.
     pub fn entered_play(&mut self) {
         if !std::mem::take(&mut self.pending) {
             return;
         }
         let mut state = self.limits.lock();
-        state.pending -= 1;
-        if let Some(address) = state.addresses.get_mut(&self.ip) {
-            address.pending -= 1;
+        if self.ip.is_loopback() {
+            state.pending -= 1;
+            return;
+        }
+        // An evicted connection's place was already given away.
+        let place = state.addresses.get_mut(&self.ip).and_then(|address| {
+            let at = address
+                .pending
+                .iter()
+                .position(|(n, _)| *n == self.number)?;
+            address.pending.remove(at)
+        });
+        if place.is_some() {
+            state.pending -= 1;
         }
     }
 }
@@ -224,6 +279,69 @@ mod tests {
         assert!(limits.connect(address(1), now).is_none());
         permits.pop();
         assert!(limits.connect(address(1), now).is_some());
+    }
+
+    #[test]
+    fn a_full_server_takes_a_place_from_the_address_that_holds_the_most() {
+        let limits = Arc::new(Limits::default());
+        let now = Instant::now();
+        // 32 addresses fill every place with 8 connections each.
+        let mut permits: Vec<Vec<Permit>> = (0..(MAX_PENDING / MAX_PENDING_PER_ADDRESS) as u8)
+            .map(|last| {
+                (0..MAX_PENDING_PER_ADDRESS)
+                    .map(|_| limits.connect(address(last), now).unwrap())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        // They cannot add more, but another address gets in at the cost of the oldest connection of one of them.
+        assert!(limits.connect(address(0), now).is_none());
+        let player = limits.connect(address(200), now).unwrap();
+        assert!(!player.evicted());
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        let evicted: Vec<_> = permits
+            .iter()
+            .enumerate()
+            .filter(|(_, held)| held.iter().any(Permit::evicted))
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(evicted.len(), 1);
+        let held = &mut permits[evicted[0]];
+        assert!(held[0].evicted());
+        assert!(held[1..].iter().all(|permit| !permit.evicted()));
+        // Closing the evicted connection does not free a second place.
+        held.remove(0);
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        // A loopback connection gets in the same way.
+        let local = limits
+            .connect(IpAddr::V4(Ipv4Addr::LOCALHOST), now)
+            .unwrap();
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        drop((player, local));
+        assert_eq!(limits.lock().pending, MAX_PENDING - 2);
+    }
+
+    #[test]
+    fn a_full_server_refuses_a_connection_when_no_address_holds_two_more() {
+        let limits = Arc::new(Limits::default());
+        let now = Instant::now();
+        // One connection from each of 254 addresses, and two from another.
+        let address =
+            |n: usize| IpAddr::V4(Ipv4Addr::new(203, 0, (n / 256) as u8, (n % 256) as u8));
+        let mut permits: Vec<_> = (0..MAX_PENDING - 2)
+            .map(|n| limits.connect(address(n), now).unwrap())
+            .collect();
+        permits.push(limits.connect(address(1000), now).unwrap());
+        permits.push(limits.connect(address(1000), now).unwrap());
+        // An address that already holds one would only trade places, so it is refused.
+        assert!(limits.connect(address(0), now).is_none());
+        assert!(permits.iter().all(|permit| !permit.evicted()));
+        // A new address takes the older of the two.
+        let player = limits.connect(address(2000), now).unwrap();
+        assert!(permits[MAX_PENDING - 2].evicted());
+        // Now every address holds one, and the next new address is refused.
+        assert!(limits.connect(address(3000), now).is_none());
+        drop(player);
     }
 
     #[test]

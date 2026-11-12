@@ -1,6 +1,6 @@
 [package]
 name = "harpas-bench"
-description = "Benchmarks for the M1 risk prototypes"
+description = "Benchmarks for the M1 risk prototypes and for world generation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,9 @@ test = true
 # Only the benchmarks use these. As dev-dependencies they stay out of THIRD_PARTY_NOTICES.md, which lists what
 # Harpas distributes.
 [dev-dependencies]
+harpas-engine.workspace = true
+harpas-java.workspace = true
+harpas-worldgen.workspace = true
 aes = "0.9.3"
 cfb8 = "0.9.1"
 ctr = "0.10.1"

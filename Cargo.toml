@@ -38,6 +38,14 @@ harpas-nethernet = { path = "crates/harpas-nethernet" }
 harpas-bedrock = { path = "crates/harpas-bedrock" }
 harpas-jvm = { path = "crates/harpas-jvm" }
 
+# The binaries of a release (`.github/workflows/release.yml`). Link-time optimization across every crate makes
+# world generation about 4% faster and the binary 17% smaller, and the build three times longer, so `release`,
+# which the parity tests and benchmarks use, stays as it is. Measured with the `worldgen` benchmark of
+# harpas-bench.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"

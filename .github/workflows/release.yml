@@ -63,7 +63,7 @@ jobs:
       - run: rustup target add "$TARGET"
         env:
           TARGET: ${{ matrix.target }}
-      - run: cargo build --release --locked --bin harpas --target "$TARGET"
+      - run: cargo build --profile dist --locked --bin harpas --target "$TARGET"
         env:
           TARGET: ${{ matrix.target }}
       - name: The binary's version is the tag's
@@ -73,7 +73,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
           TARGET: ${{ matrix.target }}
         run: |
-          actual=$("target/$TARGET/release/harpas" --version)
+          actual=$("target/$TARGET/dist/harpas" --version)
           if [[ "$actual" != "harpas ${TAG#v}" ]]; then
             echo "harpas --version prints '$actual', but the tag is $TAG" >&2
             exit 1
@@ -92,7 +92,7 @@ jobs:
           fi
           name="harpas-${version%%+*}-$TARGET"
           mkdir "$name"
-          cp "target/$TARGET/release/harpas$([[ $TARGET == *windows* ]] && echo .exe)" "$name/"
+          cp "target/$TARGET/dist/harpas$([[ $TARGET == *windows* ]] && echo .exe)" "$name/"
           cp LICENSE-MIT LICENSE-APACHE THIRD_PARTY_NOTICES.md README.md CHANGELOG.md "$name/"
           if [[ $ARCHIVE == zip ]]; then
             7z a "$name.zip" "$name" > /dev/null

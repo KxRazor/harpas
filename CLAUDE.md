@@ -19,7 +19,7 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 | `harpas-bedrock` | Translation between the engine and Bedrock packets |
 | `harpas-jvm` | Embedded JVM bridge for Bukkit and Paper plugins |
 | `harpas-server` | The `harpas` binary |
-| `harpas-bench` | Benchmarks for the M1 risk prototypes, run with `cargo run --release -p harpas-bench --example <name>` |
+| `harpas-bench` | Benchmarks for the M1 risk prototypes and for world generation, run with `cargo run --release -p harpas-bench --example <name>` |
 
 ## Commands
 

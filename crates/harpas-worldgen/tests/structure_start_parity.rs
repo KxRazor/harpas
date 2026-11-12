@@ -269,10 +269,7 @@ fn compare(seed: i64) {
     if !reference::sampled_seeds(&SEEDS).contains(&seed) {
         return;
     }
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping vanilla structure starts: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data =
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
     let templates =
@@ -297,21 +294,25 @@ fn compare(seed: i64) {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn structure_starts_and_references_match_vanilla_seed_0() {
     compare(SEEDS[0]);
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn structure_starts_and_references_match_vanilla_seed_42() {
     compare(SEEDS[1]);
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn structure_starts_and_references_match_vanilla_seed_minus_1() {
     compare(SEEDS[2]);
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn structure_starts_and_references_match_vanilla_seed_full_64_bits() {
     compare(SEEDS[3]);
 }

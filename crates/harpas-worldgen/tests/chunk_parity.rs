@@ -293,11 +293,9 @@ fn compare_seed(
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn generated_chunks_match_vanilla_block_by_block() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping vanilla chunk parity: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data =
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
     reference.compile(&[
@@ -352,11 +350,9 @@ fn generated_chunks_match_vanilla_block_by_block() {
 /// Terrain around one actual start of every Overworld terrain-adaptation mode, including adjacent chunks.
 /// Positions are discovered from the seed instead of pinning coordinates or committing vanilla data.
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn structure_terrain_matches_vanilla_block_by_block() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping structure terrain: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     let templates = StructureTemplates::from_zip_path(&reference.server_jar).unwrap();
     reference.compile(&[
@@ -477,11 +473,9 @@ fn structure_terrain_matches_vanilla_block_by_block() {
 
 /// Reaches every entry, including the rare ones that chunks are unlikely to meet.
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn overworld_biome_parameters_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping vanilla biome parameters: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     reference.compile(&[(
         "BiomeParameterProbe.java",
         include_str!("BiomeParameterProbe.java"),

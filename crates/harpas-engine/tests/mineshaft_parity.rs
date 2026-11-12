@@ -174,11 +174,9 @@ fn fixture(
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn mineshaft_blocks_metadata_clipping_and_replays_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping mineshafts: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut inputs = Compound::new();
     let mut expected = Compound::new();
     let states = block_states();
@@ -515,6 +513,7 @@ fn compare_cases(reference: &Reference, inputs: Compound, expected: Compound) {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
     use harpas_engine::world::{ChunkPos, ChunkState, World};
     use harpas_engine::worldgen::overworld_generator;
@@ -523,10 +522,7 @@ fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
     };
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     use std::sync::Arc;
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping mineshaft workers: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     data.structure_sets.retain(|_, set| {
         set.structures.iter().all(|s| {
@@ -767,6 +763,7 @@ fn wait(world: &mut harpas_engine::world::World, positions: &[harpas_engine::wor
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_use_saved_mine_records_and_neighbor_biomes() {
     use harpas_engine::world::ChunkPos;
     use harpas_engine::worldgen::overworld_generator;
@@ -774,10 +771,7 @@ fn workers_use_saved_mine_records_and_neighbor_biomes() {
         BiomeManager, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData,
     };
     use std::sync::Arc;
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping saved mineshafts: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
     let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();

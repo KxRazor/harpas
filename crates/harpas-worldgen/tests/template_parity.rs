@@ -13,11 +13,9 @@ use reference::Reference;
 const POSITIONS: [[i32; 3]; 2] = [[10, 64, -7], [1234, -20, 5678]];
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn templates_and_pools_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping vanilla templates: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data =
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
     let templates =

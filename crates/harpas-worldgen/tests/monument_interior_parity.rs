@@ -121,11 +121,9 @@ impl Input {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn monument_interiors_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping monument interiors: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let palette = palette();
     let mut cases = palette
         .iter()
@@ -380,11 +378,9 @@ fn monument_interiors_match_vanilla() {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn monument_worker_stream_matches_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping monument worker stream: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let palette = palette();
     let mut cases = palette
         .iter()

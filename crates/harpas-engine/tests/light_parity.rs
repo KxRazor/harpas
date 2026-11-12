@@ -204,11 +204,12 @@ fn compare(target_x: i32, target_z: i32, world: &World) -> Vec<String> {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn light_matches_vanillas_saved_chunks() {
-    let Some(reference) = std::env::var_os("HARPAS_VANILLA_SERVER_DIR").map(PathBuf::from) else {
-        eprintln!("Skipping light parity: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = PathBuf::from(
+        std::env::var_os("HARPAS_VANILLA_SERVER_DIR")
+            .expect("HARPAS_VANILLA_SERVER_DIR is not set (docs/parity.md#locally)"),
+    );
     let folder = Folder::new();
     let (mut server, log) = main_server(&folder.0, &reference);
     wait_for_log(&mut server, &log, "Done (");

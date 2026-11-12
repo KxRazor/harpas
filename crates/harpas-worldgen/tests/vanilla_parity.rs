@@ -754,11 +754,9 @@ fn compare_seed(data: &WorldgenData, seed: i64, output: &Path) {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn terrain_aquifers_veins_and_surface_samples_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping vanilla worldgen parity: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data =
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data");
     reference.compile(&[(

@@ -133,12 +133,10 @@ fn write_start(text: &mut String, start: &StructureStart) {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn collected_structure_density_matches_vanilla() {
     use std::fmt::Write;
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping structure density: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     reference.compile(&[("BeardifierProbe.java", include_str!("BeardifierProbe.java"))]);
     let data = data();
     let mut text = String::new();

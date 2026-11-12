@@ -126,11 +126,9 @@ fn status(chunk: &Chunk) -> Option<&str> {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping the FEATURES stage on workers: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let data = Arc::new(
         WorldgenData::from_zip_path(&reference.server_jar).expect("load vanilla worldgen data"),
     );

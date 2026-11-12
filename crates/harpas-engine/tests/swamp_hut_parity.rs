@@ -98,11 +98,9 @@ fn snapshot(chunk: &GeneratedChunk, own: &[StructureStart], entities: Vec<Compou
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn hut_blocks_metadata_workers_and_vanilla_resumption_match() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping hut placement: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut inputs = Compound::new();
     let mut expected = Compound::new();
     let states = block_states();
@@ -495,11 +493,9 @@ fn postprocessing(chunk: &GeneratedChunk) -> Nbt {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_place_saved_neighbor_huts_and_preserve_source_records() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping saved neighbor huts: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
     data.structure_sets.shift_remove("minecraft:mineshafts");

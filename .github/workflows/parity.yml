@@ -84,7 +84,7 @@ jobs:
       # A test that the command below does not select would skip its comparison and still pass.
       - name: Every test that needs the reference server runs here
         run: |
-          missed=$(git grep -lE 'HARPAS_VANILLA_SERVER_DIR|Reference::from_env' -- 'crates/*.rs' \
+          missed=$(git grep -lE 'HARPAS_VANILLA_SERVER_DIR|Reference::(from_env|required)|VanillaData::' -- 'crates/*.rs' \
             | grep -vE '/tests/([a-z0-9_]+_parity|world_loading|reference/mod)\.rs$' || true)
           if [ -n "$missed" ]; then
             echo "::error::These files need the reference server, but this workflow does not run them. Name the test file <name>_parity.rs (docs/parity.md#adding-a-harness)."
@@ -110,14 +110,15 @@ jobs:
           java-version: "25"
       # CI already runs the other tests. A new harness needs no change here if its name ends in `_parity`
       # (docs/parity.md#adding-a-harness). The `parity` profile in .config/nextest.toml runs every test even after
-      # a failure, so one run reports all the differences.
+      # a failure, so one run reports all the differences. The tests that need the server are `#[ignore]`d, so
+      # that a run without it reports them as skipped; `--run-ignored all` runs them with the others.
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
           HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || inputs.sample || 'full' }}
         run: >-
           cargo nextest run --profile parity --release --workspace --locked --test '*_parity' --test world_loading
-          --partition slice:${{ matrix.shard }}/${{ strategy.job-total }}
+          --run-ignored all --partition slice:${{ matrix.shard }}/${{ strategy.job-total }}
 
   result:
     # Rulesets require checks by name, so this name does not include the version or the shards. A skipped job counts

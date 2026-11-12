@@ -131,11 +131,9 @@ fn assert_blocks_match(actual: &Chunk, expected: &GeneratedChunk, pos: ChunkPos)
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
-    let Some(vanilla) = VanillaData::find() else {
-        eprintln!("Skipping monument workers: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let vanilla = VanillaData::required();
     let mut data = WorldgenData::from_zip_path(&vanilla.path).unwrap();
     // Isolate this structure; the direct API below places only the monument.
     data.structure_sets.retain(|_, set| {

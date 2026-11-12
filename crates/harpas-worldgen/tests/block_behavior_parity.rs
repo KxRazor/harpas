@@ -9,11 +9,9 @@ use harpas_core::block_behavior::{Face, block_behavior};
 use reference::Reference;
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn block_behavior_matches_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping block behavior: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     reference.compile(&[(
         "BlockBehaviorProbe.java",
         include_str!("BlockBehaviorProbe.java"),

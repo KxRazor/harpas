@@ -172,11 +172,9 @@ fn clearing_reaches_the_halo_and_keeps_ice_and_existing_water() {
 }
 
 #[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn monument_exteriors_match_vanilla() {
-    let Some(reference) = Reference::from_env() else {
-        eprintln!("Skipping monument exterior: HARPAS_VANILLA_SERVER_DIR is not set");
-        return;
-    };
+    let reference = Reference::required();
     let palette = palette();
     let mut cases = palette
         .iter()

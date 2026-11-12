@@ -63,6 +63,10 @@ The second command regenerates the Rust dependency section of [THIRD_PARTY_NOTIC
 commit the result. Only licenses allowed in [deny.toml](deny.toml) are accepted; a new license needs a change
 to `deny.toml` that explains why it is compatible with [docs/licensing.md](docs/licensing.md).
 
+On a Dependabot pull request that changes `Cargo.lock`, a workflow regenerates the file and commits it to the
+pull request. GitHub holds the checks of that commit until a maintainer approves them with "Approve and run" on
+the pull request; until then the pull request cannot be merged.
+
 ## Changelog
 
 Every pull request that changes behavior adds its [CHANGELOG.md](CHANGELOG.md) entry as a file in

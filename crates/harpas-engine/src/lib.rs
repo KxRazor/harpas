@@ -61,6 +61,9 @@ impl Handle {
     }
 
     /// Registers a player with its initial client view distance and the server's maximum.
+    ///
+    /// The logic thread unparks the calling thread for every message it queues for the player, so the thread
+    /// can [park](thread::park_timeout) while it waits and still take the message at once.
     pub fn player_joined_with_view(
         &self,
         entity_id: i32,
@@ -69,7 +72,7 @@ impl Handle {
         initial_view_distance: u8,
         allow_flight: bool,
     ) -> Result<PlayerSession, LogicStopped> {
-        let (output, receiver) = player::output_channel();
+        let (output, receiver) = player::output_channel_waking(thread::current());
         self.events
             .send(Event::Joined {
                 entity_id,
@@ -1379,6 +1382,28 @@ mod tests {
         let mut outputs = std::iter::from_fn(|| session.try_recv());
         assert!(outputs.any(|output| output == Output::Disconnect("Server closed")));
         assert!(handle.shutdown("Server closed").is_err());
+    }
+
+    #[test]
+    fn output_wakes_the_thread_that_joined_the_player() {
+        let (handle, logic) = start().unwrap();
+        // The test's own thread joins the player, as a connection's thread does.
+        let session = handle
+            .player_joined(
+                handle.next_entity_id().unwrap(),
+                profile("Steve", 1),
+                10,
+                false,
+            )
+            .unwrap();
+        handle.shutdown("Server closed").unwrap();
+        let started = Instant::now();
+        // Each park is far longer than the test may take, so it ends only when the logic thread unparks.
+        while session.try_recv() != Some(Output::Disconnect("Server closed")) {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            thread::park_timeout(Duration::from_secs(60));
+        }
+        logic.join().unwrap().unwrap();
     }
 
     #[test]

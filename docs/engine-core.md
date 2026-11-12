@@ -113,8 +113,11 @@ The logic thread is attached to the JVM at startup when Java plugins are present
 
 The current chunk loader uses a bounded queue and two workers for every three hardware threads, at
 most 16: 8 on a machine with 12. Generating a view of 441 chunks on such a machine (6 cores) went from 71
-chunks a second with 4 workers to 81 with 8 and 83 with 12, and with the features stage from 21 to 35 and 45;
-from 10 workers on, the logic thread waited up to 5 ms for a processor. Limited to 4 hardware threads, 2
+chunks a second with 4 workers to 81 with 8 and 83 with 12; from 10 workers on, the logic thread waited up to
+5 ms for a processor. With the features stage, whose workers share the chunks around the one each decorates,
+the same view generates at 15 chunks a second with 1 worker, 45 with 4, 57 with 8 and 62 with 12: a worker that finds
+a chunk in another worker's hands generates or decorates the others it needs meanwhile, and waits only when
+it has nothing else to do. Limited to 4 hardware threads, 2
 workers generated as fast as 4. The logic thread requests each player's
 view, interleaving viewers and prioritizing nearby chunks, and applies completed reads in the dimension phase.
 A player's view is computed again only when the player enters another chunk or changes its view distance, and

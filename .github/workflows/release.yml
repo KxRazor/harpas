@@ -1,7 +1,9 @@
 name: Release
 
 # Builds the `harpas` binary for each platform when a release is published, and attaches it to the release with
-# its SHA-256 checksum (docs/releases.md#release-process).
+# its SHA-256 checksum (docs/releases.md#release-process). Each archive gets a build provenance attestation, which
+# `gh attestation verify <archive> --repo <owner>/<repo>` checks: proof that this workflow built it from this
+# repository.
 #
 # Both macOS binaries are built on an Intel runner: the hosted arm64 runners are short of capacity, and GitHub
 # cancels a job it cannot place. The arm64 binary is cross-compiled there, so it is not run before it is attached.
@@ -15,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,11 +43,18 @@ jobs:
             archive: tar.gz
             cross: true
     runs-on: ${{ matrix.os }}
+    permissions:
+      # Attach the archives to the release.
+      contents: write
+      # Sign and store the attestation.
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Empty when started by hand, which checks out the chosen branch.
           ref: ${{ github.event.release.tag_name }}
@@ -99,9 +108,13 @@ jobs:
           cat "$name.$ARCHIVE.sha256"
           echo "ASSETS=$name.$ARCHIVE $name.$ARCHIVE.sha256" >> "$GITHUB_ENV"
           echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Attest the archive's provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ env.NAME }}.${{ matrix.archive }}
       - name: Keep as a workflow artifact
         if: ${{ github.event_name != 'release' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.NAME }}
           path: |

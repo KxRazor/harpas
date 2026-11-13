@@ -20,9 +20,10 @@ use harpas_worldgen::{FeatureIndex, NoiseBasedChunkGenerator, StructureTemplates
 use reference::Reference;
 
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
-/// Far apart, so no two share a decorated chunk; the last four are a bamboo jungle, an old growth pine
-/// taiga with forest rocks, a desert well crossing a chunk edge and a warm ocean reef in the last seed.
-const CHUNKS: [(i32, i32); 7] = [
+/// Far apart, so no two share a decorated chunk; the last five are a bamboo jungle, an old growth pine
+/// taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an underwater magma
+/// deposit on a chunk edge in the last seed.
+const CHUNKS: [(i32, i32); 8] = [
     (0, 0),
     (41, -26),
     (-203, -151),
@@ -30,6 +31,7 @@ const CHUNKS: [(i32, i32); 7] = [
     (-400, 368),
     (-348, -421),
     (-600, 552),
+    (-120, -18),
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -216,6 +218,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
                 (204, -236) => Some("minecraft:bamboo"),
                 (-400, 368) => Some("minecraft:mossy_cobblestone"),
                 (-348, -421) => Some("minecraft:suspicious_sand"),
+                (-120, -18) => Some("minecraft:magma_block"),
                 _ => None,
             };
             if seed == SEEDS[1]

@@ -5,7 +5,8 @@
 //! `canBeReplaced` and `liquid` are set by a block's properties; `isFaceSturdy` asks whether the support shape
 //! covers a whole face, or its center. The support shape is the collision shape except for the blocks listed in
 //! `support_shape`. `isSolidRender` asks whether a block that occludes has a full occlusion shape, which is a
-//! full collision shape except for the blocks listed in `is_solid_render`.
+//! full collision shape except for the blocks listed in `is_solid_render`. Directional occlusion uses the
+//! same shape, except for mud, soul sand and snow, and excludes blocks whose properties call `noOcclusion`.
 
 use std::sync::OnceLock;
 
@@ -99,6 +100,8 @@ pub struct BlockBehavior {
     sturdy: Vec<u16>,
     /// For each shape, its full faces as [`full_faces`] returns them.
     shape_faces: Vec<u16>,
+    /// For each state, the full faces of its occlusion shape when it can occlude.
+    occlusion_faces: Vec<u8>,
 }
 
 /// The block behavior of Java 26.1.
@@ -154,6 +157,7 @@ impl BlockBehavior {
         let shape_faces: Vec<u16> = shapes.iter().map(|boxes| full_faces(boxes)).collect();
         let mut flags = Vec::with_capacity(state_shapes.len());
         let mut sturdy = Vec::with_capacity(state_shapes.len());
+        let mut occlusion_faces = Vec::with_capacity(state_shapes.len());
         for (id, &shape) in state_shapes.iter().enumerate() {
             let (name, properties) = states.properties(id as u32).expect("known block state");
             let name = name.strip_prefix("minecraft:").unwrap_or(name);
@@ -178,6 +182,16 @@ impl BlockBehavior {
                 flag |= BLOCK_ENTITY;
             }
             flags.push(flag);
+            occlusion_faces.push(if no_occlusion(name) {
+                0
+            } else {
+                match name {
+                    "mud" | "soul_sand" => 63,
+                    "snow" if properties.contains(&("layers", "8")) => 63,
+                    "snow" => 1 << Face::Down as u8,
+                    _ => (shape_faces[shape as usize] & 63) as u8,
+                }
+            });
             sturdy.push(match support_shape(name, &properties) {
                 Some(support) => full_faces(&support),
                 None => shape_faces[shape as usize],
@@ -189,6 +203,7 @@ impl BlockBehavior {
             flags,
             sturdy,
             shape_faces,
+            occlusion_faces,
         }
     }
 
@@ -247,6 +262,14 @@ impl BlockBehavior {
     /// occlude and its occlusion shape is a full block.
     pub fn is_solid_render(&self, id: u32) -> bool {
         self.flag(id, SOLID_RENDER)
+    }
+
+    /// Whether the state can occlude and its occlusion shape covers a whole face (`Block.isFaceFull` of
+    /// `getOcclusionShape`). Unlike support, glass and other blocks with `noOcclusion` never close a face.
+    pub fn is_occlusion_face_full(&self, id: u32, face: Face) -> bool {
+        self.occlusion_faces
+            .get(id as usize)
+            .is_some_and(|faces| faces & (1 << face as u8) != 0)
     }
 
     /// Whether the state's block has a block entity (`BlockState.hasBlockEntity`).
@@ -395,30 +418,46 @@ fn is_solid_render(name: &str, properties: &[(&str, &str)], boxes: &[ShapeBox]) 
         min: [0; 3],
         max: [32; 3],
     };
-    // The blocks with a full collision shape that do not occlude.
-    let no_occlusion = ["_leaves", "glass", "shulker_box", "copper_grate"]
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
-        || matches!(
-            name,
-            "barrier"
-                | "beacon"
-                | "chorus_flower"
-                | "frosted_ice"
-                | "ice"
-                | "mangrove_roots"
-                | "slime_block"
-                | "spawner"
-                | "test_instance_block"
-                | "trial_spawner"
-                | "vault"
-        );
     let full_occlusion = match name {
         "mud" | "soul_sand" => true,
         "snow" => properties.contains(&("layers", "8")),
         _ => boxes == [FULL],
     };
-    !no_occlusion && full_occlusion
+    !no_occlusion(name) && full_occlusion
+}
+
+/// Blocks with a full collision face whose properties call `noOcclusion`.
+fn no_occlusion(name: &str) -> bool {
+    [
+        "_leaves",
+        "glass",
+        "shulker_box",
+        "copper_grate",
+        "_door",
+        "_trapdoor",
+        "campfire",
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix))
+        || matches!(
+            name,
+            "azalea"
+                | "flowering_azalea"
+                | "barrier"
+                | "beacon"
+                | "chorus_flower"
+                | "frosted_ice"
+                | "ice"
+                | "ladder"
+                | "mangrove_roots"
+                | "pale_moss_carpet"
+                | "scaffolding"
+                | "slime_block"
+                | "spawner"
+                | "test_instance_block"
+                | "trial_spawner"
+                | "vault"
+        )
 }
 
 /// Blocks whose properties call `forceSolidOn`, by name pattern. Resin brick walls are the one wall that
@@ -612,6 +651,22 @@ mod tests {
                 max: [32; 3]
             }]
         );
+    }
+
+    #[test]
+    fn occlusion_distinguishes_glass_partial_shapes_and_snow() {
+        let behavior = block_behavior();
+        let glass = state("minecraft:glass", &[]);
+        assert!(behavior.is_face_sturdy(glass, Face::Up));
+        assert!(!behavior.is_occlusion_face_full(glass, Face::Up));
+        let slab = state("minecraft:oak_slab", &[("type", "top")]);
+        assert!(behavior.is_occlusion_face_full(slab, Face::Up));
+        assert!(!behavior.is_occlusion_face_full(slab, Face::Down));
+        let snow = state("minecraft:snow", &[("layers", "1")]);
+        assert!(behavior.collision_shape(snow).is_empty());
+        assert!(behavior.is_occlusion_face_full(snow, Face::Down));
+        assert!(!behavior.is_occlusion_face_full(snow, Face::Up));
+        assert!(!behavior.is_occlusion_face_full(u32::MAX, Face::Up));
     }
 
     #[test]

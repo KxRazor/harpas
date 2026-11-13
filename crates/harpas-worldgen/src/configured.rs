@@ -39,6 +39,7 @@ use crate::root_system::{CompiledRootSystem, place_root_system};
 use crate::surface::resolve_block_state;
 use crate::survival::{SurvivalRule, compile_block_survival};
 use crate::tree::{CompiledTree, TreeBlocks, place_tree};
+use crate::underwater_magma::{CompiledUnderwaterMagma, place_underwater_magma};
 use crate::vegetation_patch::{CompiledVegetationPatch, place_vegetation_patch};
 
 /// A placed feature compiled with its configured feature.
@@ -109,6 +110,8 @@ pub enum CompiledFeature {
     },
     /// `minecraft:desert_well`.
     DesertWell,
+    /// `minecraft:underwater_magma`.
+    UnderwaterMagma(CompiledUnderwaterMagma),
     /// `minecraft:vines`.
     Vines,
     /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
@@ -428,6 +431,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             can_place_on,
         } => place_block_blob(world, *state, can_place_on, random, origin),
         CompiledFeature::DesertWell => place_desert_well(world, random, origin),
+        CompiledFeature::UnderwaterMagma(magma) => {
+            place_underwater_magma(world, magma, random, origin)
+        }
         CompiledFeature::Vines => place_vines(world, origin),
         CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
         CompiledFeature::Liquid(liquid) => place_liquid(world, liquid, random, origin),
@@ -955,6 +961,9 @@ impl<'a> FeatureCompiler<'a> {
             | "minecraft:coral_claw"
             | "minecraft:coral_mushroom") => CompiledFeature::Coral(Box::new(self.coral(kind)?)),
             "minecraft:desert_well" => CompiledFeature::DesertWell,
+            "minecraft:underwater_magma" => {
+                CompiledFeature::UnderwaterMagma(self.underwater_magma(name, config)?)
+            }
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
             "minecraft:block_blob" => {
                 let Some(can_place_on) = self.predicate(name, field("can_place_on")?)? else {

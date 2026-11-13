@@ -21,8 +21,9 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// for mangroves, two chunks of the last seed over lush caves, where rooted azaleas grow, and a warm ocean of the
 /// last seed with sea pickles, two frozen oceans of the last seed with packed ice icebergs, snow on them and blue
 /// ice, two chunks of the last seed with an underground and a surface lava lake, a bamboo jungle and an old
-/// growth pine taiga with forest rocks, a desert well crossing a chunk edge and a warm ocean reef.
-const CHUNKS: [(i32, i32); 39] = [
+/// growth pine taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an
+/// underwater magma deposit on a chunk edge.
+const CHUNKS: [(i32, i32); 40] = [
     (0, 0),
     (-3, 7),
     (41, -26),
@@ -62,6 +63,7 @@ const CHUNKS: [(i32, i32); 39] = [
     (-400, 368),
     (-348, -421),
     (-600, 552),
+    (-120, -18),
 ];
 
 fn changed_blocks(
@@ -171,6 +173,7 @@ fn feature_blocks_match_vanilla() {
                 (204, -236) => Some("minecraft:bamboo"),
                 (-400, 368) => Some("minecraft:mossy_cobblestone"),
                 (-348, -421) => Some("minecraft:suspicious_sand"),
+                (-120, -18) => Some("minecraft:magma_block"),
                 _ => None,
             };
             if seed == SEEDS[2]

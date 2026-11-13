@@ -344,7 +344,7 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 146 of the 164 Overworld placed features run, with the trees of every
+    dripleaves), is skipped as a whole; 147 of the 164 Overworld placed features run, with the trees of every
     biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
     seagrass, kelp and sea pickles of oceans, rivers and swamps (`harpas_worldgen::ocean_vegetation`), which grow
     on the `OCEAN_FLOOR` heightmap in water where their blocks survive. `harpas_worldgen::multiface` places vines on
@@ -362,6 +362,14 @@ and the owner **accepts it once**:
     and 780 shape updates: stalk age follows an older stalk above, a shoot becomes a stalk below another stalk,
     and a shoot breaks without support below. Unsupported stalks keep their state until their scheduled tick,
     which is deferred along with other ticks scheduled during generation.
+    `harpas_worldgen::block_blob` places the mossy cobblestone forest rocks of old growth taigas. It searches
+    downward until the block below satisfies `can_place_on`, stopping above the lowest three blocks, then
+    places three overlapping rounded lumps, drifting downward and toward negative X and Z after each one.
+    Every block in the volume is replaced. The configured state and support predicate follow
+    [26.1's `block_blob` configuration](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1);
+    a predicate that accepts air can place a floating blob. `block_blob_feature_parity` compares blocks,
+    results and random consumption in 960 placements across three seeds with both legacy and Xoroshiro
+    sources, including mixed supports, unsupported columns, offset predicates, chunk borders and world limits.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are
@@ -389,7 +397,7 @@ and the owner **accepts it once**:
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 36 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 37 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration
@@ -652,11 +660,10 @@ and the owner **accepts it once**:
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
-  stage on the chunk workers before players receive them. It is off by default because only ores, flowers, grass
-  and other simple vegetation, mushrooms, disks, block columns and the trees and fallen trees of most biomes are
-  placed so far,
-  and a chunk saved after FEATURES never runs the stage again, in Harpas or in vanilla, so it would never get the
-  lakes or springs. Without it, chunks stop at `carvers` as described below.
+  stage on the chunk workers before players receive them. It is off by default while feature families and
+  structure scheduling remain incomplete: a chunk saved after FEATURES never runs the stage again, in Harpas
+  or in vanilla, so it would never receive the unported families. Without it, chunks stop at `carvers` as
+  described below.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker

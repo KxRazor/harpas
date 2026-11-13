@@ -16,6 +16,7 @@ use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 use serde_json::Value;
 
 use crate::bamboo::{CompiledBamboo, place_bamboo};
+use crate::block_blob::place_block_blob;
 use crate::data::{
     BlockDirection, ConfiguredFeatureDef, FeatureRefDef, IntProviderDef, PlacedFeatureDef,
     WorldgenData, WorldgenDataError, parse_block_predicate, parse_block_state_def,
@@ -95,6 +96,13 @@ pub enum CompiledFeature {
     OceanPlant(Box<CompiledOceanPlant>),
     /// `minecraft:bamboo`.
     Bamboo(Box<CompiledBamboo>),
+    /// `minecraft:block_blob`.
+    BlockBlob {
+        /// The block of the blob.
+        state: u32,
+        /// The predicate tested on the block below its origin.
+        can_place_on: BlockPredicate,
+    },
     /// `minecraft:vines`.
     Vines,
     /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
@@ -408,6 +416,10 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::RootSystem(roots) => place_root_system(world, roots, random, origin),
         CompiledFeature::OceanPlant(plant) => place_ocean_plant(world, plant, random, origin),
         CompiledFeature::Bamboo(bamboo) => place_bamboo(world, bamboo, random, origin),
+        CompiledFeature::BlockBlob {
+            state,
+            can_place_on,
+        } => place_block_blob(world, *state, can_place_on, random, origin),
         CompiledFeature::Vines => place_vines(world, origin),
         CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
         CompiledFeature::Liquid(liquid) => place_liquid(world, liquid, random, origin),
@@ -932,6 +944,18 @@ impl<'a> FeatureCompiler<'a> {
             }
             "minecraft:vines" => CompiledFeature::Vines,
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
+            "minecraft:block_blob" => {
+                let Some(can_place_on) = self.predicate(name, field("can_place_on")?)? else {
+                    return Ok(None);
+                };
+                CompiledFeature::BlockBlob {
+                    state: resolve_block_state(
+                        &parse_block_state_def(name, field("state")?)?,
+                        name,
+                    )?,
+                    can_place_on,
+                }
+            }
             kind @ ("minecraft:spike" | "minecraft:iceberg" | "minecraft:blue_ice") => {
                 match self.ice(name, kind, config)? {
                     Some(ice) => CompiledFeature::Ice(Box::new(ice)),

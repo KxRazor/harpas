@@ -172,6 +172,9 @@ vanilla for the same seed.
           without the ticks they schedule, compared with vanilla's
           own feature and `applyBiomeDecoration`, including worker generation and Anvil reloads
           (`bamboo_feature_parity`, `feature_blocks_parity`, `feature_worker_parity`).
+    - [x] Forest rocks (`block_blob`), with 26.1's configurable block and support predicate, compared with
+          vanilla's own feature and `applyBiomeDecoration`, including worker generation and Anvil reloads
+          (`block_blob_feature_parity`, `feature_blocks_parity`, `feature_worker_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

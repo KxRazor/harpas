@@ -5,9 +5,14 @@
 //! gives one customer, so that one host cannot avoid the limits by changing the rest of its address. Loopback
 //! connections, such as a proxy on the same machine, skip the per-address limits (`docs/java-connection.md`).
 //!
+//! One customer of a hosting company often has a /48, which is 65,536 of those prefixes, so the connections
+//! of an IPv6 address also count for its /48 and its /32, the block of a whole network, with higher limits:
+//! many unrelated people share those blocks, as the customers of a mobile carrier do.
+//!
 //! When the total is reached, a new connection takes the place of the oldest one of the address that holds the
-//! most, if that address holds at least two more than the newcomer's. A few addresses that fill every place
-//! therefore cannot keep everyone else out; only as many addresses as there are places can.
+//! most, if that address holds at least two more than the newcomer's; failing that, of the /48 that holds the
+//! most, and then of the /32. A few addresses or blocks that fill every place therefore cannot keep everyone
+//! else out; only as many networks as there are places can.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv6Addr};
@@ -19,6 +24,9 @@ use std::time::{Duration, Instant};
 const MAX_PENDING: usize = 256;
 /// Connections not yet in Play from one address.
 const MAX_PENDING_PER_ADDRESS: usize = 8;
+/// Connections not yet in Play from the larger blocks of an IPv6 address, by prefix length. The limits per
+/// [`WINDOW`] stay with the address: a block holds too many unrelated people to share those.
+const MAX_PENDING_PER_BLOCK: [(u8, usize); 2] = [(48, 32), (32, 64)];
 /// New connections from one address per [`WINDOW`]; a server list refresh and a join take two.
 const CONNECTIONS_PER_WINDOW: usize = 20;
 /// Login attempts from one address per [`WINDOW`].
@@ -40,6 +48,24 @@ fn limited_as(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// A block of IPv6 addresses: its prefix length and its first address.
+type Block = (u8, Ipv6Addr);
+
+/// The larger blocks that the connections of `ip`, as [`limited_as`] gives it, count for, with the most each
+/// may hold. An IPv4 address and loopback have none.
+fn blocks_of(ip: IpAddr) -> impl Iterator<Item = (Block, usize)> {
+    let ip = match ip {
+        IpAddr::V6(ip) if !ip.is_loopback() => Some(ip),
+        _ => None,
+    };
+    ip.into_iter().flat_map(|ip| {
+        MAX_PENDING_PER_BLOCK.map(|(length, most)| {
+            let prefix = u128::from(ip) & (u128::MAX << (128 - length));
+            ((length, Ipv6Addr::from(prefix)), most)
+        })
+    })
+}
+
 /// The connection limits shared by every connection.
 #[derive(Default)]
 pub struct Limits {
@@ -50,6 +76,8 @@ pub struct Limits {
 struct State {
     pending: usize,
     addresses: HashMap<IpAddr, Address>,
+    /// How many connections not yet in Play each larger block holds.
+    blocks: HashMap<Block, usize>,
     last_sweep: Option<Instant>,
     next_permit: u64,
 }
@@ -96,8 +124,11 @@ impl Limits {
                 return None;
             }
             holds = address.pending.len();
+            if blocks_of(ip).any(|(block, most)| state.held_by(block) >= most) {
+                return None;
+            }
         }
-        if state.pending >= MAX_PENDING && !state.make_room(holds) {
+        if state.pending >= MAX_PENDING && !state.make_room(ip, holds) {
             return None;
         }
         let number = state.next_permit;
@@ -107,6 +138,9 @@ impl Limits {
             let address = state.addresses.entry(ip).or_default();
             address.connections.push_back(now);
             address.pending.push_back((number, Arc::clone(&evicted)));
+            for (block, _) in blocks_of(ip) {
+                *state.blocks.entry(block).or_default() += 1;
+            }
         }
         state.pending += 1;
         Some(Permit {
@@ -120,23 +154,74 @@ impl Limits {
 }
 
 impl State {
-    /// Frees a place for a connection whose address holds `holds` of them: the oldest connection of the address
-    /// that holds the most gives up its place, if that leaves the address with no fewer than the newcomer's.
+    fn held_by(&self, block: Block) -> usize {
+        self.blocks.get(&block).copied().unwrap_or(0)
+    }
+
+    /// Frees a place for a connection from `ip`, whose address holds `holds` of them. The oldest connection
+    /// of the address that holds the most gives up its place, if that leaves the address with no fewer than
+    /// the newcomer's; failing that, the oldest of the /48 that holds the most, by the same rule between
+    /// /48s, and then of the /32. An IPv4 newcomer counts as a block that holds what its address does.
     /// Returns whether a place was freed.
-    fn make_room(&mut self, holds: usize) -> bool {
-        let Some(most) = self
+    fn make_room(&mut self, ip: IpAddr, holds: usize) -> bool {
+        let most = self
             .addresses
-            .values_mut()
-            .max_by_key(|address| address.pending.len())
-            .filter(|address| address.pending.len() >= holds + 2)
-        else {
-            return false;
-        };
-        if let Some((_, evicted)) = most.pending.pop_front() {
-            evicted.store(true, Ordering::Relaxed);
-            self.pending -= 1;
+            .iter()
+            .max_by_key(|(_, address)| address.pending.len())
+            .filter(|(_, address)| address.pending.len() >= holds + 2)
+            .map(|(&ip, _)| ip);
+        if let Some(most) = most {
+            self.evict_oldest(|ip| ip == most);
+            return true;
         }
-        true
+        for (length, _) in MAX_PENDING_PER_BLOCK {
+            let holds = blocks_of(ip)
+                .find(|((own, _), _)| *own == length)
+                .map_or(holds, |(block, _)| self.held_by(block));
+            let most = self
+                .blocks
+                .iter()
+                .filter(|((other, _), _)| *other == length)
+                .max_by_key(|(_, held)| **held)
+                .filter(|(_, held)| **held >= holds + 2)
+                .map(|(&block, _)| block);
+            if let Some(most) = most {
+                self.evict_oldest(|ip| blocks_of(ip).any(|(block, _)| block == most));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Makes the oldest connection of the addresses that `among` selects give up its place.
+    fn evict_oldest(&mut self, among: impl Fn(IpAddr) -> bool) {
+        let oldest = self
+            .addresses
+            .iter()
+            .filter(|(ip, _)| among(**ip))
+            .filter_map(|(&ip, address)| Some((address.pending.front()?.0, ip)))
+            .min();
+        let Some((_, ip)) = oldest else {
+            return;
+        };
+        let address = self.addresses.get_mut(&ip).expect("the address was found");
+        if let Some((_, evicted)) = address.pending.pop_front() {
+            evicted.store(true, Ordering::Relaxed);
+            self.left(ip);
+        }
+    }
+
+    /// A connection from `ip` no longer waits to play.
+    fn left(&mut self, ip: IpAddr) {
+        self.pending -= 1;
+        for (block, _) in blocks_of(ip) {
+            if let Some(held) = self.blocks.get_mut(&block) {
+                *held -= 1;
+                if *held == 0 {
+                    self.blocks.remove(&block);
+                }
+            }
+        }
     }
 
     /// Forgets addresses with nothing recent, at most once per window, so that the table cannot grow without
@@ -208,7 +293,7 @@ impl Permit {
             address.pending.remove(at)
         });
         if place.is_some() {
-            state.pending -= 1;
+            state.left(self.ip);
         }
     }
 }
@@ -362,6 +447,74 @@ mod tests {
         assert!(limits.connect(host(2, 0), now).is_some());
         let local = IpAddr::V6(Ipv6Addr::LOCALHOST);
         assert!((0..MAX_PENDING_PER_ADDRESS * 2).all(|_| limits.connect(local, now).is_some()));
+    }
+
+    /// An address of the /64 `prefix` in the /48 `site` of the /32 `network`.
+    fn v6(network: u16, site: u16, prefix: u16) -> IpAddr {
+        IpAddr::V6(Ipv6Addr::new(0x2001, network, site, prefix, 0, 0, 0, 1))
+    }
+
+    #[test]
+    fn the_prefixes_of_one_ipv6_block_share_its_places() {
+        let limits = Arc::new(Limits::default());
+        let now = Instant::now();
+        // One connection from each /64 of a /48 never reaches the limit of an address.
+        let site: Vec<_> = (0..32)
+            .map(|prefix| limits.connect(v6(1, 1, prefix), now).unwrap())
+            .collect();
+        assert!(limits.connect(v6(1, 1, 32), now).is_none());
+        // The /48s of one /32 share its places too: 32 more from another fill it.
+        let network: Vec<_> = (0..32)
+            .map(|prefix| limits.connect(v6(1, 2, prefix), now).unwrap())
+            .collect();
+        assert!(limits.connect(v6(1, 3, 0), now).is_none());
+        // Another network and IPv4 are not affected.
+        let other = limits.connect(v6(2, 1, 0), now).unwrap();
+        assert!(limits.connect(address(1), now).is_some());
+        assert_eq!(limits.lock().blocks.len(), 5);
+
+        // A connection that plays or closes frees its place in every block.
+        drop(site);
+        assert!(limits.connect(v6(1, 3, 0), now).is_some());
+        drop((network, other));
+        assert!(limits.lock().blocks.is_empty());
+        assert_eq!(limits.lock().pending, 0);
+    }
+
+    #[test]
+    fn a_full_server_takes_a_place_from_the_ipv6_block_that_holds_the_most() {
+        let limits = Arc::new(Limits::default());
+        let now = Instant::now();
+        // Four networks fill every place, each with two /48s of 32 prefixes that hold one connection.
+        let permits: Vec<_> = (0..MAX_PENDING as u16)
+            .map(|n| limits.connect(v6(n / 64, n / 32, n % 32), now).unwrap())
+            .collect();
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        // No address holds two, so the newcomer takes the oldest place of a /48.
+        let player = limits.connect(address(1), now).unwrap();
+        let evicted: Vec<_> = (0..MAX_PENDING).filter(|&n| permits[n].evicted()).collect();
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0] % 32, 0, "not the oldest of its /48");
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        // The /48 that lost a place holds 31. A second newcomer takes from one that still holds 32.
+        let second = limits.connect(address(2), now).unwrap();
+        let evicted: Vec<_> = (0..MAX_PENDING)
+            .filter(|&n| permits[n].evicted())
+            .map(|n| n / 32)
+            .collect();
+        assert_eq!(evicted.len(), 2);
+        assert_ne!(evicted[0], evicted[1]);
+        // A prefix of a new /48 in a network that holds fewer takes a place from a full /48 as well.
+        let network = evicted[0] as u16 / 2;
+        let third = limits.connect(v6(network, 100, 0), now).unwrap();
+        assert_eq!(limits.lock().pending, MAX_PENDING);
+        assert_eq!(
+            (0..MAX_PENDING).filter(|&n| permits[n].evicted()).count(),
+            3
+        );
+        drop((player, second, third, permits));
+        assert_eq!(limits.lock().pending, 0);
+        assert!(limits.lock().blocks.is_empty());
     }
 
     #[test]

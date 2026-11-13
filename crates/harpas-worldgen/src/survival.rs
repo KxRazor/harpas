@@ -244,6 +244,7 @@ pub fn compile_block_survival(
             SurvivalRule::DoublePlant(tag("minecraft:supports_vegetation")?)
         }
         "azalea" | "flowering_azalea" => SurvivalRule::Below(tag("minecraft:supports_azalea")?),
+        "bamboo" | "bamboo_sapling" => SurvivalRule::Below(tag("minecraft:supports_bamboo")?),
         "dead_bush" | "short_dry_grass" | "tall_dry_grass" => {
             SurvivalRule::Below(tag("minecraft:supports_dry_vegetation")?)
         }

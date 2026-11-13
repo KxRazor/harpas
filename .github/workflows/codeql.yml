@@ -36,6 +36,8 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          # Only Rust leaves paths out: the Java sources are the probes of the parity tests, in `tests/`.
+          config-file: ${{ matrix.language == 'rust' && './.github/codeql/rust.yml' || '' }}
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}

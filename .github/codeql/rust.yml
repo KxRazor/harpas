@@ -1,0 +1,8 @@
+# What CodeQL leaves out of the Rust analysis (.github/workflows/codeql.yml): the code that is not part of the
+# server. The integration tests, the benchmarks and the fuzz targets are a quarter of the Rust code, and the
+# analysis is the slowest check of a pull request. The unit tests inside `src/` are still analyzed.
+name: Rust without tests, benchmarks and fuzz targets
+paths-ignore:
+  - "**/tests/**"
+  - crates/harpas-bench/**
+  - fuzz/**

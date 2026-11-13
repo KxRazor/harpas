@@ -380,6 +380,15 @@ and the owner **accepts it once**:
     obstructions, chunk borders, replaced containers and world limits. A natural well crossing a chunk edge is
     also checked through `applyBiomeDecoration`, worker generation and Anvil reloads. The feature participates
     in the existing `generation.features` opt-in, with the other ported families.
+    `harpas_worldgen::coral` places the warm ocean's `coral_tree`, `coral_claw` and `coral_mushroom` reefs:
+    branching columns, bent fingers and hollow shells with their edges omitted. Each draws its block from
+    `#coral_blocks` in tag encounter order, expanding nested tags and keeping the first occurrence of each
+    block. Growth replaces water or `#corals` only where water lies above it, decorating accepted blocks with
+    random coral plants or fans, sea pickles and outward-facing wall fans. `coral_feature_parity` compares all
+    blocks, four live heightmaps, results and random tails in 468 placements across three seeds and both random
+    sources, including obstructions, existing vegetation, flowing water, chunk borders and world limits.
+    Warm ocean reefs also participate in `feature_blocks_parity` and `feature_worker_parity`, including Anvil
+    reloads, behind the same `generation.features` opt-in.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are
@@ -407,7 +416,7 @@ and the owner **accepts it once**:
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 37 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 39 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration

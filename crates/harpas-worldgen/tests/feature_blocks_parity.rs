@@ -21,8 +21,8 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// for mangroves, two chunks of the last seed over lush caves, where rooted azaleas grow, and a warm ocean of the
 /// last seed with sea pickles, two frozen oceans of the last seed with packed ice icebergs, snow on them and blue
 /// ice, two chunks of the last seed with an underground and a surface lava lake, a bamboo jungle and an old
-/// growth pine taiga with forest rocks, and a desert well crossing a chunk edge.
-const CHUNKS: [(i32, i32); 38] = [
+/// growth pine taiga with forest rocks, a desert well crossing a chunk edge and a warm ocean reef.
+const CHUNKS: [(i32, i32); 39] = [
     (0, 0),
     (-3, 7),
     (41, -26),
@@ -61,6 +61,7 @@ const CHUNKS: [(i32, i32); 38] = [
     (204, -236),
     (-400, 368),
     (-348, -421),
+    (-600, 552),
 ];
 
 fn changed_blocks(
@@ -157,6 +158,15 @@ fn feature_blocks_match_vanilla() {
                 ));
             }
             let actual = changed_blocks(&data, &generator, &index, seed, chunk);
+            if seed == SEEDS[2] && chunk == (-600, 552) {
+                let corals = data.block_tag_states("minecraft:coral_blocks").unwrap();
+                assert!(
+                    expected
+                        .iter()
+                        .any(|&(_, _, _, state)| corals[state as usize]),
+                    "the warm ocean sample must place coral blocks"
+                );
+            }
             let required = match chunk {
                 (204, -236) => Some("minecraft:bamboo"),
                 (-400, 368) => Some("minecraft:mossy_cobblestone"),

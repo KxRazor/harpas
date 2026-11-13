@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::bamboo::{CompiledBamboo, place_bamboo};
 use crate::block_blob::place_block_blob;
+use crate::coral::{CompiledCoral, place_coral};
 use crate::data::{
     BlockDirection, ConfiguredFeatureDef, FeatureRefDef, IntProviderDef, PlacedFeatureDef,
     WorldgenData, WorldgenDataError, parse_block_predicate, parse_block_state_def,
@@ -95,6 +96,8 @@ pub enum CompiledFeature {
     RootSystem(Box<CompiledRootSystem>),
     /// `minecraft:seagrass`, `minecraft:kelp` and `minecraft:sea_pickle`.
     OceanPlant(Box<CompiledOceanPlant>),
+    /// `minecraft:coral_tree`, `minecraft:coral_claw` and `minecraft:coral_mushroom`.
+    Coral(Box<CompiledCoral>),
     /// `minecraft:bamboo`.
     Bamboo(Box<CompiledBamboo>),
     /// `minecraft:block_blob`.
@@ -418,6 +421,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         }
         CompiledFeature::RootSystem(roots) => place_root_system(world, roots, random, origin),
         CompiledFeature::OceanPlant(plant) => place_ocean_plant(world, plant, random, origin),
+        CompiledFeature::Coral(coral) => place_coral(world, coral, random, origin),
         CompiledFeature::Bamboo(bamboo) => place_bamboo(world, bamboo, random, origin),
         CompiledFeature::BlockBlob {
             state,
@@ -947,6 +951,9 @@ impl<'a> FeatureCompiler<'a> {
                 }
             }
             "minecraft:vines" => CompiledFeature::Vines,
+            kind @ ("minecraft:coral_tree"
+            | "minecraft:coral_claw"
+            | "minecraft:coral_mushroom") => CompiledFeature::Coral(Box::new(self.coral(kind)?)),
             "minecraft:desert_well" => CompiledFeature::DesertWell,
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
             "minecraft:block_blob" => {

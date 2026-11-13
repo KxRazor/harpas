@@ -20,15 +20,16 @@ use harpas_worldgen::{FeatureIndex, NoiseBasedChunkGenerator, StructureTemplates
 use reference::Reference;
 
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
-/// Far apart, so no two share a decorated chunk; the last three are a bamboo jungle, an old growth pine
-/// taiga with forest rocks and a desert well crossing a chunk edge in the last seed.
-const CHUNKS: [(i32, i32); 6] = [
+/// Far apart, so no two share a decorated chunk; the last four are a bamboo jungle, an old growth pine
+/// taiga with forest rocks, a desert well crossing a chunk edge and a warm ocean reef in the last seed.
+const CHUNKS: [(i32, i32); 7] = [
     (0, 0),
     (41, -26),
     (-203, -151),
     (204, -236),
     (-400, 368),
     (-348, -421),
+    (-600, 552),
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -202,6 +203,15 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             assert_eq!(status(&chunk), Some("minecraft:features"));
             let carved = terrain.generate_chunk_carved(x, z, &data).unwrap();
             let actual = changed(&chunk, &carved);
+            if seed == SEEDS[1] && (x, z) == (-600, 552) {
+                let corals = data.block_tag_states("minecraft:coral_blocks").unwrap();
+                assert!(
+                    expected
+                        .iter()
+                        .any(|&(_, _, _, state)| corals[state as usize]),
+                    "the warm ocean worker sample must generate and save coral blocks"
+                );
+            }
             let required = match (x, z) {
                 (204, -236) => Some("minecraft:bamboo"),
                 (-400, 368) => Some("minecraft:mossy_cobblestone"),

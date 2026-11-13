@@ -370,6 +370,16 @@ and the owner **accepts it once**:
     a predicate that accepts air can place a floating blob. `block_blob_feature_parity` compares blocks,
     results and random consumption in 960 placements across three seeds with both legacy and Xoroshiro
     sources, including mixed supports, unsupported columns, offset predicates, chunk borders and world limits.
+    `harpas_worldgen::desert_well` searches downward from one block above its origin for sand and requires at
+    least one non-air block in each foundation column's two supporting layers. It places the sandstone basin,
+    water cross, pillars and slab roof, then chooses one block under the water in each of the two buried layers
+    for suspicious sand. Their block entities carry the `minecraft:archaeology/desert_well` loot table and
+    position-based seeds, as in vanilla; brushing and loot generation follow in M4. `desert_well_feature_parity`
+    compares blocks, four live heightmaps, block entity NBT, results and random consumption in 320 placements
+    across five seeds with both legacy and Xoroshiro sources, including rejected supports, partial foundations,
+    obstructions, chunk borders, replaced containers and world limits. A natural well crossing a chunk edge is
+    also checked through `applyBiomeDecoration`, worker generation and Anvil reloads. The feature participates
+    in the existing `generation.features` opt-in, with the other ported families.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

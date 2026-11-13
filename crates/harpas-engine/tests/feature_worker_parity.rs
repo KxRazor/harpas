@@ -13,16 +13,23 @@ use std::time::{Duration, Instant};
 
 use harpas_anvil::Chunk;
 use harpas_core::block::block_states;
-use harpas_core::nbt::Nbt;
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
 use harpas_engine::worldgen::{decorated, overworld_generator};
 use harpas_worldgen::{FeatureIndex, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData};
 use reference::Reference;
 
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
-/// Far apart, so no two share a decorated chunk; the last two are a bamboo jungle and an old growth pine
-/// taiga with forest rocks in the last seed.
-const CHUNKS: [(i32, i32); 5] = [(0, 0), (41, -26), (-203, -151), (204, -236), (-400, 368)];
+/// Far apart, so no two share a decorated chunk; the last three are a bamboo jungle, an old growth pine
+/// taiga with forest rocks and a desert well crossing a chunk edge in the last seed.
+const CHUNKS: [(i32, i32); 6] = [
+    (0, 0),
+    (41, -26),
+    (-203, -151),
+    (204, -236),
+    (-400, 368),
+    (-348, -421),
+];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
 
@@ -127,6 +134,21 @@ fn status(chunk: &Chunk) -> Option<&str> {
     }
 }
 
+fn well_entities(chunk: &Chunk) -> Vec<Compound> {
+    let Some(Nbt::List(List::Compound(entities))) = chunk.rest.get("block_entities") else {
+        return Vec::new();
+    };
+    let mut wells: Vec<_> = entities
+        .iter()
+        .filter(|entity| {
+            entity.get("LootTable") == Some(&Nbt::from("minecraft:archaeology/desert_well"))
+        })
+        .cloned()
+        .collect();
+    wells.sort_by_key(|entity| format!("{entity:?}"));
+    wells
+}
+
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
@@ -183,6 +205,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             let required = match (x, z) {
                 (204, -236) => Some("minecraft:bamboo"),
                 (-400, 368) => Some("minecraft:mossy_cobblestone"),
+                (-348, -421) => Some("minecraft:suspicious_sand"),
                 _ => None,
             };
             if seed == SEEDS[1]
@@ -206,16 +229,35 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
                 expected.len(),
                 actual.len(),
             );
-            finals.push((pos, actual, carved));
+            let entities = well_entities(&chunk);
+            if seed == SEEDS[1] && (x, z) == (-348, -421) {
+                assert!(
+                    !entities.is_empty(),
+                    "the worker must save the well's archaeology data"
+                );
+                for entity in &entities {
+                    assert_eq!(
+                        entity.get("id"),
+                        Some(&Nbt::from("minecraft:brushable_block"))
+                    );
+                    assert!(matches!(entity.get("LootTableSeed"), Some(Nbt::Long(_))));
+                }
+            }
+            finals.push((pos, actual, carved, entities));
             compared += 1;
         }
         world.flush().unwrap();
         drop(world);
 
         let mut world = open(&folder, seed, &data, &templates);
-        for (pos, actual, carved) in &finals {
+        for (pos, actual, carved, entities) in &finals {
             let chunk = load(&mut world, *pos);
             assert_eq!(&changed(&chunk, carved), actual, "{pos:?} after reopening");
+            assert_eq!(
+                &well_entities(&chunk),
+                entities,
+                "{pos:?} archaeology after reopening"
+            );
         }
         // Reopened final chunks are read as saved, so nothing waits to be saved.
         world.flush().unwrap();

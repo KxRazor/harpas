@@ -22,6 +22,7 @@ use crate::data::{
     WorldgenData, WorldgenDataError, parse_block_predicate, parse_block_state_def,
     parse_int_provider, parse_noise_parameters, parse_placed_feature,
 };
+use crate::desert_well::place_desert_well;
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
@@ -103,6 +104,8 @@ pub enum CompiledFeature {
         /// The predicate tested on the block below its origin.
         can_place_on: BlockPredicate,
     },
+    /// `minecraft:desert_well`.
+    DesertWell,
     /// `minecraft:vines`.
     Vines,
     /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
@@ -420,6 +423,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             state,
             can_place_on,
         } => place_block_blob(world, *state, can_place_on, random, origin),
+        CompiledFeature::DesertWell => place_desert_well(world, random, origin),
         CompiledFeature::Vines => place_vines(world, origin),
         CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
         CompiledFeature::Liquid(liquid) => place_liquid(world, liquid, random, origin),
@@ -943,6 +947,7 @@ impl<'a> FeatureCompiler<'a> {
                 }
             }
             "minecraft:vines" => CompiledFeature::Vines,
+            "minecraft:desert_well" => CompiledFeature::DesertWell,
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
             "minecraft:block_blob" => {
                 let Some(can_place_on) = self.predicate(name, field("can_place_on")?)? else {

@@ -11,6 +11,7 @@ pub mod carver;
 pub mod configured;
 pub mod data;
 pub mod density;
+pub mod desert_well;
 pub mod fallen_tree;
 pub mod feature;
 pub mod generator;

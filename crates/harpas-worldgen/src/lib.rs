@@ -6,6 +6,7 @@ pub mod aquifer;
 pub mod bamboo;
 pub mod beardifier;
 pub mod biome;
+pub mod block_blob;
 pub mod carver;
 pub mod configured;
 pub mod data;

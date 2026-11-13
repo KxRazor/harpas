@@ -20,8 +20,9 @@ use harpas_worldgen::{FeatureIndex, NoiseBasedChunkGenerator, StructureTemplates
 use reference::Reference;
 
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
-/// Far apart, so no two share a decorated chunk; the last is a bamboo jungle of the last seed.
-const CHUNKS: [(i32, i32); 4] = [(0, 0), (41, -26), (-203, -151), (204, -236)];
+/// Far apart, so no two share a decorated chunk; the last two are a bamboo jungle and an old growth pine
+/// taiga with forest rocks in the last seed.
+const CHUNKS: [(i32, i32); 5] = [(0, 0), (41, -26), (-203, -151), (204, -236), (-400, 368)];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
 
@@ -179,14 +180,21 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             assert_eq!(status(&chunk), Some("minecraft:features"));
             let carved = terrain.generate_chunk_carved(x, z, &data).unwrap();
             let actual = changed(&chunk, &carved);
-            if seed == SEEDS[1] && (x, z) == (204, -236) {
+            let required = match (x, z) {
+                (204, -236) => Some("minecraft:bamboo"),
+                (-400, 368) => Some("minecraft:mossy_cobblestone"),
+                _ => None,
+            };
+            if seed == SEEDS[1]
+                && let Some(block) = required
+            {
                 assert!(
                     expected.iter().any(|&(_, _, _, state)| {
                         block_states()
                             .properties(state)
-                            .is_some_and(|(name, _)| name == "minecraft:bamboo")
+                            .is_some_and(|(name, _)| name == block)
                     }),
-                    "the worker sample must generate and save bamboo"
+                    "the worker sample {x}, {z} must generate and save {block}"
                 );
             }
             let missing: Vec<_> = expected.difference(&actual).take(20).collect();

@@ -20,8 +20,9 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// meadow of the last seed, where trees grow with bee nests, a mangrove swamp of the last seed shallow enough
 /// for mangroves, two chunks of the last seed over lush caves, where rooted azaleas grow, and a warm ocean of the
 /// last seed with sea pickles, two frozen oceans of the last seed with packed ice icebergs, snow on them and blue
-/// ice, two chunks of the last seed with an underground and a surface lava lake, and a bamboo jungle.
-const CHUNKS: [(i32, i32); 36] = [
+/// ice, two chunks of the last seed with an underground and a surface lava lake, a bamboo jungle and an old
+/// growth pine taiga with forest rocks.
+const CHUNKS: [(i32, i32); 37] = [
     (0, 0),
     (-3, 7),
     (41, -26),
@@ -58,6 +59,7 @@ const CHUNKS: [(i32, i32); 36] = [
     (-119, -11),
     (-393, 14),
     (204, -236),
+    (-400, 368),
 ];
 
 fn changed_blocks(
@@ -154,14 +156,21 @@ fn feature_blocks_match_vanilla() {
                 ));
             }
             let actual = changed_blocks(&data, &generator, &index, seed, chunk);
-            if seed == SEEDS[2] && chunk == (204, -236) {
+            let required = match chunk {
+                (204, -236) => Some("minecraft:bamboo"),
+                (-400, 368) => Some("minecraft:mossy_cobblestone"),
+                _ => None,
+            };
+            if seed == SEEDS[2]
+                && let Some(block) = required
+            {
                 assert!(
                     expected.iter().any(|&(_, _, _, state)| {
                         block_states()
                             .properties(state)
-                            .is_some_and(|(name, _)| name == "minecraft:bamboo")
+                            .is_some_and(|(name, _)| name == block)
                     }),
-                    "the bamboo jungle sample must place bamboo"
+                    "the {chunk:?} sample must place {block}"
                 );
             }
             let missing: Vec<_> = expected.difference(&actual).take(20).collect();

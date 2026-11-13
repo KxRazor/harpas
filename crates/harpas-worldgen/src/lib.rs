@@ -16,6 +16,7 @@ pub mod huge_mushroom;
 pub mod ice;
 pub mod java_hash;
 pub mod light;
+pub mod liquid;
 pub mod mossy_carpet;
 pub mod multiface;
 pub mod noise_chunk;

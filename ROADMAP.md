@@ -166,6 +166,8 @@ vanilla for the same seed.
           vanilla's `applyBiomeDecoration` (`feature_blocks_parity`).
     - [x] Ice spikes, packed and blue ice icebergs and blue ice, compared with vanilla's `applyBiomeDecoration`
           (`feature_blocks_parity`).
+    - [x] Water and lava springs and underground and surface lava lakes, without the ticks they schedule,
+          compared with vanilla's `applyBiomeDecoration` (`feature_blocks_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

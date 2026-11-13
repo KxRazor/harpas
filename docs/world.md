@@ -344,7 +344,7 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 139 of the 164 Overworld placed features run, with the trees of every
+    dripleaves), is skipped as a whole; 144 of the 164 Overworld placed features run, with the trees of every
     biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
     seagrass, kelp and sea pickles of oceans, rivers and swamps (`harpas_worldgen::ocean_vegetation`), which grow
     on the `OCEAN_FLOOR` heightmap in water where their blocks survive. `harpas_worldgen::multiface` places vines on
@@ -353,6 +353,13 @@ and the owner **accepts it once**:
     beyond the origin sets its position from the origin each time, so it tries only the six neighbors.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
+    `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are
+    valid and `hole_count` are air, and lava lakes: four to seven ellipsoids in a 16x8x16 box, lava in the lower
+    half and cave air in the upper, given up if liquid touches the upper half or the lower half has a wall that is
+    neither solid nor lava, then a stone barrier around the lava and around half of the air. Vanilla schedules a
+    fluid tick at each spring and a block tick at each block of the lake's air; they are not saved yet, so the
+    water and lava of springs do not flow until a block next to them changes. A lake of water, which freezes over
+    in cold biomes, is not compiled; vanilla's data has none.
     `harpas_worldgen::root_system` climbs from a lush cave's ceiling to the first block, at most 100 above, that
     takes an azalea over `#azalea_grows_on` with three blocks of air above it (or water in the lowest), gives up
     above lava or a block that is not solid, and once the tree grows fills the column below it with rooted dirt at
@@ -371,7 +378,7 @@ and the owner **accepts it once**:
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 33 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 35 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration

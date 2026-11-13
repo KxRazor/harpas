@@ -53,6 +53,9 @@ cargo test --workspace --doc
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
+With [just](https://just.systems) installed, `just check` runs them all, and `just` alone lists the other
+shortcuts of the [justfile](justfile).
+
 The tests run with [cargo-nextest](https://nexte.st) (`cargo install --locked cargo-nextest`), which runs the test
 binaries at once and so takes about half the time of `cargo test`. It does not run documentation tests, hence
 the second command. Without it, `cargo test --workspace` runs the same tests.

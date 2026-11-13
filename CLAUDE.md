@@ -34,6 +34,7 @@ build order in [ROADMAP.md](ROADMAP.md), and contribution rules in [CONTRIBUTING
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | Build the documentation and check its links, as CI does |
 | `cargo deny check licenses bans sources` | Check dependency licenses and sources |
 | `ci/third-party-notices.sh` | Regenerate the Rust dependency section of THIRD_PARTY_NOTICES.md |
+| `just check` | Run the formatting, changelog, lint, test and documentation checks at once, with [just](https://just.systems); `just` lists the other shortcuts |
 
 ## Branch names
 

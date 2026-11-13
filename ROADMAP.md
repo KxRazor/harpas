@@ -178,6 +178,9 @@ vanilla for the same seed.
     - [x] Desert wells, with sandstone foundations, water, slab roofs and buried suspicious sand with loot
           metadata, compared with vanilla's own feature and `applyBiomeDecoration`, including worker generation
           and Anvil reloads (`desert_well_feature_parity`, `feature_blocks_parity`, `feature_worker_parity`).
+    - [x] Warm ocean coral reefs: trees, claws and mushrooms, with coral plants, fans and sea pickles, compared
+          with vanilla's own features and `applyBiomeDecoration`, including worker generation and Anvil reloads
+          (`coral_feature_parity`, `feature_blocks_parity`, `feature_worker_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

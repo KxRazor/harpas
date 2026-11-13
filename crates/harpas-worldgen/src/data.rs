@@ -13,7 +13,7 @@ use std::path::Path;
 
 use harpas_core::block::block_states;
 use harpas_core::noise::NoiseParameters;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde_json::Value;
 
 use crate::biome::{Parameter, ParameterPoint, quantize_coord};
@@ -1175,6 +1175,25 @@ impl WorldgenData {
             .collect())
     }
 
+    /// Default states in a block tag's encounter order, expanding nested tags and keeping the first
+    /// occurrence of each block. Random selection from a tag uses this order, not registry order.
+    pub(crate) fn block_tag_blocks(&self, tag: &str) -> Result<Vec<u32>, WorldgenDataError> {
+        let mut blocks = IndexSet::new();
+        collect_tag(
+            &self.block_tags,
+            "block",
+            &|name| block_states().default_state(name).is_some(),
+            tag.strip_prefix('#').unwrap_or(tag),
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            &mut blocks,
+        )?;
+        Ok(blocks
+            .iter()
+            .map(|name| block_states().default_state(name).expect("resolved block"))
+            .collect())
+    }
+
     fn collect_block_tag(
         &self,
         tag: &str,
@@ -1256,7 +1275,7 @@ fn collect_tag(
     tag: &str,
     active: &mut HashSet<String>,
     done: &mut HashSet<String>,
-    elements: &mut HashSet<String>,
+    elements: &mut impl Extend<String>,
 ) -> Result<(), WorldgenDataError> {
     let tag = resource_name(tag);
     if done.contains(&tag) {
@@ -1283,7 +1302,7 @@ fn collect_tag(
                 }
                 continue;
             }
-            elements.insert(name);
+            elements.extend([name]);
         }
     }
     active.remove(&tag);

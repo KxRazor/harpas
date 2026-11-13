@@ -9,6 +9,7 @@ pub mod biome;
 pub mod block_blob;
 pub mod carver;
 pub mod configured;
+pub mod coral;
 pub mod data;
 pub mod density;
 pub mod desert_well;

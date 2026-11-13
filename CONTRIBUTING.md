@@ -57,7 +57,9 @@ The tests run with [cargo-nextest](https://nexte.st) (`cargo install --locked ca
 binaries at once and so takes about half the time of `cargo test`. It does not run documentation tests, hence
 the second command. Without it, `cargo test --workspace` runs the same tests.
 
-Adding or updating a Rust dependency also needs:
+A Rust dependency is declared once, in `[workspace.dependencies]` of the root `Cargo.toml`, with its version
+and the features every crate that uses it needs. A crate takes it with `name.workspace = true`, adding the
+features only it needs. Adding or updating one also needs:
 
 ```sh
 cargo deny check licenses bans sources

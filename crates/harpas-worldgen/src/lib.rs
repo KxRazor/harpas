@@ -37,6 +37,7 @@ pub mod survival;
 pub mod template;
 pub mod tree;
 pub mod tree_decorator;
+pub mod underwater_magma;
 pub mod vegetation_patch;
 
 pub use aquifer::{

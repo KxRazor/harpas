@@ -389,6 +389,16 @@ and the owner **accepts it once**:
     sources, including obstructions, existing vegetation, flowing water, chunk borders and world limits.
     Warm ocean reefs also participate in `feature_blocks_parity` and `feature_worker_parity`, including Anvil
     reloads, behind the same `generation.features` opt-in.
+    `harpas_worldgen::underwater_magma` searches downward through water blocks for a floor strictly within
+    `floor_search_range`, then considers the cube of `placement_radius_around_floor` around it. Each position
+    draws a float before checking its blocks. The destination must be neither air nor a water block; below
+    and beside it, each neighbor must close its face towards the destination with its occlusion shape and
+    permit occlusion. This admits non-solid destinations and distinguishes glass from opaque supports and
+    partial shapes from full cubes. `underwater_magma_parity` compares blocks, four live heightmaps, results
+    and random tails in 216 placements across three seeds with both random sources, and every block state as
+    the destination or one of its five closing neighbors. The full occluding faces of all 29,873 states are
+    also checked by `block_behavior_parity`. A natural deposit crossing a chunk edge participates in
+    `feature_blocks_parity` and `feature_worker_parity`, including Anvil reloads, under `generation.features`.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

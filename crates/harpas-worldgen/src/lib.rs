@@ -3,6 +3,7 @@
 //! Design: `docs/world.md`.
 
 pub mod aquifer;
+pub mod bamboo;
 pub mod beardifier;
 pub mod biome;
 pub mod carver;

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use harpas_anvil::Chunk;
+use harpas_core::block::block_states;
 use harpas_core::nbt::Nbt;
 use harpas_engine::world::{ChunkPos, ChunkState, World};
 use harpas_engine::worldgen::{decorated, overworld_generator};
@@ -19,8 +20,8 @@ use harpas_worldgen::{FeatureIndex, NoiseBasedChunkGenerator, StructureTemplates
 use reference::Reference;
 
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
-/// Far apart, so no two share a decorated chunk.
-const CHUNKS: [(i32, i32); 3] = [(0, 0), (41, -26), (-203, -151)];
+/// Far apart, so no two share a decorated chunk; the last is a bamboo jungle of the last seed.
+const CHUNKS: [(i32, i32); 4] = [(0, 0), (41, -26), (-203, -151), (204, -236)];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
 
@@ -178,6 +179,16 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             assert_eq!(status(&chunk), Some("minecraft:features"));
             let carved = terrain.generate_chunk_carved(x, z, &data).unwrap();
             let actual = changed(&chunk, &carved);
+            if seed == SEEDS[1] && (x, z) == (204, -236) {
+                assert!(
+                    expected.iter().any(|&(_, _, _, state)| {
+                        block_states()
+                            .properties(state)
+                            .is_some_and(|(name, _)| name == "minecraft:bamboo")
+                    }),
+                    "the worker sample must generate and save bamboo"
+                );
+            }
             let missing: Vec<_> = expected.difference(&actual).take(20).collect();
             let extra: Vec<_> = actual.difference(expected).take(20).collect();
             assert!(

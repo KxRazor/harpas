@@ -6,7 +6,8 @@
 //! (`SnowyBlock`), vegetation and carpets break into air once they cannot survive (`VegetationBlock`,
 //! `CarpetBlock`), a spore blossom breaks once the block above no longer holds it, and either half of a double
 //! plant breaks without the other (`DoublePlantBlock`), a vine loses the faces nothing holds and breaks
-//! without faces (`VineBlock`), and cocoa breaks once the block it faces no longer holds it (`CocoaBlock`).
+//! without faces (`VineBlock`), cocoa breaks once the block it faces no longer holds it (`CocoaBlock`), and
+//! bamboo follows an older stalk above it, with a bamboo shoot becoming a stalk below another stalk.
 //! Blocks that only schedule a tick, such as leaves, liquids, sugar cane or cactus, keep their state.
 
 use std::collections::HashMap;
@@ -116,6 +117,10 @@ enum Update {
     MossyCarpet,
     /// `HangingMossBlock`: a tip unless more hanging moss is below; it only schedules a tick when unsupported.
     HangingMoss,
+    /// `BambooStalkBlock`: age follows an older stalk above; loss of support only schedules a tick.
+    Bamboo,
+    /// `BambooSaplingBlock`: breaks without support below, or becomes a stalk below another stalk.
+    BambooSapling(SurvivalRule),
 }
 
 /// The shape updates of the blocks they are ported for.
@@ -187,6 +192,9 @@ impl ShapeUpdates {
         if short == "pale_hanging_moss" {
             return Ok(Some(Update::HangingMoss));
         }
+        if short == "bamboo" {
+            return Ok(Some(Update::Bamboo));
+        }
         if short == "cocoa" {
             let support = data.block_tag_states("minecraft:supports_cocoa")?;
             return Ok(Some(Update::Cocoa(StateSet::from_membership(&support))));
@@ -196,6 +204,7 @@ impl ShapeUpdates {
         };
         Ok(Some(match (short, rule) {
             ("spore_blossom", rule) => Update::SurviveFromAbove(rule),
+            ("bamboo_sapling", rule) => Update::BambooSapling(rule),
             (_, rule @ SurvivalRule::DoublePlant(_)) => Update::DoublePlant(rule),
             (_, rule) => Update::Survive(rule),
         }))
@@ -282,6 +291,32 @@ impl ShapeUpdates {
                 let [x, y, z] = position;
                 let tip = !same_block(world.block_state(x, y - 1, z), state);
                 with_property(state, "tip", if tip { "true" } else { "false" })
+            }
+            Update::Bamboo => {
+                if direction == Direction::Up
+                    && same_block(state, neighbor)
+                    && property(state, "age") == Some("0")
+                    && property(neighbor, "age") == Some("1")
+                {
+                    with_property(state, "age", "1")
+                } else {
+                    state
+                }
+            }
+            Update::BambooSapling(rule) => {
+                if !rule.test(world, position, state) {
+                    self.air
+                } else if direction == Direction::Up
+                    && block_states()
+                        .properties(neighbor)
+                        .is_some_and(|(name, _)| name == "minecraft:bamboo")
+                {
+                    block_states()
+                        .default_state("minecraft:bamboo")
+                        .unwrap_or(state)
+                } else {
+                    state
+                }
             }
             Update::Cocoa(support) => {
                 let facing = property(state, "facing");

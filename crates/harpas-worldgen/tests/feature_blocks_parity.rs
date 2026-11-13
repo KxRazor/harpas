@@ -4,6 +4,7 @@ mod reference;
 use std::collections::BTreeSet;
 use std::fs;
 
+use harpas_core::block::block_states;
 use harpas_worldgen::{
     FeatureIndex, FeatureWorld, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
     apply_biome_decoration,
@@ -19,8 +20,8 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// meadow of the last seed, where trees grow with bee nests, a mangrove swamp of the last seed shallow enough
 /// for mangroves, two chunks of the last seed over lush caves, where rooted azaleas grow, and a warm ocean of the
 /// last seed with sea pickles, two frozen oceans of the last seed with packed ice icebergs, snow on them and blue
-/// ice, and two chunks of the last seed with an underground and a surface lava lake.
-const CHUNKS: [(i32, i32); 35] = [
+/// ice, two chunks of the last seed with an underground and a surface lava lake, and a bamboo jungle.
+const CHUNKS: [(i32, i32); 36] = [
     (0, 0),
     (-3, 7),
     (41, -26),
@@ -56,6 +57,7 @@ const CHUNKS: [(i32, i32); 35] = [
     (294, 336),
     (-119, -11),
     (-393, 14),
+    (204, -236),
 ];
 
 fn changed_blocks(
@@ -152,6 +154,16 @@ fn feature_blocks_match_vanilla() {
                 ));
             }
             let actual = changed_blocks(&data, &generator, &index, seed, chunk);
+            if seed == SEEDS[2] && chunk == (204, -236) {
+                assert!(
+                    expected.iter().any(|&(_, _, _, state)| {
+                        block_states()
+                            .properties(state)
+                            .is_some_and(|(name, _)| name == "minecraft:bamboo")
+                    }),
+                    "the bamboo jungle sample must place bamboo"
+                );
+            }
             let missing: Vec<_> = expected.difference(&actual).take(20).collect();
             let extra: Vec<_> = actual.difference(&expected).take(20).collect();
             assert!(

@@ -38,6 +38,38 @@ harpas-nethernet = { path = "crates/harpas-nethernet" }
 harpas-bedrock = { path = "crates/harpas-bedrock" }
 harpas-jvm = { path = "crates/harpas-jvm" }
 
+# Every external dependency, so that a version is written once. A crate takes one with `name.workspace = true`
+# and adds the features only it needs.
+aes = "0.9.3"
+base64 = "0.23.1"
+cfb8 = "0.9.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+ctr = "0.10.1"
+ctrlc = { version = "3.5.2", features = ["termination"] }
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+getrandom = "0.4.3"
+indexmap = "2.14.2"
+jni = { version = "0.22.4", features = ["invocation"] }
+libdeflater = "1.26.1"
+log = "0.4.35"
+md-5 = "0.11.0"
+miniz_oxide = "0.9.1"
+p384 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
+rsa = { version = "0.10.0", features = ["hazmat", "pkcs1v15"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.5"
+rustyline = { version = "19.0.0", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+str0m = { version = "0.25.0", default-features = false, features = ["rust-crypto"] }
+subtle = "2.6.1"
+toml = "1.1.8"
+ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-provider"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zlib-rs = "0.6.8"
+
 # The binaries of a release (`.github/workflows/release.yml`). Link-time optimization across every crate makes
 # world generation about 4% faster and the binary 17% smaller, and the build three times longer, so `release`,
 # which the parity tests and benchmarks use, stays as it is. Measured with the `worldgen` benchmark of

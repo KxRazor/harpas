@@ -36,6 +36,7 @@ use crate::placement::{
     BlockPredicate, CompiledModifier, Fluid, StateSet, compile_placement, compile_predicate, fluid,
     pick_weighted, place_positions, sample_int_provider,
 };
+use crate::pointed_dripstone::{CompiledPointedDripstone, place_pointed_dripstone};
 use crate::root_system::{CompiledRootSystem, place_root_system};
 use crate::surface::resolve_block_state;
 use crate::survival::{SurvivalRule, compile_block_survival};
@@ -115,6 +116,8 @@ pub enum CompiledFeature {
     UnderwaterMagma(CompiledUnderwaterMagma),
     /// `minecraft:freeze_top_layer`.
     FreezeTopLayer(Box<CompiledFreezeTopLayer>),
+    /// `minecraft:pointed_dripstone`.
+    PointedDripstone(Box<CompiledPointedDripstone>),
     /// `minecraft:vines`.
     Vines,
     /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
@@ -438,6 +441,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             place_underwater_magma(world, magma, random, origin)
         }
         CompiledFeature::FreezeTopLayer(surface) => place_freeze_top_layer(world, surface, origin),
+        CompiledFeature::PointedDripstone(dripstone) => {
+            place_pointed_dripstone(world, dripstone, random, origin)
+        }
         CompiledFeature::Vines => place_vines(world, origin),
         CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
         CompiledFeature::Liquid(liquid) => place_liquid(world, liquid, random, origin),
@@ -970,6 +976,9 @@ impl<'a> FeatureCompiler<'a> {
             }
             "minecraft:freeze_top_layer" => {
                 CompiledFeature::FreezeTopLayer(Box::new(self.freeze_top_layer(name)?))
+            }
+            "minecraft:pointed_dripstone" => {
+                CompiledFeature::PointedDripstone(Box::new(self.pointed_dripstone(name, config)?))
             }
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
             "minecraft:block_blob" => {

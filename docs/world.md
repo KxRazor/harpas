@@ -344,7 +344,7 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 147 of the 164 Overworld placed features run, with the trees of every
+    dripleaves), is skipped as a whole; 148 of the 164 Overworld placed features run, with the trees of every
     biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
     seagrass, kelp and sea pickles of oceans, rivers and swamps (`harpas_worldgen::ocean_vegetation`), which grow
     on the `OCEAN_FLOOR` heightmap in water where their blocks survive. `harpas_worldgen::multiface` places vines on
@@ -409,6 +409,15 @@ and the owner **accepts it once**:
     replays across all 65 biomes and nine heights, including world limits and chunk borders, plus snow
     survival over all 29,873 block states. Natural snowy plains and a frozen river participate in the
     decoration and worker comparisons, with Anvil reloads.
+    `harpas_worldgen::pointed_dripstone` places one- or two-block stalactites and stalagmites over
+    `#dripstone_replaceable_blocks` or existing dripstone blocks. When both floor and ceiling qualify, a
+    boolean chooses the ceiling. The base spreads clockwise, taking up to two further steps in any of the
+    six directions even through blocks it cannot replace. The origin is overwritten, preserving waterlogging,
+    and the taller variant needs air or a water block ahead. `pointed_dripstone_parity` compares blocks, four
+    live heightmaps, results and random tails in 1,080 placements across three seeds and both random sources,
+    six configurations, chunk borders and world limits; all 29,873 block states also serve as floor, ceiling,
+    origin and possible second block. A natural dripstone cave participates in the decoration and worker
+    comparisons, including Anvil reloads. Large dripstone and dripstone clusters remain pending.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

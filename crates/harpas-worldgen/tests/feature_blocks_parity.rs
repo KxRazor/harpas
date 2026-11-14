@@ -24,6 +24,7 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// growth pine taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an
 /// underwater magma deposit on a chunk edge. Snowy plains and the frozen river also exercise surface snow
 /// and ice in the last seed, followed by two dripstone caves with small and large formations and clusters.
+/// The lush cave at (-528,-480) also has a monster room crossing a chunk edge.
 const CHUNKS: [(i32, i32); 42] = [
     (0, 0),
     (-3, 7),
@@ -197,6 +198,7 @@ fn feature_blocks_match_vanilla() {
                 (-200, -175) => Some("minecraft:ice"),
                 (-600, -348) => Some("minecraft:pointed_dripstone"),
                 (-600, -240) => Some("minecraft:dripstone_block"),
+                (-528, -480) => Some("minecraft:spawner"),
                 _ => None,
             };
             if seed == SEEDS[2]

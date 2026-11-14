@@ -25,6 +25,7 @@ pub mod java_hash;
 pub mod large_dripstone;
 pub mod light;
 pub mod liquid;
+pub mod monster_room;
 pub mod mossy_carpet;
 pub mod multiface;
 pub mod noise_chunk;

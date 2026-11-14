@@ -32,6 +32,7 @@ use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
 use crate::ice::{CompiledIce, place_ice};
 use crate::large_dripstone::{CompiledLargeDripstone, place_large_dripstone};
 use crate::liquid::{CompiledLiquid, place_liquid};
+use crate::monster_room::place_monster_room;
 use crate::multiface::{CompiledMultifaceGrowth, place_multiface_growth, place_vines};
 use crate::ocean_vegetation::{CompiledOceanPlant, place_ocean_plant};
 use crate::placement::{
@@ -114,6 +115,8 @@ pub enum CompiledFeature {
     },
     /// `minecraft:desert_well`.
     DesertWell,
+    /// `minecraft:monster_room`.
+    MonsterRoom,
     /// `minecraft:underwater_magma`.
     UnderwaterMagma(CompiledUnderwaterMagma),
     /// `minecraft:freeze_top_layer`.
@@ -443,6 +446,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             can_place_on,
         } => place_block_blob(world, *state, can_place_on, random, origin),
         CompiledFeature::DesertWell => place_desert_well(world, random, origin),
+        CompiledFeature::MonsterRoom => place_monster_room(world, random, origin),
         CompiledFeature::UnderwaterMagma(magma) => {
             place_underwater_magma(world, magma, random, origin)
         }
@@ -983,6 +987,7 @@ impl<'a> FeatureCompiler<'a> {
             | "minecraft:coral_claw"
             | "minecraft:coral_mushroom") => CompiledFeature::Coral(Box::new(self.coral(kind)?)),
             "minecraft:desert_well" => CompiledFeature::DesertWell,
+            "minecraft:monster_room" => CompiledFeature::MonsterRoom,
             "minecraft:underwater_magma" => {
                 CompiledFeature::UnderwaterMagma(self.underwater_magma(name, config)?)
             }

@@ -191,7 +191,11 @@ vanilla for the same seed.
     - [x] Small stalactites and stalagmites (`pointed_dripstone`): base patches, direction selection, height
           and waterlogging, compared with vanilla's own feature and `applyBiomeDecoration`, including worker
           generation and Anvil reloads (`pointed_dripstone_parity`, `feature_blocks_parity`,
-          `feature_worker_parity`). Large dripstone and dripstone clusters remain pending.
+          `feature_worker_parity`).
+    - [x] Large dripstone (`large_dripstone`): cave searches, embedded and shrinking bases, radial profiles,
+          shared wind offsets and obstacle handling, compared with vanilla's own feature and
+          `applyBiomeDecoration`, including worker generation and Anvil reloads (`large_dripstone_parity`,
+          `feature_blocks_parity`, `feature_worker_parity`). Dripstone clusters remain pending.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

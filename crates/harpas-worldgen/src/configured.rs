@@ -29,6 +29,7 @@ use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::freeze_top_layer::{CompiledFreezeTopLayer, place_freeze_top_layer};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
 use crate::ice::{CompiledIce, place_ice};
+use crate::large_dripstone::{CompiledLargeDripstone, place_large_dripstone};
 use crate::liquid::{CompiledLiquid, place_liquid};
 use crate::multiface::{CompiledMultifaceGrowth, place_multiface_growth, place_vines};
 use crate::ocean_vegetation::{CompiledOceanPlant, place_ocean_plant};
@@ -118,6 +119,8 @@ pub enum CompiledFeature {
     FreezeTopLayer(Box<CompiledFreezeTopLayer>),
     /// `minecraft:pointed_dripstone`.
     PointedDripstone(Box<CompiledPointedDripstone>),
+    /// `minecraft:large_dripstone`.
+    LargeDripstone(Box<CompiledLargeDripstone>),
     /// `minecraft:vines`.
     Vines,
     /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
@@ -443,6 +446,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::FreezeTopLayer(surface) => place_freeze_top_layer(world, surface, origin),
         CompiledFeature::PointedDripstone(dripstone) => {
             place_pointed_dripstone(world, dripstone, random, origin)
+        }
+        CompiledFeature::LargeDripstone(dripstone) => {
+            place_large_dripstone(world, dripstone, random, origin)
         }
         CompiledFeature::Vines => place_vines(world, origin),
         CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
@@ -980,6 +986,10 @@ impl<'a> FeatureCompiler<'a> {
             "minecraft:pointed_dripstone" => {
                 CompiledFeature::PointedDripstone(Box::new(self.pointed_dripstone(name, config)?))
             }
+            "minecraft:large_dripstone" => match self.large_dripstone(name, config)? {
+                Some(dripstone) => CompiledFeature::LargeDripstone(Box::new(dripstone)),
+                None => return Ok(None),
+            },
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
             "minecraft:block_blob" => {
                 let Some(can_place_on) = self.predicate(name, field("can_place_on")?)? else {

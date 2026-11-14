@@ -344,7 +344,7 @@ and the owner **accepts it once**:
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
     log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
     or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 148 of the 164 Overworld placed features run, with the trees of every
+    dripleaves), is skipped as a whole; 153 of the 164 Overworld placed features run, with the trees of every
     biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
     seagrass, kelp and sea pickles of oceans, rivers and swamps (`harpas_worldgen::ocean_vegetation`), which grow
     on the `OCEAN_FLOOR` heightmap in water where their blocks survive. `harpas_worldgen::multiface` places vines on
@@ -417,7 +417,17 @@ and the owner **accepts it once**:
     live heightmaps, results and random tails in 1,080 placements across three seeds and both random sources,
     six configurations, chunk borders and world limits; all 29,873 block states also serve as floor, ceiling,
     origin and possible second block. A natural dripstone cave participates in the decoration and worker
-    comparisons, including Anvil reloads. Large dripstone and dripstone clusters remain pending.
+    comparisons, including Anvil reloads.
+    `harpas_worldgen::large_dripstone` scans for a floor and ceiling, draws a uniform radius from the configured
+    provider's bounds capped by the cave height, and samples each column's bluntness and scale independently.
+    Both columns share a wind offset when both qualify, before searching for embedded bases and halving radii
+    that do not fit. The radial profile fills air, water and lava; after its first placed block, a column stops
+    at `#dripstone_replaceable_blocks` but skips other obstacles, including existing dripstone blocks.
+    `large_dripstone_parity` compares the profile, blocks, four live heightmaps, results and random tails in
+    1,248 placements across three seeds and both random sources, with eight configurations, dry and flooded
+    caves, search boundaries, irregular and thin supports, shrinking bases, obstacles, chunk borders and world
+    limits. A natural large-dripstone cave participates in the decoration and worker comparisons, including
+    Anvil reloads. Dripstone clusters remain pending.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are
@@ -445,7 +455,7 @@ and the owner **accepts it once**:
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 40 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 42 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration

@@ -273,6 +273,17 @@ and the owner **accepts it once**:
     states, positions and full NBT, across world seeds, origins, list sizes and integer providers. Placement
     settings' randomness is checked to remain untouched. Other delegates and jigsaw block placement on
     workers remain unported.
+    `ProcessorPipeline` combines these processors with `block_rot`, `protected_blocks`, `block_ignore` and
+    `nop`. Rot membership reads the original template state even after earlier rules change it; its draw
+    uses the shared placement-settings source when supplied, or a fresh positional legacy source otherwise.
+    Protected blocks check existing terrain, while ignore checks the current template block type across
+    all its states. A rejected block stops the remaining per-block processors; capped finalizers then run
+    over the surviving blocks. Surviving positions and NBT are preserved. All 40 vanilla processor lists
+    now compile without dropping entries. `filter_processor_parity` compares those lists, all 13 shipped
+    filters in isolation and synthetic chains against `StructureTemplate.processBlockInfos`, including
+    settings random consumption, float thresholds, empty lists, world limits and every registry state in
+    the full sample. Gravity, jigsaw replacement and the other runtime-added processors, template placement,
+    waterlogging, shape updates and worker integration remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

@@ -224,6 +224,10 @@ vanilla for the same seed.
     - [x] Capped rule processors: whole-template limits, world-seeded candidate shuffles, unchanged and
           NBT-only results, integer limit providers and ordered finalizers, compared with vanilla's own
           processor pipeline (`capped_processor_parity`). Worker template placement follows below.
+    - [x] Template block filters: `block_rot`, `protected_blocks`, `block_ignore` and `nop`, in an ordered
+          pipeline with rules and capped finalizers. All 40 shipped processor lists, original versus current
+          states, preserved NBT and placement-settings randomness are compared with vanilla's own pipeline
+          (`filter_processor_parity`). Template placement on workers follows below.
     - [ ] Remaining processors, template block placement and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

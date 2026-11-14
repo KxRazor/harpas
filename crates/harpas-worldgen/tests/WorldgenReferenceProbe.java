@@ -96,6 +96,9 @@ public final class WorldgenReferenceProbe {
         // No chunk has initialized its light during FEATURES: the sky light engine reports 15 in columns it has no
         // data for, and the block light engine 0 (LevelLightEngine.getRawBrightness). Mushrooms read it.
         @Override public int getRawBrightness(net.minecraft.core.BlockPos pos, int darken) { return Math.max(0, 15 - darken); }
+        @Override public int getBrightness(net.minecraft.world.level.LightLayer layer, net.minecraft.core.BlockPos pos) {
+            return layer == net.minecraft.world.level.LightLayer.SKY ? 15 : 0;
+        }
         @Override public long getGameTime() { return 0; }
         @Override public long nextSubTickCount() { return subTicks.getAndIncrement(); }
         @Override public int getMinY() { return height.getMinY(); }

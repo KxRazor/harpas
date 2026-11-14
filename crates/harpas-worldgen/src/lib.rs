@@ -15,6 +15,7 @@ pub mod density;
 pub mod desert_well;
 pub mod fallen_tree;
 pub mod feature;
+pub mod freeze_top_layer;
 pub mod generator;
 pub mod huge_mushroom;
 pub mod ice;

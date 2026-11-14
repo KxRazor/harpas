@@ -205,6 +205,10 @@ vanilla for the same seed.
           `applyBiomeDecoration`, including overlapping rooms, world limits, worker generation, chunk edges
           and Anvil reloads (`monster_room_parity`, `feature_blocks_parity`, `feature_worker_parity`). Spawner
           ticking and opening loot follow in M4.
+    - [x] Lush cave clay patches and pools (`waterlogged_vegetation_patch`), with small and big dripleaves,
+          support rules, waterlogging and shape updates, compared with vanilla's own features and
+          `applyBiomeDecoration`, including repeated placement, chunk edges, world limits, worker generation
+          and Anvil reloads (`lush_vegetation_parity`, `feature_blocks_parity`, `feature_worker_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

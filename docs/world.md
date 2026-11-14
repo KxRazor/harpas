@@ -342,10 +342,9 @@ and the owner **accepts it once**:
     `attached_to_logs`, which places mushrooms beside a shuffled copy of the logs. No light is initialized while
     a chunk decorates: vanilla's sky light engine reports 15 in the columns it has no data for, so a mushroom
     survives only on a block in `#overrides_mushroom_light_requirement`, and the trees growing next to a fallen
-    log's mushrooms break them. A configured feature with any part that is not ported, such as a tree with roots
-    or other placers or decorators, a scheduled tick (eyeblossoms) or a block without a survival rule (fire and
-    dripleaves), is skipped as a whole; 153 of the 164 Overworld placed features run, with the trees of every
-    biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
+    log's mushrooms break them. A configured feature with any part that is not ported, such as a scheduled tick
+    (eyeblossoms) or a block without a survival rule (fire), is skipped as a whole. The ported features include
+    the trees of every biome, the rooted azaleas above lush caves, the moss patches of pale gardens and lush caves, and the
     seagrass, kelp and sea pickles of oceans, rivers and swamps (`harpas_worldgen::ocean_vegetation`), which grow
     on the `OCEAN_FLOOR` heightmap in water where their blocks survive. `harpas_worldgen::multiface` places vines on
     the first face, without down, they can attach to, and glow lichen on a shuffled `can_be_placed_on` neighbor of
@@ -452,6 +451,18 @@ and the owner **accepts it once**:
     spawners, chunk borders and world limits. A natural room crossing a chunk edge participates in decoration
     and worker comparisons, including chest and spawner NBT against vanilla and Anvil reloads, under
     `generation.features`. Spawner ticking and loot opening follow in M4.
+    `harpas_worldgen::vegetation_patch` also places `waterlogged_vegetation_patch`: after replacing the ground,
+    it collects positions enclosed below and on all four sides by sturdy faces, fills them with water and grows
+    vegetation in that water, in a fresh Java `HashSet`'s iteration order. Lush caves' clay patches and pools
+    grow small dripleaves with two halves and big dripleaf columns. Small dripleaves need their own support tag,
+    or vegetation ground while in source water, and only the halves replacing water are waterlogged. A pool also
+    waterlogs the first block of a big dripleaf column. Shape updates break unsupported small dripleaves and big
+    leaves, turn a leaf below another leaf into a stem and keep unsupported stems until their scheduled tick,
+    which follows in M4 along with fluid ticks. `lush_vegetation_parity` compares blocks, four live heightmaps,
+    results and random tails on controlled floors, including holes, partial supports, flooded and obstructed
+    origins, repeated placement, chunk edges and world limits, and compares survival and shape updates against
+    every block state. The natural decoration and worker comparisons require both dripleaves and waterlogged
+    plants in their samples and check their Anvil reloads under `generation.features`.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

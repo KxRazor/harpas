@@ -96,7 +96,7 @@ pub enum CompiledFeature {
     FallenTree(Box<CompiledFallenTree>),
     /// `minecraft:huge_brown_mushroom` and `minecraft:huge_red_mushroom`.
     HugeMushroom(Box<CompiledHugeMushroom>),
-    /// `minecraft:vegetation_patch`.
+    /// `minecraft:vegetation_patch` and `minecraft:waterlogged_vegetation_patch`.
     VegetationPatch(Box<CompiledVegetationPatch>),
     /// `minecraft:root_system`.
     RootSystem(Box<CompiledRootSystem>),
@@ -516,6 +516,7 @@ fn is_double_plant(state: u32) -> bool {
                 | "minecraft:lilac"
                 | "minecraft:rose_bush"
                 | "minecraft:peony"
+                | "minecraft:small_dripleaf"
         )
     })
 }
@@ -972,10 +973,16 @@ impl<'a> FeatureCompiler<'a> {
                 Some(tree) => CompiledFeature::FallenTree(Box::new(tree)),
                 None => return Ok(None),
             },
-            "minecraft:vegetation_patch" => match self.vegetation_patch(name, config)? {
-                Some(patch) => CompiledFeature::VegetationPatch(Box::new(patch)),
-                None => return Ok(None),
-            },
+            kind @ ("minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch") => {
+                match self.vegetation_patch(
+                    name,
+                    config,
+                    kind == "minecraft:waterlogged_vegetation_patch",
+                )? {
+                    Some(patch) => CompiledFeature::VegetationPatch(Box::new(patch)),
+                    None => return Ok(None),
+                }
+            }
             kind @ ("minecraft:seagrass" | "minecraft:kelp" | "minecraft:sea_pickle") => {
                 match self.ocean_plant(name, kind, config)? {
                     Some(plant) => CompiledFeature::OceanPlant(Box::new(plant)),

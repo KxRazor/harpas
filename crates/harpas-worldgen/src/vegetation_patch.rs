@@ -1,4 +1,4 @@
-//! `minecraft:vegetation_patch` (`VegetationPatchFeature`): a patch of ground blocks on the floor or ceiling around
+//! `minecraft:vegetation_patch` and `minecraft:waterlogged_vegetation_patch`: ground on the floor or ceiling around
 //! the origin, then vegetation placed on some of them.
 //!
 //! The patch is a rectangle of two radii drawn from `xz_radius` plus one, without its corners and with each edge
@@ -6,6 +6,8 @@
 //! back out of the blocks there, each within `vertical_range`, and replaces up to `depth` blocks from the surface beyond it that are in `replaceable`,
 //! when that surface has a sturdy face towards the air. Each patched column then grows `vegetation_feature` by
 //! `vegetation_chance`, in Java's iteration order of the `HashSet` that holds them.
+//! Waterlogged patches first keep only positions with sturdy faces below and beside them, fill them with water,
+//! and grow their vegetation in the water, waterlogging the block at each successful origin.
 
 use std::sync::Arc;
 
@@ -21,9 +23,11 @@ use crate::java_hash::BlockPosSet;
 use crate::placement::{StateSet, sample_int_provider};
 use crate::shape_update::{Direction, same_block};
 
-/// A compiled `minecraft:vegetation_patch`.
+/// A compiled `minecraft:vegetation_patch` or `minecraft:waterlogged_vegetation_patch`.
 #[derive(Debug)]
 pub struct CompiledVegetationPatch {
+    /// Flood enclosed ground positions and grow vegetation in their water instead of above the ground.
+    waterlogged: bool,
     replaceable: StateSet,
     ground_state: StateProvider,
     vegetation_feature: Arc<CompiledPlaced>,
@@ -46,15 +50,49 @@ pub fn place_vegetation_patch<W: FeatureWorld, R: RandomSource>(
 ) -> bool {
     let radius_x = sample_int_provider(&patch.xz_radius, random).unwrap_or(0) + 1;
     let radius_z = sample_int_provider(&patch.xz_radius, random).unwrap_or(0) + 1;
-    let surface = ground_patch(world, patch, random, origin, radius_x, radius_z);
+    let mut surface = ground_patch(world, patch, random, origin, radius_x, radius_z);
+    if patch.waterlogged {
+        let mut enclosed = BlockPosSet::new();
+        for position in surface.iter() {
+            let exposed = [
+                (Face::Down, Face::Up),
+                (Face::North, Face::South),
+                (Face::South, Face::North),
+                (Face::West, Face::East),
+                (Face::East, Face::West),
+            ]
+            .into_iter()
+            .any(|(face, opposite)| {
+                let [dx, dy, dz] = face.offset();
+                let neighbor = [position[0] + dx, position[1] + dy, position[2] + dz];
+                !block_behavior().is_face_sturdy(
+                    world.block_state(neighbor[0], neighbor[1], neighbor[2]),
+                    opposite,
+                )
+            });
+            if !exposed {
+                enclosed.insert(position);
+            }
+        }
+        let water = block_states().default_state("minecraft:water").unwrap_or(0);
+        for [x, y, z] in enclosed.iter() {
+            world.set_block_state(x, y, z, water);
+        }
+        surface = enclosed;
+    }
     for position in surface.iter() {
         if patch.vegetation_chance > 0.0 && random.next_float() < patch.vegetation_chance {
-            place_placed(
-                world,
-                &patch.vegetation_feature,
-                random,
-                patch.surface.opposite().step(position),
-            );
+            let at = if patch.waterlogged {
+                position
+            } else {
+                patch.surface.opposite().step(position)
+            };
+            let placed = place_placed(world, &patch.vegetation_feature, random, at);
+            if patch.waterlogged && placed {
+                let state = world.block_state(at[0], at[1], at[2]);
+                let state = crate::shape_update::with_property(state, "waterlogged", "true");
+                world.set_block_state(at[0], at[1], at[2], state);
+            }
         }
     }
     !surface.is_empty()
@@ -146,11 +184,12 @@ fn place_ground<W: FeatureWorld, R: RandomSource>(
 }
 
 impl FeatureCompiler<'_> {
-    /// Compiles a `minecraft:vegetation_patch` configuration; None for parts not ported yet.
+    /// Compiles either vegetation patch configuration; None for parts not ported yet.
     pub(crate) fn vegetation_patch(
         &mut self,
         name: &str,
         config: &Value,
+        waterlogged: bool,
     ) -> Result<Option<CompiledVegetationPatch>, WorldgenDataError> {
         let invalid = |message: String| WorldgenDataError::InvalidDefinition {
             context: name.to_string(),
@@ -197,6 +236,7 @@ impl FeatureCompiler<'_> {
             .and_then(|value| i32::try_from(value).ok())
             .ok_or_else(|| invalid("`vertical_range` must be an integer".to_string()))?;
         Ok(Some(CompiledVegetationPatch {
+            waterlogged,
             replaceable: StateSet::from_membership(&self.data().block_tag_states(replaceable)?),
             ground_state,
             vegetation_feature,
@@ -208,5 +248,104 @@ impl FeatureCompiler<'_> {
             xz_radius,
             extra_edge_column_chance: number("extra_edge_column_chance")? as f32,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{GeneratedChunk, RegionFeatureWorld, WorldgenData, place_feature};
+    use harpas_core::random::XoroshiroRandom;
+    use serde_json::json;
+
+    fn state(name: &str) -> u32 {
+        block_states()
+            .default_state(&format!("minecraft:{name}"))
+            .unwrap()
+    }
+
+    fn data(wet: bool, vegetation: f32) -> WorldgenData {
+        WorldgenData::from_json_entries([
+            ("data/test/tags/block/replaceable.json", json!({"values": ["minecraft:stone"]}).to_string()),
+            ("data/minecraft/tags/block/supports_small_dripleaf.json", json!({"values": ["minecraft:clay"]}).to_string()),
+            ("data/minecraft/tags/block/supports_vegetation.json", json!({"values": ["minecraft:dirt"]}).to_string()),
+            ("data/test/worldgen/configured_feature/patch.json", json!({
+                "type": if wet { "minecraft:waterlogged_vegetation_patch" } else { "minecraft:vegetation_patch" },
+                "config": {
+                    "replaceable": "#test:replaceable", "ground_state": {"type": "minecraft:simple_state_provider", "state": {"Name": "minecraft:clay"}},
+                    "vegetation_feature": {"feature": {"type": "minecraft:simple_block", "config": {"to_place": {"type": "minecraft:simple_state_provider", "state": {"Name": "minecraft:small_dripleaf"}}}}, "placement": []},
+                    "surface": "floor", "depth": 2, "extra_bottom_block_chance": 0.0, "vertical_range": 3,
+                    "vegetation_chance": vegetation, "xz_radius": 0, "extra_edge_column_chance": 1.0
+                }
+            }).to_string()),
+        ]).unwrap()
+    }
+
+    fn floor() -> RegionFeatureWorld {
+        let mut chunk = GeneratedChunk::new(0, 0, -64, 384, 1);
+        for y in 0..=4 {
+            for z in 5..=11 {
+                for x in 5..=11 {
+                    chunk.set_block_state(x, y, z, state("stone"));
+                }
+            }
+        }
+        RegionFeatureWorld::new([chunk], 0).unwrap()
+    }
+
+    #[test]
+    fn dry_and_flooded_patches_grow_both_halves_at_different_heights() {
+        for wet in [false, true] {
+            let data = data(wet, 1.0);
+            let patch = FeatureCompiler::new(&data)
+                .configured("test:patch")
+                .unwrap()
+                .unwrap();
+            let mut world = floor();
+            let mut random = WorldgenRandom::new(XoroshiroRandom::new(42));
+            assert!(place_feature(&mut world, &patch, &mut random, [8, 5, 8]));
+            let y = if wet { 4 } else { 5 };
+            for (dy, half) in [(0, "lower"), (1, "upper")] {
+                let (name, properties) = block_states()
+                    .properties(world.block_state(8, y + dy, 8))
+                    .unwrap();
+                assert_eq!(name, "minecraft:small_dripleaf");
+                assert!(properties.contains(&("half", half)));
+                assert!(
+                    properties
+                        .contains(&("waterlogged", if wet && dy == 0 { "true" } else { "false" }))
+                );
+            }
+            assert_eq!(world.block_state(8, y - 1, 8), state("clay"));
+        }
+    }
+
+    #[test]
+    fn pool_does_not_flood_positions_with_a_side_or_bottom_opening() {
+        let data = data(true, 0.0);
+        let patch = FeatureCompiler::new(&data)
+            .configured("test:patch")
+            .unwrap()
+            .unwrap();
+        let mut world = floor();
+        world.set_block_state(8, 3, 8, state("air"));
+        world.set_block_state(7, 4, 7, state("air"));
+        let mut random = WorldgenRandom::new(XoroshiroRandom::new(42));
+        assert!(place_feature(&mut world, &patch, &mut random, [8, 5, 8]));
+        assert_eq!(
+            world.block_state(8, 4, 8),
+            state("clay"),
+            "an opening below"
+        );
+        assert_eq!(
+            world.block_state(7, 4, 8),
+            state("clay"),
+            "an opening beside"
+        );
+        assert_eq!(
+            world.block_state(9, 4, 8),
+            state("water"),
+            "enclosed by solid faces"
+        );
     }
 }

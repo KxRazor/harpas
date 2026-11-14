@@ -23,7 +23,7 @@ const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
 /// Far apart, so no two share a decorated chunk; after the first three come a bamboo jungle, an old growth pine
 /// taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an underwater magma
 /// deposit on a chunk edge in the last seed, followed by snowy plains, a frozen river and two dripstone caves,
-/// including clusters with long pointed columns, and a monster room crossing a chunk edge.
+/// including clusters with long pointed columns, and a lush cave with dripleaves, clay pools and a monster room crossing a chunk edge.
 const CHUNKS: [(i32, i32); 13] = [
     (0, 0),
     (41, -26),
@@ -221,6 +221,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
     let supported_list = reference.temp.0.join("supported.txt");
     fs::write(&supported_list, supported.join("\n")).unwrap();
     let mut compared = 0;
+    let mut lush = [false; 3];
     for &seed in reference::sampled_seeds(&SEEDS) {
         let expected = vanilla(&reference, seed, &supported_list);
         let folder = reference.temp.0.join(format!("world-{seed}"));
@@ -234,6 +235,16 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             assert_eq!(status(&chunk), Some("minecraft:features"));
             let carved = terrain.generate_chunk_carved(x, z, &data).unwrap();
             let actual = changed(&chunk, &carved);
+            if seed == SEEDS[1] {
+                for &(_, _, _, state) in expected {
+                    if let Some((name, properties)) = block_states().properties(state) {
+                        lush[0] |= name == "minecraft:small_dripleaf";
+                        lush[1] |= name == "minecraft:big_dripleaf";
+                        lush[2] |= name.contains("dripleaf")
+                            && properties.contains(&("waterlogged", "true"));
+                    }
+                }
+            }
             if seed == SEEDS[1] && (x, z) == (-600, 552) {
                 let corals = data.block_tag_states("minecraft:coral_blocks").unwrap();
                 assert!(
@@ -332,5 +343,9 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
         drop(world);
         fs::remove_dir_all(&folder).unwrap();
     }
+    assert!(
+        lush.into_iter().all(|placed| placed),
+        "the worker samples must place and save both dripleaves and waterlog them"
+    );
     eprintln!("Compared {compared} final chunks decorated on the chunk workers");
 }

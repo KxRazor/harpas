@@ -10,7 +10,8 @@
 //! below that is not in `#cannot_support_kelp`, a sea pickle a top face of its collision shape below, and a mushroom a block that overrides its light
 //! requirement below, as no light is initialized while chunks decorate. Snow needs a full top collision
 //! face below, with support overrides and exclusions by tag, or eight layers of snow. Blocks without a
-//! rule of their own always survive.
+//! rule of their own always survive. Dripleaves use their support tags: a small dripleaf also takes ordinary
+//! vegetation ground in source water, a big leaf another leaf or stem below, and a stem a stem or leaf above.
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
@@ -30,6 +31,21 @@ pub enum SurvivalRule {
     Below(StateSet),
     /// `DoublePlantBlock`: the lower half needs `support` below, the upper half its own lower half.
     DoublePlant(StateSet),
+    /// `SmallDripleafBlock`: its upper half needs its lower half; the lower half takes its own support tag,
+    /// or ordinary vegetation support while in a water source.
+    SmallDripleaf {
+        /// `#supports_small_dripleaf`.
+        support: StateSet,
+        /// `#supports_vegetation`.
+        wet_support: StateSet,
+    },
+    /// `BigDripleafBlock` and `BigDripleafStemBlock`.
+    BigDripleaf {
+        /// `#supports_big_dripleaf`.
+        support: StateSet,
+        /// A stem also needs another stem or a leaf above.
+        stem: bool,
+    },
     /// `MangrovePropaguleBlock`: below it unless it hangs, then above it.
     Mangrove {
         /// `#supports_mangrove_propagule`.
@@ -113,6 +129,35 @@ impl SurvivalRule {
                 } else {
                     support.contains(below)
                 }
+            }
+            Self::SmallDripleaf {
+                support,
+                wet_support,
+            } => {
+                let below = world.block_state(x, y - 1, z);
+                if property(state, "half") == Some("upper") {
+                    same_block(below, state) && property(below, "half") == Some("lower")
+                } else {
+                    support.contains(below)
+                        || fluid(world.block_state(x, y, z)) == Fluid::Water
+                            && wet_support.contains(below)
+                }
+            }
+            Self::BigDripleaf { support, stem } => {
+                let below = world.block_state(x, y - 1, z);
+                let is_stem = |state| {
+                    block_states()
+                        .properties(state)
+                        .is_some_and(|(name, _)| name == "minecraft:big_dripleaf_stem")
+                };
+                let above = world.block_state(x, y + 1, z);
+                let is_leaf = |state| {
+                    block_states()
+                        .properties(state)
+                        .is_some_and(|(name, _)| name == "minecraft:big_dripleaf")
+                };
+                (support.contains(below) || is_stem(below) || !stem && is_leaf(below))
+                    && (!stem || is_stem(above) || is_leaf(above))
             }
             Self::Mangrove { standing, hanging } => {
                 if property(state, "hanging") == Some("true") {
@@ -259,6 +304,14 @@ pub fn compile_block_survival(
         "tall_grass" | "large_fern" | "sunflower" | "lilac" | "rose_bush" | "peony" => {
             SurvivalRule::DoublePlant(tag("minecraft:supports_vegetation")?)
         }
+        "small_dripleaf" => SurvivalRule::SmallDripleaf {
+            support: tag("minecraft:supports_small_dripleaf")?,
+            wet_support: tag("minecraft:supports_vegetation")?,
+        },
+        "big_dripleaf" | "big_dripleaf_stem" => SurvivalRule::BigDripleaf {
+            support: tag("minecraft:supports_big_dripleaf")?,
+            stem: short == "big_dripleaf_stem",
+        },
         "azalea" | "flowering_azalea" => SurvivalRule::Below(tag("minecraft:supports_azalea")?),
         "bamboo" | "bamboo_sapling" => SurvivalRule::Below(tag("minecraft:supports_bamboo")?),
         "dead_bush" | "short_dry_grass" | "tall_dry_grass" => {
@@ -337,6 +390,14 @@ mod tests {
             (
                 "data/minecraft/tags/block/supports_vegetation.json",
                 tag(r#""minecraft:dirt","minecraft:grass_block""#),
+            ),
+            (
+                "data/minecraft/tags/block/supports_small_dripleaf.json",
+                tag(r#""minecraft:clay","minecraft:moss_block""#),
+            ),
+            (
+                "data/minecraft/tags/block/supports_big_dripleaf.json",
+                tag(r##""#minecraft:supports_small_dripleaf","minecraft:dirt""##),
             ),
             (
                 "data/minecraft/tags/block/supports_sugar_cane.json",
@@ -432,6 +493,50 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn small_dripleaves_need_their_own_support_or_water_over_vegetation_ground() {
+        let lower = rule("minecraft:small_dripleaf", &[]);
+        let upper = rule("minecraft:small_dripleaf", &[("half", "upper")]);
+        let mut ground = world(&[([5, 0, 5], "minecraft:dirt")]);
+        assert!(!survives(&lower, &ground, [5, 1, 5]));
+        ground.set_block_state(
+            5,
+            1,
+            5,
+            block_states().default_state("minecraft:water").unwrap(),
+        );
+        assert!(survives(&lower, &ground, [5, 1, 5]));
+        ground.set_block_state(5, 1, 5, lower.1);
+        assert!(survives(&upper, &ground, [5, 2, 5]));
+        ground.set_block_state(5, 1, 5, upper.1);
+        assert!(!survives(&upper, &ground, [5, 2, 5]));
+        assert!(survives(
+            &lower,
+            &world(&[([5, 0, 5], "minecraft:clay")]),
+            [5, 1, 5]
+        ));
+    }
+
+    #[test]
+    fn big_dripleaf_stems_need_supported_bases_and_another_stem_or_leaf_above() {
+        let leaf = rule("minecraft:big_dripleaf", &[]);
+        let stem = rule("minecraft:big_dripleaf_stem", &[]);
+        let mut ground = world(&[([5, 0, 5], "minecraft:clay")]);
+        assert!(survives(&leaf, &ground, [5, 1, 5]));
+        assert!(!survives(&stem, &ground, [5, 1, 5]));
+        ground.set_block_state(5, 2, 5, leaf.1);
+        assert!(survives(&stem, &ground, [5, 1, 5]));
+        ground.set_block_state(
+            5,
+            0,
+            5,
+            block_states().default_state("minecraft:stone").unwrap(),
+        );
+        assert!(!survives(&stem, &ground, [5, 1, 5]));
+        ground.set_block_state(5, 0, 5, stem.1);
+        assert!(survives(&stem, &ground, [5, 1, 5]));
     }
 
     #[test]

@@ -24,7 +24,7 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// growth pine taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an
 /// underwater magma deposit on a chunk edge. Snowy plains and the frozen river also exercise surface snow
 /// and ice in the last seed, followed by two dripstone caves with small and large formations and clusters.
-/// The lush cave at (-528,-480) also has a monster room crossing a chunk edge.
+/// The lush caves also exercise clay pools and dripleaves; (-528,-480) has a monster room crossing a chunk edge.
 const CHUNKS: [(i32, i32); 42] = [
     (0, 0),
     (-3, 7),
@@ -132,6 +132,7 @@ fn feature_blocks_match_vanilla() {
 
     let mut compared = 0;
     let mut placed = 0;
+    let mut lush = [false; 3];
     for &seed in reference::sampled_seeds(&SEEDS) {
         let output = reference.temp.0.join("feature-blocks.txt");
         let mut args = vec![
@@ -164,6 +165,16 @@ fn feature_blocks_match_vanilla() {
                 ));
             }
             let actual = changed_blocks(&data, &generator, &index, seed, chunk);
+            if seed == SEEDS[2] {
+                for &(_, _, _, state) in &expected {
+                    if let Some((name, properties)) = block_states().properties(state) {
+                        lush[0] |= name == "minecraft:small_dripleaf";
+                        lush[1] |= name == "minecraft:big_dripleaf";
+                        lush[2] |= name.contains("dripleaf")
+                            && properties.contains(&("waterlogged", "true"));
+                    }
+                }
+            }
             if seed == SEEDS[2] && chunk == (-600, 552) {
                 let corals = data.block_tag_states("minecraft:coral_blocks").unwrap();
                 assert!(
@@ -227,6 +238,10 @@ fn feature_blocks_match_vanilla() {
         }
         fs::remove_file(&output).unwrap();
     }
+    assert!(
+        lush.into_iter().all(|placed| placed),
+        "the samples must place both dripleaves and waterlog them"
+    );
     eprintln!(
         "Compared {placed} blocks around {compared} decorated chunks, from {} placed features",
         supported.len()

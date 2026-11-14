@@ -8,6 +8,8 @@
 //! plant breaks without the other (`DoublePlantBlock`), a vine loses the faces nothing holds and breaks
 //! without faces (`VineBlock`), cocoa breaks once the block it faces no longer holds it (`CocoaBlock`), and
 //! bamboo follows an older stalk above it, with a bamboo shoot becoming a stalk below another stalk.
+//! Small dripleaves follow double plants; a big dripleaf breaks without support below or becomes a stem
+//! when another big dripleaf grows above it.
 //! Blocks that only schedule a tick, such as leaves, liquids, sugar cane or cactus, keep their state.
 
 use std::collections::HashMap;
@@ -109,6 +111,8 @@ enum Update {
     SurviveFromAbove(SurvivalRule),
     /// `DoublePlantBlock`.
     DoublePlant(SurvivalRule),
+    /// `BigDripleafBlock`: breaks without support below, or becomes a stem below another leaf.
+    BigDripleaf(SurvivalRule),
     /// `VineBlock`: each face keeps only while something supports it, and the vine is air without faces.
     Vine,
     /// `CocoaBlock`: air once the block it faces is not in `#supports_cocoa`, checked when that block changes.
@@ -195,6 +199,9 @@ impl ShapeUpdates {
         if short == "bamboo" {
             return Ok(Some(Update::Bamboo));
         }
+        if short == "big_dripleaf_stem" {
+            return Ok(None);
+        }
         if short == "cocoa" {
             let support = data.block_tag_states("minecraft:supports_cocoa")?;
             return Ok(Some(Update::Cocoa(StateSet::from_membership(&support))));
@@ -205,7 +212,9 @@ impl ShapeUpdates {
         Ok(Some(match (short, rule) {
             ("spore_blossom", rule) => Update::SurviveFromAbove(rule),
             ("bamboo_sapling", rule) => Update::BambooSapling(rule),
+            ("big_dripleaf", rule) => Update::BigDripleaf(rule),
             (_, rule @ SurvivalRule::DoublePlant(_)) => Update::DoublePlant(rule),
+            (_, rule @ SurvivalRule::SmallDripleaf { .. }) => Update::DoublePlant(rule),
             (_, rule) => Update::Survive(rule),
         }))
     }
@@ -267,6 +276,25 @@ impl ShapeUpdates {
                     state
                 } else {
                     self.air
+                }
+            }
+            Update::BigDripleaf(rule) => {
+                if direction == Direction::Down && !rule.test(world, position, state) {
+                    return self.air;
+                }
+                if direction == Direction::Up && same_block(state, neighbor) {
+                    let stem = block_states()
+                        .default_state("minecraft:big_dripleaf_stem")
+                        .unwrap_or(state);
+                    let stem =
+                        with_property(stem, "facing", property(state, "facing").unwrap_or("north"));
+                    with_property(
+                        stem,
+                        "waterlogged",
+                        property(state, "waterlogged").unwrap_or("false"),
+                    )
+                } else {
+                    state
                 }
             }
             Update::Vine => {

@@ -307,7 +307,7 @@ and the owner **accepts it once**:
     with the world seed's `BiomeManager`. The structures of each step and the other families follow.
     Besides ores, `harpas_worldgen::configured` places `simple_block`, `random_selector`,
     `simple_random_selector`, `random_boolean_selector`, `block_column` and `disk`, with the simple, weighted,
-    randomized-int, noise, noise-threshold, dual-noise and rule-based block state providers. A feature runs
+    rotated, randomized-int, noise, noise-threshold, dual-noise and rule-based block state providers. A feature runs
     only where the region may be written at its origin, as `Feature.place` checks, before drawing anything.
     `simple_block` places a state only where its survival rule holds, and a double plant as two halves where
     the block above is air, each half waterlogged when it replaces water; `block_column` checks its positions
@@ -475,6 +475,13 @@ and the owner **accepts it once**:
     lenient codec defaults, chunk borders and world limits.
     A natural geode crossing into its eastern neighbor participates in decoration and worker comparisons,
     including Anvil reloads, under `generation.features`. Fluid ticks requested beside cracks follow in M4.
+    `harpas_worldgen::block_pile` places village piles of hay, melons, pumpkins, snow and ice in two layers,
+    only in air with a sturdy top face below, or a successful coin flip above dirt paths. Hay's
+    `rotated_block_provider` draws X, Y or Z from the block's default state, discarding other configured
+    properties. `block_pile_parity` compares blocks, four live heightmaps, results and random tails in 3,024
+    placements across three seeds and both random sources, including partial supports, liquids, occupied
+    positions, repeated placement, chunk edges and world limits. A synthetic biome schedule also checks
+    worker decoration across chunk edges and Anvil reloads. Natural village placement awaits jigsaw blocks.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

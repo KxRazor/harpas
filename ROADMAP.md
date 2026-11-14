@@ -213,6 +213,10 @@ vanilla for the same seed.
           waterlogging, compared with vanilla's own feature and `applyBiomeDecoration`, including repeated
           placement, protected blocks, world limits, worker generation, chunk edges and Anvil reloads
           (`geode_parity`, `feature_blocks_parity`, `feature_worker_parity`). Fluid ticks follow in M4.
+    - [x] Village block piles (`block_pile`): hay with random axes, melons, pumpkins, snow and weighted ice,
+          with support checks and dirt-path coin flips, compared with vanilla's own features, including
+          repeated placement, chunk edges and world limits (`block_pile_parity`), plus synthetic worker
+          decoration and Anvil reload tests. Calling them from village pool elements follows with jigsaw blocks.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

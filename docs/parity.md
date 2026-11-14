@@ -34,7 +34,7 @@ There are four levels, from the cheapest to the closest to what a player sees:
 | Level | Reference | Harnesses | Runs in |
 |---|---|---|---|
 | **Java semantics** | Java programs written for the test, using only Java SE classes and no Mojang files | `java_parity` in `harpas-core` and `harpas-worldgen` | CI, every pull request, every platform |
-| **Vanilla's classes** | Java probes compiled against the server jar, which call vanilla's own code | `vanilla_parity`, `worldgen_random_parity`, `chunk_parity`, `beardifier_parity`, `structure_placement_parity`, `structure_start_parity`, `template_parity`, `monument_layout_parity`, `monument_exterior_parity`, `monument_interior_parity`, `ore_feature_parity`, `tree_feature_parity`, `bamboo_feature_parity`, `block_blob_feature_parity`, `desert_well_feature_parity`, `coral_feature_parity`, `underwater_magma_parity`, `large_dripstone_parity`, `dripstone_cluster_parity`, `lush_vegetation_parity`, `geode_parity`, `feature_stage_parity`, `placement_parity`, `block_behavior_parity`, `feature_blocks_parity`; `generated_chunk_parity`, `feature_worker_parity`, `buried_treasure_parity`, `swamp_hut_parity`, `desert_pyramid_parity`, `jungle_temple_parity`, `igloo_parity`, `shipwreck_parity`, `ocean_ruin_parity`, `mineshaft_parity`, `stronghold_parity` in `harpas-engine` | Parity workflow |
+| **Vanilla's classes** | Java probes compiled against the server jar, which call vanilla's own code | `vanilla_parity`, `worldgen_random_parity`, `chunk_parity`, `beardifier_parity`, `structure_placement_parity`, `structure_start_parity`, `template_parity`, `monument_layout_parity`, `monument_exterior_parity`, `monument_interior_parity`, `ore_feature_parity`, `tree_feature_parity`, `bamboo_feature_parity`, `block_blob_feature_parity`, `block_pile_parity`, `desert_well_feature_parity`, `coral_feature_parity`, `underwater_magma_parity`, `large_dripstone_parity`, `dripstone_cluster_parity`, `lush_vegetation_parity`, `geode_parity`, `feature_stage_parity`, `placement_parity`, `block_behavior_parity`, `feature_blocks_parity`; `generated_chunk_parity`, `feature_worker_parity`, `buried_treasure_parity`, `swamp_hut_parity`, `desert_pyramid_parity`, `jungle_temple_parity`, `igloo_parity`, `shipwreck_parity`, `ocean_ruin_parity`, `mineshaft_parity`, `stronghold_parity` in `harpas-engine` | Parity workflow |
 | **Vanilla's saved world** | The server itself, generating and lighting a world whose region files the test reads | `light_parity` in `harpas-engine` | Parity workflow |
 | **Vanilla on the network** | The server itself, started on loopback and spoken to with the protocol codecs | `block_entity_parity` | Parity workflow |
 
@@ -136,6 +136,11 @@ This table is the base of the parity report published with every release ([relea
   `feature_worker_parity` covers the nine passes that write into a final chunk, but in one order, without
   structures, and without the blocks of unported families that other features would read or write over.
   Postprocessing marks and saved heightmaps of decorated chunks are not compared block by block.
+- **Village block piles.** `block_pile_parity` compares vanilla's five configured piles and a rotated
+  provider with non-default properties on 42 controlled terrains, three seeds and both random sources.
+  It checks blocks, four live heightmaps, results and random tails, including a second placement over the
+  first. A separate synthetic biome test checks worker decoration at chunk edges and Anvil reloads.
+  Village pool elements do not place these features until jigsaw block placement is implemented.
 - **Heightmaps of gameplay blocks.** Predicates are compared for terrain and carver blocks; the classification of
   other blocks is provisional until block updates exist.
 

@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::bamboo::{CompiledBamboo, place_bamboo};
 use crate::block_blob::place_block_blob;
+use crate::block_pile::place_block_pile;
 use crate::coral::{CompiledCoral, place_coral};
 use crate::data::{
     BlockDirection, ConfiguredFeatureDef, FeatureRefDef, IntProviderDef, PlacedFeatureDef,
@@ -114,6 +115,8 @@ pub enum CompiledFeature {
         /// The predicate tested on the block below its origin.
         can_place_on: BlockPredicate,
     },
+    /// `minecraft:block_pile`.
+    BlockPile(StateProvider),
     /// `minecraft:desert_well`.
     DesertWell,
     /// `minecraft:monster_room`.
@@ -156,6 +159,8 @@ pub enum CompiledFeature {
 pub enum StateProvider {
     /// `minecraft:simple_state_provider`.
     Simple(u32),
+    /// `minecraft:rotated_block_provider`: the block's default state with a random X, Y or Z axis.
+    Rotated([u32; 3]),
     /// `minecraft:weighted_state_provider`.
     Weighted(Vec<(u32, i32)>),
     /// `minecraft:randomized_int_state_provider`: another provider's state with one integer property drawn.
@@ -259,6 +264,7 @@ impl StateProvider {
     ) -> Option<u32> {
         Some(match self {
             Self::Simple(state) => *state,
+            Self::Rotated(states) => states[random.next_int_bounded(3) as usize],
             Self::Weighted(entries) => *pick_weighted(entries, random)?,
             Self::RandomizedInt {
                 source,
@@ -347,6 +353,7 @@ impl StateProvider {
     fn candidates(&self, out: &mut Vec<u32>) {
         match self {
             Self::Simple(state) => out.push(*state),
+            Self::Rotated(states) => out.extend(states),
             Self::Weighted(entries) => out.extend(entries.iter().map(|(state, _)| *state)),
             Self::RandomizedInt { source, .. } => source.candidates(out),
             Self::Noise(noise) => out.extend(&noise.states),
@@ -448,6 +455,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
             state,
             can_place_on,
         } => place_block_blob(world, *state, can_place_on, random, origin),
+        CompiledFeature::BlockPile(provider) => place_block_pile(world, provider, random, origin),
         CompiledFeature::DesertWell => place_desert_well(world, random, origin),
         CompiledFeature::MonsterRoom => place_monster_room(world, random, origin),
         CompiledFeature::Geode(geode) => place_geode(world, geode, random, origin),
@@ -1021,6 +1029,12 @@ impl<'a> FeatureCompiler<'a> {
                 None => return Ok(None),
             },
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
+            "minecraft:block_pile" => {
+                let Some(provider) = self.provider(name, field("state_provider")?)? else {
+                    return Ok(None);
+                };
+                CompiledFeature::BlockPile(provider)
+            }
             "minecraft:block_blob" => {
                 let Some(can_place_on) = self.predicate(name, field("can_place_on")?)? else {
                     return Ok(None);
@@ -1125,6 +1139,27 @@ impl<'a> FeatureCompiler<'a> {
                 json.get("state")
                     .ok_or_else(|| invalid(name, "a simple provider needs a `state`"))?,
             )?),
+            "minecraft:rotated_block_provider" => {
+                let base = state(
+                    json.get("state")
+                        .ok_or_else(|| invalid(name, "a rotated provider needs a `state`"))?,
+                )?;
+                let (block, _) = block_states().properties(base).unwrap();
+                let mut states = [0; 3];
+                for (i, axis) in ["x", "y", "z"].into_iter().enumerate() {
+                    states[i] = block_states()
+                        .state(block, [("axis", axis)])
+                        .filter(|(_, ignored)| ignored.is_empty())
+                        .ok_or_else(|| {
+                            invalid(
+                                name,
+                                "a rotated provider needs a block with X, Y and Z axes",
+                            )
+                        })?
+                        .0;
+                }
+                StateProvider::Rotated(states)
+            }
             "minecraft:weighted_state_provider" => {
                 let entries = json
                     .get("entries")

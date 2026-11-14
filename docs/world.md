@@ -463,6 +463,17 @@ and the owner **accepts it once**:
     origins, repeated placement, chunk edges and world limits, and compares survival and shape updates against
     every block state. The natural decoration and worker comparisons require both dripleaves and waterlogged
     plants in their samples and check their Anvil reloads under `generation.features`.
+    `harpas_worldgen::geode` places hollow amethyst geodes: distribution points sum inverse distances with
+    `NormalNoise` seeded from the world seed, independently of decoration, producing the filling, inner,
+    calcite and basalt layers and optional cracks. Protected blocks keep their states, but their providers and
+    potential crystal positions consume the same random values as vanilla. Crystals try down, up, north, south, west and east in
+    that order, facing outward into air or full water blocks and preserving source-water waterlogging.
+    `geode_parity` compares blocks, four live heightmaps, results and random tails in 1,920 placements and
+    replays across three seeds and both random sources, with ten configurations, weighted providers, invalid
+    and protected blocks, different water fillings, decorations with horizontal or hopper facing properties,
+    lenient codec defaults, chunk borders and world limits.
+    A natural geode crossing into its eastern neighbor participates in decoration and worker comparisons,
+    including Anvil reloads, under `generation.features`. Fluid ticks requested beside cracks follow in M4.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

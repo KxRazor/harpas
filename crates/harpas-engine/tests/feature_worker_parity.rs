@@ -23,8 +23,9 @@ const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
 /// Far apart, so no two share a decorated chunk; after the first three come a bamboo jungle, an old growth pine
 /// taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an underwater magma
 /// deposit on a chunk edge in the last seed, followed by snowy plains, a frozen river and two dripstone caves,
-/// including clusters with long pointed columns, and a lush cave with dripleaves, clay pools and a monster room crossing a chunk edge.
-const CHUNKS: [(i32, i32); 13] = [
+/// including clusters with long pointed columns, a lush cave with dripleaves, clay pools and a monster room
+/// crossing a chunk edge, then a geode placed by the chunk to its west.
+const CHUNKS: [(i32, i32); 14] = [
     (0, 0),
     (41, -26),
     (-203, -151),
@@ -38,6 +39,7 @@ const CHUNKS: [(i32, i32); 13] = [
     (-600, -348),
     (-600, -240),
     (-528, -480),
+    (-6, -2),
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -280,6 +282,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
                 (-600, -348) => Some("minecraft:pointed_dripstone"),
                 (-600, -240) => Some("minecraft:dripstone_block"),
                 (-528, -480) => Some("minecraft:spawner"),
+                (-6, -2) => Some("minecraft:budding_amethyst"),
                 _ => None,
             };
             if seed == SEEDS[1]

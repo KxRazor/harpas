@@ -24,8 +24,9 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// growth pine taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an
 /// underwater magma deposit on a chunk edge. Snowy plains and the frozen river also exercise surface snow
 /// and ice in the last seed, followed by two dripstone caves with small and large formations and clusters.
-/// The lush caves also exercise clay pools and dripleaves; (-528,-480) has a monster room crossing a chunk edge.
-const CHUNKS: [(i32, i32); 42] = [
+/// The lush caves also exercise clay pools and dripleaves; (-528,-480) has a monster room crossing a chunk edge,
+/// and (-7,-2) places an amethyst geode into its eastern neighbor.
+const CHUNKS: [(i32, i32); 43] = [
     (0, 0),
     (-3, 7),
     (41, -26),
@@ -68,6 +69,7 @@ const CHUNKS: [(i32, i32); 42] = [
     (-120, -18),
     (-600, -348),
     (-600, -240),
+    (-7, -2),
 ];
 
 fn changed_blocks(
@@ -210,6 +212,7 @@ fn feature_blocks_match_vanilla() {
                 (-600, -348) => Some("minecraft:pointed_dripstone"),
                 (-600, -240) => Some("minecraft:dripstone_block"),
                 (-528, -480) => Some("minecraft:spawner"),
+                (-7, -2) => Some("minecraft:budding_amethyst"),
                 _ => None,
             };
             if seed == SEEDS[2]
@@ -222,6 +225,17 @@ fn feature_blocks_match_vanilla() {
                             .is_some_and(|(name, _)| name == block)
                     }),
                     "the {chunk:?} sample must place {block}"
+                );
+            }
+            if seed == SEEDS[2] && chunk == (-7, -2) {
+                assert!(
+                    expected.iter().any(|&(x, _, _, state)| {
+                        x >= -6 * 16
+                            && block_states()
+                                .properties(state)
+                                .is_some_and(|(name, _)| name.contains("amethyst"))
+                    }),
+                    "the geode must cross into the eastern chunk"
                 );
             }
             let missing: Vec<_> = expected.difference(&actual).take(20).collect();

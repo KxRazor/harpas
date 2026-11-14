@@ -19,6 +19,7 @@ pub mod feature;
 mod feature_provider;
 pub mod freeze_top_layer;
 pub mod generator;
+pub mod geode;
 pub mod huge_mushroom;
 pub mod ice;
 pub mod java_hash;

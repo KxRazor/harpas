@@ -28,6 +28,8 @@ pub const STEP_COUNT: usize = 11;
 
 /// The world a FEATURES pass reads and writes.
 pub trait FeatureWorld {
+    /// World seed, as set by [`FeatureWorld::start_region`]; zero before a region is started.
+    fn seed(&self) -> i64;
     /// Lowest block Y.
     fn min_y(&self) -> i32;
     /// Number of block Y values.
@@ -73,6 +75,7 @@ pub struct ChunkFeatureWorld<'a> {
     chunk: &'a mut GeneratedChunk,
     biome: u32,
     random: Option<XoroshiroRandom>,
+    seed: i64,
 }
 
 impl<'a> ChunkFeatureWorld<'a> {
@@ -82,6 +85,7 @@ impl<'a> ChunkFeatureWorld<'a> {
             chunk,
             biome,
             random: None,
+            seed: 0,
         }
     }
 
@@ -99,6 +103,10 @@ impl<'a> ChunkFeatureWorld<'a> {
 }
 
 impl FeatureWorld for ChunkFeatureWorld<'_> {
+    fn seed(&self) -> i64 {
+        self.seed
+    }
+
     fn min_y(&self) -> i32 {
         self.chunk.min_y()
     }
@@ -153,6 +161,7 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
         true
     }
     fn start_region(&mut self, world_seed: i64, chunk_x: i32, chunk_z: i32) {
+        self.seed = world_seed;
         self.random = Some(region_random(world_seed, chunk_x, chunk_z));
     }
 
@@ -178,6 +187,7 @@ pub struct RegionFeatureWorld {
     min_y: i32,
     height: i32,
     random: Option<XoroshiroRandom>,
+    seed: i64,
 }
 
 impl RegionFeatureWorld {
@@ -219,6 +229,7 @@ impl RegionFeatureWorld {
             min_y,
             height,
             random: None,
+            seed: 0,
         })
     }
 
@@ -266,6 +277,10 @@ impl RegionFeatureWorld {
 }
 
 impl FeatureWorld for RegionFeatureWorld {
+    fn seed(&self) -> i64 {
+        self.seed
+    }
+
     fn min_y(&self) -> i32 {
         self.min_y
     }
@@ -360,6 +375,7 @@ impl FeatureWorld for RegionFeatureWorld {
         true
     }
     fn start_region(&mut self, world_seed: i64, chunk_x: i32, chunk_z: i32) {
+        self.seed = world_seed;
         self.random = Some(region_random(world_seed, chunk_x, chunk_z));
     }
 

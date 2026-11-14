@@ -585,12 +585,19 @@ pub enum RuleTestRule {
         /// Probability in [0, 1].
         probability: f32,
     },
+    /// One exact state with a probability, consuming a float only when the state matches.
+    RandomBlockState {
+        /// Exact block state ID.
+        state: u32,
+        /// Probability in [0, 1].
+        probability: f32,
+    },
     /// Every block.
     AlwaysTrue,
 }
 
 impl RuleTestRule {
-    fn matches<R: RandomSource>(&self, state: u32, random: &mut WorldgenRandom<R>) -> bool {
+    pub(crate) fn matches(&self, state: u32, random: &mut impl RandomSource) -> bool {
         match self {
             Self::Tag(membership) => membership.get(state as usize).copied().unwrap_or(false),
             Self::Block(block) => block_states()
@@ -603,9 +610,39 @@ impl RuleTestRule {
                     .is_some_and(|(name, _)| name == block.as_str())
                     && random.next_float() < *probability
             }
+            Self::RandomBlockState {
+                state: id,
+                probability,
+            } => state == *id && random.next_float() < *probability,
             Self::AlwaysTrue => true,
         }
     }
+}
+
+pub(crate) fn compile_rule_test(
+    name: &str,
+    test: &RuleTestDef,
+    data: &WorldgenData,
+) -> Result<Option<RuleTestRule>, WorldgenDataError> {
+    Ok(Some(match test {
+        RuleTestDef::TagMatch(tag) => RuleTestRule::Tag(data.block_tag_states(tag)?),
+        RuleTestDef::BlockMatch(block) => RuleTestRule::Block(resource_name(block)),
+        RuleTestDef::BlockStateMatch(state) => {
+            RuleTestRule::BlockState(resolve_block_state(state, name)?)
+        }
+        RuleTestDef::RandomBlockMatch { block, probability } => RuleTestRule::RandomBlock {
+            block: resource_name(block),
+            probability: *probability,
+        },
+        RuleTestDef::RandomBlockStateMatch { state, probability } => {
+            RuleTestRule::RandomBlockState {
+                state: resolve_block_state(state, name)?,
+                probability: *probability,
+            }
+        }
+        RuleTestDef::AlwaysTrue => RuleTestRule::AlwaysTrue,
+        RuleTestDef::Other { .. } => return Ok(None),
+    }))
 }
 
 /// Merges the biomes' ordered lists into one order for each generation step.
@@ -701,18 +738,8 @@ fn compile_ore_config(
 ) -> Result<Option<CompiledOre>, WorldgenDataError> {
     let mut targets = Vec::with_capacity(ore.targets.len());
     for target in &ore.targets {
-        let rule = match &target.target {
-            RuleTestDef::TagMatch(tag) => RuleTestRule::Tag(data.block_tag_states(tag)?),
-            RuleTestDef::BlockMatch(block) => RuleTestRule::Block(resource_name(block)),
-            RuleTestDef::BlockStateMatch(state) => {
-                RuleTestRule::BlockState(resolve_block_state(state, name)?)
-            }
-            RuleTestDef::RandomBlockMatch { block, probability } => RuleTestRule::RandomBlock {
-                block: resource_name(block),
-                probability: *probability,
-            },
-            RuleTestDef::AlwaysTrue => RuleTestRule::AlwaysTrue,
-            RuleTestDef::Other { .. } => return Ok(None),
+        let Some(rule) = compile_rule_test(name, &target.target, data)? else {
+            return Ok(None);
         };
         targets.push(OreTarget {
             rule,

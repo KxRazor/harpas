@@ -35,6 +35,7 @@ pub mod ocean_vegetation;
 pub mod ore_vein;
 pub mod placement;
 pub mod pointed_dripstone;
+pub mod processor;
 pub mod root_system;
 pub mod seed;
 pub mod shape_update;

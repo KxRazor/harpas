@@ -218,6 +218,10 @@ vanilla for the same seed.
           repeated placement, chunk edges and world limits (`block_pile_parity`), plus synthetic worker
           decoration and Anvil reload tests. Calling them from village pool elements follows with jigsaw blocks.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
+    - [x] Processor lists and per-block `rule` substitutions: all six block predicates, distance and
+          axis-distance tests, positional randomness and passthrough, clear and loot NBT modifiers,
+          compared with vanilla's own processors (`rule_processor_parity`).
+    - [ ] Remaining processors, template block placement and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

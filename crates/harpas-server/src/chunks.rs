@@ -1,5 +1,8 @@
 //! Encode loaded overworld chunks for Java connections, off the logic thread.
 
+mod cache;
+pub(crate) use cache::Cache;
+
 use harpas_anvil::{Chunk, ChunkSection};
 use harpas_core::block::block_states;
 use harpas_core::chunk::{PalettedContainer, Section};

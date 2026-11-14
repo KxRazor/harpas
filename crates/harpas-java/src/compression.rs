@@ -72,6 +72,10 @@ impl fmt::Debug for Compression {
 }
 
 impl Compression {
+    pub(crate) fn threshold(&self) -> usize {
+        self.threshold
+    }
+
     pub(crate) fn new(threshold: usize) -> Self {
         Self {
             threshold,

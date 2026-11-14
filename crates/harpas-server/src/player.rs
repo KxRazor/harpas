@@ -124,7 +124,7 @@ fn sync(position: Position, teleport_id: i32) -> clientbound::SynchronizePlayerP
 pub(crate) fn send(
     connection: &mut Connection,
     session: &PlayerSession,
-    block_entities: &crate::block_entity_registry::Registry,
+    chunk_cache: &crate::chunks::Cache,
 ) -> Option<&'static str> {
     while let Some(output) = session.try_recv() {
         let packet = match output {
@@ -277,8 +277,8 @@ pub(crate) fn send(
                 connection.send_play_packet(clientbound::ChunkBatchStart.into());
                 let count = chunks.len() as i32;
                 for chunk in chunks {
-                    connection
-                        .send_play_packet(crate::chunks::encode(chunk, block_entities).into());
+                    let packet = chunk_cache.prepare(chunk, connection);
+                    connection.send_prepared_play_packet(&packet);
                 }
                 connection
                     .send_play_packet(clientbound::ChunkBatchFinished { batch_size: count }.into());

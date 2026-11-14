@@ -304,7 +304,9 @@ vanilla for the same seed.
 - [x] Run the parity harnesses in CI: a reduced sample on pull requests and the full one on `main`
       ([docs/parity.md](docs/parity.md#running-the-comparisons)).
 - [x] Make `parity against vanilla` a required check.
-- [ ] Shared Java chunk encoding cache.
+- [x] Shared Java chunk encoding cache: complete compressed columns shared between viewers, bounded by
+      retained bytes and entry count, invalidated by chunk/light snapshots and compression settings, with
+      concurrent-viewer, content-change, reload and cipher-stream tests.
 - [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
 - [x] Older and newer world detection with clear errors.
 

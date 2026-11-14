@@ -81,8 +81,9 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
 
 The server requests existing overworld chunks within each player's effective view distance, prioritizing nearby
 chunks and sharing reads between viewers. Workers read only the requested region entries and decode the chunks;
-the logic thread receives results in its dimension phase. Each connection encodes and sends bounded batches off
-the logic thread. A missing chunk is represented by the temporary void until generation exists; read errors
+the logic thread receives results in its dimension phase. Connections send bounded batches off the logic thread,
+sharing encoded and compressed Java columns through the server's [encoding cache](engine-core.md#6-chunks).
+A missing chunk is represented by the temporary void until generation exists; read errors
 are logged separately, and an incompatible data version stops the server even if the player left while its
 read was in progress. Chunks outside every view are released and other stale results discarded. When the local
 block entity registry is available, their positions and types are sent with the client update fields checked

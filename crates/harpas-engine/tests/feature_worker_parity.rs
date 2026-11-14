@@ -23,8 +23,8 @@ const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
 /// Far apart, so no two share a decorated chunk; after the first three come a bamboo jungle, an old growth pine
 /// taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an underwater magma
 /// deposit on a chunk edge in the last seed, followed by snowy plains, a frozen river and two dripstone caves,
-/// including clusters with long pointed columns.
-const CHUNKS: [(i32, i32); 12] = [
+/// including clusters with long pointed columns, and a monster room crossing a chunk edge.
+const CHUNKS: [(i32, i32); 13] = [
     (0, 0),
     (41, -26),
     (-203, -151),
@@ -37,6 +37,7 @@ const CHUNKS: [(i32, i32); 12] = [
     (-200, -175),
     (-600, -348),
     (-600, -240),
+    (-528, -480),
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -81,7 +82,7 @@ fn changed(chunk: &Chunk, carved: &harpas_worldgen::GeneratedChunk) -> Blocks {
     blocks
 }
 
-fn vanilla(reference: &Reference, seed: i64, supported: &Path) -> Vec<Blocks> {
+fn vanilla(reference: &Reference, seed: i64, supported: &Path) -> Vec<(Blocks, Vec<Compound>)> {
     let output = reference.temp.0.join(format!("final-features-{seed}.txt"));
     let mut args = vec![
         output.display().to_string(),
@@ -100,7 +101,25 @@ fn vanilla(reference: &Reference, seed: i64, supported: &Path) -> Vec<Blocks> {
         .map(|&(x, z)| {
             assert_eq!(lines.next(), Some(format!("chunk {x} {z}").as_str()));
             let mut blocks = BTreeSet::new();
+            let mut entities = Vec::new();
             while let Some(line) = lines.next_if(|line| !line.starts_with("chunk")) {
+                if let Some(hex) = line.strip_prefix("entity ") {
+                    let bytes: Vec<_> = hex
+                        .as_bytes()
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| {
+                            u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()
+                        })
+                        .collect();
+                    let Nbt::Compound(entity) = Nbt::read_network(&mut bytes.as_slice()).unwrap()
+                    else {
+                        panic!("expected block entity compound")
+                    };
+                    entities.push(entity);
+                    continue;
+                }
                 let mut fields = line.split(' ').map(|field| field.parse::<i64>().unwrap());
                 let mut field = || fields.next().expect("block field");
                 blocks.insert((
@@ -111,7 +130,8 @@ fn vanilla(reference: &Reference, seed: i64, supported: &Path) -> Vec<Blocks> {
                 ));
             }
             assert!(!blocks.is_empty(), "vanilla placed no features in {x}, {z}");
-            blocks
+            entities.sort_by_key(|e| format!("{e:?}"));
+            (blocks, entities)
         })
         .collect()
 }
@@ -142,19 +162,23 @@ fn status(chunk: &Chunk) -> Option<&str> {
     }
 }
 
-fn well_entities(chunk: &Chunk) -> Vec<Compound> {
+fn feature_entities(chunk: &Chunk, rooms_only: bool) -> Vec<Compound> {
     let Some(Nbt::List(List::Compound(entities))) = chunk.rest.get("block_entities") else {
         return Vec::new();
     };
-    let mut wells: Vec<_> = entities
+    let mut saved: Vec<_> = entities
         .iter()
         .filter(|entity| {
-            entity.get("LootTable") == Some(&Nbt::from("minecraft:archaeology/desert_well"))
+            entity.get("id") == Some(&Nbt::from("minecraft:mob_spawner"))
+                || entity.get("LootTable") == Some(&Nbt::from("minecraft:chests/simple_dungeon"))
+                || !rooms_only
+                    && entity.get("LootTable")
+                        == Some(&Nbt::from("minecraft:archaeology/desert_well"))
         })
         .cloned()
         .collect();
-    wells.sort_by_key(|entity| format!("{entity:?}"));
-    wells
+    saved.sort_by_key(|entity| format!("{entity:?}"));
+    saved
 }
 
 #[test]
@@ -204,7 +228,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
         let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
         let mut world = open(&folder, seed, &data, &templates);
         let mut finals = Vec::new();
-        for (&(x, z), expected) in CHUNKS.iter().zip(&expected) {
+        for (&(x, z), (expected, expected_entities)) in CHUNKS.iter().zip(&expected) {
             let pos = ChunkPos { x, z };
             let chunk = load(&mut world, pos);
             assert_eq!(status(&chunk), Some("minecraft:features"));
@@ -244,6 +268,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
                 (-200, -175) => Some("minecraft:ice"),
                 (-600, -348) => Some("minecraft:pointed_dripstone"),
                 (-600, -240) => Some("minecraft:dripstone_block"),
+                (-528, -480) => Some("minecraft:spawner"),
                 _ => None,
             };
             if seed == SEEDS[1]
@@ -267,7 +292,12 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
                 expected.len(),
                 actual.len(),
             );
-            let entities = well_entities(&chunk);
+            assert_eq!(
+                &feature_entities(&chunk, true),
+                expected_entities,
+                "{x}, {z}: monster room block entities"
+            );
+            let entities = feature_entities(&chunk, false);
             if seed == SEEDS[1] && (x, z) == (-348, -421) {
                 assert!(
                     !entities.is_empty(),
@@ -292,9 +322,9 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
             let chunk = load(&mut world, *pos);
             assert_eq!(&changed(&chunk, carved), actual, "{pos:?} after reopening");
             assert_eq!(
-                &well_entities(&chunk),
+                &feature_entities(&chunk, false),
                 entities,
-                "{pos:?} archaeology after reopening"
+                "{pos:?} feature block entities after reopening"
             );
         }
         // Reopened final chunks are read as saved, so nothing waits to be saved.

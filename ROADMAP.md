@@ -200,6 +200,11 @@ vanilla for the same seed.
           bases, biased column heights, merging tips and waterlogging, compared with vanilla's own feature and
           `applyBiomeDecoration`, including repeated placement, worker generation and Anvil reloads
           (`dripstone_cluster_parity`, `feature_blocks_parity`, `feature_worker_parity`).
+    - [x] Monster rooms (`monster_room`): cave validation, cobblestone walls and mossy floors, chest orientation
+          and loot seeds, and spawner species and metadata, compared with vanilla's own feature and
+          `applyBiomeDecoration`, including overlapping rooms, world limits, worker generation, chunk edges
+          and Anvil reloads (`monster_room_parity`, `feature_blocks_parity`, `feature_worker_parity`). Spawner
+          ticking and opening loot follow in M4.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

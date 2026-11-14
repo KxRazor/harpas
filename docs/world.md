@@ -440,6 +440,18 @@ and the owner **accepts it once**:
     flooded caves, obstacles, search boundaries, chunk edges and world limits. Natural clusters with long
     pointed columns participate in the decoration and worker comparisons, including Anvil reloads, under
     `generation.features`.
+    `harpas_worldgen::monster_room` places underground monster rooms after checking solid floors and ceilings
+    and one to five two-block-high openings. It excavates in X/descending-Y/Z order, keeping existing chests
+    and spawners inside the room, clearing unsupported boundary blocks and making three quarters of supported
+    floor blocks mossy. Each of two chests gets up to three attempts beside exactly one solid neighbor, faces
+    away from opaque walls and saves `minecraft:chests/simple_dungeon` with its loot seed. The central spawner
+    saves its defaults and a skeleton, zombie or spider, with zombies twice as likely. All draws share the
+    feature's decoration random source. `monster_room_parity` compares blocks, four live heightmaps, full
+    block entity NBT, results and random tails in 576 placements and replays across three seeds and both random
+    sources, with different opening counts, partial and non-opaque supports, liquids, existing containers and
+    spawners, chunk borders and world limits. A natural room crossing a chunk edge participates in decoration
+    and worker comparisons, including chest and spawner NBT against vanilla and Anvil reloads, under
+    `generation.features`. Spawner ticking and loot opening follow in M4.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

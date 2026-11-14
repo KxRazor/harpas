@@ -77,6 +77,17 @@ public final class FeatureBlocksProbe {
                 }
             }
         }
+        // These feature-created containers have their final data already at FEATURES. Compare it on workers,
+        // before any gameplay tick or loot opening; other families retain their existing separate comparisons.
+        for (var at : center.getBlockEntitiesPos()) {
+            var tag = center.getBlockEntityNbtForSaving(at, access);
+            if (tag.getStringOr("id", "").equals("minecraft:mob_spawner") ||
+                    tag.getStringOr("LootTable", "").equals("minecraft:chests/simple_dungeon")) {
+                var bytes = new ByteArrayOutputStream();
+                net.minecraft.nbt.NbtIo.writeAnyTag(tag, new DataOutputStream(bytes));
+                out.println("entity " + HexFormat.of().formatHex(bytes.toByteArray()));
+            }
+        }
     }
 
     public static void main(String[] args) throws Exception {

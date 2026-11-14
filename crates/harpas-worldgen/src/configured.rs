@@ -28,6 +28,7 @@ use crate::dripstone_cluster::{CompiledDripstoneCluster, place_dripstone_cluster
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::freeze_top_layer::{CompiledFreezeTopLayer, place_freeze_top_layer};
+use crate::geode::{CompiledGeode, place_geode};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
 use crate::ice::{CompiledIce, place_ice};
 use crate::large_dripstone::{CompiledLargeDripstone, place_large_dripstone};
@@ -117,6 +118,8 @@ pub enum CompiledFeature {
     DesertWell,
     /// `minecraft:monster_room`.
     MonsterRoom,
+    /// `minecraft:geode`.
+    Geode(Box<CompiledGeode>),
     /// `minecraft:underwater_magma`.
     UnderwaterMagma(CompiledUnderwaterMagma),
     /// `minecraft:freeze_top_layer`.
@@ -447,6 +450,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         } => place_block_blob(world, *state, can_place_on, random, origin),
         CompiledFeature::DesertWell => place_desert_well(world, random, origin),
         CompiledFeature::MonsterRoom => place_monster_room(world, random, origin),
+        CompiledFeature::Geode(geode) => place_geode(world, geode, random, origin),
         CompiledFeature::UnderwaterMagma(magma) => {
             place_underwater_magma(world, magma, random, origin)
         }
@@ -995,6 +999,10 @@ impl<'a> FeatureCompiler<'a> {
             | "minecraft:coral_mushroom") => CompiledFeature::Coral(Box::new(self.coral(kind)?)),
             "minecraft:desert_well" => CompiledFeature::DesertWell,
             "minecraft:monster_room" => CompiledFeature::MonsterRoom,
+            "minecraft:geode" => match self.geode(name, config)? {
+                Some(geode) => CompiledFeature::Geode(Box::new(geode)),
+                None => return Ok(None),
+            },
             "minecraft:underwater_magma" => {
                 CompiledFeature::UnderwaterMagma(self.underwater_magma(name, config)?)
             }

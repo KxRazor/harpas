@@ -209,6 +209,10 @@ vanilla for the same seed.
           support rules, waterlogging and shape updates, compared with vanilla's own features and
           `applyBiomeDecoration`, including repeated placement, chunk edges, world limits, worker generation
           and Anvil reloads (`lush_vegetation_parity`, `feature_blocks_parity`, `feature_worker_parity`).
+    - [x] Amethyst geodes (`geode`): world-seeded shape noise, layered shells, cracks, directional crystals and
+          waterlogging, compared with vanilla's own feature and `applyBiomeDecoration`, including repeated
+          placement, protected blocks, world limits, worker generation, chunk edges and Anvil reloads
+          (`geode_parity`, `feature_blocks_parity`, `feature_worker_parity`). Fluid ticks follow in M4.
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

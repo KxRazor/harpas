@@ -26,6 +26,7 @@ use crate::data::{
 use crate::desert_well::place_desert_well;
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
+use crate::freeze_top_layer::{CompiledFreezeTopLayer, place_freeze_top_layer};
 use crate::huge_mushroom::{CompiledHugeMushroom, place_huge_mushroom};
 use crate::ice::{CompiledIce, place_ice};
 use crate::liquid::{CompiledLiquid, place_liquid};
@@ -112,6 +113,8 @@ pub enum CompiledFeature {
     DesertWell,
     /// `minecraft:underwater_magma`.
     UnderwaterMagma(CompiledUnderwaterMagma),
+    /// `minecraft:freeze_top_layer`.
+    FreezeTopLayer(Box<CompiledFreezeTopLayer>),
     /// `minecraft:vines`.
     Vines,
     /// `minecraft:spike`, `minecraft:iceberg` and `minecraft:blue_ice`.
@@ -434,6 +437,7 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::UnderwaterMagma(magma) => {
             place_underwater_magma(world, magma, random, origin)
         }
+        CompiledFeature::FreezeTopLayer(surface) => place_freeze_top_layer(world, surface, origin),
         CompiledFeature::Vines => place_vines(world, origin),
         CompiledFeature::Ice(ice) => place_ice(world, ice, random, origin),
         CompiledFeature::Liquid(liquid) => place_liquid(world, liquid, random, origin),
@@ -963,6 +967,9 @@ impl<'a> FeatureCompiler<'a> {
             "minecraft:desert_well" => CompiledFeature::DesertWell,
             "minecraft:underwater_magma" => {
                 CompiledFeature::UnderwaterMagma(self.underwater_magma(name, config)?)
+            }
+            "minecraft:freeze_top_layer" => {
+                CompiledFeature::FreezeTopLayer(Box::new(self.freeze_top_layer(name)?))
             }
             "minecraft:bamboo" => CompiledFeature::Bamboo(Box::new(self.bamboo(name, config)?)),
             "minecraft:block_blob" => {

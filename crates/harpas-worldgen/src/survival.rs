@@ -8,7 +8,9 @@
 //! blossom the center of a bottom face above, out of water, seagrass a full top face below that is not in
 //! `#cannot_support_seagrass`, tall seagrass also a water source at its lower half, kelp a kelp or a full top face
 //! below that is not in `#cannot_support_kelp`, a sea pickle a top face of its collision shape below, and a mushroom a block that overrides its light
-//! requirement below, as no light is initialized while chunks decorate. Blocks without a rule of their own always survive.
+//! requirement below, as no light is initialized while chunks decorate. Snow needs a full top collision
+//! face below, with support overrides and exclusions by tag, or eight layers of snow. Blocks without a
+//! rule of their own always survive.
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
@@ -66,6 +68,13 @@ pub enum SurvivalRule {
     NotAirBelow,
     /// `LeafLitterBlock.canSurvive`: a full top face below.
     SturdyBelow,
+    /// `SnowLayerBlock`: a full collision face below, with support overrides and exclusions by tag.
+    Snow {
+        /// `#cannot_support_snow_layer`.
+        cannot: StateSet,
+        /// `#support_override_snow_layer`.
+        overrides: StateSet,
+    },
     /// `MossyCarpetBlock.canSurvive`: a carpet on anything but air, a topper on a carpet.
     MossyCarpet,
     /// `SeagrassBlock.mayPlaceOn`: a full top face below, not in `#cannot_support_seagrass`.
@@ -155,6 +164,13 @@ impl SurvivalRule {
             Self::MossyCarpet => crate::mossy_carpet::can_survive(world, [x, y, z], state),
             Self::SturdyBelow => {
                 block_behavior().is_face_sturdy(world.block_state(x, y - 1, z), Face::Up)
+            }
+            Self::Snow { cannot, overrides } => {
+                let below = world.block_state(x, y - 1, z);
+                !cannot.contains(below)
+                    && (overrides.contains(below)
+                        || block_behavior().is_collision_face_full(below, Face::Up)
+                        || (same_block(below, state) && property(below, "layers") == Some("8")))
             }
             Self::Seagrass(cannot) => seagrass_support(world.block_state(x, y - 1, z), cannot),
             Self::TallSeagrass(cannot) => {
@@ -287,6 +303,10 @@ pub fn compile_block_survival(
         "moss_carpet" => SurvivalRule::NotAirBelow,
         "pale_moss_carpet" => SurvivalRule::MossyCarpet,
         "leaf_litter" => SurvivalRule::SturdyBelow,
+        "snow" => SurvivalRule::Snow {
+            cannot: tag("minecraft:cannot_support_snow_layer")?,
+            overrides: tag("minecraft:support_override_snow_layer")?,
+        },
         "spore_blossom" => SurvivalRule::SporeBlossom {
             water: fluids("#minecraft:water")?,
         },

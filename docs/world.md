@@ -399,6 +399,16 @@ and the owner **accepts it once**:
     the destination or one of its five closing neighbors. The full occluding faces of all 29,873 states are
     also checked by `block_behavior_parity`. A natural deposit crossing a chunk edge participates in
     `feature_blocks_parity` and `feature_worker_parity`, including Anvil reloads, under `generation.features`.
+    `harpas_worldgen::freeze_top_layer` covers the 16×16 columns from the origin with snow and freezes source
+    water at their motion-blocking surface. The biome at the surface decides both, using its temperature,
+    altitude and frozen-ocean temperature pockets, even when it has no precipitation. Snow needs a full upper
+    collision face, with the data pack's support overrides and exclusions, or eight snow layers below it;
+    grass, podzol and mycelium become snowy. This runs before the target chunk initializes light, when block
+    light is zero even beside emitting blocks, and consumes no random values. `freeze_top_layer_parity`
+    compares every block in mixed surface columns and their four live heightmaps in 1,170 placements and
+    replays across all 65 biomes and nine heights, including world limits and chunk borders, plus snow
+    survival over all 29,873 block states. Natural snowy plains and a frozen river participate in the
+    decoration and worker comparisons, with Anvil reloads.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are
@@ -426,7 +436,7 @@ and the owner **accepts it once**:
     leaves for the stem and, for a brown one, its cap, then the cap and the stem over air or
     `#replaceable_by_mushrooms`. `alter_ground` replaces the ground in rounded squares around a giant
     trunk's base, searching each column from two blocks above to three below.
-    `feature_blocks_parity` compares every block they place in 39 decorated chunks, with vanilla running
+    `feature_blocks_parity` compares every block they place in 40 decorated chunks, with vanilla running
     the same features and no-ops at the others' indices, and `feature_worker_parity` compares final chunks
     from the workers the same way.
     `ore_feature_parity` compares the feature with vanilla's own `OreFeature` on the same Xoroshiro decoration

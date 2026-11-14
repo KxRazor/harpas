@@ -184,6 +184,10 @@ vanilla for the same seed.
     - [x] Underwater magma deposits: floor searches, directional occlusion and placement random consumption,
           compared with vanilla's own feature and `applyBiomeDecoration`, including worker generation,
           chunk edges and Anvil reloads (`underwater_magma_parity`, `feature_blocks_parity`, `feature_worker_parity`).
+    - [x] Surface snow and ice (`freeze_top_layer`): biome temperatures, height adjustment, snow support and
+          snowy ground, compared with vanilla's own feature in every biome, including world limits, repeated
+          placement, worker generation and Anvil reloads (`freeze_top_layer_parity`, `feature_blocks_parity`,
+          `feature_worker_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

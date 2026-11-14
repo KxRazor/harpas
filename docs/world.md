@@ -427,7 +427,19 @@ and the owner **accepts it once**:
     1,248 placements across three seeds and both random sources, with eight configurations, dry and flooded
     caves, search boundaries, irregular and thin supports, shrinking bases, obstacles, chunk borders and world
     limits. A natural large-dripstone cave participates in the decoration and worker comparisons, including
-    Anvil reloads. Dripstone clusters remain pending.
+    Anvil reloads.
+    `harpas_worldgen::dripstone_cluster` samples a cluster's height, wetness, density and two radii, then visits
+    its columns in X/Z order. Each column searches independently through air and water for any obstacle,
+    accepting a floor, ceiling or both. Wet pools require base stone or water fluids on their sides and below;
+    a new pool lowers the effective floor by one. Layers replace the data pack's dripstone-replaceable blocks,
+    and pointed columns require a dripstone base. Heights follow a clamped normal distribution biased by the
+    distance from the center; paired heights are split where they overlap, sometimes joining at merged tips.
+    Placed columns overwrite their path and preserve waterlogging. `dripstone_cluster_parity` compares blocks,
+    four live heightmaps, results and random tails in 3,072 placements and replays across three seeds and both
+    random sources, with eight configurations, missing and irregular boundaries, existing dripstone, wet and
+    flooded caves, obstacles, search boundaries, chunk edges and world limits. Natural clusters with long
+    pointed columns participate in the decoration and worker comparisons, including Anvil reloads, under
+    `generation.features`.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

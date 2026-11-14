@@ -211,6 +211,88 @@ fn a_final_chunk_holds_the_features_of_its_3x3_chunks() {
 }
 
 #[test]
+fn block_piles_cross_worker_chunk_edges_and_reload_unchanged() {
+    // Village feature pool elements will call these directly once jigsaw placement lands. Exercise the
+    // same compiled feature through a synthetic biome schedule while those structures are still pending.
+    let data = WorldgenData::from_json_entries([
+        (
+            "data/example/worldgen/configured_feature/pile.json",
+            r#"{"type":"minecraft:block_pile","config":{"state_provider":{
+                "type":"minecraft:rotated_block_provider","state":{"Name":"minecraft:hay_block"}}}}"#,
+        ),
+        (
+            "data/example/worldgen/placed_feature/pile.json",
+            r#"{"feature":"example:pile","placement":[{"type":"minecraft:count","count":8},
+                {"type":"minecraft:in_square"},{"type":"minecraft:height_range","height":{
+                "type":"minecraft:constant","value":{"absolute":64}}},{"type":"minecraft:biome"}]}"#,
+        ),
+        (
+            "data/minecraft/worldgen/biome/plains.json",
+            r#"{"has_precipitation":true,"temperature":0.8,"downfall":0.4,
+                "features":[[],[],[],[],[],[],[],[],[],["example:pile"]]}"#,
+        ),
+    ])
+    .unwrap();
+    let generator: Arc<ChunkGenerator> = Arc::new(|pos, _| {
+        into_anvil_with_mask(stone_chunk(pos), CarvingMask::new(-64, 384).to_raw_data())
+    });
+    let decorator = Decorator::new(
+        generator,
+        SEED,
+        FeatureIndex::new(&data, &[0]).unwrap(),
+        1,
+        CAPACITY,
+    );
+    let folder = Folder::new();
+    let storage = folder.storage();
+    let pos = ChunkPos { x: 0, z: 0 };
+    let generated = decorator.complete(pos, &storage).unwrap();
+    assert_eq!(status(&generated.chunk.rest), Some(FEATURES));
+    let index = FeatureIndex::new(&data, &[0]).unwrap();
+    let mut expected =
+        RegionFeatureWorld::with_stored_biomes(square(pos, 2).into_iter().map(stone_chunk), SEED)
+            .unwrap();
+    for target in square(pos, 1) {
+        apply_biome_decoration(&mut expected, &index, SEED, target.x, target.z).unwrap();
+    }
+    let expected = expected.into_chunk(pos.x, pos.z).unwrap();
+    let mut edge_blocks = 0;
+    for section in &generated.chunk.sections {
+        let Some(blocks) = &section.section else {
+            continue;
+        };
+        for y in 0..16 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let py = i32::from(section.y) * 16 + y as i32;
+                    let state = blocks.block_state(x, y, z);
+                    assert_eq!(state, expected.block_state(x, py, z));
+                    if py >= 64 && (x == 0 || x == 15 || z == 0 || z == 15) {
+                        edge_blocks += usize::from(!block_states().is_air(state));
+                    }
+                }
+            }
+        }
+    }
+    assert!(edge_blocks > 0, "piles must reach chunk edges");
+    storage.write(&[(pos, &generated.chunk)]).unwrap();
+    decorator.flush(&storage).unwrap();
+    let reopened = Decorator::new(
+        Arc::new(|_, _| panic!("a saved final chunk must not regenerate")),
+        SEED,
+        FeatureIndex::new(&data, &[0]).unwrap(),
+        1,
+        CAPACITY,
+    );
+    let reloaded = reopened.complete(pos, &storage).unwrap();
+    assert!(!reloaded.changed);
+    assert_eq!(
+        reloaded.chunk.to_nbt(BIOMES),
+        generated.chunk.to_nbt(BIOMES)
+    );
+}
+
+#[test]
 fn concurrent_workers_decorate_each_chunk_once() {
     let folder = Folder::new();
     let storage = folder.storage();

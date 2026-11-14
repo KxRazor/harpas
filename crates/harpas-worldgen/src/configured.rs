@@ -24,6 +24,7 @@ use crate::data::{
     parse_int_provider, parse_noise_parameters, parse_placed_feature,
 };
 use crate::desert_well::place_desert_well;
+use crate::dripstone_cluster::{CompiledDripstoneCluster, place_dripstone_cluster};
 use crate::fallen_tree::{CompiledFallenTree, place_fallen_tree};
 use crate::feature::{CompiledOre, FeatureWorld, compile_ore, place_ore};
 use crate::freeze_top_layer::{CompiledFreezeTopLayer, place_freeze_top_layer};
@@ -119,6 +120,8 @@ pub enum CompiledFeature {
     FreezeTopLayer(Box<CompiledFreezeTopLayer>),
     /// `minecraft:pointed_dripstone`.
     PointedDripstone(Box<CompiledPointedDripstone>),
+    /// `minecraft:dripstone_cluster`.
+    DripstoneCluster(Box<CompiledDripstoneCluster>),
     /// `minecraft:large_dripstone`.
     LargeDripstone(Box<CompiledLargeDripstone>),
     /// `minecraft:vines`.
@@ -446,6 +449,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::FreezeTopLayer(surface) => place_freeze_top_layer(world, surface, origin),
         CompiledFeature::PointedDripstone(dripstone) => {
             place_pointed_dripstone(world, dripstone, random, origin)
+        }
+        CompiledFeature::DripstoneCluster(cluster) => {
+            place_dripstone_cluster(world, cluster, random, origin)
         }
         CompiledFeature::LargeDripstone(dripstone) => {
             place_large_dripstone(world, dripstone, random, origin)
@@ -986,6 +992,10 @@ impl<'a> FeatureCompiler<'a> {
             "minecraft:pointed_dripstone" => {
                 CompiledFeature::PointedDripstone(Box::new(self.pointed_dripstone(name, config)?))
             }
+            "minecraft:dripstone_cluster" => match self.dripstone_cluster(name, config)? {
+                Some(cluster) => CompiledFeature::DripstoneCluster(Box::new(cluster)),
+                None => return Ok(None),
+            },
             "minecraft:large_dripstone" => match self.large_dripstone(name, config)? {
                 Some(dripstone) => CompiledFeature::LargeDripstone(Box::new(dripstone)),
                 None => return Ok(None),

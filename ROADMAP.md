@@ -195,7 +195,11 @@ vanilla for the same seed.
     - [x] Large dripstone (`large_dripstone`): cave searches, embedded and shrinking bases, radial profiles,
           shared wind offsets and obstacle handling, compared with vanilla's own feature and
           `applyBiomeDecoration`, including worker generation and Anvil reloads (`large_dripstone_parity`,
-          `feature_blocks_parity`, `feature_worker_parity`). Dripstone clusters remain pending.
+          `feature_blocks_parity`, `feature_worker_parity`).
+    - [x] Dripstone clusters (`dripstone_cluster`): independent floor and ceiling searches, wet pools, layered
+          bases, biased column heights, merging tips and waterlogging, compared with vanilla's own feature and
+          `applyBiomeDecoration`, including repeated placement, worker generation and Anvil reloads
+          (`dripstone_cluster_parity`, `feature_blocks_parity`, `feature_worker_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

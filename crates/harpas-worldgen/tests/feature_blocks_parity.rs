@@ -23,7 +23,7 @@ const SEEDS: [i64; 3] = [0, 42, -4_172_144_997_902_289_642];
 /// ice, two chunks of the last seed with an underground and a surface lava lake, a bamboo jungle and an old
 /// growth pine taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an
 /// underwater magma deposit on a chunk edge. Snowy plains and the frozen river also exercise surface snow
-/// and ice in the last seed, followed by two dripstone caves with small and large formations.
+/// and ice in the last seed, followed by two dripstone caves with small and large formations and clusters.
 const CHUNKS: [(i32, i32); 42] = [
     (0, 0),
     (-3, 7),
@@ -170,6 +170,22 @@ fn feature_blocks_match_vanilla() {
                         .iter()
                         .any(|&(_, _, _, state)| corals[state as usize]),
                     "the warm ocean sample must place coral blocks"
+                );
+            }
+            if seed == SEEDS[2] && chunk == (-600, -240) {
+                assert!(
+                    expected.iter().any(|&(_, _, _, state)| {
+                        block_states()
+                            .properties(state)
+                            .is_some_and(|(name, properties)| {
+                                name == "minecraft:pointed_dripstone"
+                                    && properties.iter().any(|&(key, value)| {
+                                        key == "thickness"
+                                            && matches!(value, "base" | "middle" | "tip_merge")
+                                    })
+                            })
+                    }),
+                    "the dripstone cave sample must place cluster columns longer than two blocks or merged tips"
                 );
             }
             let required = match chunk {

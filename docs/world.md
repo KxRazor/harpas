@@ -251,6 +251,18 @@ and the owner **accepts it once**:
     `worldgen/template_pool` definitions are loaded with their weighted elements. The `template_parity` harness
     compares all 1,202 templates in every rotation at two positions, and all 188 pools with a shuffled order,
     with vanilla's own `StructureTemplate` and template pool registry.
+  - Processor lists load from `worldgen/processor_list`, retaining processor order and unported JSON.
+    `harpas_worldgen::processor::RuleProcessor` compiles per-block `rule` substitutions: block, exact-state,
+    tag and always-true predicates, random block and exact-state predicates, and always-true, Manhattan-distance
+    and axis-distance position tests. Rules read the current template state and existing terrain state,
+    use a fresh legacy random source seeded by the transformed block position and stop at the first match.
+    NBT modifiers preserve data (`passthrough`), produce an empty compound (`clear`) or preserve data while
+    replacing the loot table and drawing its seed (`append_loot`). `rule_processor_parity` compares all 39
+    shipped rule configurations, including delegates of capped processors, and synthetic cases with vanilla's
+    own processor, checking output states, positions and complete NBT. Traced copies append loot so the seed
+    also exposes short-circuited random consumption. `append_static` and other processor types remain
+    unported; an unsupported rule does not compile as a partial processor. This API does not yet place
+    jigsaw blocks on workers or run the capped delegates' limits and finalization.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

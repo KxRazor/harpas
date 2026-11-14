@@ -305,6 +305,13 @@ pub enum RuleTestDef {
         /// Probability, from 0 to 1.
         probability: f32,
     },
+    /// Matches one exact block state with a probability (`minecraft:random_blockstate_match`).
+    RandomBlockStateMatch {
+        /// The exact block state.
+        state: BlockStateDef,
+        /// Probability, from 0 to 1.
+        probability: f32,
+    },
     /// Matches every block (`minecraft:always_true`).
     AlwaysTrue,
     /// A rule test Harpas does not evaluate yet, keeping its raw JSON.
@@ -986,6 +993,8 @@ pub struct WorldgenData {
     pub structure_sets: IndexMap<String, StructureSetDef>,
     /// `minecraft:worldgen/template_pool` definitions, the pieces jigsaw structures choose from.
     pub template_pools: IndexMap<String, TemplatePoolDef>,
+    /// Ordered processors from `worldgen/processor_list`, retaining unported processor JSON.
+    pub processor_lists: IndexMap<String, Vec<Value>>,
 }
 
 impl WorldgenData {
@@ -1127,6 +1136,15 @@ impl WorldgenData {
                         resource_id.clone(),
                         parse_template_pool(&resource_id, &json)?,
                     );
+                }
+                "processor_list" => {
+                    let processors = json
+                        .get("processors")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| {
+                            invalid_def(&resource_id, "processor list has no processors")
+                        })?;
+                    data.processor_lists.insert(resource_id, processors.clone());
                 }
                 "structure_set" => {
                     data.structure_sets.insert(
@@ -1863,6 +1881,7 @@ fn classify_worldgen_path(path: &str) -> Option<(&str, &str, &str)> {
         | "structure"
         | "structure_set"
         | "template_pool"
+        | "processor_list"
         | "world_preset" => Some((namespace, category, rel_id)),
         _ => None,
     }
@@ -2566,7 +2585,7 @@ fn parse_ore_config(ctx: &str, json: &Value) -> Result<OreFeatureDef, WorldgenDa
     })
 }
 
-fn parse_rule_test(ctx: &str, json: &Value) -> Result<RuleTestDef, WorldgenDataError> {
+pub(crate) fn parse_rule_test(ctx: &str, json: &Value) -> Result<RuleTestDef, WorldgenDataError> {
     let obj = json
         .as_object()
         .ok_or_else(|| invalid_def(ctx, "rule test must be an object"))?;
@@ -2580,6 +2599,10 @@ fn parse_rule_test(ctx: &str, json: &Value) -> Result<RuleTestDef, WorldgenDataE
         )?),
         "minecraft:random_block_match" => RuleTestDef::RandomBlockMatch {
             block: req_str(obj, "block", ctx)?.to_string(),
+            probability: req_f64(obj, "probability", ctx)? as f32,
+        },
+        "minecraft:random_blockstate_match" => RuleTestDef::RandomBlockStateMatch {
+            state: parse_block_state_def(ctx, req_field(obj, "block_state", ctx)?)?,
             probability: req_f64(obj, "probability", ctx)? as f32,
         },
         "minecraft:always_true" => RuleTestDef::AlwaysTrue,

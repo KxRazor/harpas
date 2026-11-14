@@ -22,8 +22,8 @@ use reference::Reference;
 const SEEDS: [i64; 2] = [42, -4_172_144_997_902_289_642];
 /// Far apart, so no two share a decorated chunk; after the first three come a bamboo jungle, an old growth pine
 /// taiga with forest rocks, a desert well crossing a chunk edge, a warm ocean reef and an underwater magma
-/// deposit on a chunk edge in the last seed, followed by snowy plains, a frozen river and a dripstone cave.
-const CHUNKS: [(i32, i32); 11] = [
+/// deposit on a chunk edge in the last seed, followed by snowy plains, a frozen river and two dripstone caves.
+const CHUNKS: [(i32, i32); 12] = [
     (0, 0),
     (41, -26),
     (-203, -151),
@@ -35,6 +35,7 @@ const CHUNKS: [(i32, i32); 11] = [
     (-198, -198),
     (-200, -175),
     (-600, -348),
+    (-600, -240),
 ];
 
 type Blocks = BTreeSet<(i32, i32, i32, u32)>;
@@ -225,6 +226,7 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
                 (-198, -198) => Some("minecraft:snow"),
                 (-200, -175) => Some("minecraft:ice"),
                 (-600, -348) => Some("minecraft:pointed_dripstone"),
+                (-600, -240) => Some("minecraft:dripstone_block"),
                 _ => None,
             };
             if seed == SEEDS[1]

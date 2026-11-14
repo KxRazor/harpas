@@ -20,6 +20,7 @@ pub mod generator;
 pub mod huge_mushroom;
 pub mod ice;
 pub mod java_hash;
+pub mod large_dripstone;
 pub mod light;
 pub mod liquid;
 pub mod mossy_carpet;

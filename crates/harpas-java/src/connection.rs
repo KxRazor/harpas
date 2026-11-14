@@ -13,6 +13,7 @@ use crate::chat::{ChatAuthority, ChatEvent, ChatState, MessageError, VALIDATION_
 use crate::compression::{Compression, CompressionError};
 use crate::crypto::{Encryption, ServerKey, ct_equal, server_hash};
 use crate::frame::{FrameError, FrameReader, write_frame};
+use crate::prepared::PreparedPlayPacket;
 use crate::status::{ServerInfo, json_string};
 use crate::{legacy, registries, void_world};
 
@@ -363,6 +364,31 @@ impl Connection {
         if self.state == State::Play {
             self.send_play(packet);
         }
+    }
+
+    /// The negotiated compression threshold, or none when compression is disabled.
+    pub fn compression_threshold(&self) -> Option<usize> {
+        self.compression.as_ref().map(Compression::threshold)
+    }
+
+    /// Encodes, compresses and frames a packet once, without sending or encrypting it.
+    /// The result can be cached for other connections using the same protocol and compression threshold.
+    pub fn prepare_play_packet(&mut self, packet: play::clientbound::Packet) -> PreparedPlayPacket {
+        PreparedPlayPacket {
+            frame: self.prepare_frame(|buf| packet.encode(buf)),
+            compression_threshold: self.compression_threshold(),
+        }
+    }
+
+    /// Queues a prepared packet, encrypting it with this connection's own stream.
+    /// Returns false without sending anything outside Play or if the compression threshold differs.
+    pub fn send_prepared_play_packet(&mut self, packet: &PreparedPlayPacket) -> bool {
+        if self.state != State::Play || self.compression_threshold() != packet.compression_threshold
+        {
+            return false;
+        }
+        self.send_frame(&packet.frame);
+        true
     }
 
     /// Takes chunk contents from the engine instead of generating void chunks for the player's view.
@@ -1155,6 +1181,11 @@ impl Connection {
 
     /// Frames the packet `encode` writes, compressing and encrypting it when they are on, and queues it.
     fn send(&mut self, encode: impl FnOnce(&mut Vec<u8>)) {
+        let frame = self.prepare_frame(encode);
+        self.send_frame(&frame);
+    }
+
+    fn prepare_frame(&mut self, encode: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
         let mut frame = Vec::new();
         match &mut self.compression {
             Some(compression) => {
@@ -1165,10 +1196,15 @@ impl Connection {
             }
             None => write_frame(&mut frame, encode),
         }
+        frame
+    }
+
+    fn send_frame(&mut self, frame: &[u8]) {
+        let start = self.out.len();
+        self.out.extend_from_slice(frame);
         if let Some(encryption) = &mut self.encryption {
-            encryption.encrypt(&mut frame);
+            encryption.encrypt(&mut self.out[start..]);
         }
-        self.out.extend_from_slice(&frame);
     }
 
     fn send_configuration(&mut self, packet: configuration::clientbound::Packet) {
@@ -1249,6 +1285,78 @@ fn translate(key: &str, with: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn play_connection(threshold: Option<usize>) -> Connection {
+        static KEY: std::sync::OnceLock<Arc<ServerKey>> = std::sync::OnceLock::new();
+        let mut connection = Connection::new(Arc::clone(
+            KEY.get_or_init(|| Arc::new(ServerKey::generate())),
+        ));
+        connection.state = State::Play;
+        connection.compression = threshold.map(Compression::new);
+        connection
+    }
+
+    #[test]
+    fn prepared_chunks_match_normal_sends_with_each_compression_and_cipher_stream() {
+        let chunk: play::clientbound::Packet = void_world::empty_chunk(-7, 12, 1).into();
+        for threshold in [None, Some(0), Some(256), Some(usize::MAX)] {
+            let mut source = play_connection(threshold);
+            let prepared = source.prepare_play_packet(chunk.clone());
+            assert!(source.take_output().is_empty());
+            for secret in [[1; 16], [2; 16]] {
+                let mut connection = play_connection(threshold);
+                connection.encryption = Some(Encryption::new(&secret));
+                let mut reference = play_connection(threshold);
+                // Different prefixes put the viewers at different positions in their cipher streams.
+                for _ in 0..secret[0] {
+                    connection.send_play_packet(play::clientbound::ChunkBatchStart.into());
+                    reference.send_play_packet(play::clientbound::ChunkBatchStart.into());
+                }
+                for _ in 0..2 {
+                    assert!(connection.send_prepared_play_packet(&prepared));
+                    reference.send_play_packet(chunk.clone());
+                }
+                let end: play::clientbound::Packet =
+                    play::clientbound::ChunkBatchFinished { batch_size: 2 }.into();
+                connection.send_play_packet(end.clone());
+                reference.send_play_packet(end);
+                let mut wire = connection.take_output();
+                Encryption::new(&secret).decrypt(&mut wire);
+                assert_eq!(wire, reference.take_output(), "threshold {threshold:?}");
+            }
+            // Preparing and encrypting for viewers never changes the cached plaintext frame.
+            assert!(source.send_prepared_play_packet(&prepared));
+            assert_eq!(source.take_output(), prepared.frame);
+        }
+    }
+
+    #[test]
+    fn prepared_packets_refuse_other_compression_settings_and_non_play_states() {
+        for source in [None, Some(0), Some(256), Some(4096)] {
+            let packet = play_connection(source)
+                .prepare_play_packet(play::clientbound::ChunkBatchStart.into());
+            for target in [None, Some(0), Some(256), Some(4096)] {
+                let mut connection = play_connection(target);
+                assert_eq!(
+                    connection.send_prepared_play_packet(&packet),
+                    source == target
+                );
+                assert_eq!(connection.take_output().is_empty(), source != target);
+            }
+            let mut connection = play_connection(source);
+            for state in [
+                State::Handshaking,
+                State::Status,
+                State::Login,
+                State::Configuration,
+                State::Closed,
+            ] {
+                connection.state = state;
+                assert!(!connection.send_prepared_play_packet(&packet));
+                assert!(connection.take_output().is_empty());
+            }
+        }
+    }
 
     #[test]
     fn offline_uuids_match_vanilla() {

@@ -12,6 +12,7 @@ mod connection;
 mod crypto;
 mod frame;
 mod legacy;
+mod prepared;
 mod registries;
 mod status;
 mod void_world;
@@ -23,5 +24,6 @@ pub use connection::{
 };
 pub use crypto::{ServerKey, server_hash};
 pub use frame::{FrameError, FrameReader, MAX_FRAME_LEN, write_frame};
+pub use prepared::PreparedPlayPacket;
 pub use registries::biome_names;
 pub use status::ServerInfo;

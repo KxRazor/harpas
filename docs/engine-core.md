@@ -168,10 +168,19 @@ Harpas uses its own storage:
     even past 8 bits; at least 4 bits per block state index; no data when there is one value. Reading checks
     the data length and every index, as vanilla does.
 - A **version per section** that changes on every change. Versions come from one process-wide counter, so a
-  section that is unloaded and loaded again never takes a version a cache already holds. The shared encoding
-  of Java and Bedrock packets caches encoded sections by version
+  section that is unloaded and loaded again never takes a version a cache already holds. Versions identify
+  sections for shared encoding
   ([protocol-codecs.md](protocol-codecs.md#java-wire-format),
   [bedrock-interop.md](bedrock-interop.md#1-shared-chunk-encoding)).
+- **Java 26.1 shares complete compressed chunk packets**, keyed by position, immutable chunk and computed-light
+  snapshots, and the negotiated compression threshold. Each server environment owns its cache and fixed block
+  entity registry. Snapshot identity covers blocks, biomes, heightmaps, saved light and block entity NBT;
+  section versions alone cannot cover changes to those other fields. Weak references preserve snapshot
+  identity without keeping unloaded chunk data alive, and copy-on-write edits detach from cached snapshots.
+  The cache retains at most 4,096 entries and 64 MiB of frame buffers, evicting the oldest entries first.
+  Concurrent viewers initialize each entry once; encoding and compression hold no global cache lock and run
+  on connection threads. A viewer can finish sending an evicted packet. Each connection encrypts its own copy
+  after framing, so cached bytes contain no cipher state. Bedrock section caching follows in M6.
 - Block states are global IDs from the **block state registry** (`harpas_core::block`). Blocks are defined by
   the game's code, so the registry is fixed for a version: built from minecraft-data's `blocks.json`, it names
   each state by its block and property values, in vanilla's order. Biomes are global IDs from the biome

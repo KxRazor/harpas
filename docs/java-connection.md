@@ -144,6 +144,10 @@ Implementation:
   bomb is stopped at the declared size. A negative threshold turns compression off.
 - **Libraries:** zlib-rs at level 6 through `flate2`, and the RustCrypto `aes` and `cfb8` crates, as measured
   in [protocol-codecs.md](protocol-codecs.md#shared-encoding-results).
+- **Shared chunks:** connections reuse complete compressed frames from the bounded
+  [Java chunk cache](engine-core.md#6-chunks). `Connection::prepare_play_packet` produces a shareable frame
+  without touching the cipher stream; `send_prepared_play_packet` encrypts it for the recipient and refuses
+  a different compression threshold or a state outside Play. Batches and their acknowledgements stay per player.
 
 ---
 

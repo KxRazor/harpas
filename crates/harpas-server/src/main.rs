@@ -204,7 +204,7 @@ fn run() -> io::Result<()> {
     }
     let environment = Arc::new(ConnectionEnvironment {
         info: server_info,
-        block_entities,
+        chunks: chunks::Cache::new(block_entities),
     });
     let info = &environment.info;
     info!("Default game type: {:?}", info.game_mode);
@@ -434,7 +434,7 @@ fn load_icon(path: &Path) -> Option<String> {
 /// Runs one connection until it is closed.
 struct ConnectionEnvironment {
     info: ServerInfo,
-    block_entities: block_entity_registry::Registry,
+    chunks: chunks::Cache,
 }
 
 fn serve(
@@ -612,11 +612,10 @@ fn play(
         if let Some(session) = &player_session {
             // The logic thread's output first: once it disconnects the player, there is nothing left to
             // forward, and forwarding to a stopped logic thread would hide its reason.
-            departure.kick = departure.kick.or(player::send(
-                &mut connection,
-                session,
-                &environment.block_entities,
-            ));
+            departure.kick =
+                departure
+                    .kick
+                    .or(player::send(&mut connection, session, &environment.chunks));
             if !connection.is_closed() {
                 player::receive(&mut connection, session)?;
             }
@@ -748,7 +747,7 @@ mod tests {
     fn test_environment(info: &ServerInfo) -> ConnectionEnvironment {
         ConnectionEnvironment {
             info: info.clone(),
-            block_entities: block_entity_registry::Registry::default(),
+            chunks: chunks::Cache::new(block_entity_registry::Registry::default()),
         }
     }
 

@@ -221,6 +221,9 @@ vanilla for the same seed.
     - [x] Processor lists and per-block `rule` substitutions: all six block predicates, distance and
           axis-distance tests, positional randomness and passthrough, clear and loot NBT modifiers,
           compared with vanilla's own processors (`rule_processor_parity`).
+    - [x] Capped rule processors: whole-template limits, world-seeded candidate shuffles, unchanged and
+          NBT-only results, integer limit providers and ordered finalizers, compared with vanilla's own
+          processor pipeline (`capped_processor_parity`). Worker template placement follows below.
     - [ ] Remaining processors, template block placement and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

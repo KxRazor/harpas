@@ -1,7 +1,10 @@
-//! Per-block template rules, observed through vanilla's `RuleProcessor` API.
+//! Template rules and capped substitutions, observed through vanilla's processor APIs.
 //!
 //! This is the rule-processing part of jigsaw placement. Processor lists retain their other processor
 //! types in [`WorldgenData`]; a rule with an unported predicate or NBT modifier does not compile.
+
+mod capped;
+pub use capped::CappedProcessor;
 
 use harpas_core::math::position_seed;
 use harpas_core::nbt::{Compound, Nbt};

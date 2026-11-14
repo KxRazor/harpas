@@ -261,8 +261,18 @@ and the owner **accepts it once**:
     shipped rule configurations, including delegates of capped processors, and synthetic cases with vanilla's
     own processor, checking output states, positions and complete NBT. Traced copies append loot so the seed
     also exposes short-circuited random consumption. `append_static` and other processor types remain
-    unported; an unsupported rule does not compile as a partial processor. This API does not yet place
-    jigsaw blocks on workers or run the capped delegates' limits and finalization.
+    unported; an unsupported rule does not compile as a partial processor.
+    `CappedProcessor` compiles `capped` processors with rule delegates and positive integer limit providers.
+    Finalization shuffles the whole template's surviving blocks using a positional legacy source forked
+    from the world seed at the template origin. Only changed states or NBT consume the sampled limit;
+    unchanged results leave room for later candidates. Each finalizer sees earlier finalizers' results,
+    after all per-block rules, and runs before placement clips blocks to a chunk. The limit provider's
+    declared zero maximum skips finalization, including clamped sources below their clamp interval, as
+    in vanilla. `capped_processor_parity` compares the four shipped capped processors, their three complete
+    processor lists and synthetic chains with vanilla's `StructureTemplate.processBlockInfos`: block order,
+    states, positions and full NBT, across world seeds, origins, list sizes and integer providers. Placement
+    settings' randomness is checked to remain untouched. Other delegates and jigsaw block placement on
+    workers remain unported.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

@@ -62,7 +62,9 @@ the second command. Without it, `cargo test --workspace` runs the same tests.
 
 A Rust dependency is declared once, in `[workspace.dependencies]` of the root `Cargo.toml`, with its version
 and the features every crate that uses it needs. A crate takes it with `name.workspace = true`, adding the
-features only it needs. Adding or updating one also needs:
+features only it needs. The entry is added with the first crate that uses it, workspace crates included: Cargo's
+lints (`[workspace.lints.cargo]`) reject unused dependencies and unused workspace entries. Adding or updating one
+also needs:
 
 ```sh
 cargo deny check licenses bans sources

@@ -234,8 +234,11 @@ vanilla for the same seed.
     - [x] Template material processors: `block_age`, `blackstone_replace` and `lava_submerged_block`, with
           tag membership, state properties, outline shapes and placement-settings randomness, compared with
           vanilla's own pipeline (`material_processor_parity`, `gravity_processor_parity`).
-    - [ ] Remaining processors (including jigsaw replacement), template block placement and feature/list pool
-          elements on chunk workers.
+    - [x] Static rule NBT (`append_static`): recursive compound merges, JSON numeric and list types,
+          existing-NBT mutation and capped limit accounting, compared with vanilla's own ordered pipeline
+          (`static_processor_parity`).
+    - [ ] Jigsaw replacement, including final block state parsing and structure-void filtering.
+    - [ ] Remaining capped delegates, template block placement and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

@@ -6,6 +6,7 @@
 mod capped;
 mod material;
 mod pipeline;
+mod static_data;
 pub use capped::CappedProcessor;
 pub use pipeline::{ProcessorPipeline, ProcessorWorld};
 
@@ -49,6 +50,7 @@ enum EntityModifier {
     Passthrough,
     Clear,
     AppendLoot(String),
+    AppendStatic(Compound),
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +116,10 @@ impl RuleProcessor {
                         format!("minecraft:{table}")
                     })
                 }
+                "minecraft:append_static" => EntityModifier::AppendStatic(static_data::compile(
+                    context,
+                    field(context, modifier.unwrap(), "data")?,
+                )?),
                 _ => return Ok(None),
             };
             rules.push(Rule {
@@ -135,9 +141,23 @@ impl RuleProcessor {
     /// `location_state` is the world's existing state at `block.pos`. `pivot` is the structure's
     /// placement reference position, used by distance predicates. The processor creates its own legacy
     /// random source from the transformed block position; decoration randomness is not consumed.
+    /// The input is a snapshot; use [`Self::process_in_place`] to retain static NBT mutation.
     pub fn process(
         &self,
         block: &ProcessorBlock,
+        location_state: u32,
+        pivot: [i32; 3],
+    ) -> ProcessorBlock {
+        self.process_in_place(&mut block.clone(), location_state, pivot)
+    }
+
+    /// Processes a block while retaining vanilla's mutation of existing NBT by `append_static`.
+    ///
+    /// Other modifiers leave the incoming block unchanged. Capped finalization compares its result
+    /// with this possibly mutated input, so a static merge into existing NBT alone spends no limit.
+    pub fn process_in_place(
+        &self,
+        block: &mut ProcessorBlock,
         location_state: u32,
         pivot: [i32; 3],
     ) -> ProcessorBlock {
@@ -156,6 +176,14 @@ impl RuleProcessor {
                         tag.insert("LootTable", Nbt::String(table.clone()));
                         tag.insert("LootTableSeed", Nbt::Long(random.next_long()));
                         Some(tag)
+                    }
+                    EntityModifier::AppendStatic(data) => {
+                        if let Some(tag) = &mut block.nbt {
+                            static_data::merge(tag, data);
+                            Some(tag.clone())
+                        } else {
+                            Some(data.clone())
+                        }
                     }
                 };
                 return ProcessorBlock {
@@ -423,6 +451,80 @@ mod tests {
             processor.process(&unmatched, state("air"), [0; 3]),
             unmatched
         );
+    }
+
+    #[test]
+    fn static_data_merges_nested_compounds_and_keeps_inputs_and_configuration_independent() {
+        let mut entry = rule(json!({"predicate_type": "minecraft:always_true"}), "stone");
+        entry["block_entity_modifier"] = json!({"type": "minecraft:append_static", "data": {
+            "keep": {"added": true}, "LootTableSeed": "new", "items": [1, 2]
+        }});
+        let processor = compile(vec![entry]);
+        let mut block = ProcessorBlock {
+            pos: [-17, 64, 32],
+            state: state("stone"),
+            nbt: Some(
+                [
+                    (
+                        "keep",
+                        Nbt::Compound([("nested", Nbt::Int(7))].into_iter().collect()),
+                    ),
+                    ("LootTableSeed", Nbt::Long(123)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        };
+        let original = block.clone();
+        let output = processor.process(&block, state("air"), [0; 3]);
+        assert_eq!(block, original);
+        let expected: Compound = [
+            (
+                "keep",
+                Nbt::Compound(
+                    [("nested", Nbt::Int(7)), ("added", Nbt::Byte(1))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+            ("LootTableSeed", Nbt::String("new".into())),
+            ("items", Nbt::List(harpas_core::nbt::List::Byte(vec![1, 2]))),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(output.nbt, Some(expected));
+        assert_eq!(
+            processor.process_in_place(&mut block, state("air"), [0; 3]),
+            output
+        );
+        assert_eq!(block.nbt, output.nbt);
+        block.nbt = None;
+        let output = processor.process_in_place(&mut block, state("air"), [0; 3]);
+        assert!(block.nbt.is_none());
+        let Some(Nbt::Compound(keep)) = output.nbt.unwrap().get("keep").cloned() else {
+            panic!("keep")
+        };
+        assert!(keep.get("nested").is_none(), "compiled data was mutated");
+    }
+
+    #[test]
+    fn malformed_static_data_reports_the_definition() {
+        for modifier in [
+            json!({"type": "minecraft:append_static"}),
+            json!({"type": "minecraft:append_static", "data": []}),
+            json!({"type": "minecraft:append_static", "data": "{x:1}"}),
+            json!({"type": "minecraft:append_static", "data": {"bad": null}}),
+        ] {
+            let mut entry = rule(json!({"predicate_type": "minecraft:always_true"}), "sand");
+            entry["block_entity_modifier"] = modifier;
+            let error = RuleProcessor::compile(
+                "test:bad",
+                &json!({"processor_type": "minecraft:rule", "rules": [entry]}),
+                &WorldgenData::default(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("test:bad"));
+        }
     }
 
     #[test]

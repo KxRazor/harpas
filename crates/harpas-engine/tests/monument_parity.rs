@@ -1,11 +1,11 @@
-//! Ocean monuments placed on chunk workers, compared with the direct placement API and Anvil.
+//! Ocean monuments placed by the chunk workers' decoration, compared with the direct placement API and Anvil.
 //!
 //! The world generation API is compared block by block with vanilla in
-//! `harpas-worldgen/tests/monument_interior_parity.rs`. This harness checks the engine wiring: the
-//! monument is dispatched to every chunk intersecting the saved bounds, with the five-block exterior
+//! `harpas-worldgen/tests/monument_interior_parity.rs`. This harness checks the engine wiring: chunks saved
+//! at carvers hold the monument's records but none of its blocks, and decoration places it in every chunk
+//! intersecting the saved bounds, in `surface_structures` with vanilla's stream, with the five-block exterior
 //! clearing clipped to each, chunks outside those bounds left carved, saved records keeping the single
-//! building and its references, request order unchanged, and the saved chunks surviving a region round
-//! trip.
+//! building and its references, request order unchanged, and the saved chunks surviving Anvil reloads.
 
 #[allow(dead_code)]
 #[path = "../../harpas-worldgen/tests/reference/mod.rs"]
@@ -14,11 +14,12 @@ mod reference;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use harpas_anvil::{Chunk, Region};
 use harpas_core::nbt::{Compound, Nbt};
-use harpas_engine::world::{ChunkPos, ChunkReader};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::world::{ChunkPos, ChunkReader, ChunkState, World};
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
     Beardifier, BoundingBox, Direction, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator,
     StructurePiece, StructureStart, StructureTemplates, WorldgenData,
@@ -141,6 +142,11 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
             .iter()
             .any(|s| s.structure == "minecraft:monument")
     });
+    // Monuments are placed in decoration. Decorate without features, so that a decorated chunk is the carved
+    // terrain with the monument, as the direct API places it.
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
     let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&vanilla.path).unwrap());
     let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
@@ -174,6 +180,7 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
         .collect();
 
     let mut expected = HashMap::new();
+    let mut carved_chunks = HashMap::new();
     let mut outside = 0;
     for &pos in &positions {
         let beardifier =
@@ -195,12 +202,14 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
             );
         }
         expected.insert((pos.x, pos.z), direct);
+        carved_chunks.insert((pos.x, pos.z), carved);
     }
     assert!(
         outside > 0,
         "the sample must include chunks outside the saved bounds"
     );
 
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
     let mut first = HashMap::new();
     for reverse in [false, true] {
         let mut order = positions.clone();
@@ -215,46 +224,76 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
             } else {
                 first.insert((pos.x, pos.z), nbt);
             }
-            let expected = &expected[&(pos.x, pos.z)];
-            assert_blocks_match(&chunk, expected, pos);
-            let actual_sections =
-                sections(&chunk, expected.min_y(), expected.height(), biomes.len());
-            // Chunks keep only the final heightmaps once carvers have run; the worldgen ones are not saved.
-            for kind in HeightmapType::FINAL {
-                for z in 0..16 {
-                    for x in 0..16 {
-                        assert_eq!(
-                            expected.heightmaps().get(kind, x, z),
-                            actual_sections.heightmaps().get(kind, x, z),
-                            "{pos:?}: {kind:?} at {x}, {z}"
-                        );
-                    }
-                }
-            }
-
-            let saved_starts = starts(&chunk);
-            let saved_references = references(&chunk);
-            let intersects =
-                b.intersects_columns(pos.x * 16, pos.z * 16, pos.x * 16 + 15, pos.z * 16 + 15);
-            let mut want_references = Compound::new();
-            if intersects {
-                want_references.insert("minecraft:monument", Nbt::LongArray(vec![packed(source)]));
-            }
-            assert_eq!(saved_references, want_references, "{pos:?}: references");
-            if (pos.x, pos.z) == source {
-                assert_eq!(
-                    saved_starts.get("minecraft:monument"),
-                    Some(&Nbt::Compound(start.to_nbt())),
-                    "{pos:?}: saved building record"
-                );
-            } else {
-                assert!(saved_starts.is_empty(), "{pos:?}: copied start");
-            }
+            // At carvers the chunk holds the monument's records but none of its blocks.
+            assert_blocks_match(&chunk, &carved_chunks[&(pos.x, pos.z)], pos);
+            assert_records(&chunk, pos, &start);
         }
     }
 
+    // Decoration places the monument in every chunk that its saved bounds reach.
+    let folder = std::env::temp_dir().join(format!(
+        "harpas-monument-world-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let saved_reader = Arc::new(move |pos: ChunkPos| -> std::io::Result<Option<Compound>> {
+        Ok(((pos.x, pos.z) == source).then(|| saved.clone()))
+    });
+    let read = Arc::clone(&saved_reader);
+    let workers = Arc::new(move |pos, _: &ChunkReader<'_>| generator(pos, &|p| read(p)));
+    let overworld = overworld_starts(seed, Arc::clone(&data), Arc::clone(&templates)).unwrap();
+    let decoration_starts =
+        Arc::new(move |pos, _: &ChunkReader<'_>| overworld(pos, &|p| saved_reader(p)));
+    let decorated = decorated_with_structures(
+        workers,
+        decoration_starts,
+        seed,
+        Arc::clone(&data),
+        templates,
+    )
+    .unwrap();
+    let mut world = World::open_with_source(&folder, &biomes, decorated).unwrap();
+    wait(&mut world, &positions);
+    let mut final_chunks = HashMap::new();
+    for &pos in &positions {
+        let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
+            panic!("{pos:?}: decorated chunk");
+        };
+        let expected = &expected[&(pos.x, pos.z)];
+        assert_blocks_match(chunk, expected, pos);
+        let actual_sections = sections(chunk, expected.min_y(), expected.height(), biomes.len());
+        for kind in HeightmapType::FINAL {
+            for z in 0..16 {
+                for x in 0..16 {
+                    assert_eq!(
+                        expected.heightmaps().get(kind, x, z),
+                        actual_sections.heightmaps().get(kind, x, z),
+                        "{pos:?}: {kind:?} at {x}, {z}"
+                    );
+                }
+            }
+        }
+        assert_records(chunk, pos, &start);
+        final_chunks.insert(pos, chunk.to_nbt(&biomes));
+    }
+    world.flush().unwrap();
+    drop(world);
+    let mut world = World::open(&folder, &biomes).unwrap();
+    wait(&mut world, &positions);
+    for &pos in &positions {
+        let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
+            panic!("{pos:?}: reloaded chunk");
+        };
+        assert_eq!(
+            chunk.to_nbt(&biomes),
+            final_chunks[&pos],
+            "Anvil reload {pos:?}"
+        );
+    }
+    drop(world);
+    std::fs::remove_dir_all(&folder).unwrap();
+
     // The saved chunks must read back unchanged from region files.
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "harpas-monument-region-{}-{}",
         std::process::id(),
@@ -281,4 +320,48 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
         assert_eq!(&reloaded.to_nbt(&biomes), nbt, "region round trip {x}, {z}");
     }
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Checks that a chunk keeps the single saved building in its source chunk, and references to it where its
+/// bounds reach.
+fn assert_records(chunk: &Chunk, pos: ChunkPos, start: &StructureStart) {
+    let b = start.bounding_box;
+    let source = start.chunk;
+    let saved_starts = starts(chunk);
+    let saved_references = references(chunk);
+    let intersects = b.intersects_columns(pos.x * 16, pos.z * 16, pos.x * 16 + 15, pos.z * 16 + 15);
+    let mut want_references = Compound::new();
+    if intersects {
+        want_references.insert("minecraft:monument", Nbt::LongArray(vec![packed(source)]));
+    }
+    assert_eq!(saved_references, want_references, "{pos:?}: references");
+    if (pos.x, pos.z) == source {
+        assert_eq!(
+            saved_starts.get("minecraft:monument"),
+            Some(&Nbt::Compound(start.to_nbt())),
+            "{pos:?}: saved building record"
+        );
+    } else {
+        assert!(saved_starts.is_empty(), "{pos:?}: copied start");
+    }
+}
+
+fn wait(world: &mut World, positions: &[ChunkPos]) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        world.update(positions.iter().copied()).unwrap();
+        if positions
+            .iter()
+            .all(|&pos| matches!(world.chunk(pos), Some(ChunkState::Loaded(_))))
+        {
+            return;
+        }
+        for pos in positions {
+            if let Some(ChunkState::Failed(error)) = world.chunk(*pos) {
+                panic!("{pos:?}: {error}");
+            }
+        }
+        assert!(Instant::now() < deadline, "chunks did not load");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

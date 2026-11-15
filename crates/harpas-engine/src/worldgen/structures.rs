@@ -182,7 +182,6 @@ impl ChunkStructures {
         &mut self,
         generated: &mut GeneratedChunk,
         seed: i64,
-        sea_level: i32,
         terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
         templates: &StructureTemplates,
         blocking_biomes: &HashMap<[i32; 3], bool>,
@@ -233,10 +232,10 @@ impl ChunkStructures {
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
-                // Buried treasure and swamp huts are placed in decoration.
+                // Buried treasure, swamp huts and monuments are placed in decoration.
                 if matches!(
                     start.structure.as_str(),
-                    "minecraft:buried_treasure" | "minecraft:swamp_hut"
+                    "minecraft:buried_treasure" | "minecraft:swamp_hut" | "minecraft:monument"
                 ) {
                     return Vec::new();
                 }
@@ -336,10 +335,6 @@ impl ChunkStructures {
                                 )
                         },
                     );
-                }
-                if start.structure == "minecraft:monument" {
-                    start.place_monument_in_chunk(generated, seed, sea_level);
-                    return Vec::new();
                 }
                 // Jigsaw structures are placed in decoration, step by step.
                 if start.is_jigsaw() {
@@ -823,10 +818,8 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Template hulls, pyramids, monuments and igloos can span several chunks; saved temples can
-        // too. Place their intersection without moving or duplicating the source
-        // chunk's saved start. Vanilla only invokes a monument in chunks that intersect its saved
-        // bounds, so the five-block exterior clearing is clipped to those chunks.
+        // Template hulls, pyramids and igloos can span several chunks; saved temples can too. Place
+        // their intersection without moving or duplicating the source chunk's saved start.
         let neighbor_pieces = nearby
             .iter()
             .flat_map(|starts| starts.iter())
@@ -851,7 +844,6 @@ impl Structures {
                             | "minecraft:shipwreck_beached"
                             | "minecraft:ocean_ruin_cold"
                             | "minecraft:ocean_ruin_warm"
-                            | "minecraft:monument"
                     ))
             })
             .map(|s| (*s).clone())

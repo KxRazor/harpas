@@ -701,16 +701,18 @@ and the owner **accepts it once**:
     vertical clipping. Second passes reconstruct rooms from saved building records without changing their
     NBT. No internal children are persisted. Scheduled fluid ticks and the complete FEATURES schedule
     remain pending; elder guardian spawning follows in M4 and is suppressed in the probe.
-  - Ocean monument blocks run on chunk workers through `StructureStart::place_monument_in_chunk`, which
-    places the exterior and then the internal rooms in the target chunk. The decoration stream is seeded
-    like vanilla's `applyBiomeDecoration` for `minecraft:monument` (index 6, step 4), so sponge rooms and
-    simple-room pillars choose the same columns. Vanilla invokes the building only in chunks that intersect
+  - Chunk workers place ocean monuments in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_monument`), with the exterior first and then the internal rooms.
+    `StructureStart::place_monument_in_chunk` does the same for direct placements. The decoration stream is
+    the one vanilla's `applyBiomeDecoration` seeds for `minecraft:monument` (index 6, step 4), so sponge rooms
+    and simple-room pillars choose the same columns. Vanilla invokes the building only in chunks that intersect
     its saved bounds; the five-block exterior clearing is clipped to those chunks, so chunks reached only by
     the halo keep their terrain. A chunk's `References` likewise stays limited to the saved bounds. Only the
     single building record is saved, no internal children are persisted, and saved records are unchanged.
     The worker stream test in `monument_interior_parity` compares complete passes with vanilla; the
-    engine's `monument_parity`
-    compares worker chunks, reversed request orders and Anvil reloads with the direct API. Elder guardians
+    engine's `monument_parity` checks that worker chunks saved at `carvers` hold the records but none of the
+    monument's blocks in either request order, and compares chunks decorated without features, and their
+    Anvil reloads, with the direct API. Elder guardians
     and scheduled fluid ticks follow in M4.
   - `Beardifier::for_starts` collects the rigid pieces and jigsaw junctions of supplied referenced starts, in
     their supplied order, with vanilla's chunk-distance checks. It supports `none`, `bury`, `beard_thin`,
@@ -929,8 +931,8 @@ and the owner **accepts it once**:
     final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure, swamp huts and jigsaw
-  structures are placed in decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch
+  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure, swamp huts, ocean
+  monuments and jigsaw structures are placed in decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch
   and cat are left for vanilla or M4. Pyramid workers retain the
   incoming chest flags while saving at `carvers`: vanilla clears the alcoves when it repeats pyramid placement,
   so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API
@@ -942,11 +944,9 @@ and the owner **accepts it once**:
   establish a complete FEATURES-stage round trip. Ocean ruin pass replays likewise refit their saved pieces
   to the existing terrain; blocks and loot can change when earlier placement changed that terrain.
   Ruined portal passes likewise replay against existing blocks, and generated chunks continue to save at
-  `carvers`. Ocean monument workers place the exterior and internal rooms on every chunk intersecting the
-  saved bounds, clipping the five-block clearing to each chunk, keep only the single saved building record,
-  and reproduce the same blocks after an Anvil reload and in reversed request order. Full feature-stage
-  resumption, the jigsaw structures' blocks and lighting remain separate roadmap tasks; generated chunks do
-  not yet include them.
+  `carvers`. Ocean monuments are placed in decoration, on every chunk intersecting the saved bounds, clipping
+  the five-block clearing to each chunk and keeping only the single saved building record. Full feature-stage
+  resumption and lighting remain separate roadmap tasks.
 - **Lighting:** a port of vanilla's light engine, with results applied at defined points
   ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
   - `harpas_worldgen::light` computes sky and block light for a chunk from its blocks and one chunk around it,

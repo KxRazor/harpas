@@ -1,5 +1,5 @@
 //! Template pool elements placed in one chunk: vanilla's `SinglePoolElement.place`, observed through its public API
-//! (`single_pool_element_parity`).
+//! (`pool_element_parity`).
 //!
 //! The whole template is processed first. The element ignores structure blocks, turns jigsaws into their final
 //! states, then runs its processor list and, for terrain matching, gravity at `WORLD_SURFACE_WG`; a legacy element
@@ -23,7 +23,8 @@ use crate::generator::HeightmapType;
 use crate::processor::{ProcessorBlock, ProcessorPipeline, ProcessorWorld};
 use crate::template::{Rotation, StructureTemplates};
 
-/// A single or legacy single pool element placed in a chunk (`SinglePoolElement.place`).
+/// A single, legacy single or list pool element placed in a chunk (`SinglePoolElement.place`,
+/// `ListPoolElement.place`).
 pub struct SingleElementPlacement<'a> {
     /// Worldgen definitions, for the element's processor list.
     pub data: &'a WorldgenData,
@@ -45,8 +46,10 @@ impl SingleElementPlacement<'_> {
     /// Places `element` in `chunk` and returns the block entities it creates there.
     ///
     /// `world` reads terrain outside the chunk and the heightmaps processors use, both as they were before the
-    /// element was placed. `random` is the piece's placement random, which loot seeds draw from. Elements of other
-    /// types place nothing.
+    /// element was placed. `random` is the piece's placement random, which loot seeds draw from. A list places its
+    /// elements in order. A feature element places its placed feature at the piece's position with
+    /// [`place_placed`](crate::place_placed) in a [`FeatureWorld`](crate::FeatureWorld) instead; this places nothing
+    /// for it, nor for an empty element.
     pub fn place(
         &self,
         element: &PoolElementDef,
@@ -54,14 +57,36 @@ impl SingleElementPlacement<'_> {
         world: &mut impl ProcessorWorld,
         random: &mut impl RandomSource,
     ) -> Result<Vec<Compound>, WorldgenDataError> {
-        let PoolElementDef::Single {
-            location,
-            processors,
-            projection,
-            legacy,
-        } = element
-        else {
-            return Ok(Vec::new());
+        let (location, processors, projection, legacy) = match element {
+            PoolElementDef::Single {
+                location,
+                processors,
+                projection,
+                legacy,
+            } => (location, processors, projection, legacy),
+            // A list places each of its elements in turn at the same spot.
+            PoolElementDef::List { elements, .. } => {
+                // A later element replaces the block entity of an earlier one at the same position, or removes
+                // it with a block that has none.
+                let mut entities: Vec<Compound> = Vec::new();
+                for element in elements {
+                    for entity in self.place(element, chunk, world, random)? {
+                        let pos = position(&entity);
+                        entities.retain(|other| position(other) != pos);
+                        entities.push(entity);
+                    }
+                }
+                entities.retain(|entity| {
+                    let [x, y, z] = position(entity);
+                    block_behavior().has_block_entity(chunk.block_state(
+                        (x & 15) as usize,
+                        y,
+                        (z & 15) as usize,
+                    ))
+                });
+                return Ok(entities);
+            }
+            PoolElementDef::Feature { .. } | PoolElementDef::Empty => return Ok(Vec::new()),
         };
         let Some(template) = self.templates.get(location) else {
             return Ok(Vec::new());
@@ -253,6 +278,14 @@ fn entity(
         }
     }
     nbt
+}
+
+/// A placed block entity's world position.
+fn position(entity: &Compound) -> [i32; 3] {
+    ["x", "y", "z"].map(|key| match entity.get(key) {
+        Some(harpas_core::nbt::Nbt::Int(value)) => *value,
+        _ => unreachable!("placed block entities have a position"),
+    })
 }
 
 /// Terrain in the target chunk from the chunk itself, and elsewhere from the caller's world.

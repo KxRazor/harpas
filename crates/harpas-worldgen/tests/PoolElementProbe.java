@@ -1,10 +1,12 @@
-// Test driver only: observes vanilla's SinglePoolElement.place for elements of the owner's template pools, in one
-// chunk of layered terrain. Arguments: <input NBT> <output NBT>. No game code or data is copied into the repository.
+// Test driver only: observes vanilla's StructurePoolElement.place for elements of the owner's template pools, in one
+// chunk of layered terrain whose eight neighbors may also be written, as in a generation region. Arguments: <input NBT> <output NBT>. No game code or data is copied into the repository.
 //
 // Each input case names a pool and element index, the template position, the processors' pivot, a rotation, the
 // target chunk, a seed for the placement random, the liquid settings and the terrain as [top Y, state] layers from
 // the world bottom, with air above. The output holds the chunk's blocks that differ from the terrain as
-// [index, state] pairs, its block entities with full metadata and the next long of the placement random afterwards.
+// [index, state] pairs, the blocks written to neighboring chunks as [x, y, z, state], its block entities with full
+// metadata and the next long of the placement random afterwards. The placement random is a WorldgenRandom over
+// Xoroshiro, as structure pieces receive.
 // With the arguments normalize <input NBT> <output NBT>, it instead loads Harpas's block entities and saves them again.
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
@@ -22,7 +24,7 @@ import net.minecraft.world.level.levelgen.*;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.templatesystem.LiquidSettings;
 
-public final class SinglePoolElementProbe {
+public final class PoolElementProbe {
     public static void main(String[] args) throws Exception {
         try { run(args); } catch (Throwable error) { error.printStackTrace(); System.exit(1); }
     }
@@ -37,6 +39,11 @@ public final class SinglePoolElementProbe {
         var storage = net.minecraft.world.level.storage.LevelStorageSource.createDefault(Path.of("element-worlds")).createAccess("test");
         var manager = new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager(
             server.resources(), storage, net.minecraft.util.datafix.DataFixers.getDataFixer(), registries.lookupOrThrow(Registries.BLOCK));
+        // Placed features read the world's height range from the generator.
+        var generator = new NoiseBasedChunkGenerator(
+            net.minecraft.world.level.biome.MultiNoiseBiomeSource.createFromPreset(registries.lookupOrThrow(Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST)
+                .getOrThrow(net.minecraft.world.level.biome.MultiNoiseBiomeSourceParameterLists.OVERWORLD)),
+            registries.lookupOrThrow(Registries.NOISE_SETTINGS).getOrThrow(NoiseGeneratorSettings.OVERWORLD));
         CompoundTag cases;
         try (var stream = new java.io.DataInputStream(new java.io.BufferedInputStream(java.nio.file.Files.newInputStream(Path.of(args[0]))))) {
             cases = NbtIo.read(stream);
@@ -57,16 +64,23 @@ public final class SinglePoolElementProbe {
                 proto.setBlockState(pos.set(cx * 16 + x, y, cz * 16 + z), terrain(layers, y), 0);
             proto.setPersistedStatus(ChunkStatus.CARVERS);
             var entities = new HashMap<BlockPos, BlockEntity>();
+            // Blocks written to the eight neighboring chunks, which a generation region also lets features write.
+            var outside = new HashMap<BlockPos, BlockState>();
             var level = CappedProcessorProbe.seedLevel(seed);
             // Every column has the same layers; heights describe them before placement, as processors read them.
-            var world = (WorldGenLevel) Proxy.newProxyInstance(SinglePoolElementProbe.class.getClassLoader(),
+            var world = (WorldGenLevel) Proxy.newProxyInstance(PoolElementProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
-                    case "getHeight" -> arguments.length == 0 ? 384 : height(layers, (Heightmap.Types) arguments[0]);
+                    case "getHeight" -> arguments == null ? 384 : height(layers, (Heightmap.Types) arguments[0]);
                     case "getHeightmapPos" -> {
                         var at = (BlockPos) arguments[1];
                         yield new BlockPos(at.getX(), height(layers, (Heightmap.Types) arguments[0]), at.getZ());
                     }
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
+                    case "isStateAtPosition" -> ((java.util.function.Predicate<BlockState>) arguments[1])
+                        .test(((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]));
+                    case "isFluidAtPosition" -> ((java.util.function.Predicate<net.minecraft.world.level.material.FluidState>) arguments[1])
+                        .test(((WorldGenLevel) proxy).getFluidState((BlockPos) arguments[0]));
+                    case "isEmptyBlock" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).isAir();
                     case "getChunk" -> proto;
                     case "registryAccess" -> registries;
                     case "holderLookup" -> registries.lookupOrThrow((net.minecraft.resources.ResourceKey) arguments[0]);
@@ -77,17 +91,25 @@ public final class SinglePoolElementProbe {
                     case "getMinY" -> -64;
                     case "getMaxY" -> 319;
                     case "getSeed" -> seed;
+                    case "ensureCanWrite" -> {
+                        var at = (BlockPos) arguments[0];
+                        yield Math.abs((at.getX() >> 4) - cx) <= 1 && Math.abs((at.getZ() >> 4) - cz) <= 1;
+                    }
                     case "getBlockState" -> {
                         var at = (BlockPos) arguments[0];
                         if (at.getY() < -64 || at.getY() >= 320) yield Blocks.VOID_AIR.defaultBlockState();
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
-                        yield terrain(layers, at.getY());
+                        yield outside.getOrDefault(at, terrain(layers, at.getY()));
                     }
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
-                        if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) throw new AssertionError("write outside target chunk " + at);
                         if (at.getY() < -64 || at.getY() >= 320) yield false;
                         var state = (BlockState) arguments[1];
+                        if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) {
+                            if (Math.abs((at.getX() >> 4) - cx) > 1 || Math.abs((at.getZ() >> 4) - cz) > 1) throw new AssertionError("write outside region " + at);
+                            outside.put(at, state);
+                            yield true;
+                        }
                         var before = proto.getBlockState(at);
                         proto.setBlockState(at, state, 0);
                         if (before.getBlock() != state.getBlock()) entities.remove(at);
@@ -103,13 +125,13 @@ public final class SinglePoolElementProbe {
                     }
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
-            var random = new XoroshiroRandomSource(seed);
+            var random = new WorldgenRandom(new XoroshiroRandomSource(seed));
             var at = new BlockPos(input.getIntOr("x", 0), input.getIntOr("y", 0), input.getIntOr("z", 0));
             var pivot = new BlockPos(input.getIntOr("px", 0), input.getIntOr("py", 0), input.getIntOr("pz", 0));
             var rotation = Rotation.values()[input.getIntOr("rotation", 0)];
             var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
             var liquid = input.getBooleanOr("ignore_waterlogging", false) ? LiquidSettings.IGNORE_WATERLOGGING : LiquidSettings.APPLY_WATERLOGGING;
-            element.place(manager, world, null, null, at, pivot, rotation, bounds, random, liquid, false);
+            element.place(manager, world, null, generator, at, pivot, rotation, bounds, random, liquid, false);
 
             var result = new CompoundTag();
             var changes = new ArrayList<Integer>();
@@ -123,6 +145,11 @@ public final class SinglePoolElementProbe {
             positions.sort(Comparator.comparingInt((BlockPos p) -> p.getY()).thenComparingInt(BlockPos::getZ).thenComparingInt(BlockPos::getX));
             for (var position : positions) saved.add(entities.get(position).saveWithFullMetadata(registries));
             result.put("entities", saved);
+            var written = new ArrayList<Integer>();
+            outside.forEach((where, state) -> {
+                if (state != terrain(layers, where.getY())) { written.add(where.getX()); written.add(where.getY()); written.add(where.getZ()); written.add(Block.getId(state)); }
+            });
+            result.putIntArray("outside", written.stream().mapToInt(Integer::intValue).toArray());
             result.putLong("random_tail", random.nextLong());
             results.put(name, result);
         }

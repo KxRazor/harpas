@@ -243,8 +243,11 @@ vanilla for the same seed.
           chorus plant exceptions, compared for every registry state (`block_transform_parity`).
     - [x] Single and legacy single pool element placement in one chunk: implied processors, state turns,
           chunk clipping, waterlogging, water filling, unchanged edge shapes and block entity loot seeds,
-          compared for every single element of every pool (`single_pool_element_parity`).
-    - [ ] Remaining capped delegates and feature/list pool elements on chunk workers.
+          compared for every single element of every pool (`pool_element_parity`).
+    - [x] List and feature pool elements: lists in order with replaced block entities, and every village
+          feature placed through its placement modifiers into the generation region (`pool_element_parity`).
+          The ancient city's `sculk_patch` feature follows with the feature families.
+    - [ ] Remaining capped delegates and pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

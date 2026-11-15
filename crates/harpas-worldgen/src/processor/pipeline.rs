@@ -5,6 +5,7 @@ use harpas_core::math::position_seed;
 use harpas_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
 
+use super::material::{BlockAge, blackstone, full_shape};
 use super::{CappedProcessor, ProcessorBlock, RuleProcessor, field, invalid, string};
 use crate::data::{WorldgenData, WorldgenDataError, parse_block_state_def, parse_holder_set};
 use crate::generator::HeightmapType;
@@ -18,6 +19,14 @@ pub trait ProcessorWorld {
     /// First available Y in a column, as returned by vanilla's `LevelReader.getHeight`.
     fn heightmap(&mut self, kind: HeightmapType, x: i32, z: i32) -> i32;
 
+    /// Whether the incoming state's outline fills a block (`Block.isShapeFullBlock(getShape)`).
+    ///
+    /// The default uses generation shapes without active block entities. Worlds with dynamic shapes,
+    /// such as an open shulker box, can override this query at the current transformed position.
+    fn is_shape_full_block(&mut self, state: u32, _pos: [i32; 3]) -> bool {
+        full_shape(state)
+    }
+
     /// Whether placement targets a live level (`ServerLevel`) instead of a generation region.
     ///
     /// Gravity substitutes the live heightmaps for their worldgen variants in a live level.
@@ -29,7 +38,7 @@ pub trait ProcessorWorld {
 /// A complete, ordered processor list, compiled without silently dropping unsupported entries.
 ///
 /// Supports `rule`, rule-delegating `capped`, `block_rot`, `protected_blocks`, `block_ignore`,
-/// `gravity` and `nop`.
+/// `gravity`, `block_age`, `blackstone_replace`, `lava_submerged_block` and `nop`.
 /// Processing precedes template block placement, waterlogging, shape updates and chunk clipping.
 #[derive(Debug, Clone)]
 pub struct ProcessorPipeline {
@@ -46,6 +55,9 @@ enum Processor {
     },
     Protected(Vec<bool>),
     Ignore(Vec<bool>),
+    Age(BlockAge),
+    Blackstone,
+    LavaSubmerged,
     Gravity {
         heightmap: HeightmapType,
         offset: i32,
@@ -131,6 +143,15 @@ impl ProcessorPipeline {
                     };
                     Processor::Gravity { heightmap, offset }
                 }
+                "minecraft:block_age" => {
+                    let mossiness = field(context, json, "mossiness")?
+                        .as_f64()
+                        .map(|v| v as f32)
+                        .ok_or_else(|| invalid(context, "invalid mossiness"))?;
+                    Processor::Age(BlockAge::new(mossiness, data)?)
+                }
+                "minecraft:blackstone_replace" => Processor::Blackstone,
+                "minecraft:lava_submerged_block" => Processor::LavaSubmerged,
                 "minecraft:nop" => Processor::Nop,
                 _ => return Ok(None),
             });
@@ -142,7 +163,7 @@ impl ProcessorPipeline {
     ///
     /// `blocks` holds original template states at transformed world positions, before state rotation.
     /// `block_at` reads terrain before placement. A supplied placement-settings random source is shared
-    /// by all rot processors; `None` uses a fresh positional legacy source per call, as vanilla does.
+    /// by all rot and age processors; `None` uses a fresh positional legacy source per call, as vanilla does.
     /// World `seed` and template `origin` independently seed capped finalization. `pivot` is the rule
     /// predicates' reference position. Neither chunk bounds nor block placement belong in this pass.
     ///
@@ -195,6 +216,27 @@ impl ProcessorPipeline {
                         continue 'blocks;
                     }
                     Processor::Ignore(states) if states[block.state as usize] => continue 'blocks,
+                    Processor::Age(age) => {
+                        block.state = match settings_random.as_deref_mut() {
+                            Some(random) => age.process(block.state, random),
+                            None => {
+                                let [x, y, z] = block.pos;
+                                age.process(
+                                    block.state,
+                                    &mut LegacyRandom::new(position_seed(x, y, z)),
+                                )
+                            }
+                        };
+                    }
+                    Processor::Blackstone => block.state = blackstone(block.state),
+                    Processor::LavaSubmerged => {
+                        let terrain = world.block_at(block.pos);
+                        if block_states().properties(terrain).unwrap().0 == "minecraft:lava"
+                            && !world.is_shape_full_block(block.state, block.pos)
+                        {
+                            block.state = block_states().default_state("minecraft:lava").unwrap();
+                        }
+                    }
                     Processor::Gravity { heightmap, offset } => {
                         let heightmap = match (*heightmap, world.is_server_level()) {
                             (HeightmapType::WorldSurfaceWg, true) => HeightmapType::WorldSurface,
@@ -611,5 +653,207 @@ mod tests {
                     .contains("bad-gravity")
             );
         }
+    }
+
+    #[test]
+    fn material_substitutions_preserve_position_and_nbt_but_reset_unlisted_properties() {
+        let pipeline = compile(
+            &[json!({"processor_type": "minecraft:blackstone_replace"})],
+            &WorldgenData::default(),
+        );
+        let mut input = block("cobblestone_stairs", [-17, 319, 32]);
+        input.state = block_states()
+            .state(
+                "minecraft:cobblestone_stairs",
+                [
+                    ("facing", "west"),
+                    ("half", "top"),
+                    ("shape", "inner_left"),
+                    ("waterlogged", "true"),
+                ],
+            )
+            .unwrap()
+            .0;
+        let output = pipeline.process(
+            123,
+            [99; 3],
+            [0; 3],
+            std::slice::from_ref(&input),
+            |_| panic!("blackstone read terrain"),
+            None,
+        );
+        let expected = block_states()
+            .state(
+                "minecraft:blackstone_stairs",
+                [("facing", "west"), ("half", "top")],
+            )
+            .unwrap()
+            .0;
+        assert_eq!(
+            output,
+            [ProcessorBlock {
+                state: expected,
+                ..input.clone()
+            }]
+        );
+        let pipeline = compile(
+            &[json!({"processor_type": "minecraft:lava_submerged_block"})],
+            &WorldgenData::default(),
+        );
+        assert_eq!(
+            pipeline.process(
+                0,
+                [0; 3],
+                [0; 3],
+                std::slice::from_ref(&input),
+                |_| state("lava"),
+                None
+            ),
+            [ProcessorBlock {
+                state: state("lava"),
+                ..input
+            }]
+        );
+    }
+
+    #[test]
+    fn aging_uses_tag_membership_and_the_shared_settings_random() {
+        let data = WorldgenData::from_json_entries([
+            ("data/minecraft/tags/block/stairs.json", r#"{"values":[]}"#),
+            (
+                "data/minecraft/tags/block/slabs.json",
+                r#"{"values":["minecraft:oak_slab"]}"#,
+            ),
+            ("data/minecraft/tags/block/walls.json", r#"{"values":[]}"#),
+        ])
+        .unwrap();
+        let pipeline = compile(
+            &[json!({"processor_type": "minecraft:block_age", "mossiness": 1.0})],
+            &data,
+        );
+        let mut input = block("oak_slab", [-17, -64, 32]);
+        input.state = block_states()
+            .state(
+                "minecraft:oak_slab",
+                [("type", "top"), ("waterlogged", "true")],
+            )
+            .unwrap()
+            .0;
+        let mut random = XoroshiroRandom::new(42);
+        let output = pipeline.process(
+            123,
+            [99; 3],
+            [0; 3],
+            std::slice::from_ref(&input),
+            |_| panic!("age read terrain"),
+            Some(&mut random),
+        );
+        let expected = block_states()
+            .state(
+                "minecraft:mossy_stone_brick_slab",
+                [("type", "top"), ("waterlogged", "true")],
+            )
+            .unwrap()
+            .0;
+        assert_eq!(
+            output,
+            [ProcessorBlock {
+                state: expected,
+                ..input
+            }]
+        );
+        let mut expected_random = XoroshiroRandom::new(42);
+        expected_random.next_float();
+        assert_eq!(random.next_long(), expected_random.next_long());
+        let untagged = block("stone_slab", [0; 3]);
+        assert_eq!(
+            pipeline.process(
+                0,
+                [0; 3],
+                [0; 3],
+                std::slice::from_ref(&untagged),
+                |_| panic!("age read terrain"),
+                None
+            ),
+            [untagged]
+        );
+    }
+
+    #[test]
+    fn malformed_aging_definitions_report_their_context() {
+        for value in [
+            None,
+            Some(Value::Null),
+            Some(json!("0.2")),
+            Some(json!(false)),
+            Some(json!([])),
+        ] {
+            let mut entry = json!({"processor_type": "minecraft:block_age"});
+            if let Some(value) = value {
+                entry["mossiness"] = value;
+            }
+            assert!(
+                ProcessorPipeline::compile("bad-aging", &[entry], &WorldgenData::default())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("bad-aging")
+            );
+        }
+    }
+
+    #[test]
+    fn lava_queries_dynamic_outline_shapes_at_the_gravity_adjusted_position() {
+        struct Terrain;
+        impl ProcessorWorld for Terrain {
+            fn block_at(&mut self, pos: [i32; 3]) -> u32 {
+                assert_eq!(pos, [3, 75, 4]);
+                state("lava")
+            }
+            fn heightmap(&mut self, _: HeightmapType, _: i32, _: i32) -> i32 {
+                70
+            }
+            fn is_shape_full_block(&mut self, incoming: u32, pos: [i32; 3]) -> bool {
+                assert_eq!(incoming, state("shulker_box"));
+                assert_eq!(pos, [3, 75, 4]);
+                false // An open shulker box's outline extends beyond a single block.
+            }
+        }
+        let lava = json!({"processor_type": "minecraft:lava_submerged_block"});
+        let data = WorldgenData::default();
+        let input = block("shulker_box", [3, 8, 4]);
+        let pipeline = compile(
+            &[
+                json!({"processor_type": "minecraft:gravity", "offset": 2}),
+                lava.clone(),
+            ],
+            &data,
+        );
+        let output = pipeline.process_in_world(
+            0,
+            [0, 5, 0],
+            [0; 3],
+            std::slice::from_ref(&input),
+            &mut Terrain,
+            None,
+        );
+        assert_eq!(
+            output,
+            [ProcessorBlock {
+                pos: [3, 75, 4],
+                state: state("lava"),
+                ..input.clone()
+            }]
+        );
+        assert_eq!(
+            compile(&[lava], &data).process(
+                0,
+                [0; 3],
+                [0; 3],
+                std::slice::from_ref(&input),
+                |_| state("lava"),
+                None
+            ),
+            [input]
+        );
     }
 }

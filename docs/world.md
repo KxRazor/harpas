@@ -291,9 +291,23 @@ and the owner **accepts it once**:
     provides these terrain reads, while `process` remains the block-read-only entry point for lists that
     need no heightmaps. `gravity_processor_parity` compares complete processing passes and terrain-read
     traces with vanilla, including chained gravity, rotations, offsets and integer overflow, world limits,
-    missing and existing NBT, and explicit versus positional settings randomness. Jigsaw replacement and
-    the other runtime-added processors, template placement, waterlogging, shape updates and worker
-    integration remain separate work.
+    missing and existing NBT, and explicit versus positional settings randomness.
+    Runtime-added material processors also run in this pipeline. `block_age` uses the owner's stairs,
+    slabs and walls tags and the shared placement-settings random source when provided, or a fresh
+    positional legacy source otherwise. Mossy stairs, slabs and walls retain their incoming properties
+    when keeping that shape; conversions to other shapes use their defaults. `blackstone_replace` retains
+    only facing, half and slab type, resetting wall connections, stair shape and waterlogging before placement.
+    `lava_submerged_block` keeps source lava where a partial outline would replace any level of lava,
+    preserving the incoming NBT. Its shape query uses outlines rather than collision shapes, including
+    full outlines of plants and attachment blocks without faces. `ProcessorWorld::is_shape_full_block`
+    defaults to generation shapes without active block entities; worlds with dynamic shapes can override
+    the query. `material_processor_parity` compares 56 pipelines in 8,928 complete passes with vanilla,
+    including every registry state as incoming blocks and lava's terrain in the full sample, mossiness
+    outside the unit interval, property preservation, NBT, shared and positional random sources, ordered
+    filters, rules and capped finalizers. `gravity_processor_parity` also checks material processors before
+    and after movement.
+    Jigsaw replacement, the remaining processors, template placement, waterlogging, shape updates and
+    worker integration remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

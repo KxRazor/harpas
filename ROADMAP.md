@@ -231,6 +231,9 @@ vanilla for the same seed.
     - [x] Template gravity processors: all six heightmaps, local heights, live-level heightmap substitutions
           and ordered filter/rule/finalizer interactions, compared with vanilla's own pipeline
           (`gravity_processor_parity`).
+    - [x] Template material processors: `block_age`, `blackstone_replace` and `lava_submerged_block`, with
+          tag membership, state properties, outline shapes and placement-settings randomness, compared with
+          vanilla's own pipeline (`material_processor_parity`, `gravity_processor_parity`).
     - [ ] Remaining processors (including jigsaw replacement), template block placement and feature/list pool
           elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.

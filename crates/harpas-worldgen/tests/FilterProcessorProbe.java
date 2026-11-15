@@ -46,6 +46,7 @@ public final class FilterProcessorProbe {
                 new Class<?>[]{ServerLevelAccessor.class}, (proxy, method, arguments) -> switch (method.getName()) {
                     case "getLevel" -> level;
                     case "getBlockState" -> Objects.requireNonNull(terrain.get(arguments[0]), "unexpected terrain position");
+                    case "getBlockEntity" -> null;
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
             var random = new net.minecraft.world.level.levelgen.XoroshiroRandomSource(seed);

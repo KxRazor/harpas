@@ -1,9 +1,10 @@
-//! Template rules, block filters, gravity and capped substitutions, observed through vanilla's APIs.
+//! Template rules, filters, materials, gravity and capped substitutions, observed through vanilla's APIs.
 //!
 //! This is the processing part of jigsaw placement. Processor lists retain their other processor
 //! types in [`WorldgenData`]; a list with an unported processor does not compile partially.
 
 mod capped;
+mod material;
 mod pipeline;
 pub use capped::CappedProcessor;
 pub use pipeline::{ProcessorPipeline, ProcessorWorld};

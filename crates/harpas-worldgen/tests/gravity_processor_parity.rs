@@ -83,7 +83,16 @@ fn pipelines() -> Vec<Vec<Value>> {
     let rot = json!({"processor_type": "minecraft:block_rot", "integrity": 0.5});
     let ignore = json!({"processor_type": "minecraft:block_ignore", "blocks": [{"Name": "minecraft:stone"}]});
     let cap = json!({"processor_type": "minecraft:capped", "delegate": rule.clone(), "limit": 3});
-    for processor in [rule, protected, rot, ignore, cap] {
+    for processor in [
+        rule,
+        protected,
+        rot,
+        ignore,
+        cap,
+        json!({"processor_type": "minecraft:block_age", "mossiness": 0.6}),
+        json!({"processor_type": "minecraft:blackstone_replace"}),
+        json!({"processor_type": "minecraft:lava_submerged_block"}),
+    ] {
         pipelines.push(vec![processor.clone(), gravity.clone()]);
         pipelines.push(vec![gravity.clone(), processor]);
     }

@@ -17,6 +17,8 @@ mod desert_pyramid;
 mod igloo;
 mod jigsaw;
 mod jigsaw_blocks;
+pub(crate) use jigsaw_blocks::STEPS;
+pub use jigsaw_blocks::decoration_slot;
 mod jungle_temple;
 mod mineshaft;
 mod mineshaft_blocks;

@@ -352,3 +352,185 @@ fn final_chunks_from_the_workers_match_vanilla_and_reload_unchanged() {
     );
     eprintln!("Compared {compared} final chunks decorated on the chunk workers");
 }
+
+/// Jigsaw structures are placed in decoration, in every chunk their pieces reach: a plains village chunk away from
+/// its start must hold the blocks `jigsaw_chunk_parity` compares with vanilla's `StructureStart.placeInChunk`, and a
+/// world decorating without structures must not.
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn decoration_places_jigsaw_pieces_in_every_chunk_they_reach() {
+    use harpas_core::random::{WorldgenRandom, XoroshiroRandom};
+    use harpas_engine::worldgen::{decorated_with_structures, overworld_starts};
+    use harpas_worldgen::{
+        Beardifier, FeatureCompiler, FeatureWorld, RegionFeatureWorld, StructureState,
+        decoration_slot,
+    };
+
+    let reference = Reference::required();
+    let data = Arc::new(WorldgenData::from_zip_path(&reference.server_jar).unwrap());
+    let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
+    let seed = 0;
+    let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
+    let state = StructureState::new(seed, &data, &terrain).unwrap();
+    let mut starts_cache = std::collections::HashMap::new();
+    let mut starts = |x: i32, z: i32| {
+        starts_cache
+            .entry((x, z))
+            .or_insert_with(|| {
+                state
+                    .starts_in_chunk(&terrain, &data, &templates, x, z)
+                    .unwrap()
+            })
+            .clone()
+    };
+    let village = (0..64)
+        .flat_map(|r: i32| {
+            (-r..=r).flat_map(move |x| {
+                (-r..=r)
+                    .map(move |z| (x, z))
+                    .filter(move |&(x, z)| x.abs().max(z.abs()) == r)
+            })
+        })
+        .filter(|&(x, z)| state.is_structure_chunk("minecraft:villages", x, z))
+        .find_map(|(x, z)| {
+            starts(x, z)
+                .into_iter()
+                .find(|s| s.structure == "minecraft:village_plains")
+        })
+        .expect("a plains village near the origin");
+    // The chunk its pieces reach most, other than the start's own.
+    let bounds = village.bounding_box;
+    let pieces_in = |x: i32, z: i32| {
+        village
+            .pieces
+            .iter()
+            .filter(|p| {
+                p.bounding_box
+                    .intersects_columns(x * 16, z * 16, x * 16 + 15, z * 16 + 15)
+            })
+            .count()
+    };
+    let target = (bounds.min[0] >> 4..=bounds.max[0] >> 4)
+        .flat_map(|x| (bounds.min[2] >> 4..=bounds.max[2] >> 4).map(move |z| (x, z)))
+        .filter(|&chunk| chunk != village.chunk)
+        .max_by_key(|&(x, z)| pieces_in(x, z))
+        .unwrap();
+
+    // The village's own blocks in the target, placed on the carved chunks around it.
+    let carved: Vec<_> = (target.0 - 1..=target.0 + 1)
+        .flat_map(|x| (target.1 - 1..=target.1 + 1).map(move |z| (x, z)))
+        .map(|(x, z)| {
+            let mut nearby = Vec::new();
+            for nx in x - 8..=x + 8 {
+                for nz in z - 8..=z + 8 {
+                    nearby.extend(starts(nx, nz));
+                }
+            }
+            let beardifier = Beardifier::for_starts(x, z, &data, &nearby).unwrap();
+            terrain
+                .generate_chunk_carved_with_beardifier(x, z, &data, beardifier)
+                .unwrap()
+        })
+        .collect();
+    let base = carved
+        .iter()
+        .find(|c| (c.chunk_x(), c.chunk_z()) == target)
+        .unwrap()
+        .clone();
+    let mut region = RegionFeatureWorld::with_stored_biomes(carved, seed).unwrap();
+    region.start_region(seed, target.0, target.1);
+    let (index, step) = decoration_slot(&data, &village.structure).unwrap();
+    let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+    let decoration = random.set_decoration_seed(seed, target.0 * 16, target.1 * 16);
+    random.set_feature_seed(decoration, index, step);
+    village
+        .place_jigsaw_in_region(
+            &mut region,
+            target.0,
+            target.1,
+            seed,
+            &data,
+            &templates,
+            &mut FeatureCompiler::new(&data),
+            &mut random,
+        )
+        .unwrap();
+    let placed = changed_blocks(&region.into_chunk(target.0, target.1).unwrap(), &base);
+    assert!(
+        placed.len() > 100,
+        "the village must place blocks in {target:?}"
+    );
+
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let pos = ChunkPos {
+        x: target.0,
+        z: target.1,
+    };
+    let kept = |structures: bool| {
+        let folder = reference.temp.0.join(format!("village-{structures}"));
+        fs::create_dir_all(&folder).unwrap();
+        let generator = overworld_generator(
+            seed,
+            Arc::clone(&data),
+            Arc::clone(&templates),
+            true,
+            &biomes,
+        )
+        .unwrap();
+        let source = if structures {
+            let starts = overworld_starts(seed, Arc::clone(&data), Arc::clone(&templates)).unwrap();
+            decorated_with_structures(
+                generator,
+                starts,
+                seed,
+                Arc::clone(&data),
+                Arc::clone(&templates),
+            )
+            .unwrap()
+        } else {
+            decorated(generator, seed, &data).unwrap()
+        };
+        let mut world = World::open_with_source(&folder, &biomes, source).unwrap();
+        let chunk = load(&mut world, pos);
+        let actual = changed(&chunk, &base);
+        placed.iter().filter(|block| actual.contains(block)).count()
+    };
+    // Later features and the neighbors' decorations may still change a few village blocks.
+    let with = kept(true);
+    let without = kept(false);
+    eprintln!(
+        "{} village blocks in {target:?}: {with} kept with structures, {without} without",
+        placed.len()
+    );
+    assert!(
+        with * 100 >= placed.len() * 95,
+        "the workers must place the village"
+    );
+    assert!(
+        without * 2 < placed.len(),
+        "decoration without structures must not"
+    );
+}
+
+fn changed_blocks(
+    chunk: &harpas_worldgen::GeneratedChunk,
+    base: &harpas_worldgen::GeneratedChunk,
+) -> Blocks {
+    let mut blocks = BTreeSet::new();
+    for y in chunk.min_y()..chunk.min_y() + chunk.height() {
+        for z in 0..16 {
+            for x in 0..16 {
+                let state = chunk.block_state(x, y, z);
+                if state != base.block_state(x, y, z) {
+                    blocks.insert((
+                        chunk.chunk_x() * 16 + x as i32,
+                        y,
+                        chunk.chunk_z() * 16 + z as i32,
+                        state,
+                    ));
+                }
+            }
+        }
+    }
+    blocks
+}

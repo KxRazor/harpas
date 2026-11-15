@@ -7,14 +7,16 @@
 //! random source, are compared.
 mod reference;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_core::random::{WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::{
-    Beardifier, FeatureCompiler, GeneratedChunk, JigsawPiece, NoiseBasedChunkGenerator,
-    PoolElementDef, StructureStart, StructureState, StructureTemplates, WorldgenData,
+    Beardifier, FeatureCompiler, FeatureWorld, GeneratedChunk, JigsawPiece,
+    NoiseBasedChunkGenerator, PoolElementDef, RegionFeatureWorld, StructureStart, StructureState,
+    StructureTemplates, WorldgenData, decoration_slot,
 };
 use reference::Reference;
 
@@ -226,13 +228,75 @@ fn jigsaw_chunks_match_vanilla() {
             let Some(Nbt::Compound(vanilla)) = results.get(&format!("{x},{z}")) else {
                 panic!("no result for {label}")
             };
-            let mut chunk = carved[&(x, z)].clone();
-            let entities = start
-                .place_jigsaw_in_chunk(&mut chunk, seed, &data, &templates, |cx, cz| {
-                    carved.get(&(cx, cz))
-                })
+            // The chunk's decoration region: the target and its eight carved neighbors.
+            let region = (x - 1..=x + 1)
+                .flat_map(|cx| (z - 1..=z + 1).map(move |cz| (cx, cz)))
+                .map(|key| carved[&key].clone());
+            let mut world = RegionFeatureWorld::with_stored_biomes(region, seed).unwrap();
+            world.start_region(seed, x, z);
+            let (index, step) = decoration_slot(&data, &start.structure).unwrap();
+            let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+            let decoration = random.set_decoration_seed(seed, x * 16, z * 16);
+            random.set_feature_seed(decoration, index, step);
+            start
+                .place_jigsaw_in_region(
+                    &mut world,
+                    x,
+                    z,
+                    seed,
+                    &data,
+                    &templates,
+                    &mut features,
+                    &mut random,
+                )
                 .unwrap();
+            let mut neighbors = BTreeSet::new();
+            let mut target = None;
+            for chunk in world.into_chunks() {
+                let key = (chunk.chunk_x(), chunk.chunk_z());
+                if key == (x, z) {
+                    target = Some(chunk);
+                    continue;
+                }
+                let carved_blocks = blocks(&carved[&key]);
+                for (i, block) in blocks(&chunk).into_iter().enumerate() {
+                    if block != carved_blocks[i] {
+                        let i = i as i32;
+                        neighbors.insert([
+                            key.0 * 16 + i % 16,
+                            i / 256 - 64,
+                            key.1 * 16 + i / 16 % 16,
+                            block,
+                        ]);
+                    }
+                }
+            }
+            let mut chunk = target.unwrap();
+            // Blocks placed without data hold vanilla's placeholder until their block entity is created.
+            let entities: Vec<Compound> = chunk
+                .take_block_entities()
+                .into_iter()
+                .filter(|entity| entity.get("id") != Some(&Nbt::from("DUMMY")))
+                .collect();
             compared += 1;
+            let Some(Nbt::IntArray(written)) = vanilla.get("neighbors") else {
+                panic!("no neighbor blocks")
+            };
+            let expected_neighbors: BTreeSet<[i32; 4]> = written
+                .chunks(4)
+                .map(|b| [b[0], b[1], b[2], b[3]])
+                .collect();
+            if expected_neighbors != neighbors {
+                let only = |a: &BTreeSet<[i32; 4]>, b: &BTreeSet<[i32; 4]>| {
+                    a.difference(b).take(3).copied().collect::<Vec<_>>()
+                };
+                failures.push(format!(
+                    "{label}: blocks written to neighbors differ, vanilla only {:?}, Harpas only {:?}",
+                    only(&expected_neighbors, &neighbors),
+                    only(&neighbors, &expected_neighbors)
+                ));
+                continue;
+            }
             let Some(Nbt::IntArray(expected)) = vanilla.get("blocks") else {
                 panic!("no blocks")
             };

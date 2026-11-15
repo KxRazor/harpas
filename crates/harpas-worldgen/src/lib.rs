@@ -78,8 +78,9 @@ pub use density::{
     DensityOp, MarkerKind, NodeId, NoiseRouterDef, PositionalRandom, RarityValueMapper, UnaryOp,
 };
 pub use feature::{
-    ChunkFeatureWorld, CompiledOre, FeatureIndex, FeatureWorld, OreTarget, RegionFeatureWorld,
-    RuleTestRule, STEP_COUNT, apply_biome_decoration, place_ore,
+    ChunkFeatureWorld, CompiledOre, DecorationStructures, FeatureIndex, FeatureWorld, OreTarget,
+    RegionFeatureWorld, RuleTestRule, STEP_COUNT, apply_biome_decoration,
+    apply_biome_decoration_with_structures, place_ore,
 };
 pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
 pub use light::{ChunkLight, LIGHT_BYTES, LightSection, LightWorld, light_chunk};
@@ -95,7 +96,7 @@ pub use structure::{
     BoundingBox, Direction, JigsawJunction, JigsawPiece, MonumentLayout, MonumentRoom,
     MonumentRoomKind, MonumentRoomPiece, RuinedPortalBlocks, RuinedPortalGenerator,
     SingleElementPlacement, StructurePiece, StructureReference, StructureStart, StructureState,
-    TemplatePiece, place_mineshafts_in_chunk,
+    TemplatePiece, decoration_slot, place_mineshafts_in_chunk,
 };
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,

@@ -5,7 +5,8 @@
 // cases, each a start and a target chunk. A case builds proto-chunks at carvers for the target and its eight
 // neighbors, which a generation region lets features write; farther chunks read as air with heights at the world's
 // bottom. The random source is seeded as vanilla's decoration does, from the structure's index in its step. The
-// output holds, for each case, the target's block states and its block entities with full metadata.
+// output holds, for each case, the target's block states, the blocks written to its neighbors as [x, y, z, state]
+// and the target's block entities with full metadata.
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.util.*;
@@ -146,6 +147,20 @@ public final class JigsawChunkProbe {
             for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
                 blocks[((y + 64) * 16 + z) * 16 + x] = Block.getId(target.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
             result.putIntArray("blocks", blocks);
+            var written = new ArrayList<Integer>();
+            for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                var at = new ChunkPos(cx + dx, cz + dz);
+                var neighbor = protos.get(ChunkPos.pack(at.x(), at.z()));
+                int[] before = carved.getIntArray(at.x() + "," + at.z()).orElseThrow();
+                for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+                    int id = Block.getId(neighbor.getBlockState(pos.set(at.x() * 16 + x, y, at.z() * 16 + z)));
+                    if (id != before[((y + 64) * 16 + z) * 16 + x]) {
+                        written.add(at.x() * 16 + x); written.add(y); written.add(at.z() * 16 + z); written.add(id);
+                    }
+                }
+            }
+            result.putIntArray("neighbors", written.stream().mapToInt(Integer::intValue).toArray());
             var list = new ListTag();
             var positions = new ArrayList<>(entities.keySet());
             positions.removeIf(at -> (at.getX() >> 4) != cx || (at.getZ() >> 4) != cz);

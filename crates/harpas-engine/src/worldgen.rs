@@ -7,15 +7,33 @@ use std::sync::Arc;
 use harpas_anvil::{Chunk, ChunkSection, DATA_VERSION};
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_worldgen::{
-    GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData,
+    GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureStart, StructureTemplates,
+    WorldgenData,
 };
 
-use crate::world::ChunkGenerator;
+use crate::world::{ChunkGenerator, ChunkPos, ChunkReader};
 
 mod features;
 mod structures;
 
-pub use features::decorated;
+pub use features::{decorated, decorated_with_structures};
+
+/// The structure starts whose pieces reach a chunk, which its decoration places.
+pub type StartSource =
+    dyn Fn(ChunkPos, &ChunkReader<'_>) -> io::Result<Vec<StructureStart>> + Send + Sync;
+
+/// The Overworld's structure starts for decoration, read from saved chunks where they have them.
+pub fn overworld_starts(
+    seed: i64,
+    data: Arc<WorldgenData>,
+    templates: Arc<StructureTemplates>,
+) -> io::Result<Arc<StartSource>> {
+    let generator = NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?;
+    let structures = structures::Structures::new(seed, &data, &generator, templates)?;
+    Ok(Arc::new(move |pos, read| {
+        structures.referenced(pos, &generator, &data, read)
+    }))
+}
 
 /// Compiles an Overworld generator whose biome IDs match the registry used to read and send chunks.
 pub fn overworld_generator(
@@ -77,7 +95,6 @@ pub fn overworld_generator(
             generator.sea_level(),
             &terrain_chunks,
             &templates,
-            &data,
             &blocking_biomes,
         );
         let mut chunk = into_anvil(generated)?;

@@ -178,7 +178,6 @@ impl ChunkStructures {
         Ok(result)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn place_blocks(
         &mut self,
         generated: &mut GeneratedChunk,
@@ -186,7 +185,6 @@ impl ChunkStructures {
         sea_level: i32,
         terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
         templates: &StructureTemplates,
-        data: &WorldgenData,
         blocking_biomes: &HashMap<[i32; 3], bool>,
     ) -> Vec<Compound> {
         // UNDERGROUND_STRUCTURES seeds treasure before normal and mesa mineshafts.
@@ -352,15 +350,9 @@ impl ChunkStructures {
                     start.place_monument_in_chunk(generated, seed, sea_level);
                     return Vec::new();
                 }
-                if start.pieces.iter().any(|piece| piece.jigsaw.is_some()) {
-                    return start
-                        .place_jigsaw_in_chunk(generated, seed, data, templates, |x, z| {
-                            terrain_chunks.get(&ChunkPos { x, z })
-                        })
-                        .unwrap_or_else(|error| {
-                            log::error!("cannot place {}: {error}", start.structure);
-                            Vec::new()
-                        });
+                // Jigsaw structures are placed in decoration, step by step.
+                if start.is_jigsaw() {
+                    return Vec::new();
                 }
                 start.prepare_pyramid_height(
                     seed,
@@ -647,13 +639,6 @@ impl Structures {
                             .map(move |z| ChunkPos { x, z })
                     })
                     .collect()
-            } else if start.pieces.iter().any(|piece| piece.jigsaw.is_some()) {
-                // Jigsaw templates read the terrain around their blocks, and feature elements write into the
-                // chunks beside the target.
-                let (x, z) = (chunk.chunk_x(), chunk.chunk_z());
-                (x - 1..=x + 1)
-                    .flat_map(|x| (z - 1..=z + 1).map(move |z| ChunkPos { x, z }))
-                    .collect()
             } else if start.structure == "minecraft:stronghold" {
                 start
                     .stronghold_chest_neighbors(chunk)
@@ -786,6 +771,38 @@ impl Structures {
                 .starts_in_chunk(generator, data, &self.templates, pos.x, pos.z)
                 .map_err(io::Error::other)
         })
+    }
+
+    /// The starts whose bounds reach a chunk: those its structure references point to, which its decoration
+    /// places.
+    pub(super) fn referenced(
+        &self,
+        pos: ChunkPos,
+        generator: &NoiseBasedChunkGenerator,
+        data: &WorldgenData,
+        read: &ChunkReader<'_>,
+    ) -> io::Result<Vec<StructureStart>> {
+        let (min_x, min_z) = (pos.x * 16, pos.z * 16);
+        let mut referenced = Vec::new();
+        for x in pos.x - 8..=pos.x + 8 {
+            for z in pos.z - 8..=pos.z + 8 {
+                let starts = self.starts(ChunkPos { x, z }, generator, data, read)?;
+                referenced.extend(
+                    starts
+                        .iter()
+                        .filter(|start| {
+                            start.bounding_box.intersects_columns(
+                                min_x,
+                                min_z,
+                                min_x + 15,
+                                min_z + 15,
+                            )
+                        })
+                        .cloned(),
+                );
+            }
+        }
+        Ok(referenced)
     }
 
     pub(super) fn for_chunk(

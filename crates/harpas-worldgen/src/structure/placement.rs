@@ -56,46 +56,22 @@ impl StructureStart {
             let decoration =
                 random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
             random.set_feature_seed(decoration, 4, 4);
-            let mut entities = Vec::new();
-            for piece in &mut self.pieces {
-                if piece.kind == "minecraft:tejp" {
-                    entities.extend(super::jungle_temple::place(
-                        piece,
-                        chunk,
-                        &mut random,
-                        block_at,
-                    ));
-                }
-            }
-            self.update_bounds();
-            return entities;
+            return self.place_jungle_temple(chunk, &mut random, block_at);
         }
         if self.structure == "minecraft:desert_pyramid" {
             let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
             let decoration =
                 random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
             random.set_feature_seed(decoration, 1, 4);
-            let mut region = XoroshiroRandom::new(seed)
-                .fork_positional()
-                .from_hash_of("minecraft:worldgen_region_random")
-                .fork_positional()
-                .at(chunk.chunk_x() * 16, 0, chunk.chunk_z() * 16);
-            let mut entities = Vec::new();
-            for piece in &mut self.pieces {
-                if piece.kind == "minecraft:tedp" {
-                    entities.extend(super::desert_pyramid::place(
-                        piece,
-                        chunk,
-                        &mut random,
-                        &mut region,
-                        seed,
-                        height_at,
-                        block_at,
-                    ));
-                }
-            }
-            self.update_bounds();
-            return entities;
+            let mut region = crate::feature::region_random(seed, chunk.chunk_x(), chunk.chunk_z());
+            return self.place_desert_pyramid(
+                chunk,
+                &mut random,
+                &mut region,
+                seed,
+                height_at,
+                block_at,
+            );
         }
         if self.structure == "minecraft:swamp_hut" {
             self.place_swamp_hut(chunk);
@@ -200,6 +176,53 @@ impl StructureStart {
                     entities.push(entity);
                 }
                 break;
+            }
+        }
+        self.update_bounds();
+        entities
+    }
+
+    /// Places a jungle temple start's intersection with `chunk`, drawing from `random`, which the caller has
+    /// seeded as vanilla's decoration does for `minecraft:jungle_pyramid`. A piece without a saved height first
+    /// takes the average `MOTION_BLOCKING_NO_LEAVES` height of the columns it covers in `chunk`. `block_at`
+    /// reads blocks outside `chunk`. Returns the chests and dispensers it creates.
+    pub fn place_jungle_temple<R: RandomSource>(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        random: &mut WorldgenRandom<R>,
+        block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+    ) -> Vec<Compound> {
+        let mut entities = Vec::new();
+        for piece in &mut self.pieces {
+            if piece.kind == "minecraft:tejp" {
+                entities.extend(super::jungle_temple::place(piece, chunk, random, block_at));
+            }
+        }
+        self.update_bounds();
+        entities
+    }
+
+    /// Places a desert pyramid start's intersection with `chunk`, drawing from `random`, which the caller has
+    /// seeded as vanilla's decoration does for `minecraft:desert_pyramid`, and from the decoration region's
+    /// own random source `region` for its archaeology. A piece without a saved height first takes the lowest
+    /// `MOTION_BLOCKING_NO_LEAVES` height of its whole footprint from `height_at`; see
+    /// [`Self::prepare_pyramid_height`]. `block_at` reads blocks outside `chunk`. Returns the chests and
+    /// suspicious sand it creates.
+    pub fn place_desert_pyramid<R: RandomSource>(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        random: &mut WorldgenRandom<R>,
+        region: &mut impl RandomSource,
+        seed: i64,
+        height_at: &mut impl FnMut(i32, i32) -> i32,
+        block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+    ) -> Vec<Compound> {
+        let mut entities = Vec::new();
+        for piece in &mut self.pieces {
+            if piece.kind == "minecraft:tedp" {
+                entities.extend(super::desert_pyramid::place(
+                    piece, chunk, random, region, seed, height_at, block_at,
+                ));
             }
         }
         self.update_bounds();

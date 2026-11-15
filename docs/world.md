@@ -754,48 +754,56 @@ and the owner **accepts it once**:
     and compares repeated placement after vanilla reloads the records. Below zero, vanilla's negative `HPos`
     sentinel intentionally causes another ground adjustment on each pass; these cases compare both passes.
     The vanilla probe suppresses entity spawning while observing blocks and restores the original flags.
-  - Desert pyramid blocks also run on chunk workers: the lowest `MOTION_BLOCKING_NO_LEAVES` height over the
+  - Chunk workers place desert pyramids in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_desert_pyramid`): the lowest `MOTION_BLOCKING_NO_LEAVES` height over the
     entire footprint, the random burial offset, foundation columns, rotated sandstone blocks and decorations,
     four chests with decoration-seeded loot, the pressure plate/TNT trap and the archaeology cellar. The cellar
-    uses the region's positional random stream for its stairs and collapsed roof; suspicious sand selection is
+    uses the decoration region's own random stream for its stairs and collapsed roof; suspicious sand selection is
     sorted and shuffled with a separate positional legacy stream and stores loot seeds from block positions.
-    Workers read saved neighbor terrain where available and otherwise generate it through carvers with the same
-    structure adaptation. For new pieces, Harpas fixes the shared height as if vanilla processed the source chunk
-    first, independent of worker order; already saved heights take precedence. The probe uses that same schedule
+    Chests read their neighbors from the decoration region. For new pieces, the decoration's start source fixes
+    the shared height once per session as if vanilla processed the source chunk first, independent of worker
+    order, from saved neighbor terrain where available and otherwise from terrain generated again through
+    carvers with the same structure adaptation; already saved heights take precedence. Vanilla reads the
+    heights when it places the pyramid, so lakes and other features of the earlier steps can lower them there. The probe uses that same schedule
     for worker comparisons. A vanilla world that processes another intersecting chunk first may choose a different
     burial offset. Cached starts remain immutable, and neighbor starts are not copied into the target's records.
     `desert_pyramid_parity` compares every block, all six heightmaps, chest/brushable NBT and saved starts in 160
     synthetic chunks across two seeds, including all rotations, slopes, water, negative coordinates, boundary
     chests, saved flags and the bottom of the world, then compares replay after loading Harpas's records in vanilla.
-    It also compares eight natural worker chunks across two seeds, their Anvil reloads and pyramid-pass replay,
-    and checks a saved source with altered blocks in the neighboring terrain. Pull requests use one seed.
-  - Jungle temple blocks run on chunk workers with average `MOTION_BLOCKING_NO_LEAVES` ground height,
+    It also compares eight natural worker chunks across two seeds, decorated without features, and their Anvil
+    reloads, and checks that a target next to a saved, decorated source with altered blocks is saved at `carvers`
+    without pyramid blocks and decorated reading those blocks. Pull requests use one seed.
+  - Chunk workers place jungle temples in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_jungle_temple`), with average `MOTION_BLOCKING_NO_LEAVES` ground height,
     saved `HPos`, randomized cobblestone/mossy cobblestone, rotated stairs and mechanisms, tripwire traps,
     vines and the piston/lever puzzle. Two chests and two dispensers save their loot tables and decoration-seeded
     loot without rolling items. New temples fit in their source chunk; saved pieces can place intersections
-    across boundaries, reading saved neighboring terrain when orienting chests. Mechanism ticking belongs to M4.
+    across boundaries, reading the decoration region when orienting chests. Mechanism ticking belongs to M4.
     `jungle_temple_parity` compares every block, all six heightmaps, block entity NBT, saved starts and
     postprocessing in 208 synthetic chunks across two seeds, then compares their replays after vanilla loads
     Harpas records. Cases cover every rotation and container flag, slopes, water, negative coordinates,
     four-chunk pieces, negative `HPos` resumption and both vertical world limits. Two natural worker chunks
-    across two seeds, worker-pass replay, Anvil reloads and a saved neighbor with altered terrain are also
-    checked. Pull requests use one seed.
-  - Igloo blocks run on chunk workers using the owner's template palettes, blocks and block entity NBT.
+    across two seeds, decorated without features, their Anvil reloads and a saved neighbor with altered terrain
+    placed by decoration are also checked. Pull requests use one seed.
+  - Chunk workers place igloos in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_igloo`), using the owner's template palettes, blocks and block entity NBT.
     Each piece samples the top's rotated entrance at `WORLD_SURFACE_WG`, temporarily shifts its template
     position, and saves the adjusted bounds while retaining its original template position. Reloading rebuilds
     those original bounds, as vanilla does. The top seals its ladder hole with snow only over non-air,
     non-ladder terrain. Furnace, bed, sign and brewing stand data are retained; the chest marker saves its
     loot table with the second decoration-seeded draw, without rolling items. Template placement updates
-    snowy ground before the top's separate snow seal. Template edge connections read
-    saved neighboring terrain when present; workers clip writes to their own chunk, including the snow seal
-    that vanilla may write outside the target bounds. These comparisons use pre-placement neighboring terrain;
-    feature-stage scheduling and general block shape updates remain for later stages.
+    snowy ground before the top's separate snow seal. The entrance height and template edge connections read the
+    decoration region; `WORLD_SURFACE_WG` no longer changes after carvers, so the height does not depend on the
+    order in which chunks decorate. Edge connections do: a chunk that decorates after its neighbor placed its part
+    of the igloo connects to those blocks instead of the terrain, as in vanilla. Workers clip writes to their own chunk, including the snow seal that vanilla
+    may write outside the target bounds. General block shape updates remain for later stages.
     `igloo_parity` compares every block, all six heightmaps, saved records and block entity NBT in 126 synthetic
     chunks across two seeds and their replays after vanilla reloads Harpas records. Cases cover all rotations,
     igloos with and without basements, both shaft-depth extremes, slopes, water, negative coordinates, chunk
-    boundaries and both vertical world limits. Four natural igloos across two seeds also run through workers,
-    Anvil reloads and repeated placement. A saved neighbor with an altered entrance column checks that saved
-    terrain controls height. Pull requests use one seed. Entity spawning remains for M4; other structure types
+    boundaries and both vertical world limits. Four natural igloos across two seeds also run through workers
+    that decorate without features, Anvil reloads and repeated placement; each worker chunk must match vanilla
+    given its neighbors either before or after their own decoration. A saved, decorated neighbor with an
+    altered entrance column checks that its terrain controls the height. Pull requests use one seed. Entity spawning remains for M4; other structure types
     remain unplaced.
   - Ocean and beached shipwreck blocks run on chunk workers using the owner's 20 templates and their
     palettes. Height sampling uses the unrotated footprint at the template origin, even when the hull turns
@@ -932,12 +940,9 @@ and the owner **accepts it once**:
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
   status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure, swamp huts, ocean
-  monuments and jigsaw structures are placed in decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch
-  and cat are left for vanilla or M4. Pyramid workers retain the
-  incoming chest flags while saving at `carvers`: vanilla clears the alcoves when it repeats pyramid placement,
-  so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API
-  still updates the flags as vanilla does. Jungle temple workers likewise retain all four incoming chest and
-  dispenser flags: a repeated temple pass clears those positions and must recreate the same loot containers.
+  monuments, desert pyramids, jungle temples, igloos and jigsaw structures are placed in decoration, so a chunk
+  saved at `carvers` has none of their blocks yet; a hut's witch and cat are left for vanilla or M4. Pyramid and
+  temple container flags are saved as vanilla saves them, since a decorated chunk is never placed again.
   Igloo pass replays also match vanilla, including its height changing when the existing roof raises the
   entrance's `WORLD_SURFACE_WG` height. Shipwreck replays retain their saved height. A beached replay skips
   the original burial draw, so its chest loot seeds can change, as in vanilla. These comparisons do not

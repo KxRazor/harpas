@@ -7,7 +7,8 @@
 //! The surviving blocks inside the chunk are turned with the piece and placed. Existing water waterlogs the blocks
 //! that can hold it, then placed blocks take water from source water above them or through sides that are not
 //! full, and water puts out lit candles and campfires. Block entities keep the template's data, and containers
-//! draw a loot seed from the placement random. Shape updates at the template's edges follow separately.
+//! draw a loot seed from the placement random. As in vanilla, the shapes at the template's edges stay as placed:
+//! neither the template's blocks nor their neighbors update against each other.
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};

@@ -1,6 +1,6 @@
 //! Single and legacy single pool elements compared with vanilla's `SinglePoolElement.place` in one chunk: every
 //! such element of every template pool (every eighth in the reduced sample), each turned by one of the four
-//! rotations, over dry, flooded and deep terrain, every fifth ignoring waterlogging, with its blocks, block
+//! rotations, over dry, flooded, deep and fence terrain, every fifth ignoring waterlogging, with its blocks, block
 //! entities and placement random tail.
 mod reference;
 
@@ -26,12 +26,14 @@ fn state(name: &str) -> u32 {
 }
 
 /// Layered terrain as [top Y, state] pairs from the world bottom, with air above.
-fn terrains() -> [Vec<i32>; 3] {
+fn terrains() -> [Vec<i32>; 4] {
     let id = |name| state(name) as i32;
     [
         vec![64, id("stone")],
         vec![50, id("stone"), 64, id("water")],
         vec![-60, id("deepslate")],
+        // Fences would connect to the template if its edges updated their neighbors' shapes; vanilla's do not.
+        vec![-60, id("deepslate"), 320, id("oak_fence")],
     ]
 }
 

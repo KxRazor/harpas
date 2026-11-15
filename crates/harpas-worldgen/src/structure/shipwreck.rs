@@ -358,7 +358,7 @@ pub(super) fn water(state: u32) -> bool {
     ) || props.contains(&("waterlogged", "true"))
 }
 
-fn source_water(state: u32) -> bool {
+pub(super) fn source_water(state: u32) -> bool {
     let (name, props) = block_states().properties(state).unwrap();
     water(state) && (name != "minecraft:water" || props.contains(&("level", "0")))
 }

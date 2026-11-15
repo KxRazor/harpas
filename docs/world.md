@@ -334,8 +334,22 @@ and the owner **accepts it once**:
     chorus plants keep their faces, anvils keep their facing in a mirror, chests keep their side, and a
     reflected stair keeps its inner corners and keeps its outer corners unless it faces along X.
     `block_transform_parity` compares every registry state with each rotation and the front-back mirror.
-    Other capped delegates, template placement, waterlogging, shape updates and worker integration
-    remain separate work.
+  - Single and legacy single pool elements place their template in one chunk as vanilla's
+    `SinglePoolElement.place` does (`SingleElementPlacement`). The whole template is processed first: the
+    element ignores structure blocks, applies jigsaw replacement, then its processor list and, for terrain
+    matching, gravity at `WORLD_SURFACE_WG` one block down. A legacy element ignores structure blocks and air
+    after everything else, so blocks its processors turn into air are not placed. The surviving blocks inside
+    the chunk turn with the piece. Existing water waterlogs blocks with a `waterlogged` property other than
+    double slabs. Placed blocks then repeatedly take water from source water above them, or beside them
+    through a side that is not full, and water puts out lit candles and campfires. Block entities keep the
+    template's data, with an id added for processor-made data such as suspicious gravel loot; chests,
+    barrels, shulker boxes, dispensers, droppers, hoppers, crafters and decorated pots draw a loot seed from
+    the placement random, kept only with a loot table, while other block entities keep their processor
+    seeds. `single_pool_element_parity` places every single element of every pool, turned and crossing a
+    chunk edge, over dry, flooded and deep layered terrain, with and without waterlogging, and compares the
+    blocks, the block entities as vanilla loads and saves them, and the random tail. Shape updates at the
+    template's edges, feature and list elements, other capped delegates and worker integration remain
+    separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

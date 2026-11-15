@@ -30,6 +30,8 @@ mod portal_blocks;
 pub use portal_blocks::{RuinedPortalBlocks, RuinedPortalGenerator};
 mod ruined_portal;
 mod shipwreck;
+mod single_element;
+pub use single_element::SingleElementPlacement;
 mod start;
 mod storage;
 mod stronghold;

@@ -739,14 +739,16 @@ and the owner **accepts it once**:
     38 synthetic cases and four actual chunks per seed in two seeds (one seed on pull requests); the actual
     chunks come from workers that decorate without features, and are saved and reloaded from Anvil. Vanilla
     also reloads its own saved records and places the treasure again, which changes nothing.
-  - Chunk workers also place swamp hut blocks: average `MOTION_BLOCKING_NO_LEAVES` ground height saved as
-    `HPos`, oriented walls and roof corners, support columns through replaceable blocks and fence positions
+  - Chunk workers place swamp huts in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_swamp_hut`), so the ground height includes the features of the earlier steps, as
+    vanilla's does: average `MOTION_BLOCKING_NO_LEAVES` ground height saved as `HPos`, oriented walls and roof corners, support columns through replaceable blocks and fence positions
     marked for postprocessing. Unwritten interior blocks and the saved `Witch`/`Cat` flags stay unchanged;
     spawning those entities belongs to M4. New huts fit inside their source chunk. A saved, height-adjusted
     piece crossing a boundary also places its intersection in neighboring chunks without copying its start.
     `swamp_hut_parity` compares every block, all six heightmaps, saved starts and postprocessing in 92 synthetic
     cases covering all orientations, terrain, supports and four-chunk pieces. It also compares two actual
-    worker chunks per seed in two seeds (one seed on pull requests), checks Anvil reloads and a saved neighbor,
+    worker chunks per seed in two seeds (one seed on pull requests), which come from workers that decorate
+    without features, checks Anvil reloads and a saved neighbor placed by decoration,
     and compares repeated placement after vanilla reloads the records. Below zero, vanilla's negative `HPos`
     sentinel intentionally causes another ground adjustment on each pass; these cases compare both passes.
     The vanilla probe suppresses entity spawning while observing blocks and restores the original flags.
@@ -927,9 +929,9 @@ and the owner **accepts it once**:
     final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure and jigsaw structures are
-  placed in decoration, so a chunk saved at `carvers` has none of their blocks yet. Swamp hut blocks and their
-  saved height can also be resumed; their witch and cat are left for vanilla or M4. Pyramid workers retain the
+  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure, swamp huts and jigsaw
+  structures are placed in decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch
+  and cat are left for vanilla or M4. Pyramid workers retain the
   incoming chest flags while saving at `carvers`: vanilla clears the alcoves when it repeats pyramid placement,
   so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API
   still updates the flags as vanilla does. Jungle temple workers likewise retain all four incoming chest and

@@ -98,12 +98,7 @@ impl StructureStart {
             return entities;
         }
         if self.structure == "minecraft:swamp_hut" {
-            for piece in &mut self.pieces {
-                if piece.kind == "minecraft:tesh" {
-                    super::swamp_hut::place(piece, chunk);
-                }
-            }
-            self.update_bounds();
+            self.place_swamp_hut(chunk);
             return Vec::new();
         }
         if self.structure != "minecraft:buried_treasure" {
@@ -209,6 +204,18 @@ impl StructureStart {
         }
         self.update_bounds();
         entities
+    }
+
+    /// Places a swamp hut start's intersection with `chunk`. A piece without a saved height first takes the
+    /// average `MOTION_BLOCKING_NO_LEAVES` height of the columns it covers in `chunk`, as vanilla's does in
+    /// the first chunk that places it. The hut draws nothing from the decoration random source.
+    pub fn place_swamp_hut(&mut self, chunk: &mut GeneratedChunk) {
+        for piece in &mut self.pieces {
+            if piece.kind == "minecraft:tesh" {
+                super::swamp_hut::place(piece, chunk);
+            }
+        }
+        self.update_bounds();
     }
 
     /// Fixes a new pyramid's shared height as if vanilla processed its source chunk first.

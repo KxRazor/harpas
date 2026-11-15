@@ -256,6 +256,8 @@ vanilla for the same seed.
           that reaches the chunk; jigsaw structures run there (`jigsaw_chunk_parity`, `feature_worker_parity`).
     - [x] Buried treasure in `underground_structures`, saving its moved piece with the chunk's start
           (`buried_treasure_parity`).
+    - [x] Swamp huts in `surface_structures`, saving the ground height of a new hut with its start
+          (`swamp_hut_parity`).
     - [ ] The other structures in their steps, then full resumption from `features`.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

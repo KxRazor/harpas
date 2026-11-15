@@ -70,8 +70,8 @@ pub fn decorated(
 }
 
 /// Like [`decorated`], but each step also places the structures whose pieces reach the chunk, before its
-/// features, as vanilla's decoration does. Only jigsaw structures are placed here so far; the generator places
-/// the others after carvers.
+/// features, as vanilla's decoration does. Only jigsaw structures, buried treasure and swamp huts are placed
+/// here so far; the generator places the others after carvers.
 pub fn decorated_with_structures(
     generator: Arc<ChunkGenerator>,
     starts: Arc<StartSource>,
@@ -681,6 +681,32 @@ fn into_chunk(proto: Proto) -> io::Result<Chunk> {
         );
     }
     shell.rest.insert("Heightmaps", maps);
+    // Decoration marks blocks for postprocessing after the ones saved at carvers, which stay in the shell;
+    // vanilla appends each mark to its section's list.
+    if !blocks.fluid_postprocessing().is_empty() {
+        let count = blocks.sections().len();
+        let mut lists = match shell.rest.remove("PostProcessing") {
+            Some(Nbt::List(List::List(lists))) => lists,
+            _ => Vec::new(),
+        };
+        lists.resize(count.max(lists.len()), List::Empty);
+        for &(x, y, z) in blocks.fluid_postprocessing() {
+            let Some(list) = usize::try_from((y >> 4) - min_section)
+                .ok()
+                .and_then(|index| lists.get_mut(index))
+            else {
+                continue;
+            };
+            let packed = (u16::from(x) | (((y & 15) as u16) << 4) | (u16::from(z) << 8)) as i16;
+            match list {
+                List::Short(entries) => entries.push(packed),
+                _ => *list = List::Short(vec![packed]),
+            }
+        }
+        shell
+            .rest
+            .insert("PostProcessing", Nbt::List(List::List(lists)));
+    }
     if decorated {
         shell.rest.insert("Status", FEATURES);
     }

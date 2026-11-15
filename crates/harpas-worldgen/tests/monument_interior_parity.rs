@@ -228,7 +228,7 @@ fn monument_interiors_match_vanilla() {
     ))));
     let data = WorldgenData::from_json_entries([(
         "data/minecraft/worldgen/structure/monument.json",
-        r#"{"type":"minecraft:ocean_monument","biomes":[],"terrain_adaptation":"none"}"#,
+        r#"{"type":"minecraft:ocean_monument","step":"surface_structures","biomes":[],"terrain_adaptation":"none"}"#,
     )])
     .unwrap();
     let mut failures = Vec::new();
@@ -439,7 +439,7 @@ fn monument_worker_stream_matches_vanilla() {
     ))));
     let data = WorldgenData::from_json_entries([(
         "data/minecraft/worldgen/structure/monument.json",
-        r#"{"type":"minecraft:ocean_monument","biomes":[],"terrain_adaptation":"none"}"#,
+        r#"{"type":"minecraft:ocean_monument","step":"surface_structures","biomes":[],"terrain_adaptation":"none"}"#,
     )])
     .unwrap();
     let mut failures = Vec::new();

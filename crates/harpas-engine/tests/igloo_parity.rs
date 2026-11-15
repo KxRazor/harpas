@@ -7,7 +7,7 @@ mod reference;
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
     Beardifier, GeneratedChunk, HeightmapType, Mirror, NoiseBasedChunkGenerator, Rotation,
     StructurePiece, StructureStart, StructureState, StructureTemplates, TemplatePiece,
@@ -253,55 +253,78 @@ fn igloo_blocks_and_metadata_match_vanilla() {
     };
     let mut failures = Vec::new();
     for (name, tag) in expected.iter() {
-        let Nbt::Compound(mut expected) = tag.clone() else {
-            unreachable!()
-        };
-        let Some(Nbt::Compound(mut actual)) = actual.get(name).cloned() else {
-            panic!("missing case")
-        };
-        if name.starts_with("worker-") {
-            let Some(Nbt::Compound(mut maps)) = actual.remove("Heightmaps") else {
-                panic!("maps")
-            };
-            maps.remove("WORLD_SURFACE_WG");
-            maps.remove("OCEAN_FLOOR_WG");
-            actual.insert("Heightmaps", maps);
+        if name.starts_with(ALTERNATIVE) {
+            continue;
         }
-        let Some(Nbt::IntArray(want)) = expected.remove("blocks") else {
-            panic!("blocks")
-        };
-        let Some(Nbt::IntArray(got)) = actual.remove("blocks") else {
-            panic!("blocks")
-        };
-        assert_eq!(want.len(), got.len(), "{name} block count");
-        assert_eq!(expected.len(), actual.len(), "{name} metadata field count");
-        let mut diffs = Vec::new();
-        for (i, (&a, &b)) in want.iter().zip(&got).enumerate() {
-            if a != b && diffs.len() < 30 {
-                diffs.push(format!(
-                    "({},{},{}) Rust={:?} vanilla={:?}",
-                    i % 16,
-                    (i / 256) as i32 - 64,
-                    (i / 16) % 16,
-                    block_states().properties(a as u32),
-                    block_states().properties(b as u32)
-                ));
-            }
+        let mut case = case_failures(name, tag, &actual);
+        // A worker chunk may have decorated after its neighbors placed their part of the igloo, as vanilla's
+        // may: it then matches vanilla given those neighbors.
+        let alternative = format!("{ALTERNATIVE}{name}");
+        if !case.is_empty()
+            && actual.get(&alternative).is_some()
+            && case_failures(&alternative, tag, &actual).is_empty()
+        {
+            case.clear();
         }
-        if !diffs.is_empty() {
-            failures.push(format!("{name}: {}", diffs.join("\n")));
-        }
-        for (k, v) in expected.iter() {
-            if Some(v) != actual.get(k) {
-                failures.push(format!(
-                    "{name} {k}: Rust={v:?} vanilla={:?}",
-                    actual.get(k)
-                ));
-            }
-        }
+        failures.extend(case);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+/// The prefix of a worker case given its neighbors as they were decorated.
+const ALTERNATIVE: &str = "decorated-neighbors-";
+
+/// The differences between Harpas's result for a case and vanilla's.
+fn case_failures(name: &str, expected: &Nbt, actual: &Compound) -> Vec<String> {
+    let mut failures = Vec::new();
+    let Nbt::Compound(mut expected) = expected.clone() else {
+        unreachable!()
+    };
+    let Some(Nbt::Compound(mut actual)) = actual.get(name).cloned() else {
+        panic!("missing case")
+    };
+    if name.contains("worker-") {
+        let Some(Nbt::Compound(mut maps)) = actual.remove("Heightmaps") else {
+            panic!("maps")
+        };
+        maps.remove("WORLD_SURFACE_WG");
+        maps.remove("OCEAN_FLOOR_WG");
+        actual.insert("Heightmaps", maps);
+    }
+    let Some(Nbt::IntArray(want)) = expected.remove("blocks") else {
+        panic!("blocks")
+    };
+    let Some(Nbt::IntArray(got)) = actual.remove("blocks") else {
+        panic!("blocks")
+    };
+    assert_eq!(want.len(), got.len(), "{name} block count");
+    assert_eq!(expected.len(), actual.len(), "{name} metadata field count");
+    let mut diffs = Vec::new();
+    for (i, (&a, &b)) in want.iter().zip(&got).enumerate() {
+        if a != b && diffs.len() < 30 {
+            diffs.push(format!(
+                "({},{},{}) Rust={:?} vanilla={:?}",
+                i % 16,
+                (i / 256) as i32 - 64,
+                (i / 16) % 16,
+                block_states().properties(a as u32),
+                block_states().properties(b as u32)
+            ));
+        }
+    }
+    if !diffs.is_empty() {
+        failures.push(format!("{name}: {}", diffs.join("\n")));
+    }
+    for (k, v) in expected.iter() {
+        if Some(v) != actual.get(k) {
+            failures.push(format!(
+                "{name} {k}: Rust={v:?} vanilla={:?}",
+                actual.get(k)
+            ));
+        }
+    }
+    failures
+}
+
 fn postprocessing(chunk: &GeneratedChunk) -> Nbt {
     let mut sections = vec![Vec::new(); chunk.sections().len()];
     for &(x, y, z) in chunk.fluid_postprocessing() {
@@ -517,11 +540,24 @@ fn worker_cases(
                 .temp
                 .0
                 .join(format!("igloo-world-{seed}-{}", source.pieces.len()));
-            let generator =
-                overworld_generator(seed, Arc::clone(data), Arc::clone(templates), true, &biomes)
-                    .unwrap();
-            let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+            // Igloos are placed in decoration. Decorate without features, so that the workers' chunks are the
+            // carved terrain with their structures, as vanilla's probe places them.
+            let mut world = World::open_with_source(
+                &folder,
+                &biomes,
+                structures_only_source(seed, data, templates, None),
+            )
+            .unwrap();
             wait(&mut world, &positions);
+            let decorated: HashMap<_, _> = positions
+                .iter()
+                .map(|&pos| {
+                    let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
+                        panic!("worker chunk")
+                    };
+                    (pos, loaded_blocks(chunk, pos, biomes.len()))
+                })
+                .collect();
             let mut saved = Vec::new();
             for &pos in &positions {
                 let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
@@ -544,6 +580,29 @@ fn worker_cases(
 
                 let name = format!("worker-{seed}-{},{}", pos.x, pos.z);
                 inputs.insert(name.clone(), inp.clone());
+                // The same chunk given its igloo neighbors as decorated, for the other decoration order.
+                let decorated_block = |x: i32, y: i32, z: i32| {
+                    let at = ChunkPos {
+                        x: x >> 4,
+                        z: z >> 4,
+                    };
+                    match decorated.get(&at) {
+                        Some(chunk) if at != pos => {
+                            chunk.block_state((x & 15) as usize, y, (z & 15) as usize)
+                        }
+                        _ => block(x, y, z),
+                    }
+                };
+                let mut alternative = input_with_terrain(
+                    &carved[&pos],
+                    seed,
+                    std::slice::from_ref(&source),
+                    &decorated_block,
+                    &surface,
+                );
+                alternative.insert("starts", starts(&all));
+                alternative.insert("keep_neighbor_starts", 0_i8);
+                inputs.insert(format!("{ALTERNATIVE}{name}"), alternative);
                 let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biomes.len());
                 for section in &chunk.sections {
                     if let Some(blocks) = &section.section {
@@ -708,8 +767,16 @@ fn saved_neighbor_case(
     records.insert("starts", Compound::new());
     records.insert("References", Compound::new());
     empty.insert("structures", records);
-    let generator =
-        overworld_generator(seed, Arc::clone(data), Arc::clone(templates), true, &biomes).unwrap();
+    let structures_only = structures_only(data);
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&structures_only),
+        Arc::clone(templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    // The generator saves the target at carvers with the igloo's reference but none of its blocks.
     let result = generator(target, &|p| {
         Ok(Some(if p == origin {
             source_nbt.clone()
@@ -718,14 +785,38 @@ fn saved_neighbor_case(
         }))
     })
     .unwrap();
-    let nbt = result.to_nbt(&biomes);
-    let mut generated = GeneratedChunk::new(target.x, target.z, -64, 384, biomes.len());
-    for section in &result.sections {
-        if let Some(blocks) = &section.section {
-            let index = (i32::from(section.y) - generated.min_section_y()) as usize;
-            generated.sections_mut()[index] = blocks.clone();
-        }
-    }
+    assert_eq!(
+        blocks(&loaded_blocks(&result, target, biomes.len())),
+        blocks(&carved[&target])
+    );
+    // Decoration places it, reading the entrance height from the saved source.
+    let folder = reference.temp.0.join("saved-igloo-neighbor");
+    let region = harpas_anvil::dimension_dir(&folder, "minecraft:overworld").join("region");
+    std::fs::create_dir_all(&region).unwrap();
+    // Saved as decorated, so the source is not decorated again here: the target's decoration reads its saved
+    // blocks whichever chunk the workers decorate first.
+    let mut decorated_source = source_nbt.clone();
+    decorated_source.insert("Status", "minecraft:features");
+    harpas_anvil::write_chunks(&region, 0, 0, &[((0, 0), &decorated_source)]).unwrap();
+    let reader = Arc::new(move |p: ChunkPos| -> std::io::Result<Option<Compound>> {
+        Ok(Some(if p == origin {
+            source_nbt.clone()
+        } else {
+            empty.clone()
+        }))
+    });
+    let mut world = World::open_with_source(
+        &folder,
+        &biomes,
+        structures_only_source(seed, data, templates, Some(reader)),
+    )
+    .unwrap();
+    wait(&mut world, &[target]);
+    let Some(ChunkState::Loaded(chunk)) = world.chunk(target) else {
+        panic!("neighbor worker")
+    };
+    let nbt = chunk.to_nbt(&biomes);
+    let mut generated = loaded_blocks(chunk, target, biomes.len());
     generated.recompute_heightmaps();
     let block = |x: i32, y: i32, z: i32| {
         carved
@@ -784,23 +875,7 @@ fn saved_neighbor_case(
         panic!("refs")
     };
     assert_eq!(refs.get("minecraft:igloo"), Some(&Nbt::LongArray(vec![0])));
-    let folder = reference.temp.0.join("saved-igloo-neighbor");
     let expected_nbt = nbt.clone();
-    let generator = Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
-        generator(pos, &|p| {
-            Ok(Some(if p == origin {
-                source_nbt.clone()
-            } else {
-                empty.clone()
-            }))
-        })
-    });
-    let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
-    wait(&mut world, &[target]);
-    let Some(ChunkState::Loaded(chunk)) = world.chunk(target) else {
-        panic!("neighbor worker")
-    };
-    assert_eq!(chunk.to_nbt(&biomes), expected_nbt);
     world.flush().unwrap();
     drop(world);
     let mut world = World::open(&folder, &biomes).unwrap();
@@ -809,4 +884,63 @@ fn saved_neighbor_case(
         panic!("neighbor reload")
     };
     assert_eq!(chunk.to_nbt(&biomes), expected_nbt);
+}
+
+/// Worldgen data whose biomes list no features, so that decoration places only structures.
+fn structures_only(data: &WorldgenData) -> Arc<WorldgenData> {
+    let mut data = data.clone();
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
+    Arc::new(data)
+}
+
+type SavedReader = Arc<dyn Fn(ChunkPos) -> std::io::Result<Option<Compound>> + Send + Sync>;
+
+/// Workers that generate chunks and decorate them with structures only. With `saved`, generation and the
+/// decoration's starts read saved chunks from it instead of the world.
+fn structures_only_source(
+    seed: i64,
+    data: &WorldgenData,
+    templates: &Arc<StructureTemplates>,
+    saved: Option<SavedReader>,
+) -> Arc<dyn harpas_engine::world::ChunkSource> {
+    let data = structures_only(data);
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    let starts = overworld_starts(seed, Arc::clone(&data), Arc::clone(templates)).unwrap();
+    let (generator, starts): (Arc<harpas_engine::world::ChunkGenerator>, _) = match saved {
+        Some(saved) => {
+            let read = Arc::clone(&saved);
+            (
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    generator(pos, &|p| read(p))
+                }),
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    starts(pos, &|p| saved(p))
+                }) as Arc<harpas_engine::worldgen::StartSource>,
+            )
+        }
+        None => (generator, starts),
+    };
+    decorated_with_structures(generator, starts, seed, data, Arc::clone(templates)).unwrap()
+}
+
+/// The blocks of a loaded chunk.
+fn loaded_blocks(chunk: &harpas_anvil::Chunk, pos: ChunkPos, biome_count: usize) -> GeneratedChunk {
+    let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biome_count);
+    for section in &chunk.sections {
+        if let Some(blocks) = &section.section {
+            let i = (i32::from(section.y) - generated.min_section_y()) as usize;
+            generated.sections_mut()[i] = blocks.clone();
+        }
+    }
+    generated
 }

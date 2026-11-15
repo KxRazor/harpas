@@ -69,10 +69,14 @@ impl<T> Cache<T> {
 }
 
 pub(super) struct Structures {
+    seed: i64,
+    /// The world's height in blocks.
+    height: i32,
     state: StructureState,
     templates: Arc<StructureTemplates>,
     starts: StartCache,
     shipwreck_heights: StartCache,
+    pyramid_heights: StartCache,
     portals: RuinedPortalGenerator,
     portal_blocks: Cache<PortalPlans>,
 }
@@ -232,10 +236,15 @@ impl ChunkStructures {
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
-                // Buried treasure, swamp huts and monuments are placed in decoration.
+                // These structures are placed in decoration.
                 if matches!(
                     start.structure.as_str(),
-                    "minecraft:buried_treasure" | "minecraft:swamp_hut" | "minecraft:monument"
+                    "minecraft:buried_treasure"
+                        | "minecraft:swamp_hut"
+                        | "minecraft:monument"
+                        | "minecraft:desert_pyramid"
+                        | "minecraft:jungle_pyramid"
+                        | "minecraft:igloo"
                 ) {
                     return Vec::new();
                 }
@@ -306,54 +315,14 @@ impl ChunkStructures {
                         },
                     );
                 }
-                if start.structure == "minecraft:igloo" {
-                    return start.place_igloo_in_chunk(
-                        generated,
-                        seed,
-                        templates,
-                        &mut |x, z| {
-                            terrain_chunks[&ChunkPos {
-                                x: x >> 4,
-                                z: z >> 4,
-                            }]
-                                .heightmaps()
-                                .get(
-                                    HeightmapType::WorldSurfaceWg,
-                                    (x & 15) as usize,
-                                    (z & 15) as usize,
-                                )
-                        },
-                        &mut |x, y, z| {
-                            terrain_chunks[&ChunkPos {
-                                x: x >> 4,
-                                z: z >> 4,
-                            }]
-                                .block_state(
-                                    (x & 15) as usize,
-                                    y,
-                                    (z & 15) as usize,
-                                )
-                        },
-                    );
-                }
                 // Jigsaw structures are placed in decoration, step by step.
                 if start.is_jigsaw() {
                     return Vec::new();
                 }
-                start.prepare_pyramid_height(
-                    seed,
-                    generated.min_y() + generated.height() - 1,
-                    &mut |x, z| height_at(x, z),
-                );
                 // These chunks remain at CARVERS until the entire feature stage is implemented. Vanilla
                 // clears container positions on replay; retain the incoming flags so that it recreates the
                 // containers with the same deterministic loot seeds when it resumes FEATURES.
-                let deferred: Vec<_> = if matches!(
-                    start.structure.as_str(),
-                    "minecraft:desert_pyramid"
-                        | "minecraft:jungle_pyramid"
-                        | "minecraft:stronghold"
-                ) {
+                let deferred: Vec<_> = if start.structure == "minecraft:stronghold" {
                     start
                         .pieces
                         .iter()
@@ -362,19 +331,8 @@ impl ChunkStructures {
                                 vec!["Chest".to_owned()]
                             } else if piece.kind == "minecraft:shpr" {
                                 vec!["Mob".to_owned()]
-                            } else if start.structure == "minecraft:stronghold" {
-                                Vec::new()
-                            } else if piece.kind == "minecraft:tejp" {
-                                [
-                                    "placedMainChest",
-                                    "placedHiddenChest",
-                                    "placedTrap1",
-                                    "placedTrap2",
-                                ]
-                                .map(str::to_owned)
-                                .to_vec()
                             } else {
-                                (0..4).map(|i| format!("hasPlacedChest{i}")).collect()
+                                Vec::new()
                             }
                             .into_iter()
                             .map(|key| {
@@ -467,11 +425,18 @@ impl Structures {
         generator: &NoiseBasedChunkGenerator,
         templates: Arc<StructureTemplates>,
     ) -> io::Result<Self> {
+        let height = data
+            .noise_settings
+            .get("minecraft:overworld")
+            .map_or(384, |settings| settings.noise.height);
         Ok(Self {
+            seed,
+            height,
             state: StructureState::new(seed, data, generator).map_err(io::Error::other)?,
             templates,
             starts: StartCache::new(4096),
             shipwreck_heights: StartCache::new(4096),
+            pyramid_heights: StartCache::new(4096),
             portals: RuinedPortalGenerator::new(data).map_err(io::Error::other)?,
             // Portal results include terrain writes, so retain fewer entries than the compact start records.
             portal_blocks: Cache::new(256),
@@ -614,8 +579,8 @@ impl Structures {
         read: &ChunkReader<'_>,
     ) -> io::Result<HashMap<ChunkPos, GeneratedChunk>> {
         let mut terrain_chunks = HashMap::new();
-        // Pyramids and ocean templates sample neighboring heights and blocks. Igloo ladders and
-        // rotated shipwrecks can sample outside their piece bounds.
+        // Ocean templates sample neighboring heights and blocks, and rotated shipwrecks can sample outside
+        // their piece bounds.
         // Resolve these reads before placing blocks, preferring saved terrain.
         for start in placements.starts.iter().chain(&placements.neighbor_pieces) {
             let mut neighbors: Vec<_> = if let Some(bounds) = start.ruined_portal_terrain_bounds() {
@@ -637,10 +602,7 @@ impl Structures {
             } else {
                 if !matches!(
                     start.structure.as_str(),
-                    "minecraft:desert_pyramid"
-                        | "minecraft:jungle_pyramid"
-                        | "minecraft:igloo"
-                        | "minecraft:shipwreck"
+                    "minecraft:shipwreck"
                         | "minecraft:shipwreck_beached"
                         | "minecraft:ocean_ruin_cold"
                         | "minecraft:ocean_ruin_warm"
@@ -655,7 +617,6 @@ impl Structures {
                         // outside the template, requiring two columns beyond the piece bounds.
                         let padding = match start.structure.as_str() {
                             "minecraft:shipwreck" | "minecraft:shipwreck_beached" => 2,
-                            "minecraft:igloo" => 1,
                             "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm" => 2,
                             _ => 0,
                         };
@@ -668,12 +629,6 @@ impl Structures {
                             })
                     })
                     .collect();
-                if start.structure == "minecraft:igloo" {
-                    neighbors.extend(start.igloo_height_samples().map(|(x, z)| ChunkPos {
-                        x: x >> 4,
-                        z: z >> 4,
-                    }));
-                }
                 if matches!(
                     start.structure.as_str(),
                     "minecraft:shipwreck" | "minecraft:shipwreck_beached"
@@ -689,7 +644,7 @@ impl Structures {
             };
             neighbors.sort_by_key(|p| (p.x, p.z));
             neighbors.dedup();
-            for neighbor @ ChunkPos { x, z } in neighbors {
+            for neighbor in neighbors {
                 if terrain_chunks.contains_key(&neighbor) {
                     continue;
                 }
@@ -702,41 +657,100 @@ impl Structures {
                     terrain_chunks.insert(neighbor, chunk.clone());
                     continue;
                 }
-                if let Some(saved) = read(neighbor)?
-                    && saved.get("sections").is_some()
-                {
-                    let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
-                    let (saved, _) = Chunk::read(saved, &names)?;
-                    let mut terrain = GeneratedChunk::new(
-                        x,
-                        z,
-                        generator.min_y(),
-                        chunk.height(),
-                        data.biomes.len(),
-                    );
-                    for section in saved.sections {
-                        if let Some(blocks) = section.section {
-                            let index = i32::from(section.y) - terrain.min_section_y();
-                            if let Some(target) = usize::try_from(index)
-                                .ok()
-                                .and_then(|i| terrain.sections_mut().get_mut(i))
-                            {
-                                *target = blocks;
-                            }
-                        }
-                    }
-                    terrain.recompute_heightmaps();
-                    terrain_chunks.insert(neighbor, terrain);
-                    continue;
-                }
-                let nearby = self.for_chunk(neighbor, generator, data, read)?;
-                let terrain = generator
-                    .generate_chunk_carved_with_beardifier(x, z, data, nearby.beardifier)
-                    .map_err(io::Error::other)?;
+                let terrain = self.terrain(neighbor, chunk.height(), generator, data, read)?;
                 terrain_chunks.insert(neighbor, terrain);
             }
         }
         Ok(terrain_chunks)
+    }
+
+    /// A chunk's terrain for structure placement: its saved blocks where it has them, otherwise the carved
+    /// terrain generated again.
+    fn terrain(
+        &self,
+        pos @ ChunkPos { x, z }: ChunkPos,
+        height: i32,
+        generator: &NoiseBasedChunkGenerator,
+        data: &WorldgenData,
+        read: &ChunkReader<'_>,
+    ) -> io::Result<GeneratedChunk> {
+        if let Some(saved) = read(pos)?
+            && saved.get("sections").is_some()
+        {
+            let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+            let (saved, _) = Chunk::read(saved, &names)?;
+            let mut terrain =
+                GeneratedChunk::new(x, z, generator.min_y(), height, data.biomes.len());
+            for section in saved.sections {
+                if let Some(blocks) = section.section {
+                    let index = i32::from(section.y) - terrain.min_section_y();
+                    if let Some(target) = usize::try_from(index)
+                        .ok()
+                        .and_then(|i| terrain.sections_mut().get_mut(i))
+                    {
+                        *target = blocks;
+                    }
+                }
+            }
+            terrain.recompute_heightmaps();
+            return Ok(terrain);
+        }
+        let nearby = self.for_chunk(pos, generator, data, read)?;
+        generator
+            .generate_chunk_carved_with_beardifier(x, z, data, nearby.beardifier)
+            .map_err(io::Error::other)
+    }
+
+    /// A desert pyramid with its shared height. Every chunk the pyramid reaches places it at the same height:
+    /// the lowest `MOTION_BLOCKING_NO_LEAVES` height of its footprint on the terrain before decoration, as if
+    /// vanilla's source chunk placed it first. A saved height is kept.
+    fn prepared_pyramid(
+        &self,
+        start: StructureStart,
+        generator: &NoiseBasedChunkGenerator,
+        data: &WorldgenData,
+        read: &ChunkReader<'_>,
+    ) -> io::Result<StructureStart> {
+        let unprepared = start.pieces.iter().any(|piece| {
+            piece.kind == "minecraft:tedp"
+                && !matches!(piece.save_data.get("HPos"), Some(Nbt::Int(y)) if *y >= 0)
+        });
+        if !unprepared {
+            return Ok(start);
+        }
+        let origin = ChunkPos {
+            x: start.chunk.0,
+            z: start.chunk.1,
+        };
+        let prepared = self.pyramid_heights.get(origin, || {
+            let b = start.bounding_box;
+            let mut terrain = HashMap::new();
+            for x in b.min[0] >> 4..=b.max[0] >> 4 {
+                for z in b.min[2] >> 4..=b.max[2] >> 4 {
+                    let pos = ChunkPos { x, z };
+                    terrain.insert(pos, self.terrain(pos, self.height, generator, data, read)?);
+                }
+            }
+            let mut pyramid = start.clone();
+            pyramid.prepare_pyramid_height(
+                self.seed,
+                generator.min_y() + self.height - 1,
+                &mut |x, z| {
+                    terrain[&ChunkPos {
+                        x: x >> 4,
+                        z: z >> 4,
+                    }]
+                        .heightmaps()
+                        .get(
+                            HeightmapType::MotionBlockingNoLeaves,
+                            (x & 15) as usize,
+                            (z & 15) as usize,
+                        )
+                },
+            );
+            Ok(vec![pyramid])
+        })?;
+        Ok(prepared[0].clone())
     }
 
     fn starts(
@@ -760,7 +774,7 @@ impl Structures {
     }
 
     /// The starts whose bounds reach a chunk: those its structure references point to, which its decoration
-    /// places.
+    /// places. A new desert pyramid comes with its shared height.
     pub(super) fn referenced(
         &self,
         pos: ChunkPos,
@@ -788,7 +802,16 @@ impl Structures {
                 );
             }
         }
-        Ok(referenced)
+        referenced
+            .into_iter()
+            .map(|start| {
+                if start.structure == "minecraft:desert_pyramid" {
+                    self.prepared_pyramid(start, generator, data, read)
+                } else {
+                    Ok(start)
+                }
+            })
+            .collect()
     }
 
     pub(super) fn for_chunk(
@@ -818,8 +841,8 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Template hulls, pyramids and igloos can span several chunks; saved temples can too. Place
-        // their intersection without moving or duplicating the source chunk's saved start.
+        // Template hulls and strongholds can span several chunks. Place their intersection without moving or
+        // duplicating the source chunk's saved start.
         let neighbor_pieces = nearby
             .iter()
             .flat_map(|starts| starts.iter())
@@ -837,9 +860,6 @@ impl Structures {
                         "minecraft:stronghold"
                             | "minecraft:mineshaft"
                             | "minecraft:mineshaft_mesa"
-                            | "minecraft:desert_pyramid"
-                            | "minecraft:jungle_pyramid"
-                            | "minecraft:igloo"
                             | "minecraft:shipwreck"
                             | "minecraft:shipwreck_beached"
                             | "minecraft:ocean_ruin_cold"

@@ -44,6 +44,22 @@ impl StructureStart {
         let decoration =
             random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
         random.set_feature_seed(decoration, 3, 4);
+        self.place_igloo(chunk, &mut random, templates, surface_height, block_at)
+    }
+
+    /// Places igloo templates in one chunk like [`Self::place_igloo_in_chunk`], drawing from `random`, which
+    /// the caller has seeded as vanilla's decoration does for `minecraft:igloo`.
+    pub fn place_igloo<R: RandomSource>(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        random: &mut WorldgenRandom<R>,
+        templates: &StructureTemplates,
+        surface_height: &mut impl FnMut(i32, i32) -> i32,
+        block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+    ) -> Vec<Compound> {
+        if self.structure != "minecraft:igloo" {
+            return Vec::new();
+        }
         let mut entities = Vec::new();
         for piece in &mut self.pieces {
             if piece.kind != "minecraft:iglu"

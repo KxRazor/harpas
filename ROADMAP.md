@@ -259,6 +259,10 @@ vanilla for the same seed.
     - [x] Swamp huts in `surface_structures`, saving the ground height of a new hut with its start
           (`swamp_hut_parity`).
     - [x] Ocean monuments in `surface_structures`, with the decoration's own stream (`monument_parity`).
+    - [x] Desert pyramids, jungle temples and igloos in `surface_structures`, reading their neighbors from the
+          decoration region, with each new pyramid's shared height fixed once from the terrain before
+          decoration and the container flags saved as vanilla saves them (`desert_pyramid_parity`,
+          `jungle_temple_parity`, `igloo_parity`).
     - [ ] The other structures in their steps, then full resumption from `features`.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

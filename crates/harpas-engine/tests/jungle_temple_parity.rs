@@ -7,7 +7,7 @@ mod reference;
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
     Beardifier, BoundingBox, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator,
     StructurePiece, StructureStart, StructureState, StructureTemplates, WorldgenData,
@@ -193,7 +193,7 @@ fn temple_blocks_and_metadata_match_vanilla() {
                             &mut |x, z| height(x, z),
                             &mut |x, y, z| terrain(x, y, z),
                         );
-                        inputs.insert(name.clone(), inp.clone());
+                        inputs.insert(name.clone(), inp);
                         expected.insert(name.clone(), snapshot(&chunk, &own, entities.clone()));
                         // Vanilla loads Harpas's saved records and block entities before a second FEATURES attempt.
                         own[0] = StructureStart::from_nbt(&own[0].to_nbt(), &data, &templates)
@@ -448,10 +448,14 @@ fn worker_cases(
                 })
         };
         let folder = reference.temp.0.join(format!("temple-world-{seed}"));
-        let generator =
-            overworld_generator(seed, Arc::clone(data), Arc::clone(templates), true, &biomes)
-                .unwrap();
-        let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+        // Temples are placed in decoration. Decorate without features, so that the workers' chunks are the
+        // carved terrain with their structures, as vanilla's probe places them.
+        let mut world = World::open_with_source(
+            &folder,
+            &biomes,
+            structures_only_source(seed, data, templates, None),
+        )
+        .unwrap();
         wait(&mut world, &positions);
         let mut saved = Vec::new();
         for &pos in &positions {
@@ -467,9 +471,8 @@ fn worker_cases(
             }
             inp.insert("starts", starts(&all));
             inp.insert("keep_neighbor_starts", 0_i8);
-            inp.insert("defer_containers", 1_i8);
             let name = format!("worker-{seed}-{},{}", pos.x, pos.z);
-            inputs.insert(name.clone(), inp.clone());
+            inputs.insert(name.clone(), inp);
             let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biomes.len());
             for section in &chunk.sections {
                 if let Some(blocks) = &section.section {
@@ -493,7 +496,7 @@ fn worker_cases(
             };
             entities.sort_by_key(packed_position);
             actual.insert("block_entities", entity_list(entities.clone()));
-            expected.insert(name.clone(), actual.clone());
+            expected.insert(name, actual);
             let Some(Nbt::Compound(refs)) = records.get("References") else {
                 panic!("references")
             };
@@ -503,35 +506,7 @@ fn worker_cases(
                 refs.get("minecraft:jungle_pyramid"),
                 Some(&Nbt::LongArray(vec![packed]))
             );
-            // Reload the exact worker records in vanilla, including deferred container flags. A complete
-            // second temple pass must reproduce the saved blocks and loot, before other features run.
-            let mut all = all;
-            for start in &mut all {
-                if start.structure == source.structure {
-                    *start = if pos
-                        == (ChunkPos {
-                            x: source.chunk.0,
-                            z: source.chunk.1,
-                        }) {
-                        let Some(Nbt::Compound(own)) = records.get("starts") else {
-                            panic!("starts")
-                        };
-                        let Some(Nbt::Compound(tag)) = own.get(&source.structure) else {
-                            panic!("temple")
-                        };
-                        StructureStart::from_nbt(tag, data, templates)
-                            .unwrap()
-                            .unwrap()
-                    } else {
-                        source.clone()
-                    };
-                }
-            }
-            inp.insert("blocks", blocks(&generated));
-            inp.insert("starts", starts(&all));
-            inp.insert("initial_entities", entity_list(entities));
-            inputs.insert(format!("worker-resume-{name}"), inp);
-            expected.insert(format!("worker-resume-{name}"), actual);
+            // The chunk is saved decorated, so vanilla never repeats the pass on it: no replay to compare.
             saved.push((pos, nbt));
         }
         world.flush().unwrap();
@@ -622,6 +597,26 @@ fn saved_neighbor_temples_keep_their_height_and_source_record() {
         }))
     };
     let mut generated = baseline[&pos].clone();
+    // The generator saves the target at carvers with the temple's reference but none of its blocks.
+    let mut carved = harpas_engine::worldgen::into_anvil(generated.clone()).unwrap();
+    let mut refs = Compound::new();
+    refs.insert("minecraft:jungle_pyramid", Nbt::LongArray(vec![0]));
+    let mut records = Compound::new();
+    records.insert("starts", Compound::new());
+    records.insert("References", refs);
+    carved.rest.insert("structures", records);
+    let data = structures_only(&data);
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(&templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    let actual = generator(pos, &reader).unwrap();
+    assert_eq!(actual.to_nbt(&biomes), carved.to_nbt(&biomes));
+    // Decoration places the saved temple's intersection at its saved height; the chest reads the saved source.
     let entities = source.place_in_chunk(
         &mut generated,
         seed,
@@ -634,26 +629,9 @@ fn saved_neighbor_temples_keep_their_height_and_source_record() {
                 .block_state((x & 15) as usize, y, (z & 15) as usize)
         },
     );
-    let mut expected = harpas_engine::worldgen::into_anvil(generated).unwrap();
-    expected
-        .rest
-        .insert("block_entities", entity_list(entities));
-    let mut refs = Compound::new();
-    refs.insert("minecraft:jungle_pyramid", Nbt::LongArray(vec![0]));
-    let mut records = Compound::new();
-    records.insert("starts", Compound::new());
-    records.insert("References", refs);
-    expected.rest.insert("structures", records);
-    let generator = overworld_generator(
-        seed,
-        Arc::clone(&data),
-        Arc::clone(&templates),
-        true,
-        &biomes,
-    )
-    .unwrap();
-    let actual = generator(pos, &reader).unwrap();
-    assert_eq!(actual.to_nbt(&biomes), expected.to_nbt(&biomes));
+    let want = blocks(&generated);
+    let mut want_entities = entities;
+    want_entities.sort_by_key(packed_position);
     let Some(Nbt::Compound(records)) = source_nbt.get("structures") else {
         panic!("source records")
     };
@@ -665,21 +643,36 @@ fn saved_neighbor_temples_keep_their_height_and_source_record() {
         Some(&Nbt::Compound(original))
     );
     let folder = reference.temp.0.join("saved-neighbor-world");
-    let generator = Arc::new(move |target, _: &harpas_engine::world::ChunkReader<'_>| {
-        generator(target, &|p| {
-            Ok(Some(if p == (ChunkPos { x: 0, z: 0 }) {
-                source_nbt.clone()
-            } else {
-                empty.clone()
-            }))
-        })
+    let region = harpas_anvil::dimension_dir(&folder, "minecraft:overworld").join("region");
+    std::fs::create_dir_all(&region).unwrap();
+    // Saved as decorated, so the source is not decorated again here: the target's decoration reads its saved
+    // blocks whichever chunk the workers decorate first.
+    let mut decorated_source = source_nbt.clone();
+    decorated_source.insert("Status", "minecraft:features");
+    harpas_anvil::write_chunks(&region, 0, 0, &[((0, 0), &decorated_source)]).unwrap();
+    let reader = Arc::new(move |p: ChunkPos| -> std::io::Result<Option<Compound>> {
+        Ok(Some(if p == (ChunkPos { x: 0, z: 0 }) {
+            source_nbt.clone()
+        } else {
+            empty.clone()
+        }))
     });
-    let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+    let source = structures_only_source(seed, &data, &templates, Some(reader));
+    let mut world = World::open_with_source(&folder, &biomes, source).unwrap();
     wait(&mut world, &[pos]);
     let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
         panic!("neighbor worker")
     };
-    assert_eq!(chunk.to_nbt(&biomes), expected.to_nbt(&biomes));
+    let nbt = chunk.to_nbt(&biomes);
+    assert_same_blocks(&blocks(&loaded_blocks(chunk, pos, biomes.len())), &want);
+    let mut entities = match nbt.get("block_entities").unwrap() {
+        Nbt::List(List::Compound(v)) => v.clone(),
+        Nbt::List(List::Empty) => Vec::new(),
+        _ => panic!("entities"),
+    };
+    entities.sort_by_key(packed_position);
+    assert_eq!(entities, want_entities);
+    assert_eq!(nbt.get("structures"), carved.rest.get("structures"));
     world.flush().unwrap();
     drop(world);
     let mut world = World::open(&folder, &biomes).unwrap();
@@ -687,5 +680,89 @@ fn saved_neighbor_temples_keep_their_height_and_source_record() {
     let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
         panic!("neighbor reload")
     };
-    assert_eq!(chunk.to_nbt(&biomes), expected.to_nbt(&biomes));
+    assert_eq!(chunk.to_nbt(&biomes), nbt);
+}
+
+/// Worldgen data whose biomes list no features, so that decoration places only structures.
+fn structures_only(data: &WorldgenData) -> Arc<WorldgenData> {
+    let mut data = data.clone();
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
+    Arc::new(data)
+}
+
+type SavedReader = Arc<dyn Fn(ChunkPos) -> std::io::Result<Option<Compound>> + Send + Sync>;
+
+/// Workers that generate chunks and decorate them with structures only. With `saved`, generation and the
+/// decoration's starts read saved chunks from it instead of the world.
+fn structures_only_source(
+    seed: i64,
+    data: &WorldgenData,
+    templates: &Arc<StructureTemplates>,
+    saved: Option<SavedReader>,
+) -> Arc<dyn harpas_engine::world::ChunkSource> {
+    let data = structures_only(data);
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    let starts = overworld_starts(seed, Arc::clone(&data), Arc::clone(templates)).unwrap();
+    let (generator, starts): (Arc<harpas_engine::world::ChunkGenerator>, _) = match saved {
+        Some(saved) => {
+            let read = Arc::clone(&saved);
+            (
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    generator(pos, &|p| read(p))
+                }),
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    starts(pos, &|p| saved(p))
+                }) as Arc<harpas_engine::worldgen::StartSource>,
+            )
+        }
+        None => (generator, starts),
+    };
+    decorated_with_structures(generator, starts, seed, data, Arc::clone(templates)).unwrap()
+}
+
+/// The blocks of a loaded chunk.
+fn loaded_blocks(chunk: &harpas_anvil::Chunk, pos: ChunkPos, biome_count: usize) -> GeneratedChunk {
+    let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biome_count);
+    for section in &chunk.sections {
+        if let Some(blocks) = &section.section {
+            let i = (i32::from(section.y) - generated.min_section_y()) as usize;
+            generated.sections_mut()[i] = blocks.clone();
+        }
+    }
+    generated
+}
+
+/// Asserts that two block arrays from [`blocks`] match, naming the first positions that differ.
+fn assert_same_blocks(actual: &Nbt, expected: &Nbt) {
+    let (Nbt::IntArray(actual), Nbt::IntArray(expected)) = (actual, expected) else {
+        panic!("block arrays")
+    };
+    let diffs: Vec<_> = actual
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .take(20)
+        .map(|(i, (&a, &b))| {
+            format!(
+                "({},{},{}) actual={:?} expected={:?}",
+                i % 16,
+                (i / 256) as i32 - 64,
+                (i / 16) % 16,
+                block_states().properties(a as u32),
+                block_states().properties(b as u32)
+            )
+        })
+        .collect();
+    assert!(diffs.is_empty(), "{}", diffs.join("\n"));
 }

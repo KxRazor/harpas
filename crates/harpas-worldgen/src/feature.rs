@@ -979,8 +979,9 @@ pub struct DecorationStructures<'a> {
     pub data: &'a WorldgenData,
     /// The owner's templates.
     pub templates: &'a StructureTemplates,
-    /// The starts whose pieces reach the chunk (its structure references). Jigsaw, buried treasure, swamp hut
-    /// and ocean monument starts place blocks here so far; the other structures are placed after carvers. Placement can change
+    /// The starts whose pieces reach the chunk (its structure references). Jigsaw, buried treasure, swamp hut,
+    /// ocean monument, jungle temple, desert pyramid and igloo starts place blocks here so far; the other
+    /// structures are placed after carvers. Placement can change
     /// a start, as a buried treasure moves its piece to its chest and a swamp hut saves its ground height.
     pub starts: &'a mut [StructureStart],
 }
@@ -1053,19 +1054,77 @@ pub fn apply_biome_decoration_with_structures(
                     {
                         let entities = start.place_buried_treasure(&mut chunk, random);
                         world.put_back(chunk);
-                        for entity in entities {
-                            let [x, y, z] = ["x", "y", "z"].map(|key| match entity.get(key) {
-                                Some(harpas_core::nbt::Nbt::Int(value)) => *value,
-                                _ => unreachable!("a placed chest has a position"),
+                        set_block_entities(world, entities);
+                    } else if id == "minecraft:jungle_pyramid"
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        let entities =
+                            start.place_jungle_temple(&mut chunk, random, &mut |x, y, z| {
+                                world.block_state(x, y, z)
                             });
-                            world.set_block_entity(x, y, z, entity);
+                        world.put_back(chunk);
+                        set_block_entities(world, entities);
+                    } else if id == "minecraft:igloo"
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        let entities = start.place_igloo(
+                            &mut chunk,
+                            random,
+                            templates,
+                            &mut |x, z| world.heightmap(HeightmapType::WorldSurfaceWg, x, z),
+                            &mut |x, y, z| world.block_state(x, y, z),
+                        );
+                        world.put_back(chunk);
+                        set_block_entities(world, entities);
+                    } else if id == "minecraft:desert_pyramid" {
+                        // A pyramid's height is shared by every chunk it reaches. The owner normally fixes it
+                        // before decoration; otherwise this chunk fixes it from the region, as vanilla's first
+                        // chunk to place the pyramid does.
+                        start.prepare_pyramid_height(
+                            world_seed,
+                            world.min_y() + world.height() - 1,
+                            &mut |x, z| {
+                                world.heightmap(HeightmapType::MotionBlockingNoLeaves, x, z)
+                            },
+                        );
+                        let Some(mut region) = world.region_random().cloned() else {
+                            continue;
+                        };
+                        let Some(mut chunk) = world.take(chunk_x, chunk_z) else {
+                            continue;
+                        };
+                        let entities = start.place_desert_pyramid(
+                            &mut chunk,
+                            random,
+                            &mut region,
+                            world_seed,
+                            &mut |x, z| {
+                                world.heightmap(HeightmapType::MotionBlockingNoLeaves, x, z)
+                            },
+                            &mut |x, y, z| world.block_state(x, y, z),
+                        );
+                        world.put_back(chunk);
+                        if let Some(shared) = world.region_random() {
+                            *shared = region;
                         }
+                        set_block_entities(world, entities);
                     }
                 }
             }
             Ok(())
         },
     )
+}
+
+/// Adds the block entities a structure created in the region's chunks.
+fn set_block_entities(world: &mut RegionFeatureWorld, entities: Vec<Compound>) {
+    for entity in entities {
+        let [x, y, z] = ["x", "y", "z"].map(|key| match entity.get(key) {
+            Some(harpas_core::nbt::Nbt::Int(value)) => *value,
+            _ => unreachable!("a placed block entity has a position"),
+        });
+        world.set_block_entity(x, y, z, entity);
+    }
 }
 
 /// `applyBiomeDecoration`'s loop over the steps, running `structures` before the features of each step.

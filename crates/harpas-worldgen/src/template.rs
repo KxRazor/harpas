@@ -1,6 +1,8 @@
 //! Structure templates from the owner's `data/<namespace>/structure/**/*.nbt`: palettes, blocks and block
 //! entity data for placement, plus the jigsaw metadata used to lay out structures.
 
+mod transform;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};

@@ -38,7 +38,7 @@ pub trait ProcessorWorld {
 /// A complete, ordered processor list, compiled without silently dropping unsupported entries.
 ///
 /// Supports `rule`, rule-delegating `capped`, `block_rot`, `protected_blocks`, `block_ignore`,
-/// `gravity`, `block_age`, `blackstone_replace`, `lava_submerged_block` and `nop`.
+/// `gravity`, `block_age`, `blackstone_replace`, `lava_submerged_block`, `jigsaw_replacement` and `nop`.
 /// Processing precedes template block placement, waterlogging, shape updates and chunk clipping.
 #[derive(Debug, Clone)]
 pub struct ProcessorPipeline {
@@ -58,6 +58,7 @@ enum Processor {
     Age(BlockAge),
     Blackstone,
     LavaSubmerged,
+    Jigsaw,
     Gravity {
         heightmap: HeightmapType,
         offset: i32,
@@ -152,6 +153,7 @@ impl ProcessorPipeline {
                 }
                 "minecraft:blackstone_replace" => Processor::Blackstone,
                 "minecraft:lava_submerged_block" => Processor::LavaSubmerged,
+                "minecraft:jigsaw_replacement" => Processor::Jigsaw,
                 "minecraft:nop" => Processor::Nop,
                 _ => return Ok(None),
             });
@@ -230,6 +232,12 @@ impl ProcessorPipeline {
                         };
                     }
                     Processor::Blackstone => block.state = blackstone(block.state),
+                    Processor::Jigsaw => {
+                        let Some(replacement) = super::jigsaw::replace(block) else {
+                            continue 'blocks;
+                        };
+                        block = replacement;
+                    }
                     Processor::LavaSubmerged => {
                         let terrain = world.block_at(block.pos);
                         if block_states().properties(terrain).unwrap().0 == "minecraft:lava"
@@ -543,6 +551,59 @@ mod tests {
                 blocks
             );
         }
+    }
+
+    #[test]
+    fn jigsaw_replacement_reads_current_state_and_nbt_before_capped_finalizers() {
+        let data = WorldgenData::default();
+        let replacement = json!({"processor_type":"minecraft:jigsaw_replacement"});
+        let mut input = block("stone", [-17, 319, 32]);
+        input
+            .nbt
+            .as_mut()
+            .unwrap()
+            .insert("final_state", "structure_void");
+        let mut random = XoroshiroRandom::new(42);
+        // An earlier rule can turn an ordinary block into a jigsaw; its replacement then rejects
+        // it before the following rot, gravity and finalizer can read or draw anything.
+        let pipeline = compile(
+            &[
+                rule("jigsaw"),
+                replacement.clone(),
+                json!({"processor_type":"minecraft:block_rot","integrity":0.5}),
+                json!({"processor_type":"minecraft:gravity"}),
+                json!({"processor_type":"minecraft:capped","limit":1,"delegate":rule("gold_block")}),
+            ],
+            &data,
+        );
+        assert!(
+            pipeline
+                .process(
+                    0,
+                    [0; 3],
+                    [0; 3],
+                    std::slice::from_ref(&input),
+                    |_| state("air"),
+                    Some(&mut random)
+                )
+                .is_empty()
+        );
+        assert_eq!(random.next_long(), XoroshiroRandom::new(42).next_long());
+        let pipeline = compile(&[replacement, rule("jigsaw")], &data);
+        assert_eq!(
+            pipeline.process(
+                0,
+                [0; 3],
+                [0; 3],
+                std::slice::from_ref(&input),
+                |_| state("air"),
+                None
+            ),
+            [ProcessorBlock {
+                state: state("jigsaw"),
+                ..input
+            }]
+        );
     }
 
     #[test]

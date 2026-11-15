@@ -38,8 +38,11 @@ public final class FilterProcessorProbe {
             for (var entry : c.getAsJsonArray("blocks")) {
                 var b = entry.getAsJsonArray();
                 var pos = RuleProcessorProbe.position(b.get(0));
+                var tag = b.get(2).isJsonNull() ? null
+                    : b.get(2).getAsJsonPrimitive().isString() ? TagParser.parseCompoundFully(b.get(2).getAsString())
+                    : RuleProcessorProbe.inputTag(b.get(2).getAsInt());
                 original.add(new StructureTemplate.StructureBlockInfo(pos.subtract(origin),
-                    Block.stateById(b.get(1).getAsInt()), RuleProcessorProbe.inputTag(b.get(2).getAsInt())));
+                    Block.stateById(b.get(1).getAsInt()), tag));
                 terrain.put(pos, Block.stateById(b.get(3).getAsInt()));
             }
             var world = (ServerLevelAccessor) Proxy.newProxyInstance(FilterProcessorProbe.class.getClassLoader(),
@@ -47,6 +50,7 @@ public final class FilterProcessorProbe {
                     case "getLevel" -> level;
                     case "getBlockState" -> Objects.requireNonNull(terrain.get(arguments[0]), "unexpected terrain position");
                     case "getBlockEntity" -> null;
+                    case "holderLookup" -> net.minecraft.core.registries.BuiltInRegistries.BLOCK;
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
             var random = new net.minecraft.world.level.levelgen.XoroshiroRandomSource(seed);

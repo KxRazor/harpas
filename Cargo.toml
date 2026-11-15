@@ -67,6 +67,8 @@ str0m = { version = "0.25.0", default-features = false, features = ["rust-crypto
 subtle = "2.6.1"
 toml = "1.1.8"
 ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-provider"] }
+# Unicode 16 names, matching Java 25's Character data for SNBT escapes.
+unicode_names2 = "2.0.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 zlib-rs = "0.6.8"
 

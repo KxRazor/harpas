@@ -979,22 +979,30 @@ pub struct DecorationStructures<'a> {
     pub data: &'a WorldgenData,
     /// The owner's templates.
     pub templates: &'a StructureTemplates,
-    /// The starts whose pieces reach the chunk (its structure references). Only jigsaw starts place blocks here
-    /// so far; the other structures are placed after carvers.
-    pub starts: &'a [StructureStart],
+    /// The starts whose pieces reach the chunk (its structure references). Jigsaw and buried treasure starts
+    /// place blocks here so far; the other structures are placed after carvers. Placement can change a start,
+    /// as a buried treasure moves its piece to its chest.
+    pub starts: &'a mut [StructureStart],
 }
 
 /// Decorates one chunk with its structures: vanilla's `applyBiomeDecoration`, in which each step places its
-/// structures, in registry order with a random source seeded for each, and then its features.
+/// structures, in registry order with a random source seeded for each, and then its features. The starts it
+/// changes keep their changes, which their chunks save.
 pub fn apply_biome_decoration_with_structures(
     world: &mut RegionFeatureWorld,
     index: &FeatureIndex,
     world_seed: i64,
     chunk_x: i32,
     chunk_z: i32,
-    structures: &DecorationStructures<'_>,
+    structures: &mut DecorationStructures<'_>,
 ) -> Result<(), WorldgenDataError> {
-    let mut features = FeatureCompiler::new(structures.data);
+    let DecorationStructures {
+        data,
+        templates,
+        starts,
+    } = structures;
+    let (data, templates) = (*data, *templates);
+    let mut features = FeatureCompiler::new(data);
     decorate(
         world,
         index,
@@ -1002,8 +1010,7 @@ pub fn apply_biome_decoration_with_structures(
         chunk_x,
         chunk_z,
         |world, step, decoration, random| {
-            let mut ids: Vec<&str> = structures
-                .data
+            let mut ids: Vec<&str> = data
                 .structures
                 .iter()
                 .filter(|(_, structure)| {
@@ -1014,18 +1021,30 @@ pub fn apply_biome_decoration_with_structures(
             ids.sort_unstable();
             for (structure_index, id) in ids.into_iter().enumerate() {
                 random.set_feature_seed(decoration, structure_index as i32, step as i32);
-                for start in structures.starts {
-                    if start.structure == id && start.is_jigsaw() {
+                for start in starts.iter_mut().filter(|start| start.structure == id) {
+                    if start.is_jigsaw() {
                         start.place_jigsaw_in_region(
                             world,
                             chunk_x,
                             chunk_z,
                             world_seed,
-                            structures.data,
-                            structures.templates,
+                            data,
+                            templates,
                             &mut features,
                             random,
                         )?;
+                    } else if id == "minecraft:buried_treasure"
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        let entities = start.place_buried_treasure(&mut chunk, random);
+                        world.put_back(chunk);
+                        for entity in entities {
+                            let [x, y, z] = ["x", "y", "z"].map(|key| match entity.get(key) {
+                                Some(harpas_core::nbt::Nbt::Int(value)) => *value,
+                                _ => unreachable!("a placed chest has a position"),
+                            });
+                            world.set_block_entity(x, y, z, entity);
+                        }
                     }
                 }
             }
@@ -1053,8 +1072,12 @@ fn decorate<W: FeatureWorld>(
     let origin = [chunk_x * 16, world.min_y(), chunk_z * 16];
     let decoration = random.set_decoration_seed(world_seed, origin[0], origin[2]);
     let biomes = world.region_biomes(chunk_x, chunk_z);
-    for (step, order) in index.steps.iter().enumerate() {
+    // Every step places its structures, even one whose biomes list no features.
+    for step in 0..STEP_COUNT {
         structures(world, step, decoration, &mut random)?;
+        let Some(order) = index.steps.get(step) else {
+            continue;
+        };
         let mut positions = BTreeSet::<usize>::new();
         for &biome in &biomes {
             let lists = index

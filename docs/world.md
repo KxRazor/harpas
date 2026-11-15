@@ -729,13 +729,16 @@ and the owner **accepts it once**:
     both start discovery and terrain adaptation. `generated_chunk_parity` compares the actual workers' terrain,
     biomes, carving masks, fluid postprocessing, heightmaps and structure records against vanilla around all four
     adapting modes, then saves and reloads the chunks.
-  - After carvers, chunk workers place buried treasure: search down from `OCEAN_FLOOR_WG` for its foundation,
-    fill exposed neighbors, orient the chest and save its loot table and decoration-seeded loot seed without
-    rolling any items. Final piece bounds are saved with the start; shared cached starts stay immutable.
-    The treasure's one-block shell fits in its source chunk. `buried_treasure_parity` compares every block,
-    heightmaps, chest NBT and saved starts in 38 synthetic cases and four actual chunks per seed in two seeds
-    (one seed on pull requests), checks worker saves and Anvil reloads, and has vanilla reload and place the
-    treasure again to check resumption.
+  - Chunk workers place buried treasure in its chunk's decoration, first in `underground_structures`
+    (`StructureStart::place_buried_treasure`): search down from `OCEAN_FLOOR_WG` for its foundation, fill exposed
+    neighbors, orient the chest and save its loot table and decoration-seeded loot seed without rolling any
+    items. The piece moves to the chest, and the chunk saves its start with that move, as vanilla's does. The
+    treasure's one-block shell fits in its source chunk. Mineshafts, still placed after carvers, therefore run
+    before it for now, while vanilla places treasure first; they differ only where a mine corridor crosses the
+    treasure's shell. `buried_treasure_parity` compares every block, heightmaps, chest NBT and saved starts in
+    38 synthetic cases and four actual chunks per seed in two seeds (one seed on pull requests); the actual
+    chunks come from workers that decorate without features, and are saved and reloaded from Anvil. Vanilla
+    also reloads its own saved records and places the treasure again, which changes nothing.
   - Chunk workers also place swamp hut blocks: average `MOTION_BLOCKING_NO_LEAVES` ground height saved as
     `HPos`, oriented walls and roof corners, support columns through replaceable blocks and fence positions
     marked for postprocessing. Unwritten interior blocks and the saved `Witch`/`Cat` flags stay unchanged;
@@ -865,7 +868,7 @@ and the owner **accepts it once**:
     saved neighboring sections when available, otherwise the noise biome source, without generating extra
     terrain. Floor support and solid-render checks differ for slabs, stairs, leaves and glass.
     Each structure type shares one decoration-seeded stream across all its starts, in a new chunk's native
-    reference-set iteration order. Buried treasure runs before the mineshafts. Spider corridors write cave-spider
+    reference-set iteration order. Spider corridors write cave-spider
     spawner NBT; workers retain incoming `hps` flags at `carvers` so a later vanilla pass can recreate a
     spawner which its excavation clears. Chest minecart entities and loot remain with M4; their placement
     draws and rail blocks are already preserved. The light engine and spawner ticking are separate tasks.
@@ -924,8 +927,8 @@ and the owner **accepts it once**:
     final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure placement can be repeated
-  by vanilla without replacing its chest or loot metadata in the compared cases. Swamp hut blocks and their
+  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure and jigsaw structures are
+  placed in decoration, so a chunk saved at `carvers` has none of their blocks yet. Swamp hut blocks and their
   saved height can also be resumed; their witch and cat are left for vanilla or M4. Pyramid workers retain the
   incoming chest flags while saving at `carvers`: vanilla clears the alcoves when it repeats pyramid placement,
   so it must be allowed to recreate the chests with their original decoration seeds. The direct placement API

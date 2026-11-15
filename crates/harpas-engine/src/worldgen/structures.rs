@@ -187,21 +187,8 @@ impl ChunkStructures {
         templates: &StructureTemplates,
         blocking_biomes: &HashMap<[i32; 3], bool>,
     ) -> Vec<Compound> {
-        // UNDERGROUND_STRUCTURES seeds treasure before normal and mesa mineshafts.
-        let mut early_entities: Vec<_> = self
-            .starts
-            .iter_mut()
-            .chain(&mut self.neighbor_pieces)
-            .filter(|s| s.structure == "minecraft:buried_treasure")
-            .flat_map(|s| {
-                s.place_in_chunk(
-                    generated,
-                    seed,
-                    &mut |_, _| unreachable!("treasure does not sample heights"),
-                    &mut |_, _, _| unreachable!("treasure is contained in its source chunk"),
-                )
-            })
-            .collect();
+        // Buried treasure is placed in decoration, in UNDERGROUND_STRUCTURES; mineshafts still run here.
+        let mut early_entities = Vec::new();
         let flags: Vec<_> = self
             .starts
             .iter()

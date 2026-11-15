@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
     Beardifier, BoundingBox, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator,
     StructurePiece, StructureStart, StructureState, StructureTemplates, WorldgenData,
@@ -240,15 +240,32 @@ fn treasure_blocks_metadata_workers_and_vanilla_resumption_match() {
         .unwrap();
         assert_eq!(disabled.to_nbt(&biomes), baseline.to_nbt(&biomes));
         let folder = reference.temp.0.join(format!("world-{seed}"));
+        // Treasure is placed in decoration. Decorate without features, so that the workers' chunk is the
+        // carved terrain with its structures, as vanilla's probe places them.
+        let mut structures_only = (*data).clone();
+        for biome in structures_only.biomes.values_mut() {
+            biome.features = vec![Vec::new(); biome.features.len()];
+        }
+        let structures_only = Arc::new(structures_only);
         let generator = overworld_generator(
             seed,
-            Arc::clone(&data),
+            Arc::clone(&structures_only),
             Arc::clone(&templates),
             true,
             &biomes,
         )
         .unwrap();
-        let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+        let starts =
+            overworld_starts(seed, Arc::clone(&structures_only), Arc::clone(&templates)).unwrap();
+        let source = decorated_with_structures(
+            generator,
+            starts,
+            seed,
+            structures_only,
+            Arc::clone(&templates),
+        )
+        .unwrap();
+        let mut world = World::open_with_source(&folder, &biomes, source).unwrap();
         let positions: Vec<_> = targets.iter().map(|(p, _)| *p).collect();
         wait(&mut world, &positions);
         let mut saved = Vec::new();

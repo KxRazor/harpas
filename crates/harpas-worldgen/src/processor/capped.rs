@@ -58,6 +58,7 @@ impl CappedProcessor {
     /// current position, before any template blocks are placed. The shuffle uses the world `seed` and
     /// template `origin`, independently of placement settings and decoration randomness. `pivot` is the
     /// rule predicates' reference position, which can differ from the origin.
+    /// Static merges mutate existing NBT before comparison, and alone do not spend the limit.
     pub fn finalize(
         &self,
         seed: i64,
@@ -82,8 +83,9 @@ impl CappedProcessor {
         }
         let mut changed = 0;
         for index in order {
-            let block = &blocks[index];
-            let output = self.delegate.process(block, block_at(block.pos), pivot);
+            let block = &mut blocks[index];
+            let location = block_at(block.pos);
+            let output = self.delegate.process_in_place(block, location, pivot);
             if output != *block {
                 blocks[index] = output;
                 changed += 1;
@@ -205,6 +207,34 @@ mod tests {
     #[test]
     fn empty_templates_never_read_terrain() {
         compile(&config(json!(1))).finalize(0, [0; 3], [0; 3], &mut [], |_| panic!("terrain read"));
+    }
+
+    #[test]
+    fn static_merges_into_existing_nbt_do_not_spend_the_cap_but_new_tags_do() {
+        let mut json = config(json!(1));
+        json["delegate"]["rules"][0]["output_state"]["Name"] = json!("minecraft:stone");
+        json["delegate"]["rules"][0]["block_entity_modifier"] =
+            json!({"type": "minecraft:append_static", "data": {"added": true}});
+        let processor = compile(&json);
+        for existing in [false, true] {
+            let mut blocks: Vec<_> = (0..12)
+                .map(|i| ProcessorBlock {
+                    pos: [i, 64, 0],
+                    state: state("stone"),
+                    nbt: existing.then(Compound::new),
+                })
+                .collect();
+            processor.finalize(0, [0; 3], [0; 3], &mut blocks, |_| state("air"));
+            let changed = blocks
+                .iter()
+                .filter(|b| {
+                    b.nbt
+                        .as_ref()
+                        .is_some_and(|tag| tag.get("added") == Some(&Nbt::Byte(1)))
+                })
+                .count();
+            assert_eq!(changed, if existing { 12 } else { 1 });
+        }
     }
 
     #[test]

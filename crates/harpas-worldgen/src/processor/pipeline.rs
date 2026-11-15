@@ -210,7 +210,8 @@ impl ProcessorPipeline {
             for processor in &self.processors {
                 match processor {
                     Processor::Rule(rule) => {
-                        block = rule.process(&block, world.block_at(block.pos), pivot);
+                        let location = world.block_at(block.pos);
+                        block = rule.process_in_place(&mut block, location, pivot);
                     }
                     Processor::Protected(states) if states[world.block_at(block.pos) as usize] => {
                         continue 'blocks;

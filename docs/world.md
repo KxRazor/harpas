@@ -260,8 +260,15 @@ and the owner **accepts it once**:
     replacing the loot table and drawing its seed (`append_loot`). `rule_processor_parity` compares all 39
     shipped rule configurations, including delegates of capped processors, and synthetic cases with vanilla's
     own processor, checking output states, positions and complete NBT. Traced copies append loot so the seed
-    also exposes short-circuited random consumption. `append_static` and other processor types remain
-    unported; an unsupported rule does not compile as a partial processor.
+    also exposes short-circuited random consumption. Unsupported rules do not compile as partial processors.
+    `append_static` recursively merges the configured `data` compound, retaining unrelated nested keys
+    and replacing lists and values of different types. JSON booleans become bytes, numbers use the narrowest
+    exact NBT type, and mixed lists use vanilla's compound wrappers on disk. `process` works on a snapshot;
+    `process_in_place` also retains vanilla's mutation of existing NBT. A merge into existing NBT alone
+    consequently spends no capped limit; creating a tag for a block without NBT does. The compiled data is
+    independent of each processed block. `static_processor_parity` compares ordered processing passes with
+    vanilla, including empty and nested compounds, numeric boundaries, homogeneous and mixed lists, missing
+    and existing NBT, capped state changes, clear/loot/static chains, filters and settings random consumption.
     `CappedProcessor` compiles `capped` processors with rule delegates and positive integer limit providers.
     Finalization shuffles the whole template's surviving blocks using a positional legacy source forked
     from the world seed at the template origin. Only changed states or NBT consume the sampled limit;
@@ -306,7 +313,7 @@ and the owner **accepts it once**:
     outside the unit interval, property preservation, NBT, shared and positional random sources, ordered
     filters, rules and capped finalizers. `gravity_processor_parity` also checks material processors before
     and after movement.
-    Jigsaw replacement, the remaining processors, template placement, waterlogging, shape updates and
+    Jigsaw replacement, other capped delegates, template placement, waterlogging, shape updates and
     worker integration remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the

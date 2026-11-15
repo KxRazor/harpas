@@ -254,6 +254,8 @@ vanilla for the same seed.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
     - [x] Structures placed by each decoration step before its features, with their own seeds, for every start
           that reaches the chunk; jigsaw structures run there (`jigsaw_chunk_parity`, `feature_worker_parity`).
+    - [x] Buried treasure in `underground_structures`, saving its moved piece with the chunk's start
+          (`buried_treasure_parity`).
     - [ ] The other structures in their steps, then full resumption from `features`.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

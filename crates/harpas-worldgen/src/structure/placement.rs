@@ -115,6 +115,16 @@ impl StructureStart {
         let decoration =
             random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
         random.set_feature_seed(decoration, 0, 3);
+        self.place_buried_treasure(chunk, &mut random)
+    }
+
+    /// Places a buried treasure start's chest and sand shell in `chunk`, drawing its loot seed from `random`, and
+    /// moves its piece to the chest as vanilla does. Returns the chest's block entity.
+    pub fn place_buried_treasure<R: RandomSource>(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        random: &mut WorldgenRandom<R>,
+    ) -> Vec<Compound> {
         let mut entities = Vec::new();
         for piece in &mut self.pieces {
             if piece.kind != "minecraft:btp" {

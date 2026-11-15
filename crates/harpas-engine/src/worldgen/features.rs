@@ -428,23 +428,51 @@ impl Decorator {
         let mut world = RegionFeatureWorld::with_stored_biomes(blocks, self.seed)
             .ok_or_else(|| io::Error::other("chunks around a target differ in height"))?;
         if let Some(structures) = &self.structures {
-            let starts = (structures.starts)(target, &|pos| storage.read(pos))?;
+            let mut starts = (structures.starts)(target, &|pos| storage.read(pos))?;
+            let own = |starts: &[harpas_worldgen::StructureStart]| -> Vec<(String, Compound)> {
+                starts
+                    .iter()
+                    .filter(|start| start.chunk == (target.x, target.z))
+                    .map(|start| (start.structure.clone(), start.to_nbt()))
+                    .collect()
+            };
+            let before = own(&starts);
             apply_biome_decoration_with_structures(
                 &mut world,
                 &self.index,
                 self.seed,
                 target.x,
                 target.z,
-                &DecorationStructures {
+                &mut DecorationStructures {
                     data: &structures.data,
                     templates: &structures.templates,
-                    starts: &starts,
+                    starts: &mut starts,
                 },
             )
+            .map_err(io::Error::other)?;
+            // A start this chunk holds that its placement changed is saved with the change, as vanilla's is.
+            let changed: Vec<_> = own(&starts)
+                .into_iter()
+                .filter(|start| !before.contains(start))
+                .collect();
+            if !changed.is_empty() {
+                let (shell, _) = shells.get_mut(&target).expect("the target's shell");
+                if let Some(Nbt::Compound(mut saved)) = shell.rest.remove("structures") {
+                    if let Some(Nbt::Compound(mut held)) = saved.remove("starts") {
+                        for (structure, tag) in changed {
+                            if held.get(&structure).is_some() {
+                                held.insert(structure, Nbt::Compound(tag));
+                            }
+                        }
+                        saved.insert("starts", held);
+                    }
+                    shell.rest.insert("structures", saved);
+                }
+            }
         } else {
             apply_biome_decoration(&mut world, &self.index, self.seed, target.x, target.z)
+                .map_err(io::Error::other)?;
         }
-        .map_err(io::Error::other)?;
         let used = self.tick();
         Ok(world
             .into_chunks()

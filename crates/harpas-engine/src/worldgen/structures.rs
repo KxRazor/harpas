@@ -178,6 +178,7 @@ impl ChunkStructures {
         Ok(result)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn place_blocks(
         &mut self,
         generated: &mut GeneratedChunk,
@@ -185,6 +186,7 @@ impl ChunkStructures {
         sea_level: i32,
         terrain_chunks: &HashMap<ChunkPos, GeneratedChunk>,
         templates: &StructureTemplates,
+        data: &WorldgenData,
         blocking_biomes: &HashMap<[i32; 3], bool>,
     ) -> Vec<Compound> {
         // UNDERGROUND_STRUCTURES seeds treasure before normal and mesa mineshafts.
@@ -349,6 +351,16 @@ impl ChunkStructures {
                 if start.structure == "minecraft:monument" {
                     start.place_monument_in_chunk(generated, seed, sea_level);
                     return Vec::new();
+                }
+                if start.pieces.iter().any(|piece| piece.jigsaw.is_some()) {
+                    return start
+                        .place_jigsaw_in_chunk(generated, seed, data, templates, |x, z| {
+                            terrain_chunks.get(&ChunkPos { x, z })
+                        })
+                        .unwrap_or_else(|error| {
+                            log::error!("cannot place {}: {error}", start.structure);
+                            Vec::new()
+                        });
                 }
                 start.prepare_pyramid_height(
                     seed,
@@ -634,6 +646,13 @@ impl Structures {
                         ((bounds.min[2] >> 4)..=(bounds.max[2] >> 4))
                             .map(move |z| ChunkPos { x, z })
                     })
+                    .collect()
+            } else if start.pieces.iter().any(|piece| piece.jigsaw.is_some()) {
+                // Jigsaw templates read the terrain around their blocks, and feature elements write into the
+                // chunks beside the target.
+                let (x, z) = (chunk.chunk_x(), chunk.chunk_z());
+                (x - 1..=x + 1)
+                    .flat_map(|x| (z - 1..=z + 1).map(move |z| ChunkPos { x, z }))
                     .collect()
             } else if start.structure == "minecraft:stronghold" {
                 start

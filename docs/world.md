@@ -364,6 +364,20 @@ and the owner **accepts it once**:
     junctions, which terrain adaptation will need. All jigsaw structures of the
     Overworld are laid out, including trial chambers, which rename pools for each start (`PoolAliasLookup`) and
     start at a random height.
+  - Jigsaw structure blocks run on the chunk workers with the other structures, after carvers
+    (`StructureStart::place_jigsaw_in_chunk`). The pieces that reach a chunk place their pool elements in
+    order with one random source, seeded from the chunk's decoration seed and the structure's index among
+    the structures of its decoration step in registry order; the processors' reference position is the
+    center of the first piece's columns at its lowest Y. Template blocks are clipped to the chunk, and
+    terrain matching reads the chunk's heights as blocks are placed. Templates read terrain across their
+    whole extent, as vanilla's do: the carved chunks around the target, and air with heights at the
+    world's bottom farther away, as in a region whose farther chunks have no terrain yet. Feature elements
+    write into the eight neighboring chunks through a scratch copy that later pieces read, but only the
+    target keeps their blocks until structures run in the FEATURES schedule; the ancient city's sculk
+    patches, not ported yet, place nothing. `jigsaw_chunk_parity` places real starts of all five villages,
+    a pillager outpost, trail ruins, trial chambers and an ancient city on their carved chunks with terrain
+    adaptation, and compares 368 chunks block by block, with their block entities and loot seeds, against
+    vanilla's `StructureStart.placeInChunk`; 16 ancient city chunks reached by sculk patches are left out.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by

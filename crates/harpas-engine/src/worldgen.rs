@@ -77,6 +77,7 @@ pub fn overworld_generator(
             generator.sea_level(),
             &terrain_chunks,
             &templates,
+            &data,
             &blocking_biomes,
         );
         let mut chunk = into_anvil(generated)?;

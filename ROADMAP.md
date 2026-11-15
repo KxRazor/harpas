@@ -247,7 +247,11 @@ vanilla for the same seed.
     - [x] List and feature pool elements: lists in order with replaced block entities, and every village
           feature placed through its placement modifiers into the generation region (`pool_element_parity`).
           The ancient city's `sculk_patch` feature follows with the feature families.
-    - [ ] Remaining capped delegates and pool elements on chunk workers.
+    - [x] Jigsaw pieces on chunk workers: decoration-seeded random, processor pivot, clipped templates and
+          feature elements in a scratch region, compared in 368 chunks of nine real starts
+          (`jigsaw_chunk_parity`). Feature element blocks in neighboring chunks follow with structures in the
+          FEATURES schedule, and the ancient city's sculk patches with that feature.
+    - [ ] Remaining capped delegates.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.
@@ -334,7 +338,8 @@ vanilla for the same seed.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
         comparison as they are ported.
   - [x] Whole chunks through carvers with terrain adaptation around villages, ancient cities, trail ruins and
-        trial chambers, including neighboring chunks; structure blocks are not placed yet.
+        trial chambers, including neighboring chunks; their structure blocks are compared separately
+        (`jigsaw_chunk_parity`).
 - [x] Run the parity harnesses in CI: a reduced sample on pull requests and the full one on `main`
       ([docs/parity.md](docs/parity.md#running-the-comparisons)).
 - [x] Make `parity against vanilla` a required check.

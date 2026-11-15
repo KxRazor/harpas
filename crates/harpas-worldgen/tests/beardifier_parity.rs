@@ -85,7 +85,7 @@ fn data() -> WorldgenData {
         (
             format!("data/test/worldgen/structure/{mode}.json"),
             format!(
-                r#"{{"type":"minecraft:swamp_hut","biomes":[],"terrain_adaptation":"{mode}"}}"#
+                r#"{{"type":"minecraft:swamp_hut","step":"surface_structures","biomes":[],"terrain_adaptation":"{mode}"}}"#
             ),
         )
     }))

@@ -669,6 +669,8 @@ pub struct BlockTagDef {
 pub struct StructureDef {
     /// The structure type, such as `minecraft:desert_pyramid`.
     pub kind: String,
+    /// The decoration step its blocks are placed in, such as `surface_structures`.
+    pub step: String,
     /// Biome IDs and `#`-prefixed tags where the structure may generate.
     pub biomes: Vec<String>,
     /// How the structure changes the terrain around it, such as `none` or `beard_thin`.
@@ -1393,6 +1395,11 @@ fn parse_structure(context: &str, json: &Value) -> Result<StructureDef, Worldgen
             .get("type")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid_def(context, "structure has no type"))?
+            .to_string(),
+        step: json
+            .get("step")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_def(context, "structure has no step"))?
             .to_string(),
         biomes: parse_biome_selector(context, biomes)?,
         terrain_adaptation: match json.get("terrain_adaptation") {

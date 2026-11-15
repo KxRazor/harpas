@@ -328,6 +328,12 @@ and the owner **accepts it once**:
     compares every registry state, shipped template final states, malformed command strings and
     attached SNBT, missing and existing NBT, ordered rules/filters/capped finalizers and settings random
     tails. Replacement itself reads no terrain and consumes no randomness.
+    Template block states turn and reflect as vanilla's `BlockState.rotate` and `BlockState.mirror` do:
+    facings, orientations, rail ends and connection faces turn, `axis` swaps on quarter turns and the
+    16 sign, banner and skull steps turn by four per quarter. Vanilla's exceptions are kept: fire and
+    chorus plants keep their faces, anvils keep their facing in a mirror, chests keep their side, and a
+    reflected stair keeps its inner corners and keeps its outer corners unless it faces along X.
+    `block_transform_parity` compares every registry state with each rotation and the front-back mirror.
     Other capped delegates, template placement, waterlogging, shape updates and worker integration
     remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's

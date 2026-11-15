@@ -239,6 +239,8 @@ vanilla for the same seed.
           (`static_processor_parity`).
     - [x] Jigsaw replacement, including strict command block states, discarded SNBT validation and
           structure-void filtering, compared with vanilla’s ordered pipeline (`jigsaw_processor_parity`).
+    - [x] Template block state rotation and mirroring, including vanilla's stair, chest, anvil, fire and
+          chorus plant exceptions, compared for every registry state (`block_transform_parity`).
     - [ ] Remaining capped delegates, template block placement and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

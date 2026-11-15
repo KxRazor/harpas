@@ -345,12 +345,18 @@ and the owner **accepts it once**:
     template's data, with an id added for processor-made data such as suspicious gravel loot; chests,
     barrels, shulker boxes, dispensers, droppers, hoppers, crafters and decorated pots draw a loot seed from
     the placement random, kept only with a loot table, while other block entities keep their processor
-    seeds. `single_pool_element_parity` places every single element of every pool, turned and crossing a
-    chunk edge, over dry, flooded, deep and fence layered terrain, with and without waterlogging, and compares the
-    blocks, the block entities as vanilla loads and saves them, and the random tail. As in vanilla, the
-    shapes at the template's edges stay as placed: neither its blocks nor their neighbors update, which a
-    terrain of fences confirms. Feature and list elements,
-    other capped delegates and worker integration remain separate work.
+    seeds. As in vanilla, the shapes at the template's edges stay as placed: neither its blocks nor their
+    neighbors update, which a terrain of fences confirms.
+  - A list element places each of its elements in order at the same spot; a later block entity replaces an
+    earlier one at the same position, and a block without one removes it. A feature element places its placed
+    feature at the piece's position (`place_placed`), with its placement modifiers, drawing from the piece's
+    placement random and writing into the neighboring chunks of the generation region, as trees and flower
+    patches of villages do. `pool_element_parity` places every single, legacy single and list element of
+    every pool, turned and crossing a chunk edge, over dry, flooded, deep and fence layered terrain, with and
+    without waterlogging, and every feature element on grass with four seeds, comparing the blocks of the
+    chunk and its neighbors, the block entities as vanilla loads and saves them, and the random tail. The
+    ancient city's `sculk_patch` feature is not ported yet; other capped delegates and worker integration
+    remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

@@ -1,7 +1,7 @@
 //! Monument exterior reconstructed from vanilla placement observed on supplied terrain.
 
 use harpas_core::block::block_states;
-use harpas_core::random::{WorldgenRandom, XoroshiroRandom};
+use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 
 use super::{BoundingBox, Direction, MonumentLayout, StructureStart};
 use crate::GeneratedChunk;
@@ -48,6 +48,22 @@ impl StructureStart {
     /// `minecraft:monument` (index 6, step 4). The saved record is not changed and no elder
     /// guardians are spawned; they follow in M4.
     pub fn place_monument_in_chunk(&self, chunk: &mut GeneratedChunk, seed: i64, sea_level: i32) {
+        let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+        let decoration =
+            random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
+        random.set_feature_seed(decoration, MONUMENT_FEATURE_INDEX, SURFACE_STRUCTURES_STEP);
+        self.place_monument(chunk, seed, sea_level, &mut random);
+    }
+
+    /// Places the monument's exterior and internal rooms in one chunk, drawing from `random`, which the
+    /// caller has seeded as vanilla's decoration does for `minecraft:monument`.
+    pub fn place_monument<R: RandomSource>(
+        &self,
+        chunk: &mut GeneratedChunk,
+        seed: i64,
+        sea_level: i32,
+        random: &mut WorldgenRandom<R>,
+    ) {
         let Some(piece) = self.pieces.first() else {
             return;
         };
@@ -61,11 +77,7 @@ impl StructureStart {
         let Some(layout) = MonumentLayout::from_start(seed, self) else {
             return;
         };
-        let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
-        let decoration =
-            random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
-        random.set_feature_seed(decoration, MONUMENT_FEATURE_INDEX, SURFACE_STRUCTURES_STEP);
-        layout.place_rooms_in_chunk(chunk, sea_level, &mut random);
+        layout.place_rooms_in_chunk(chunk, sea_level, random);
     }
 }
 

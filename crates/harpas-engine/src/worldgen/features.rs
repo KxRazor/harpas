@@ -70,8 +70,8 @@ pub fn decorated(
 }
 
 /// Like [`decorated`], but each step also places the structures whose pieces reach the chunk, before its
-/// features, as vanilla's decoration does. Only jigsaw structures, buried treasure and swamp huts are placed
-/// here so far; the generator places the others after carvers.
+/// features, as vanilla's decoration does. Only jigsaw structures, buried treasure, swamp huts and ocean
+/// monuments are placed here so far; the generator places the others after carvers.
 pub fn decorated_with_structures(
     generator: Arc<ChunkGenerator>,
     starts: Arc<StartSource>,

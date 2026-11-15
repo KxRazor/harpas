@@ -979,8 +979,8 @@ pub struct DecorationStructures<'a> {
     pub data: &'a WorldgenData,
     /// The owner's templates.
     pub templates: &'a StructureTemplates,
-    /// The starts whose pieces reach the chunk (its structure references). Jigsaw, buried treasure and swamp
-    /// hut starts place blocks here so far; the other structures are placed after carvers. Placement can change
+    /// The starts whose pieces reach the chunk (its structure references). Jigsaw, buried treasure, swamp hut
+    /// and ocean monument starts place blocks here so far; the other structures are placed after carvers. Placement can change
     /// a start, as a buried treasure moves its piece to its chest and a swamp hut saves its ground height.
     pub starts: &'a mut [StructureStart],
 }
@@ -1002,6 +1002,11 @@ pub fn apply_biome_decoration_with_structures(
         starts,
     } = structures;
     let (data, templates) = (*data, *templates);
+    // Only the Overworld decorates so far; monuments fill their rooms with water up to its sea level.
+    let sea_level = data
+        .noise_settings
+        .get("minecraft:overworld")
+        .map_or(63, |settings| settings.sea_level);
     let mut features = FeatureCompiler::new(data);
     decorate(
         world,
@@ -1033,6 +1038,11 @@ pub fn apply_biome_decoration_with_structures(
                             &mut features,
                             random,
                         )?;
+                    } else if id == "minecraft:monument"
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        start.place_monument(&mut chunk, world_seed, sea_level, random);
+                        world.put_back(chunk);
                     } else if id == "minecraft:swamp_hut"
                         && let Some(mut chunk) = world.take(chunk_x, chunk_z)
                     {

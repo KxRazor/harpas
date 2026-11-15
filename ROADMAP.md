@@ -241,7 +241,10 @@ vanilla for the same seed.
           structure-void filtering, compared with vanilla’s ordered pipeline (`jigsaw_processor_parity`).
     - [x] Template block state rotation and mirroring, including vanilla's stair, chest, anvil, fire and
           chorus plant exceptions, compared for every registry state (`block_transform_parity`).
-    - [ ] Remaining capped delegates, template block placement and feature/list pool elements on chunk workers.
+    - [x] Single and legacy single pool element placement in one chunk: implied processors, state turns,
+          chunk clipping, waterlogging, water filling, unchanged edge shapes and block entity loot seeds,
+          compared for every single element of every pool (`single_pool_element_parity`).
+    - [ ] Remaining capped delegates and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

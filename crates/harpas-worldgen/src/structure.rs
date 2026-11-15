@@ -16,6 +16,7 @@ use crate::generator::NoiseBasedChunkGenerator;
 mod desert_pyramid;
 mod igloo;
 mod jigsaw;
+mod jigsaw_blocks;
 mod jungle_temple;
 mod mineshaft;
 mod mineshaft_blocks;
@@ -368,7 +369,7 @@ mod tests {
             ),
             (
                 "data/minecraft/worldgen/structure/s.json",
-                r##"{"type": "minecraft:swamp_hut", "biomes": ["minecraft:plains"]}"##,
+                r##"{"type": "minecraft:swamp_hut", "step": "surface_structures", "biomes": ["minecraft:plains"]}"##,
             ),
         ])
         .unwrap();

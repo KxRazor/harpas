@@ -305,6 +305,13 @@ impl<W: ProcessorWorld> ProcessorWorld for ChunkWorld<'_, W> {
     }
 
     fn heightmap(&mut self, kind: HeightmapType, x: i32, z: i32) -> i32 {
-        self.world.heightmap(kind, x, z)
+        // The chunk's own heights include the blocks placed so far, as a generation region reads them.
+        if contains(self.chunk, [x, self.chunk.min_y(), z]) {
+            self.chunk
+                .heightmaps()
+                .get(kind, (x & 15) as usize, (z & 15) as usize)
+        } else {
+            self.world.heightmap(kind, x, z)
+        }
     }
 }

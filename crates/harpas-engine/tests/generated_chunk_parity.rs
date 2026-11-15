@@ -66,7 +66,7 @@ fn workers_generate_and_persist_a_real_chunk() {
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_apply_structure_terrain_and_persist_starts_and_references() {
     use harpas_core::nbt::Compound;
-    use harpas_worldgen::{NoiseBasedChunkGenerator, StructureState};
+    use harpas_worldgen::{Beardifier, NoiseBasedChunkGenerator, StructureState};
     use reference::Reference;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -170,12 +170,30 @@ fn workers_apply_structure_terrain_and_persist_starts_and_references() {
         assert!(Instant::now() < deadline, "structure generation timed out");
         std::thread::sleep(Duration::from_millis(2));
     }
+    // The workers also place jigsaw structure blocks, which `jigsaw_chunk_parity` compares with vanilla. Carve
+    // the same chunks without them, so that only the terrain those blocks leave untouched is compared here.
+    let mut starts_cache = BTreeMap::new();
     let mut snapshots = Vec::new();
     for pos in &wanted {
         let Some(ChunkState::Loaded(chunk)) = world.chunk(*pos) else {
             unreachable!()
         };
-        input.compare(chunk, &biomes, &biome_names);
+        let mut nearby = Vec::new();
+        for x in pos.x - 8..=pos.x + 8 {
+            for z in pos.z - 8..=pos.z + 8 {
+                let starts: &mut Vec<_> = starts_cache.entry((x, z)).or_insert_with(|| {
+                    state
+                        .starts_in_chunk(&terrain, &data, &templates, x, z)
+                        .unwrap()
+                });
+                nearby.extend(starts.iter().cloned());
+            }
+        }
+        let beardifier = Beardifier::for_starts(pos.x, pos.z, &data, &nearby).unwrap();
+        let carved = terrain
+            .generate_chunk_carved_with_beardifier(pos.x, pos.z, &data, beardifier)
+            .unwrap();
+        input.compare(chunk, &biomes, &biome_names, &carved);
         let Some(Nbt::Compound(mut structures)) = chunk.rest.get("structures").cloned() else {
             panic!("structures");
         };
@@ -279,6 +297,7 @@ fn workers_apply_structure_terrain_and_persist_starts_and_references() {
     let mut saved_start = Compound::new();
     saved_start.insert("Status", "minecraft:carvers");
     saved_start.insert("structures", structures);
+    let templates_for_expected = Arc::clone(&templates);
     let restored = overworld_generator(seed, Arc::clone(&data), templates, true, &biomes).unwrap();
     let actual = restored(source, &|pos| {
         Ok(Some(if pos == source {
@@ -290,12 +309,31 @@ fn workers_apply_structure_terrain_and_persist_starts_and_references() {
     .unwrap();
     let beardifier =
         harpas_worldgen::Beardifier::for_starts(source.x, source.z, &data, [&loaded]).unwrap();
-    let expected = harpas_engine::worldgen::into_anvil(
-        terrain
-            .generate_chunk_carved_with_beardifier(source.x, source.z, &data, beardifier)
-            .unwrap(),
-    )
-    .unwrap();
+    let mut adapted = terrain
+        .generate_chunk_carved_with_beardifier(source.x, source.z, &data, beardifier)
+        .unwrap();
+    // The workers also place the start's jigsaw blocks, compared with vanilla in `jigsaw_chunk_parity`.
+    let carved_neighbors: BTreeMap<_, _> = (source.x - 1..=source.x + 1)
+        .flat_map(|x| (source.z - 1..=source.z + 1).map(move |z| (x, z)))
+        .map(|(x, z)| {
+            let beardifier =
+                harpas_worldgen::Beardifier::for_starts(x, z, &data, [&loaded]).unwrap();
+            let chunk = terrain
+                .generate_chunk_carved_with_beardifier(x, z, &data, beardifier)
+                .unwrap();
+            ((x, z), chunk)
+        })
+        .collect();
+    loaded
+        .place_jigsaw_in_chunk(
+            &mut adapted,
+            seed,
+            &data,
+            &templates_for_expected,
+            |x, z| carved_neighbors.get(&(x, z)),
+        )
+        .unwrap();
+    let expected = harpas_engine::worldgen::into_anvil(adapted).unwrap();
     assert!(
         actual.to_nbt(&biomes).get("sections") == expected.to_nbt(&biomes).get("sections"),
         "saved start terrain differs"
@@ -339,9 +377,18 @@ impl ChunkInput {
         self.0.read_exact(&mut bytes).unwrap();
         String::from_utf8(bytes).unwrap()
     }
-    fn compare(&mut self, chunk: &harpas_anvil::Chunk, biomes: &[&str], vanilla_biomes: &[String]) {
+    /// Compares a worker chunk with vanilla's carved chunk, except where the worker's structure pass changed the
+    /// `carved` chunk: those blocks, and the heights of their columns.
+    fn compare(
+        &mut self,
+        chunk: &harpas_anvil::Chunk,
+        biomes: &[&str],
+        vanilla_biomes: &[String],
+        carved: &harpas_worldgen::GeneratedChunk,
+    ) {
         use harpas_core::nbt::List;
         use harpas_worldgen::HeightmapType;
+        let mut placed_columns = [false; 256];
         for y in -64..320 {
             for z in 0..16 {
                 for x in 0..16 {
@@ -349,11 +396,13 @@ impl ChunkInput {
                         .section
                         .as_ref()
                         .unwrap();
-                    assert_eq!(
-                        self.short() as u32,
-                        section.block_state(x, (y & 15) as usize, z),
-                        "block ({x},{y},{z})"
-                    );
+                    let expected = self.short() as u32;
+                    let actual = section.block_state(x, (y & 15) as usize, z);
+                    if actual != carved.block_state(x, y, z) {
+                        placed_columns[z * 16 + x] = true;
+                        continue;
+                    }
+                    assert_eq!(expected, actual, "block ({x},{y},{z})");
                 }
             }
         }
@@ -392,10 +441,25 @@ impl ChunkInput {
         let Some(Nbt::Compound(maps)) = chunk.rest.get("Heightmaps") else {
             panic!("heightmaps");
         };
+        // 9-bit heights, seven to a long, in X then Z order within the chunk.
+        let height = |longs: &[i64], column: usize| (longs[column / 7] >> (column % 7 * 9)) & 0x1ff;
         for kind in HeightmapType::ALL {
             let values = self.longs();
-            if let Some(map) = maps.get(kind.nbt_key()) {
-                assert_eq!(map, &Nbt::LongArray(values), "{}", kind.nbt_key());
+            if let Some(Nbt::LongArray(map)) = maps.get(kind.nbt_key()) {
+                for (column, _) in placed_columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, placed)| !**placed)
+                {
+                    {
+                        assert_eq!(
+                            height(map, column),
+                            height(&values, column),
+                            "{} column {column}",
+                            kind.nbt_key()
+                        );
+                    }
+                }
             }
         }
     }

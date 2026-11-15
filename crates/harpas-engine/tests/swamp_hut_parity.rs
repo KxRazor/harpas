@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
     Beardifier, BoundingBox, GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator,
     StructurePiece, StructureStart, StructureState, StructureTemplates, WorldgenData,
@@ -264,15 +264,28 @@ fn hut_blocks_metadata_workers_and_vanilla_resumption_match() {
         .unwrap();
         assert_eq!(disabled.to_nbt(&biomes), baseline.to_nbt(&biomes));
         let folder = reference.temp.0.join(format!("world-{seed}"));
+        // Huts are placed in decoration. Decorate without features, so that the workers' chunk is the carved
+        // terrain with its structures, as vanilla's probe places them.
+        let structures_only = structures_only(&data);
         let generator = overworld_generator(
             seed,
-            Arc::clone(&data),
+            Arc::clone(&structures_only),
             Arc::clone(&templates),
             true,
             &biomes,
         )
         .unwrap();
-        let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+        let starts =
+            overworld_starts(seed, Arc::clone(&structures_only), Arc::clone(&templates)).unwrap();
+        let source = decorated_with_structures(
+            generator,
+            starts,
+            seed,
+            structures_only,
+            Arc::clone(&templates),
+        )
+        .unwrap();
+        let mut world = World::open_with_source(&folder, &biomes, source).unwrap();
         let positions: Vec<_> = targets.iter().map(|(p, _)| *p).collect();
         wait(&mut world, &positions);
         let mut saved = Vec::new();
@@ -422,6 +435,15 @@ fn hut_blocks_metadata_workers_and_vanilla_resumption_match() {
     }
 }
 
+/// Worldgen data whose biomes list no features, so that decoration places only structures.
+fn structures_only(data: &WorldgenData) -> Arc<WorldgenData> {
+    let mut data = data.clone();
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
+    Arc::new(data)
+}
+
 fn wait(world: &mut World, positions: &[ChunkPos]) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -528,22 +550,28 @@ fn workers_place_saved_neighbor_huts_and_preserve_source_records() {
     };
     let terrain = NoiseBasedChunkGenerator::overworld(seed, &data).unwrap();
     let mut baseline = terrain.generate_chunk_carved(pos.x, pos.z, &data).unwrap();
-    saved.place_in_chunk(
-        &mut baseline,
-        seed,
-        &mut |_, _| unreachable!("no pyramid"),
-        &mut |_, _, _| unreachable!("no pyramid"),
-    );
-    let mut expected = harpas_engine::worldgen::into_anvil(baseline).unwrap();
+    // The generator saves the chunk at carvers with the hut's reference but none of its blocks.
+    let mut carved = harpas_engine::worldgen::into_anvil(baseline.clone()).unwrap();
     let mut references = Compound::new();
     references.insert("minecraft:swamp_hut", Nbt::LongArray(vec![0]));
     let mut records = Compound::new();
     records.insert("starts", Compound::new());
     records.insert("References", references);
-    expected.rest.insert("structures", records);
-    let generator = overworld_generator(seed, Arc::clone(&data), templates, true, &biomes).unwrap();
+    carved.rest.insert("structures", records);
+    let data = structures_only(&data);
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(&templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
     let actual = generator(pos, &reader).unwrap();
-    assert_eq!(actual.to_nbt(&biomes), expected.to_nbt(&biomes));
+    assert_eq!(actual.to_nbt(&biomes), carved.to_nbt(&biomes));
+    // Decoration places the saved hut's intersection at its saved height.
+    saved.place_swamp_hut(&mut baseline);
+    let expected = blocks(&baseline);
     // The source record is not copied into the target or mutated by placing its intersection.
     let Nbt::Compound(records) = source.get("structures").unwrap() else {
         panic!("structures");
@@ -556,21 +584,62 @@ fn workers_place_saved_neighbor_huts_and_preserve_source_records() {
         Some(&Nbt::Compound(source_tag))
     );
     let folder = reference.temp.0.join("neighbor-world");
-    let generator = Arc::new(move |p, _: &harpas_engine::world::ChunkReader<'_>| {
-        generator(p, &|source_pos| {
-            Ok(Some(if source_pos == (ChunkPos { x: 0, z: 0 }) {
-                source.clone()
-            } else {
-                empty.clone()
-            }))
-        })
-    });
-    let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
-    wait(&mut world, &[pos]);
-    let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
-        panic!("generated neighbor");
+    let saved_reader = move |source_pos: ChunkPos| -> std::io::Result<Option<Compound>> {
+        Ok(Some(if source_pos == (ChunkPos { x: 0, z: 0 }) {
+            source.clone()
+        } else {
+            empty.clone()
+        }))
     };
-    assert_eq!(chunk.to_nbt(&biomes), expected.to_nbt(&biomes));
+    let saved_reader = Arc::new(saved_reader);
+    let read = Arc::clone(&saved_reader);
+    let generator = Arc::new(move |p, _: &harpas_engine::world::ChunkReader<'_>| {
+        generator(p, &|source_pos| read(source_pos))
+    });
+    let overworld = overworld_starts(seed, Arc::clone(&data), Arc::clone(&templates)).unwrap();
+    let starts = Arc::new(move |p, _: &harpas_engine::world::ChunkReader<'_>| {
+        overworld(p, &|source_pos| saved_reader(source_pos))
+    });
+    let source = decorated_with_structures(generator, starts, seed, data, templates).unwrap();
+    let mut world = World::open_with_source(&folder, &biomes, source).unwrap();
+    wait(&mut world, &[pos]);
+    let decorated = |world: &World| {
+        let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
+            panic!("decorated neighbor");
+        };
+        let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biomes.len());
+        for y in -64..320 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let section = chunk.sections[((y + 64) / 16) as usize]
+                        .section
+                        .as_ref()
+                        .unwrap();
+                    generated.set_block_state(
+                        x,
+                        y,
+                        z,
+                        section.block_state(x, (y & 15) as usize, z),
+                    );
+                }
+            }
+        }
+        let nbt = chunk.to_nbt(&biomes);
+        let Some(Nbt::Compound(records)) = nbt.get("structures") else {
+            panic!("structures");
+        };
+        assert_eq!(records.get("starts"), Some(&Nbt::Compound(Compound::new())));
+        assert_eq!(
+            records.get("References"),
+            carved.rest.get("structures").and_then(|r| match r {
+                Nbt::Compound(r) => r.get("References"),
+                _ => None,
+            })
+        );
+        (blocks(&generated), nbt)
+    };
+    let (blocks, nbt) = decorated(&world);
+    assert_eq!(blocks, expected);
     world.flush().unwrap();
     drop(world);
     let mut world = World::open(&folder, &biomes).unwrap();
@@ -578,5 +647,5 @@ fn workers_place_saved_neighbor_huts_and_preserve_source_records() {
     let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
         panic!("reloaded neighbor");
     };
-    assert_eq!(chunk.to_nbt(&biomes), expected.to_nbt(&biomes));
+    assert_eq!(chunk.to_nbt(&biomes), nbt);
 }

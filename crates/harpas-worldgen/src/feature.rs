@@ -979,9 +979,9 @@ pub struct DecorationStructures<'a> {
     pub data: &'a WorldgenData,
     /// The owner's templates.
     pub templates: &'a StructureTemplates,
-    /// The starts whose pieces reach the chunk (its structure references). Jigsaw and buried treasure starts
-    /// place blocks here so far; the other structures are placed after carvers. Placement can change a start,
-    /// as a buried treasure moves its piece to its chest.
+    /// The starts whose pieces reach the chunk (its structure references). Jigsaw, buried treasure and swamp
+    /// hut starts place blocks here so far; the other structures are placed after carvers. Placement can change
+    /// a start, as a buried treasure moves its piece to its chest and a swamp hut saves its ground height.
     pub starts: &'a mut [StructureStart],
 }
 
@@ -1033,6 +1033,11 @@ pub fn apply_biome_decoration_with_structures(
                             &mut features,
                             random,
                         )?;
+                    } else if id == "minecraft:swamp_hut"
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        start.place_swamp_hut(&mut chunk);
+                        world.put_back(chunk);
                     } else if id == "minecraft:buried_treasure"
                         && let Some(mut chunk) = world.take(chunk_x, chunk_z)
                     {

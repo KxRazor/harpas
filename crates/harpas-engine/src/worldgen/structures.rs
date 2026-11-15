@@ -233,7 +233,11 @@ impl ChunkStructures {
             .iter_mut()
             .chain(self.neighbor_pieces.iter_mut())
             .flat_map(|start| {
-                if start.structure == "minecraft:buried_treasure" {
+                // Buried treasure and swamp huts are placed in decoration.
+                if matches!(
+                    start.structure.as_str(),
+                    "minecraft:buried_treasure" | "minecraft:swamp_hut"
+                ) {
                     return Vec::new();
                 }
                 if matches!(
@@ -819,8 +823,8 @@ impl Structures {
             .collect();
         let beardifier = Beardifier::for_starts(pos.x, pos.z, data, referenced.iter().copied())
             .map_err(io::Error::other)?;
-        // Template hulls, pyramids, monuments and igloos can span several chunks; saved huts and
-        // temples can too. Place their intersection without moving or duplicating the source
+        // Template hulls, pyramids, monuments and igloos can span several chunks; saved temples can
+        // too. Place their intersection without moving or duplicating the source
         // chunk's saved start. Vanilla only invokes a monument in chunks that intersect its saved
         // bounds, so the five-block exterior clearing is clipped to those chunks.
         let neighbor_pieces = nearby
@@ -837,8 +841,7 @@ impl Structures {
                         min_z + 15,
                     ) && matches!(
                         s.structure.as_str(),
-                        "minecraft:swamp_hut"
-                            | "minecraft:stronghold"
+                        "minecraft:stronghold"
                             | "minecraft:mineshaft"
                             | "minecraft:mineshaft_mesa"
                             | "minecraft:desert_pyramid"

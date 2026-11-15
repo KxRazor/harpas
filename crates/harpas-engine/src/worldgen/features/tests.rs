@@ -522,3 +522,28 @@ fn block_entities_follow_their_blocks_through_a_proto_chunk() {
     };
     assert_eq!(entities, &vec![elsewhere, chest, nest]);
 }
+
+#[test]
+fn decoration_appends_postprocessing_to_the_marks_saved_at_carvers() {
+    use harpas_worldgen::{ChunkFeatureWorld, FeatureWorld};
+    let pos = ChunkPos { x: -1, z: 3 };
+    let mut shell =
+        into_anvil_with_mask(stone_chunk(pos), CarvingMask::new(-64, 384).to_raw_data()).unwrap();
+    // A mark saved at carvers in the section at Y 0 to 15.
+    let mut lists = vec![List::Empty; 24];
+    lists[4] = List::Short(vec![0x0123]);
+    shell
+        .rest
+        .insert("PostProcessing", Nbt::List(List::List(lists.clone())));
+    let mut proto = into_proto(shell, pos, 1).unwrap();
+    let mut world = ChunkFeatureWorld::new(&mut proto.blocks, 0);
+    world.mark_postprocessing(-16 + 5, 2, 48 + 7);
+    world.mark_postprocessing(-16 + 15, 70, 48);
+    let chunk = into_chunk(proto).unwrap();
+    lists[4] = List::Short(vec![0x0123, 0x0725]);
+    lists[8] = List::Short(vec![0x006f]);
+    assert_eq!(
+        chunk.rest.get("PostProcessing"),
+        Some(&Nbt::List(List::List(lists)))
+    );
+}

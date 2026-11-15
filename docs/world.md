@@ -282,8 +282,18 @@ and the owner **accepts it once**:
     now compile without dropping entries. `filter_processor_parity` compares those lists, all 13 shipped
     filters in isolation and synthetic chains against `StructureTemplate.processBlockInfos`, including
     settings random consumption, float thresholds, empty lists, world limits and every registry state in
-    the full sample. Gravity, jigsaw replacement and the other runtime-added processors, template placement,
-    waterlogging, shape updates and worker integration remain separate work.
+    the full sample.
+    Runtime-added `gravity` processors read any of the six heightmaps through `ProcessorWorld`, retaining
+    the original template-local Y even when earlier processors have already moved the block. A live level
+    substitutes `WORLD_SURFACE` and `OCEAN_FLOOR` for their worldgen variants; generation regions keep the
+    requested kind. Subsequent rules, filters, positional random sources and capped finalizers read the
+    adjusted position. Gravity preserves state and NBT and consumes no random draws. `process_in_world`
+    provides these terrain reads, while `process` remains the block-read-only entry point for lists that
+    need no heightmaps. `gravity_processor_parity` compares complete processing passes and terrain-read
+    traces with vanilla, including chained gravity, rotations, offsets and integer overflow, world limits,
+    missing and existing NBT, and explicit versus positional settings randomness. Jigsaw replacement and
+    the other runtime-added processors, template placement, waterlogging, shape updates and worker
+    integration remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

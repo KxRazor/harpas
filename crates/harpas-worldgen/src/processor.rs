@@ -1,4 +1,4 @@
-//! Template rules, block filters and capped substitutions, observed through vanilla's processor APIs.
+//! Template rules, block filters, gravity and capped substitutions, observed through vanilla's APIs.
 //!
 //! This is the processing part of jigsaw placement. Processor lists retain their other processor
 //! types in [`WorldgenData`]; a list with an unported processor does not compile partially.
@@ -6,7 +6,7 @@
 mod capped;
 mod pipeline;
 pub use capped::CappedProcessor;
-pub use pipeline::ProcessorPipeline;
+pub use pipeline::{ProcessorPipeline, ProcessorWorld};
 
 use harpas_core::math::position_seed;
 use harpas_core::nbt::{Compound, Nbt};

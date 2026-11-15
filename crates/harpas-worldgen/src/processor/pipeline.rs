@@ -7,11 +7,29 @@ use serde_json::Value;
 
 use super::{CappedProcessor, ProcessorBlock, RuleProcessor, field, invalid, string};
 use crate::data::{WorldgenData, WorldgenDataError, parse_block_state_def, parse_holder_set};
+use crate::generator::HeightmapType;
 use crate::surface::resolve_block_state;
+
+/// Terrain read by template processors, before any of the template's blocks are placed.
+pub trait ProcessorWorld {
+    /// Existing block state at the current, possibly processor-adjusted world position.
+    fn block_at(&mut self, pos: [i32; 3]) -> u32;
+
+    /// First available Y in a column, as returned by vanilla's `LevelReader.getHeight`.
+    fn heightmap(&mut self, kind: HeightmapType, x: i32, z: i32) -> i32;
+
+    /// Whether placement targets a live level (`ServerLevel`) instead of a generation region.
+    ///
+    /// Gravity substitutes the live heightmaps for their worldgen variants in a live level.
+    fn is_server_level(&self) -> bool {
+        false
+    }
+}
 
 /// A complete, ordered processor list, compiled without silently dropping unsupported entries.
 ///
-/// Supports `rule`, rule-delegating `capped`, `block_rot`, `protected_blocks`, `block_ignore` and `nop`.
+/// Supports `rule`, rule-delegating `capped`, `block_rot`, `protected_blocks`, `block_ignore`,
+/// `gravity` and `nop`.
 /// Processing precedes template block placement, waterlogging, shape updates and chunk clipping.
 #[derive(Debug, Clone)]
 pub struct ProcessorPipeline {
@@ -28,6 +46,10 @@ enum Processor {
     },
     Protected(Vec<bool>),
     Ignore(Vec<bool>),
+    Gravity {
+        heightmap: HeightmapType,
+        offset: i32,
+    },
     Nop,
 }
 
@@ -92,6 +114,23 @@ impl ProcessorPipeline {
                     }
                     Processor::Ignore(membership(context, &Value::Array(names), data)?)
                 }
+                "minecraft:gravity" => {
+                    let heightmap = match json.get("heightmap") {
+                        None => HeightmapType::WorldSurfaceWg,
+                        Some(value) => HeightmapType::ALL
+                            .into_iter()
+                            .find(|kind| value.as_str() == Some(kind.nbt_key()))
+                            .ok_or_else(|| invalid(context, "unknown gravity heightmap"))?,
+                    };
+                    let offset = match json.get("offset") {
+                        None => 0,
+                        Some(value) => value
+                            .as_i64()
+                            .and_then(|v| i32::try_from(v).ok())
+                            .ok_or_else(|| invalid(context, "invalid gravity offset"))?,
+                    };
+                    Processor::Gravity { heightmap, offset }
+                }
                 "minecraft:nop" => Processor::Nop,
                 _ => return Ok(None),
             });
@@ -106,13 +145,42 @@ impl ProcessorPipeline {
     /// by all rot processors; `None` uses a fresh positional legacy source per call, as vanilla does.
     /// World `seed` and template `origin` independently seed capped finalization. `pivot` is the rule
     /// predicates' reference position. Neither chunk bounds nor block placement belong in this pass.
+    ///
+    /// # Panics
+    ///
+    /// If a surviving block reaches a gravity processor. Use [`Self::process_in_world`] for lists
+    /// that require heightmaps.
     pub fn process(
         &self,
         seed: i64,
         origin: [i32; 3],
         pivot: [i32; 3],
         blocks: &[ProcessorBlock],
-        mut block_at: impl FnMut([i32; 3]) -> u32,
+        block_at: impl FnMut([i32; 3]) -> u32,
+        settings_random: Option<&mut dyn RandomSource>,
+    ) -> Vec<ProcessorBlock> {
+        self.process_in_world(
+            seed,
+            origin,
+            pivot,
+            blocks,
+            &mut BlockReader(block_at),
+            settings_random,
+        )
+    }
+
+    /// Processes a complete template using block and heightmap reads from the supplied world.
+    ///
+    /// Like [`Self::process`], but also supports gravity. Gravity preserves each block's original
+    /// local Y (`blocks[i].pos[1] - origin[1]`), independently of earlier processors' movement.
+    /// Later filters, rules, positional random sources and finalizers read the adjusted position.
+    pub fn process_in_world(
+        &self,
+        seed: i64,
+        origin: [i32; 3],
+        pivot: [i32; 3],
+        blocks: &[ProcessorBlock],
+        world: &mut impl ProcessorWorld,
         mut settings_random: Option<&mut dyn RandomSource>,
     ) -> Vec<ProcessorBlock> {
         let mut output = Vec::with_capacity(blocks.len());
@@ -121,12 +189,23 @@ impl ProcessorPipeline {
             for processor in &self.processors {
                 match processor {
                     Processor::Rule(rule) => {
-                        block = rule.process(&block, block_at(block.pos), pivot);
+                        block = rule.process(&block, world.block_at(block.pos), pivot);
                     }
-                    Processor::Protected(states) if states[block_at(block.pos) as usize] => {
+                    Processor::Protected(states) if states[world.block_at(block.pos) as usize] => {
                         continue 'blocks;
                     }
                     Processor::Ignore(states) if states[block.state as usize] => continue 'blocks,
+                    Processor::Gravity { heightmap, offset } => {
+                        let heightmap = match (*heightmap, world.is_server_level()) {
+                            (HeightmapType::WorldSurfaceWg, true) => HeightmapType::WorldSurface,
+                            (HeightmapType::OceanFloorWg, true) => HeightmapType::OceanFloor,
+                            (kind, _) => kind,
+                        };
+                        let height = world.heightmap(heightmap, block.pos[0], block.pos[2]);
+                        block.pos[1] = height
+                            .wrapping_add(*offset)
+                            .wrapping_add(original.pos[1].wrapping_sub(origin[1]));
+                    }
                     Processor::Rot {
                         rottable,
                         integrity,
@@ -152,10 +231,22 @@ impl ProcessorPipeline {
         }
         for processor in &self.processors {
             if let Processor::Capped(cap) = processor {
-                cap.finalize(seed, origin, pivot, &mut output, &mut block_at);
+                cap.finalize(seed, origin, pivot, &mut output, |pos| world.block_at(pos));
             }
         }
         output
+    }
+}
+
+struct BlockReader<F>(F);
+
+impl<F: FnMut([i32; 3]) -> u32> ProcessorWorld for BlockReader<F> {
+    fn block_at(&mut self, pos: [i32; 3]) -> u32 {
+        self.0(pos)
+    }
+
+    fn heightmap(&mut self, _: HeightmapType, _: i32, _: i32) -> i32 {
+        panic!("gravity requires ProcessorPipeline::process_in_world")
     }
 }
 
@@ -407,6 +498,117 @@ mod tests {
                     None
                 ),
                 blocks
+            );
+        }
+    }
+
+    #[test]
+    fn gravity_uses_original_local_height_and_live_heightmaps_without_drawing_random() {
+        struct Terrain {
+            live: bool,
+            queries: Vec<HeightmapType>,
+        }
+        impl ProcessorWorld for Terrain {
+            fn block_at(&mut self, _: [i32; 3]) -> u32 {
+                panic!("gravity read a block")
+            }
+            fn heightmap(&mut self, kind: HeightmapType, x: i32, z: i32) -> i32 {
+                assert_eq!([x, z], [-17, 32]);
+                self.queries.push(kind);
+                match kind {
+                    HeightmapType::WorldSurfaceWg => 64,
+                    HeightmapType::WorldSurface => 90,
+                    HeightmapType::OceanFloorWg => -30,
+                    HeightmapType::OceanFloor => 10,
+                    _ => panic!("unexpected heightmap"),
+                }
+            }
+            fn is_server_level(&self) -> bool {
+                self.live
+            }
+        }
+        let pipeline = compile(
+            &[
+                json!({"processor_type": "minecraft:gravity"}),
+                json!({"processor_type": "minecraft:gravity", "heightmap": "OCEAN_FLOOR_WG", "offset": -1}),
+            ],
+            &WorldgenData::default(),
+        );
+        let input = block("oak_stairs", [-17, 77, 32]);
+        for (live, y, queries) in [
+            (
+                false,
+                -24,
+                [HeightmapType::WorldSurfaceWg, HeightmapType::OceanFloorWg],
+            ),
+            (
+                true,
+                16,
+                [HeightmapType::WorldSurface, HeightmapType::OceanFloor],
+            ),
+        ] {
+            let mut world = Terrain {
+                live,
+                queries: Vec::new(),
+            };
+            let mut random = XoroshiroRandom::new(42);
+            let output = pipeline.process_in_world(
+                123,
+                [-20, 70, 30],
+                [999, -64, 999],
+                std::slice::from_ref(&input),
+                &mut world,
+                Some(&mut random),
+            );
+            assert_eq!(
+                output,
+                [ProcessorBlock {
+                    pos: [-17, y, 32],
+                    ..input.clone()
+                }]
+            );
+            assert_eq!(world.queries, queries);
+            assert_eq!(random.next_long(), XoroshiroRandom::new(42).next_long());
+        }
+    }
+
+    #[test]
+    fn filtered_blocks_and_empty_templates_do_not_need_gravity_heightmaps() {
+        let pipeline = compile(
+            &[
+                json!({"processor_type": "minecraft:block_ignore", "blocks": [{"Name": "minecraft:stone"}]}),
+                json!({"processor_type": "minecraft:gravity"}),
+            ],
+            &WorldgenData::default(),
+        );
+        for blocks in [vec![], vec![block("stone", [0; 3])]] {
+            assert!(
+                pipeline
+                    .process(0, [0; 3], [0; 3], &blocks, |_| panic!("read terrain"), None)
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_gravity_definitions_report_their_context() {
+        for (key, value) in [
+            ("heightmap", json!("unknown")),
+            ("heightmap", json!(17)),
+            ("heightmap", Value::Null),
+            ("offset", json!(1.5)),
+            ("offset", json!(i64::from(i32::MAX) + 1)),
+            ("offset", json!(i64::from(i32::MIN) - 1)),
+            ("offset", json!("-1")),
+            ("offset", Value::Null),
+        ] {
+            let mut entry = json!({"processor_type": "minecraft:gravity"});
+            entry[key] = value;
+            assert!(
+                ProcessorPipeline::compile("bad-gravity", &[entry], &WorldgenData::default())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("bad-gravity")
             );
         }
     }

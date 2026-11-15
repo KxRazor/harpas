@@ -228,7 +228,11 @@ vanilla for the same seed.
           pipeline with rules and capped finalizers. All 40 shipped processor lists, original versus current
           states, preserved NBT and placement-settings randomness are compared with vanilla's own pipeline
           (`filter_processor_parity`). Template placement on workers follows below.
-    - [ ] Remaining processors, template block placement and feature/list pool elements on chunk workers.
+    - [x] Template gravity processors: all six heightmaps, local heights, live-level heightmap substitutions
+          and ordered filter/rule/finalizer interactions, compared with vanilla's own pipeline
+          (`gravity_processor_parity`).
+    - [ ] Remaining processors (including jigsaw replacement), template block placement and feature/list pool
+          elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

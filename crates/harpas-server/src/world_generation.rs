@@ -118,11 +118,12 @@ pub(crate) fn prepare(
             "the normal world preset has an unsupported Overworld",
         ));
     }
+    let structures = structures_enabled(&root)?;
     let generator = harpas_engine::worldgen::overworld_generator(
         seed,
         Arc::clone(&data),
-        templates,
-        structures_enabled(&root)?,
+        Arc::clone(&templates),
+        structures,
         harpas_java::biome_names(),
     )?;
     if level.is_none() {
@@ -133,7 +134,18 @@ pub(crate) fn prepare(
         info!(
             "New chunks run the FEATURES stage, which places only ores and simple vegetation so far"
         );
-        harpas_engine::worldgen::decorated(generator, seed, &data)?
+        if structures {
+            let starts = harpas_engine::worldgen::overworld_starts(
+                seed,
+                Arc::clone(&data),
+                Arc::clone(&templates),
+            )?;
+            harpas_engine::worldgen::decorated_with_structures(
+                generator, starts, seed, data, templates,
+            )?
+        } else {
+            harpas_engine::worldgen::decorated(generator, seed, &data)?
+        }
     } else {
         harpas_engine::world::generator_source(generator)
     };

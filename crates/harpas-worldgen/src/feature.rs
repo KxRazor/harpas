@@ -21,7 +21,9 @@ use crate::data::{
 };
 use crate::generator::{GeneratedChunk, HeightmapType};
 use crate::placement::{CompiledModifier, compile_placement, place_positions};
+use crate::structure::StructureStart;
 use crate::surface::resolve_block_state;
+use crate::template::StructureTemplates;
 
 /// Number of vanilla generation steps (GenerationStep.Decoration).
 pub const STEP_COUNT: usize = 11;
@@ -236,6 +238,17 @@ impl RegionFeatureWorld {
     /// A chunk in the region.
     pub fn chunk(&self, chunk_x: i32, chunk_z: i32) -> Option<&GeneratedChunk> {
         self.chunks.get(&(chunk_x, chunk_z))
+    }
+
+    /// Takes a chunk out of the region for a while; reads of it see air until [`Self::put_back`] returns it.
+    pub(crate) fn take(&mut self, chunk_x: i32, chunk_z: i32) -> Option<GeneratedChunk> {
+        self.chunks.remove(&(chunk_x, chunk_z))
+    }
+
+    /// Returns a chunk taken out with [`Self::take`].
+    pub(crate) fn put_back(&mut self, chunk: GeneratedChunk) {
+        self.chunks
+            .insert((chunk.chunk_x(), chunk.chunk_z()), chunk);
     }
 
     /// Removes and returns a chunk from the region.
@@ -955,12 +968,93 @@ pub fn apply_biome_decoration(
     chunk_x: i32,
     chunk_z: i32,
 ) -> Result<(), WorldgenDataError> {
+    decorate(world, index, world_seed, chunk_x, chunk_z, |_, _, _, _| {
+        Ok(())
+    })
+}
+
+/// The structures one chunk's decoration places, step by step before the features of each step.
+pub struct DecorationStructures<'a> {
+    /// Worldgen definitions, for each structure's step and pieces.
+    pub data: &'a WorldgenData,
+    /// The owner's templates.
+    pub templates: &'a StructureTemplates,
+    /// The starts whose pieces reach the chunk (its structure references). Only jigsaw starts place blocks here
+    /// so far; the other structures are placed after carvers.
+    pub starts: &'a [StructureStart],
+}
+
+/// Decorates one chunk with its structures: vanilla's `applyBiomeDecoration`, in which each step places its
+/// structures, in registry order with a random source seeded for each, and then its features.
+pub fn apply_biome_decoration_with_structures(
+    world: &mut RegionFeatureWorld,
+    index: &FeatureIndex,
+    world_seed: i64,
+    chunk_x: i32,
+    chunk_z: i32,
+    structures: &DecorationStructures<'_>,
+) -> Result<(), WorldgenDataError> {
+    let mut features = FeatureCompiler::new(structures.data);
+    decorate(
+        world,
+        index,
+        world_seed,
+        chunk_x,
+        chunk_z,
+        |world, step, decoration, random| {
+            let mut ids: Vec<&str> = structures
+                .data
+                .structures
+                .iter()
+                .filter(|(_, structure)| {
+                    crate::structure::STEPS.get(step) == Some(&structure.step.as_str())
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
+            ids.sort_unstable();
+            for (structure_index, id) in ids.into_iter().enumerate() {
+                random.set_feature_seed(decoration, structure_index as i32, step as i32);
+                for start in structures.starts {
+                    if start.structure == id && start.is_jigsaw() {
+                        start.place_jigsaw_in_region(
+                            world,
+                            chunk_x,
+                            chunk_z,
+                            world_seed,
+                            structures.data,
+                            structures.templates,
+                            &mut features,
+                            random,
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
+/// `applyBiomeDecoration`'s loop over the steps, running `structures` before the features of each step.
+fn decorate<W: FeatureWorld>(
+    world: &mut W,
+    index: &FeatureIndex,
+    world_seed: i64,
+    chunk_x: i32,
+    chunk_z: i32,
+    mut structures: impl FnMut(
+        &mut W,
+        usize,
+        i64,
+        &mut WorldgenRandom<XoroshiroRandom>,
+    ) -> Result<(), WorldgenDataError>,
+) -> Result<(), WorldgenDataError> {
     world.start_region(world_seed, chunk_x, chunk_z);
     let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
     let origin = [chunk_x * 16, world.min_y(), chunk_z * 16];
     let decoration = random.set_decoration_seed(world_seed, origin[0], origin[2]);
     let biomes = world.region_biomes(chunk_x, chunk_z);
     for (step, order) in index.steps.iter().enumerate() {
+        structures(world, step, decoration, &mut random)?;
         let mut positions = BTreeSet::<usize>::new();
         for &biome in &biomes {
             let lists = index

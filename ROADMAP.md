@@ -248,11 +248,13 @@ vanilla for the same seed.
           feature placed through its placement modifiers into the generation region (`pool_element_parity`).
           The ancient city's `sculk_patch` feature follows with the feature families.
     - [x] Jigsaw pieces on chunk workers: decoration-seeded random, processor pivot, clipped templates and
-          feature elements in a scratch region, compared in 368 chunks of nine real starts
-          (`jigsaw_chunk_parity`). Feature element blocks in neighboring chunks follow with structures in the
-          FEATURES schedule, and the ancient city's sculk patches with that feature.
+          feature elements written into the region, compared in 368 chunks of nine real starts and their
+          neighbors (`jigsaw_chunk_parity`). The ancient city's sculk patches follow with that feature.
     - [ ] Remaining capped delegates.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
+    - [x] Structures placed by each decoration step before its features, with their own seeds, for every start
+          that reaches the chunk; jigsaw structures run there (`jigsaw_chunk_parity`, `feature_worker_parity`).
+    - [ ] The other structures in their steps, then full resumption from `features`.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.
   - [x] Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with

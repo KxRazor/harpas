@@ -1,28 +1,24 @@
-//! Jigsaw structure blocks in one chunk: vanilla's `StructureStart.placeInChunk` for pool element pieces, compared
-//! with vanilla on carved chunks of real starts (`jigsaw_chunk_parity`).
+//! Jigsaw structure blocks in one chunk's decoration: vanilla's `StructureStart.placeInChunk` for pool element
+//! pieces, compared with vanilla on carved chunks of real starts (`jigsaw_chunk_parity`).
 //!
-//! The pieces that reach the chunk place their pool elements in order, sharing the random source vanilla seeds
-//! from the chunk's decoration seed and the structure's index in its decoration step. Template blocks are
-//! clipped to the chunk. A feature element writes into the eight neighboring chunks too; those writes stay in a
-//! scratch copy for the rest of the pass, since only the chunk itself is kept, until structures run in the
-//! FEATURES schedule. Terrain more than a chunk away reads as air and its heights as the world's bottom, as in a
-//! generation region whose farther chunks have not started their terrain yet.
+//! The pieces that reach the chunk place their pool elements in order, sharing the random source the decoration
+//! seeds for the structure. Template blocks are clipped to the chunk; feature elements write into the whole
+//! region, as other features do. Terrain beyond the region reads as air and its heights as the world's bottom,
+//! as in a generation region whose farther chunks have not started their terrain yet.
 
-use std::collections::HashMap;
-
-use harpas_core::nbt::{Compound, Nbt};
-use harpas_core::random::{WorldgenRandom, XoroshiroRandom};
+use harpas_core::nbt::Nbt;
+use harpas_core::random::{RandomSource, WorldgenRandom};
 
 use super::{BoundingBox, SingleElementPlacement, StructureStart};
 use crate::configured::{FeatureCompiler, place_placed};
 use crate::data::{PoolElementDef, WorldgenData, WorldgenDataError};
 use crate::feature::{FeatureWorld, RegionFeatureWorld};
-use crate::generator::{GeneratedChunk, HeightmapType};
+use crate::generator::HeightmapType;
 use crate::processor::ProcessorWorld;
 use crate::template::StructureTemplates;
 
 /// `GenerationStep.Decoration`, in vanilla's order.
-const STEPS: [&str; 11] = [
+pub(crate) const STEPS: [&str; 11] = [
     "raw_generation",
     "lakes",
     "local_modifications",
@@ -37,8 +33,8 @@ const STEPS: [&str; 11] = [
 ];
 
 /// A structure's decoration step and its index among the structures of that step, in registry order, which
-/// together seed the random source its blocks are placed with.
-pub(crate) fn decoration_slot(data: &WorldgenData, structure: &str) -> Option<(i32, i32)> {
+/// together seed the random source its blocks are placed with (`WorldgenRandom.setFeatureSeed`).
+pub fn decoration_slot(data: &WorldgenData, structure: &str) -> Option<(i32, i32)> {
     let step = &data.structures.get(structure)?.step;
     let ordinal = STEPS.iter().position(|name| name == step)?;
     let index = data
@@ -50,44 +46,32 @@ pub(crate) fn decoration_slot(data: &WorldgenData, structure: &str) -> Option<(i
 }
 
 impl StructureStart {
-    /// Places the pool elements of the jigsaw pieces that reach `chunk`, and returns the block entities they
-    /// create there.
+    /// Whether this is a start of a jigsaw structure, whose blocks [`Self::place_jigsaw_in_region`] places.
+    pub fn is_jigsaw(&self) -> bool {
+        self.pieces.iter().any(|piece| piece.jigsaw.is_some())
+    }
+
+    /// Places the pool elements of the jigsaw pieces that reach the chunk at `chunk_x`, `chunk_z`, which `world`
+    /// holds with its neighbors, and stores the block entities they create in that chunk.
     ///
-    /// `neighbor` gives the carved chunks around the target, which pieces read and feature elements write.
-    /// Starts of other structures place nothing.
-    pub fn place_jigsaw_in_chunk<'n>(
+    /// `random` is the decoration's source, seeded for this structure. A feature that is not ported yet, the
+    /// ancient city's sculk patches, places nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_jigsaw_in_region<R: RandomSource>(
         &self,
-        chunk: &mut GeneratedChunk,
+        world: &mut RegionFeatureWorld,
+        chunk_x: i32,
+        chunk_z: i32,
         seed: i64,
         data: &WorldgenData,
         templates: &StructureTemplates,
-        neighbor: impl Fn(i32, i32) -> Option<&'n GeneratedChunk>,
-    ) -> Result<Vec<Compound>, WorldgenDataError> {
+        features: &mut FeatureCompiler,
+        random: &mut WorldgenRandom<R>,
+    ) -> Result<(), WorldgenDataError> {
         let Some(first) = self.pieces.first() else {
-            return Ok(Vec::new());
+            return Ok(());
         };
-        if data
-            .structures
-            .get(&self.structure)
-            .is_none_or(|structure| structure.jigsaw.is_none())
-        {
-            return Ok(Vec::new());
-        }
-        let Some((index, step)) = decoration_slot(data, &self.structure) else {
-            return Ok(Vec::new());
-        };
-        let (chunk_x, chunk_z) = (chunk.chunk_x(), chunk.chunk_z());
-        let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
-        let decoration = random.set_decoration_seed(seed, chunk_x * 16, chunk_z * 16);
-        random.set_feature_seed(decoration, index, step);
         let pivot = pivot(&first.bounding_box);
-        let mut region = Region {
-            scratch: HashMap::new(),
-            neighbor,
-            min_y: chunk.min_y(),
-        };
-        let mut features = FeatureCompiler::new(data);
-        let mut entities = Vec::new();
         for piece in &self.pieces {
             let Some(jigsaw) = &piece.jigsaw else {
                 continue;
@@ -101,30 +85,35 @@ impl StructureStart {
                 continue;
             }
             if let PoolElementDef::Feature { feature, .. } = &jigsaw.element {
-                // A feature that is not ported yet, the ancient city's sculk patches, places nothing.
-                let Some(compiled) = features.placed(feature)? else {
-                    continue;
-                };
-                region.with_feature_world(chunk, seed, |world| {
-                    place_placed(world, &compiled, &mut random, jigsaw.position);
-                });
+                if let Some(compiled) = features.placed(feature)? {
+                    place_placed(world, &compiled, random, jigsaw.position);
+                }
                 continue;
             }
-            entities.extend(
-                SingleElementPlacement {
-                    data,
-                    templates,
-                    seed,
-                    position: jigsaw.position,
-                    pivot,
-                    rotation: jigsaw.rotation,
-                    ignore_waterlogging: piece.save_data.get("liquid_settings")
-                        == Some(&Nbt::from("ignore_waterlogging")),
-                }
-                .place(&jigsaw.element, chunk, &mut region, &mut random)?,
-            );
+            let Some(mut chunk) = world.take(chunk_x, chunk_z) else {
+                return Ok(());
+            };
+            let placed = SingleElementPlacement {
+                data,
+                templates,
+                seed,
+                position: jigsaw.position,
+                pivot,
+                rotation: jigsaw.rotation,
+                ignore_waterlogging: piece.save_data.get("liquid_settings")
+                    == Some(&Nbt::from("ignore_waterlogging")),
+            }
+            .place(&jigsaw.element, &mut chunk, &mut Region(world), random);
+            world.put_back(chunk);
+            for entity in placed? {
+                let [x, y, z] = ["x", "y", "z"].map(|key| match entity.get(key) {
+                    Some(Nbt::Int(value)) => *value,
+                    _ => unreachable!("placed block entities have a position"),
+                });
+                world.set_block_entity(x, y, z, entity);
+            }
         }
-        Ok(entities)
+        Ok(())
     }
 }
 
@@ -134,75 +123,15 @@ fn pivot(bounds: &BoundingBox) -> [i32; 3] {
     [center(0), bounds.min[1], center(2)]
 }
 
-/// The chunks around the target: the carved neighbors, or their scratch copies once a feature wrote to them.
-struct Region<F> {
-    scratch: HashMap<(i32, i32), GeneratedChunk>,
-    neighbor: F,
-    min_y: i32,
-}
+/// The rest of the region while a template is placed in its chunk.
+struct Region<'a>(&'a RegionFeatureWorld);
 
-impl<'n, F: Fn(i32, i32) -> Option<&'n GeneratedChunk>> Region<F> {
-    fn chunk<'a>(&'a self, x: i32, z: i32) -> Option<&'a GeneratedChunk>
-    where
-        'n: 'a,
-    {
-        let key = (x >> 4, z >> 4);
-        self.scratch
-            .get(&key)
-            .or_else(|| (self.neighbor)(key.0, key.1))
-    }
-
-    /// Runs `place` in the 3x3 chunks around `target`, then takes the target back and keeps the neighbors'
-    /// writes for the rest of the pass.
-    fn with_feature_world(
-        &mut self,
-        target: &mut GeneratedChunk,
-        seed: i64,
-        place: impl FnOnce(&mut RegionFeatureWorld),
-    ) {
-        let (x, z) = (target.chunk_x(), target.chunk_z());
-        let placeholder = GeneratedChunk::new(x, z, target.min_y(), target.height(), 1);
-        let mut chunks = vec![std::mem::replace(target, placeholder)];
-        for dx in -1..=1 {
-            for dz in -1..=1 {
-                let key = (x + dx, z + dz);
-                if key == (x, z) {
-                    continue;
-                }
-                let copy = self
-                    .scratch
-                    .remove(&key)
-                    .or_else(|| (self.neighbor)(key.0, key.1).cloned());
-                chunks.extend(copy);
-            }
-        }
-        let mut world =
-            RegionFeatureWorld::with_stored_biomes(chunks, seed).expect("chunks of one height");
-        world.start_region(seed, x, z);
-        place(&mut world);
-        for chunk in world.into_chunks() {
-            if (chunk.chunk_x(), chunk.chunk_z()) == (x, z) {
-                *target = chunk;
-            } else {
-                self.scratch
-                    .insert((chunk.chunk_x(), chunk.chunk_z()), chunk);
-            }
-        }
-    }
-}
-
-impl<'n, F: Fn(i32, i32) -> Option<&'n GeneratedChunk>> ProcessorWorld for Region<F> {
+impl ProcessorWorld for Region<'_> {
     fn block_at(&mut self, [x, y, z]: [i32; 3]) -> u32 {
-        self.chunk(x, z).map_or(0, |chunk| {
-            chunk.block_state((x & 15) as usize, y, (z & 15) as usize)
-        })
+        self.0.block_state(x, y, z)
     }
 
     fn heightmap(&mut self, kind: HeightmapType, x: i32, z: i32) -> i32 {
-        self.chunk(x, z).map_or(self.min_y, |chunk| {
-            chunk
-                .heightmaps()
-                .get(kind, (x & 15) as usize, (z & 15) as usize)
-        })
+        self.0.heightmap(kind, x, z)
     }
 }

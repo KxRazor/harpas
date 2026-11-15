@@ -19,9 +19,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use harpas_anvil::{Chunk, ChunkSection};
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_worldgen::{
-    FeatureIndex, GeneratedChunk, HeightmapType, RegionFeatureWorld, WorldgenData,
-    apply_biome_decoration,
+    DecorationStructures, FeatureIndex, GeneratedChunk, HeightmapType, RegionFeatureWorld,
+    StructureTemplates, WorldgenData, apply_biome_decoration,
+    apply_biome_decoration_with_structures,
 };
+
+use super::StartSource;
 
 use crate::world::{ChunkGenerator, ChunkPos, ChunkSource, ChunkStorage, Generated};
 
@@ -66,6 +69,33 @@ pub fn decorated(
     )))
 }
 
+/// Like [`decorated`], but each step also places the structures whose pieces reach the chunk, before its
+/// features, as vanilla's decoration does. Only jigsaw structures are placed here so far; the generator places
+/// the others after carvers.
+pub fn decorated_with_structures(
+    generator: Arc<ChunkGenerator>,
+    starts: Arc<StartSource>,
+    seed: i64,
+    data: Arc<WorldgenData>,
+    templates: Arc<StructureTemplates>,
+) -> io::Result<Arc<dyn ChunkSource>> {
+    let index = FeatureIndex::overworld(&data).map_err(io::Error::other)?;
+    let mut decorator = Decorator::new(generator, seed, index, data.biomes.len(), CAPACITY);
+    decorator.structures = Some(Structures {
+        starts,
+        data,
+        templates,
+    });
+    Ok(Arc::new(decorator))
+}
+
+/// Where a decoration finds its structures.
+struct Structures {
+    starts: Arc<StartSource>,
+    data: Arc<WorldgenData>,
+    templates: Arc<StructureTemplates>,
+}
+
 /// A chunk that has completed carvers but is not final yet.
 struct Proto {
     blocks: GeneratedChunk,
@@ -94,6 +124,7 @@ struct State {
 
 pub(crate) struct Decorator {
     generator: Arc<ChunkGenerator>,
+    structures: Option<Structures>,
     seed: i64,
     index: FeatureIndex,
     biome_count: usize,
@@ -172,6 +203,7 @@ impl Decorator {
     ) -> Self {
         Self {
             generator,
+            structures: None,
             seed,
             index,
             biome_count,
@@ -328,7 +360,7 @@ impl Decorator {
                 decorator: self,
                 positions,
             };
-            let protos = self.run_features(target, protos)?;
+            let protos = self.run_features(target, protos, storage)?;
             claim.release(protos);
             return Ok(true);
         }
@@ -379,6 +411,7 @@ impl Decorator {
         &self,
         target: ChunkPos,
         protos: Vec<(ChunkPos, Box<Proto>)>,
+        storage: &ChunkStorage,
     ) -> io::Result<Vec<(ChunkPos, Box<Proto>)>> {
         let mut shells = HashMap::with_capacity(protos.len());
         let mut blocks = Vec::with_capacity(protos.len());
@@ -394,8 +427,24 @@ impl Decorator {
         }
         let mut world = RegionFeatureWorld::with_stored_biomes(blocks, self.seed)
             .ok_or_else(|| io::Error::other("chunks around a target differ in height"))?;
-        apply_biome_decoration(&mut world, &self.index, self.seed, target.x, target.z)
-            .map_err(io::Error::other)?;
+        if let Some(structures) = &self.structures {
+            let starts = (structures.starts)(target, &|pos| storage.read(pos))?;
+            apply_biome_decoration_with_structures(
+                &mut world,
+                &self.index,
+                self.seed,
+                target.x,
+                target.z,
+                &DecorationStructures {
+                    data: &structures.data,
+                    templates: &structures.templates,
+                    starts: &starts,
+                },
+            )
+        } else {
+            apply_biome_decoration(&mut world, &self.index, self.seed, target.x, target.z)
+        }
+        .map_err(io::Error::other)?;
         let used = self.tick();
         Ok(world
             .into_chunks()

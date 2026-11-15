@@ -364,20 +364,23 @@ and the owner **accepts it once**:
     junctions, which terrain adaptation will need. All jigsaw structures of the
     Overworld are laid out, including trial chambers, which rename pools for each start (`PoolAliasLookup`) and
     start at a random height.
-  - Jigsaw structure blocks run on the chunk workers with the other structures, after carvers
-    (`StructureStart::place_jigsaw_in_chunk`). The pieces that reach a chunk place their pool elements in
-    order with one random source, seeded from the chunk's decoration seed and the structure's index among
-    the structures of its decoration step in registry order; the processors' reference position is the
-    center of the first piece's columns at its lowest Y. Template blocks are clipped to the chunk, and
-    terrain matching reads the chunk's heights as blocks are placed. Templates read terrain across their
-    whole extent, as vanilla's do: the carved chunks around the target, and air with heights at the
-    world's bottom farther away, as in a region whose farther chunks have no terrain yet. Feature elements
-    write into the eight neighboring chunks through a scratch copy that later pieces read, but only the
-    target keeps their blocks until structures run in the FEATURES schedule; the ancient city's sculk
+  - Jigsaw structure blocks are placed in each chunk's decoration, in the step of their structure
+    (`StructureStart::place_jigsaw_in_region`): trail ruins and trial chambers in `underground_structures`,
+    villages and pillager outposts in `surface_structures` and ancient cities in `underground_decoration`.
+    Every start whose bounds reach the chunk takes part, wherever it starts. The pieces that reach the chunk
+    place their pool elements in order with the step's random source, seeded for the structure as described
+    below; the processors' reference position is the center of the first piece's columns at its lowest Y.
+    Template blocks are clipped to the chunk, and terrain matching reads the chunk's heights as blocks are
+    placed. Templates read terrain across their whole extent, as vanilla's do: the region's chunks, and air
+    with heights at the world's bottom farther away, as in a region whose farther chunks have no terrain
+    yet. Feature elements write into the whole region, as other features do; the ancient city's sculk
     patches, not ported yet, place nothing. `jigsaw_chunk_parity` places real starts of all five villages,
-    a pillager outpost, trail ruins, trial chambers and an ancient city on their carved chunks with terrain
-    adaptation, and compares 368 chunks block by block, with their block entities and loot seeds, against
-    vanilla's `StructureStart.placeInChunk`; 16 ancient city chunks reached by sculk patches are left out.
+    a pillager outpost, trail ruins, trial chambers and an ancient city in the decoration regions of their
+    carved chunks with terrain adaptation, and compares 368 chunks block by block, the blocks written to
+    their neighbors, and their block entities and loot seeds against vanilla's `StructureStart.placeInChunk`;
+    16 ancient city chunks reached by sculk patches are left out. `feature_worker_parity` checks that the
+    workers place a village chunk away from its start, and nothing of it without structures. The other
+    structures are still placed after carvers.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
     saved seed, the biome's configured carvers, the same aquifer as the noise fill, and surface restoration.
     Nether caves, debug carvers, non-vanilla data packs and custom Overworld generators are not supported by
@@ -396,7 +399,9 @@ and the owner **accepts it once**:
     chunk runs, for each step, the features listed by any biome stored in the 3x3 chunks around it, in that
     order; each is seeded with `set_decoration_seed(world_seed, chunk_x * 16, chunk_z * 16)` and
     `set_feature_seed(decoration, index, step)`, where `index` is its position in the step's global order, not
-    in a biome's list. The structures of each step take indices from the same counter and are not run yet.
+    in a biome's list. When the world generates structures, each step first places its structures that reach the
+    chunk, in registry order, each with `set_feature_seed(decoration, index, step)` where `index` is the
+    structure's position among the step's structures (jigsaw structures so far).
     Placement modifiers run depth first, each position through the rest of the list and into the feature before
     the next comes out, as vanilla's lazy streams do; only `count_on_every_layer` collects all its positions
     first, as vanilla's does. All 15 modifier types are ported, with the integer providers `constant`,

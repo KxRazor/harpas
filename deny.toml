@@ -23,6 +23,9 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # Unicode 16 character names in unicode_names2: permissive data redistribution with attribution,
+    # compatible with MIT OR Apache-2.0. Required to match Java 25's named SNBT escapes.
+    "Unicode-DFS-2016",
 ]
 confidence-threshold = 0.9
 

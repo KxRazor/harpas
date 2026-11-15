@@ -4,8 +4,11 @@
 //! types in [`WorldgenData`]; a list with an unported processor does not compile partially.
 
 mod capped;
+mod jigsaw;
 mod material;
 mod pipeline;
+mod snbt;
+mod snbt_names;
 mod static_data;
 pub use capped::CappedProcessor;
 pub use pipeline::{ProcessorPipeline, ProcessorWorld};

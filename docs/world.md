@@ -313,8 +313,23 @@ and the owner **accepts it once**:
     outside the unit interval, property preservation, NBT, shared and positional random sources, ordered
     filters, rules and capped finalizers. `gravity_processor_parity` also checks material processors before
     and after movement.
-    Jigsaw replacement, other capped delegates, template placement, waterlogging, shape updates and
-    worker integration remain separate work.
+    Runtime-added `jigsaw_replacement` reads the current block and NBT after earlier processors.
+    Missing NBT leaves the jigsaw intact; missing or non-string `final_state` replaces it with air.
+    Valid replacements clear NBT, including when the replacement is another jigsaw. Invalid command
+    states and `structure_void` replacements remove the block and stop later per-block processing.
+    Other incoming blocks, including existing structure voids, pass through unchanged. Names and
+    properties use strict command syntax, with omitted properties keeping their defaults, quoted
+    property names/values, duplicate rejection and vanilla's unread trailing input. Attached SNBT is
+    validated but discarded: compounds, mixed lists, typed arrays, numeric ranges, `bool`/`uuid`
+    operations and string escapes. Unicode 16 names use `unicode_names2` with Java 25's control and
+    algorithmic range names. The parser follows [Brigadier's string syntax](https://github.com/Mojang/brigadier)
+    and Mojang's [SNBT changes](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-5#snbt-changes),
+    checked through the owner's server rather than its implementation. `jigsaw_processor_parity`
+    compares every registry state, shipped template final states, malformed command strings and
+    attached SNBT, missing and existing NBT, ordered rules/filters/capped finalizers and settings random
+    tails. Replacement itself reads no terrain and consumes no randomness.
+    Other capped delegates, template placement, waterlogging, shape updates and worker integration
+    remain separate work.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no

@@ -237,7 +237,8 @@ vanilla for the same seed.
     - [x] Static rule NBT (`append_static`): recursive compound merges, JSON numeric and list types,
           existing-NBT mutation and capped limit accounting, compared with vanilla's own ordered pipeline
           (`static_processor_parity`).
-    - [ ] Jigsaw replacement, including final block state parsing and structure-void filtering.
+    - [x] Jigsaw replacement, including strict command block states, discarded SNBT validation and
+          structure-void filtering, compared with vanilla’s ordered pipeline (`jigsaw_processor_parity`).
     - [ ] Remaining capped delegates, template block placement and feature/list pool elements on chunk workers.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency

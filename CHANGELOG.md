@@ -9,7 +9,150 @@ them here.
 
 ## [Unreleased]
 
+## [0.2.0+26.1] - 2026-11-16
+
+Worlds. The server opens vanilla 26.1 worlds, where players explore them, and saves them back so that vanilla reads
+every chunk as it saved it. A new world generates the same world as vanilla for the same seed: terrain, biomes,
+caves, every Overworld feature and structure, and light, generated and saved on worker threads. Breaking and
+placing blocks, mobs, items and the Nether and the End follow in 0.3.0; Bedrock players are not supported yet.
+
 ### Added
+
+- Woodland mansions in new worlds: their templates with both mirrors, waterlogging and shape updates, chests with
+  loot, mob markers and cobblestone foundations, placed in decoration and compared chunk by chunk with vanilla
+  (`harpas-worldgen`). Evokers, vindicators and allays follow with gameplay.
+
+- Woodland mansion starts: the layout of corridors, rooms and the third floor, and its template pieces with
+  their rotations and mirrors, compared with vanilla's, and the left-right mirror of templates and block states
+  (`harpas-worldgen`).
+
+- Saved light: a final chunk is saved with the light the chunk workers computed for it,
+  at vanilla's `light` status with `isLightOn`, so vanilla keeps that light instead of lighting the chunk again and
+  spawns the chunk's first mobs when it opens the world (`harpas-engine`).
+
+- Sculk patches generate in the deep dark and in ancient cities, spreading sculk, sculk veins, sensors,
+  shriekers and catalysts as vanilla's world generation does, and sculk veins grow on deep dark cave walls,
+  when chunks run the FEATURES stage (`harpas-worldgen`).
+
+- Fossils generate below the ocean floor in deserts, swamps and mangrove swamps, with their coal and diamond ore
+  overlays, when chunks run the FEATURES stage (`harpas-worldgen`, `harpas-engine`).
+
+- Villages, pillager outposts, trail ruins, trial chambers and ancient cities now place their blocks in
+  generated chunks (`harpas-engine`, `harpas-worldgen`). Compared with vanilla 26.1 chunk by chunk for real
+  starts of each. Their decorations that reach into neighboring chunks, such as village trees, and the
+  ancient city's sculk patches follow separately.
+
+- Jigsaw list pool elements, and feature pool elements such as the trees, flowers and hay piles of villages,
+  place as in vanilla (`harpas-worldgen`). Compared with vanilla 26.1 for every list element and every
+  feature element except the ancient city's sculk patches, which follow with that feature.
+
+- Jigsaw template pool elements place their blocks in a chunk as in vanilla: the processors each element adds,
+  turned block states, waterlogging and water filling, and block entities with loot seeds (`harpas-worldgen`).
+  Compared with vanilla 26.1 for every single and legacy single element of every pool. Running them on chunk
+  workers follows separately.
+
+- Structure template block states turn and reflect as in vanilla: facings, orientations, rail shapes,
+  connection faces, axes and sign, banner and skull rotations, with vanilla's stair, chest, anvil, fire and
+  chorus plant exceptions (`harpas-worldgen`). Compared with vanilla 26.1 for every block state. Placing
+  jigsaw templates on chunk workers follows separately.
+
+- Jigsaw template replacement: strict final block states, structure-void filtering and attached SNBT
+  validation, preserving vanilla’s processor order, missing-data behavior and random consumption
+  (`harpas-worldgen`). Compared with vanilla 26.1, including every registry state and the final states
+  in the server owner’s structure templates. Placing jigsaw templates on chunk workers follows separately.
+
+- Static block entity data in structure rules (`append_static`), with recursive NBT merges, vanilla JSON
+  numeric and list types, and existing-data mutation in capped processors (`harpas-worldgen`). Template
+  placement for jigsaw structures on chunk workers remains pending.
+
+- Template material processors: `block_age`, `blackstone_replace` and `lava_submerged_block` now run in
+  the ordered processor pipeline, preserving vanilla's block properties, outline-shape checks, NBT and
+  placement-settings random consumption. Complete processing passes are compared with vanilla, including
+  every block state and interactions with gravity, rules, filters and capped finalizers. Jigsaw replacement
+  and template placement on chunk workers follow separately (`harpas-worldgen`).
+
+- Template gravity processors (`gravity`), with all six heightmaps, original template-local heights,
+  live-level heightmap substitutions and ordered rules, filters and capped finalizers. Complete processing
+  passes, terrain reads, preserved NBT and random consumption are compared with vanilla's own pipeline
+  (`gravity_processor_parity`). Jigsaw template placement on chunk workers follows separately
+  (`harpas-worldgen`).
+
+- Structure template block filters: deterioration (`block_rot`), protected terrain (`protected_blocks`),
+  ignored block types (`block_ignore`) and passthrough (`nop`), combined with rules and capped finalizers in
+  an ordered pipeline. All 40 vanilla processor lists compile and are compared with vanilla's own pipeline,
+  including block filtering, NBT and placement randomness (`harpas-worldgen`). Jigsaw template placement on
+  chunk workers follows separately.
+
+- Structure template processors: `capped` rule delegates with whole-template limits, world-seeded candidate
+  shuffles, integer limit providers and ordered finalization, compared with vanilla's processor pipeline,
+  including archaeology loot NBT and chains of limits (`harpas-worldgen`). Jigsaw block placement on chunk
+  workers follows separately.
+
+- Template rule processors: load ordered processor lists and apply per-block substitutions with block,
+  state, tag, probability and distance predicates, positional randomness and preserved, cleared or appended
+  loot NBT, compared with vanilla's own processors (`harpas-worldgen`). Jigsaw block placement follows.
+
+- Village block pile features: hay with random axes, melons, pumpkins, snow and weighted ice, with vanilla's
+  ground support and dirt-path checks (`harpas-worldgen`). Natural village placement follows with jigsaw
+  structure blocks.
+
+- Java chunk encoding and compression shared between viewers through a cache bounded to 4,096 entries and
+  64 MiB of frame buffers. Changes to chunk contents or light invalidate the cached packet, unloaded chunk data
+  is released, and each connection encrypts its own stream (`harpas-java`, `harpas-server`).
+
+- Amethyst geodes with layered shells, cracks, budding amethyst and directional crystals, compared with
+  vanilla's feature and chunk decoration, including worker generation across chunk edges and Anvil reloads
+  (`harpas-worldgen`, `harpas-engine`). Fluid ticks beside cracks follow in M4.
+
+- Lush cave clay patches and pools with small and big dripleaves, waterlogging, support rules and shape
+  updates, compared with vanilla's features and chunk decoration, including worker generation and Anvil
+  reloads (`harpas-worldgen`, `harpas-engine`). Fluid and block ticks follow in M4.
+
+- Underground monster rooms with cobblestone walls, mossy floors, oriented loot chests and saved spawner
+  species, compared with vanilla's feature and chunk decoration, including worker generation and Anvil reloads
+  (`harpas-worldgen`, `harpas-engine`). Spawner ticking and opening chest loot follow in M4.
+
+- Dripstone cave clusters with wet pools, layered bases, stalactites and stalagmites, merged tips and
+  waterlogged columns, generated on chunk workers and saved in Anvil
+  (`harpas-worldgen`, `harpas-engine`).
+
+- Large dripstone columns (`large_dripstone`), with cave scanning, embedded bases that shrink to fit, radial
+  profiles, shared wind offsets and obstacle handling. Compared with vanilla 26.1, including natural chunk
+  generation on workers and Anvil reloads. 153 of the 164 Overworld placed features now run (`harpas-worldgen`).
+
+- Small stalactites and stalagmites (`pointed_dripstone`), with spreading dripstone bases, random floor or
+  ceiling selection, one- or two-block tips and waterlogging. Compared with vanilla 26.1, including natural
+  chunk generation and Anvil reloads. 148 of the 164 Overworld placed features now run (`harpas-worldgen`).
+
+- Surface snow and ice during chunk decoration (`freeze_top_layer`), with biome temperatures, altitude,
+  frozen ocean temperature pockets, snow support and snowy grass, podzol and mycelium
+  (`harpas-worldgen`), including worker generation and Anvil saves.
+
+- Underwater magma deposits, with floor searches, directional occlusion and vanilla placement randomness,
+  included in worker generation and Anvil saves (`harpas-worldgen`).
+
+- Warm ocean coral reefs: branching trees, claws and hollow mushrooms, with coral plants, fans and sea
+  pickles, generated on chunk workers and saved through Anvil (`harpas-worldgen`, `harpas-engine`).
+
+- Desert wells in generated deserts: sandstone foundations, water, pillars and slab roofs, with two buried
+  suspicious sand blocks and their archaeology loot metadata, compared with vanilla 26.1, including worker
+  generation and Anvil reloads (`harpas-worldgen`, `harpas-engine`). Brushing
+  follows with gameplay.
+
+- Forest rocks: mossy cobblestone boulders in old growth taigas (`block_blob`), with 26.1's configurable block
+  state and support predicate, on the FEATURES chunk workers (`harpas-worldgen`, `harpas-engine`).
+
+- Bamboo stalks and their podzol patches in jungles, including ground support and shape updates for bamboo
+  and bamboo shoots, compared with vanilla 26.1 (`harpas-worldgen`).
+
+- Lakes and springs: `lake` with the underground and surface lava lakes, their cave air and stone barrier, and
+  `spring_feature` with the water and lava springs in cave and mountain walls, without the ticks vanilla schedules for
+  them. 144 of the 164 Overworld placed features now run (`harpas-worldgen`).
+
+- Release binaries carry a build provenance attestation: `gh attestation verify <archive> --repo KxRazor/harpas`
+  proves that the archive was built by the project's Release workflow.
+
+- Releases carry `harpas` binaries for macOS on Intel and on Apple Silicon, next to those for Linux and Windows.
 
 - Frozen biomes: the `spike` feature of ice spike plains, `iceberg` with packed and blue ice icebergs centered at the
   sea level, smoothed, snowed on and cut through, and `blue_ice`, which grows under packed ice in frozen oceans.
@@ -306,6 +449,88 @@ them here.
 
 ### Changed
 
+- Shape updates at the edges of trees and structure templates also reshape fences, panes and bars, walls, fence
+  gates, stairs, doors and chests, and break ladders, torches, wall banners and levers without their support, as
+  vanilla's do (`harpas-worldgen`).
+
+- Faster startup: the Overworld's generator and its structure placement share one structure state, whose
+  stronghold ring positions are computed once instead of up to three times, so preparing world generation takes
+  about 6 seconds instead of 16 (`harpas-engine`, `harpas-server`).
+
+- New chunks always run the FEATURES stage, as in vanilla: ores, vegetation, trees, lakes, springs and every
+  structure of the Overworld are placed before players receive them, and `generation.features` in `harpas.toml`
+  is gone. `generate-structures=false` still leaves structures out (`harpas-server`).
+
+- Mineshafts and strongholds are placed in the FEATURES stage, in their decoration steps as in vanilla, instead of
+  right after carvers. Mineshafts now follow buried treasure, as in vanilla, and read the biomes stored in the
+  chunks being decorated; mineshaft and stronghold spawner and chest flags are saved as vanilla saves them
+  (`harpas-engine`, `harpas-worldgen`).
+
+- Shipwrecks, ocean ruins and ruined portals are placed in the FEATURES stage, in their decoration step as in
+  vanilla, instead of right after carvers. Outside the chunk they read the terrain from before decoration, so their
+  blocks do not depend on the order in which chunks decorate (`harpas-engine`, `harpas-worldgen`).
+
+- Desert pyramids, jungle temples and igloos are placed in the FEATURES stage, in their decoration step as in
+  vanilla, instead of right after carvers. They read neighboring blocks from the chunks being decorated, and
+  pyramid and temple chests and dispensers save their placed flags as vanilla does (`harpas-engine`,
+  `harpas-worldgen`).
+
+- Ocean monuments are placed in the FEATURES stage, in their decoration step as in vanilla, instead of right
+  after carvers (`harpas-engine`, `harpas-worldgen`).
+
+- Swamp huts are placed in the FEATURES stage, in their decoration step as in vanilla, instead of right after
+  carvers, so their ground height includes the features placed before them (`harpas-engine`, `harpas-worldgen`).
+
+- Buried treasure is placed in the FEATURES stage, in its decoration step as in vanilla, instead of right after
+  carvers (`harpas-engine`, `harpas-worldgen`).
+
+- Jigsaw structures (villages, pillager outposts, trail ruins, trial chambers and ancient cities) are placed in
+  the FEATURES stage, step by step before each step's features as in vanilla, and in every chunk their pieces
+  reach rather than only where they start; village trees, flowers and hay now reach neighboring chunks
+  (`harpas-engine`, `harpas-worldgen`).
+
+- Chunk workers no longer wait for each other while there are other chunks to
+  generate around them: a view of 441 chunks generates at 57 chunks a second with 8 workers instead of 35,
+  and at 45 with 4 instead of 22 (`harpas-engine`).
+
+- Saving writes only the chunks that changed into free sectors of their region, as vanilla does, instead of
+  reading and rewriting the whole region file: 7 ms instead of 160 ms for one chunk of a full region on a
+  disk. A save is still one transaction with the region's `.mcc` files (`harpas-anvil`, `harpas-engine`).
+- A region with a chunk entry that cannot be read no longer stops the server when another of its chunks is
+  saved: the entry is left as it is. Only an entry that points past the end of the file still does
+  (`harpas-anvil`).
+
+- Chunks are read and generated by two thirds of the machine's hardware threads, at most 16, instead of at
+  most 4: 8 workers on a machine with 12 threads, where generation through carvers is 15% faster, and 67% faster
+  with the FEATURES stage (`harpas-engine`).
+
+- A tick no longer computes every player's view again: views and the chunks kept loaded are computed when a
+  player enters another chunk, changes its view distance, joins or leaves. With 100 players at view distance
+  32 standing still, the chunk part of a tick takes 0.2 ms instead of 10 ms. Player profiles, skins included,
+  are no longer copied each time a player moves (`harpas-engine`).
+
+- A connection sends what the server has for its player as soon as it is ready, instead of up to 50 ms later
+  when the player's client was sending nothing. Each connection now reads its socket on a second thread
+  (`harpas-server`, `harpas-engine`).
+
+- Release binaries are built with link-time optimization across every crate: world generation is about 4%
+  faster and the binary 17% smaller.
+
+- `rsa` 0.10.0 replaces its release candidate, which a build without `Cargo.lock` no longer resolved to code that
+  compiles, and the exception for RUSTSEC-2023-0071, fixed in that release, is gone (`harpas-java`).
+
+- The light of generated chunks is computed on worker threads as soon as a chunk and its neighbors are loaded,
+  instead of on the connection of the first player it is sent to, and a chunk is sent once its light is ready
+  (`harpas-engine`, `harpas-server`).
+
+- A changed chunk that leaves every view is saved up to five seconds later, together with the other chunks of
+  its region that left meanwhile, and a region has one save at a time. Exploring new terrain used to rewrite
+  the region file once for each row of chunks left behind (`harpas-engine`).
+
+- The light of a generated chunk is computed once and shared by the connections that send it, until the chunk or
+  one of its neighbors changes. Every connection used to compute it again for every chunk it sent, which took far
+  longer than the rest of the chunk packet (`harpas-server`).
+
 - Generated chunks stop updating `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` once they have run carvers, as vanilla
   does, and heightmaps classify blocks by their motion-blocking flag and fluid instead of a provisional list of
   names (`harpas-worldgen`, `harpas-engine`).
@@ -314,6 +539,62 @@ them here.
   (`harpas-engine`).
 
 ### Fixed
+
+- Iron bars at the edge of an igloo's basement could stay connected to terrain that the igloo replaced, when
+  the chunk beside them decorated first. Placing an igloo now reshapes the iron bars beside its chunk, as
+  vanilla's template edge updates do (`harpas-worldgen`).
+
+- Java clients receive vanilla's tags in the Configuration state, resolved from the vanilla data at startup:
+  661 tags of 15 registries, compared with a vanilla 26.1 server. They were sent empty, so a player under water
+  saw no blue fog, and blocks, items, fluids and entities were in none of their tags. The tags of blocks, items,
+  fluids and other built-in registries need the registry IDs that the installation generates with Java; for an
+  installation made without it, run `harpas vanilla-data generate-registry` (`harpas-java`, `harpas-server`).
+
+- Light under slabs, stairs, snow layers and the other blocks that use their shape for light occlusion: the faces
+  their shape covers now stop light, so the ground under a lower slab or stair roof is lit from the side, as in
+  vanilla, instead of by direct sky light (`harpas-worldgen`, `harpas-core`).
+
+- Chunks past the edge of a world vanilla generated failed to load, because the chunks
+  vanilla left at `initialize_light` could not take their neighbors' decorations. The chunk workers now resume them
+  like chunks at `features`, and use chunks from `light` on as saved (`harpas-engine`).
+
+- Proto-chunks saved after decoration keep the blocks that their features and structures marked for
+  postprocessing, after the ones marked at carvers (`harpas-engine`).
+
+- Chat that the server does not accept gets vanilla's answers, in the client's language, where it got texts in
+  English: a red system message for a message out of order, unsigned in a signing session, wrongly signed,
+  after a broken signing chain or signed with an expired key, and vanilla's disconnection reasons for a chat
+  key that Mojang did not certify and for a bad acknowledgement (`harpas-java`).
+- A chat key that had expired when it arrived no longer disconnects a player who has no session, who is left
+  without one, as in vanilla; a player who was signing is disconnected. A player who sends again the key it
+  already signs with keeps its signing chain, where it was disconnected for a repeated session
+  (`harpas-java`, `harpas-engine`).
+- With `enforce-secure-profile=false`, a player without a chat session who sends a signed message has it
+  relayed unsigned, as in vanilla, where it was refused; such a player's messages are no longer held to the
+  order of their timestamps (`harpas-java`).
+
+- Chat accepts the characters U+0080 to U+009F, as vanilla does; a message with one closed the connection. A
+  message with a character vanilla does not allow now disconnects with vanilla's "Illegal characters in chat", and
+  a client with chat disabled in its settings gets vanilla's "Chat disabled in client options", both in the
+  client's language (`harpas-java`).
+
+- The flight check looks at the blocks around the player, as vanilla does. A survival player who swam, climbed a
+  ladder or vine, or stayed in the air next to a block for four seconds was disconnected for flying
+  (`harpas-engine`).
+
+- A chunk, `level.dat` or a player's data that inflates to more than 256 MiB, or takes more than 1 GiB of
+  memory once read, is refused as unreadable instead of filling the memory, as a crafted file in a downloaded
+  world could (`harpas-anvil`, `harpas-core`).
+
+- A panic is written to `logs/latest.log` as an error, with its thread and place, instead of only to the
+  terminal. When the logic thread panics, the world is saved before the server stops, and the server reports
+  why it stopped (`harpas-engine`, `harpas-server`).
+
+- With an empty `server-ip`, the server also listens for IPv4 on systems whose IPv6 listener takes only IPv6
+  connections, as on Windows, where IPv4 clients could not connect (`harpas-server`).
+
+- Players join with their chunk center at the world's spawn instead of chunk 0, 0. With a spawn far from the
+  origin, the client discarded the chunks around the player as outside its view (`harpas-java`).
 
 - With `generation.features = true`, decorated chunks saved at `minecraft:features` are sent with light computed
   from their blocks instead of their missing saved light, which left terrain and trees dark in daylight
@@ -341,9 +622,16 @@ them here.
 - The sine table uses Minecraft 26.1's double-precision angle scaling, including near lookup boundaries
   (`harpas-core`).
 
-### Removed
-
 ### Security
+
+- The connections of an IPv6 address that are not playing yet also count for its /48 and its /32, at most 32
+  and 64. One /48, which a single customer of a hosting company often has, could fill all 256 places with one
+  connection from each of its /64 prefixes and keep every other player out. A full server now also takes a
+  place from the block that holds the most (`harpas-server`).
+
+- A few addresses can no longer keep every other player from connecting by filling the 256 places for
+  connections that are not playing yet, which 32 IPv4 addresses could. When the places are full, a new
+  connection takes the oldest one of the address that holds the most (`harpas-server`).
 
 ## [0.1.2+26.1] - 2026-11-11
 

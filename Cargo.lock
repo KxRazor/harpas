@@ -852,6 +852,7 @@ dependencies = [
  "harpas-protocol-java",
  "md-5",
  "rsa",
+ "serde_json",
  "sha1",
  "sha2",
  "subtle",

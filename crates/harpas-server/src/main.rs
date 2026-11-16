@@ -22,6 +22,7 @@ mod properties;
 mod session;
 mod shutdown;
 mod socket;
+mod tags;
 mod vanilla_data;
 mod world_generation;
 
@@ -190,6 +191,7 @@ fn run() -> io::Result<()> {
     check_world(&world_dir)?;
     let generator = world_generation::prepare(&world_dir, &properties, &data_pack)?;
     let mut server_info = server_info(&properties);
+    server_info.tags = Arc::new(tags::load(Path::new(""), &data_pack)?);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
         && let Some(spawn) = harpas_anvil::overworld_spawn(&level)
     {
@@ -396,6 +398,7 @@ fn server_info(properties: &Properties) -> ServerInfo {
             "network-compression-threshold",
             defaults.compression_threshold,
         ),
+        tags: defaults.tags,
     }
 }
 

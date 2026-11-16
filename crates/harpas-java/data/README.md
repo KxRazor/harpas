@@ -17,8 +17,9 @@ for r in json.load(open("loginPacket.json"))["dimensionCodec"].values():
 ```
 
 `tags-26.1.txt` lists, in the same format, the tags that the registry data of the client's `minecraft:core` pack
-refers to: a 26.1 client refuses the registries when one of them is missing. Harpas sends them **empty** until
-it has vanilla's data (M3, `docs/world.md`): enchantments then apply to no item, which a void world does not
-notice. The list was taken from the errors a 26.1 client logs when it receives the registries without tags, and
-completed with the names of vanilla tags that the client's item components refer to; an unused empty tag is
-harmless.
+refers to: a 26.1 client refuses the registries when one of them is missing. Harpas sends vanilla's tags, read
+from the vanilla data provisioned at startup (`docs/java-connection.md#tags`), and adds any of these that are
+missing **empty**, which happens when the built-in registries were never generated: the client then joins, but
+blocks, items and fluids are in none of their tags. The list was taken from the errors a 26.1 client logs when it
+receives the registries without tags, completed with the names of vanilla tags that the client's item components
+refer to, and checked against the tags a vanilla 26.1 server sends; an unused empty tag is harmless.

@@ -1,9 +1,12 @@
 //! What the server list shows: the Status Response and the legacy ping answer
 
 use std::fmt::Write;
+use std::sync::Arc;
 
 use harpas_protocol_java::v26_1;
 use harpas_protocol_java::v26_1::play::GameMode;
+
+use crate::Tags;
 
 /// The server's entry in the server list, and the settings connections need to bring a player in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,8 @@ pub struct ServerInfo {
     /// Smallest packet that is compressed, from `network-compression-threshold`; negative turns compression
     /// off.
     pub compression_threshold: i32,
+    /// The tags sent in the Configuration state, resolved from vanilla's data at startup.
+    pub tags: Arc<Tags>,
 }
 
 impl Default for ServerInfo {
@@ -60,6 +65,7 @@ impl Default for ServerInfo {
             hashed_seed: 0,
             is_flat: true,
             compression_threshold: 256,
+            tags: Arc::default(),
         }
     }
 }

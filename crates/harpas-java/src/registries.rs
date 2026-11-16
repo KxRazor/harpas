@@ -27,7 +27,8 @@ pub fn biome_names() -> &'static [&'static str] {
         .entries
 }
 
-/// The tags the client needs before it accepts the registries, by registry. They are sent empty for now.
+/// The tags the client needs before it accepts the registries, by registry. `Tags` adds them empty when vanilla's
+/// data lacks them.
 pub(crate) fn required_tags() -> &'static [Registry] {
     static TAGS: OnceLock<Vec<Registry>> = OnceLock::new();
     TAGS.get_or_init(|| parse(include_str!("../data/tags-26.1.txt")))

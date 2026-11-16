@@ -1090,7 +1090,11 @@ World generation and saved worlds are checked against Mojang's server like every
 ## Validation
 
 1. **Round trip:** a world saved by vanilla, opened and saved by Harpas, then reopened by vanilla, with no
-   differences.
+   differences. `round_trip_parity` has vanilla generate the spawn area of a world and place blocks whose block
+   entities hold data, then has the server load every chunk it saved, at every status, and write each one whole
+   again; every chunk holds exactly what vanilla saved, compared as NBT, and vanilla reopens the world without
+   chunk errors. Harpas does not write `level.dat`, player data, entities or points of interest yet, so those
+   files stay as vanilla wrote them.
 2. **Generation parity:** for a set of seeds, every generated block and biome matches vanilla.
 3. **Save stalls:** tick time during autosave, with many changed chunks, compared with a tick without saving.
 4. **Generation throughput:** chunks per second as worker threads are added.

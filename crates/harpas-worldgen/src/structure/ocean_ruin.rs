@@ -41,6 +41,26 @@ impl StructureStart {
         let decoration =
             random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
         random.set_feature_seed(decoration, index, 4);
+        self.place_ocean_ruin(chunk, seed, &mut random, templates, height_at, block_at)
+    }
+
+    /// Places cold or warm ruins like [`Self::place_ocean_ruin_in_chunk`], drawing from `random`, which the
+    /// caller has seeded as vanilla's decoration does for the ruin's structure.
+    pub fn place_ocean_ruin<R: RandomSource>(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        seed: i64,
+        random: &mut WorldgenRandom<R>,
+        templates: &StructureTemplates,
+        height_at: &mut impl FnMut(HeightmapType, i32, i32) -> i32,
+        block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+    ) -> Vec<Compound> {
+        if !matches!(
+            self.structure.as_str(),
+            "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm"
+        ) {
+            return Vec::new();
+        }
         let mut entities = Vec::new();
         for piece in &mut self.pieces {
             if piece.kind != "minecraft:orp"

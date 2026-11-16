@@ -263,6 +263,9 @@ vanilla for the same seed.
           decoration region, with each new pyramid's shared height fixed once from the terrain before
           decoration and the container flags saved as vanilla saves them (`desert_pyramid_parity`,
           `jungle_temple_parity`, `igloo_parity`).
+    - [x] Shipwrecks, ocean ruins and ruined portals in `surface_structures`, reading the terrain before
+          decoration around the chunk, with shared shipwreck heights and portal placements prepared once
+          (`shipwreck_parity`, `ocean_ruin_parity`, `ruined_portal_parity`).
     - [ ] The other structures in their steps, then full resumption from `features`.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.

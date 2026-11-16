@@ -91,6 +91,33 @@ impl StructureStart {
         let decoration =
             random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
         random.set_feature_seed(decoration, index, 4);
+        self.place_prepared_shipwreck(
+            chunk,
+            &mut random,
+            templates,
+            height_at,
+            block_at,
+            initial_burial,
+        )
+    }
+
+    /// Places a prepared shipwreck like [`Self::place_prepared_shipwreck_in_chunk`], drawing from `random`,
+    /// which the caller has seeded as vanilla's decoration does for the shipwreck's structure.
+    pub fn place_prepared_shipwreck<R: RandomSource>(
+        &mut self,
+        chunk: &mut GeneratedChunk,
+        random: &mut WorldgenRandom<R>,
+        templates: &StructureTemplates,
+        height_at: &mut impl FnMut(HeightmapType, i32, i32) -> i32,
+        block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+        initial_burial: bool,
+    ) -> Vec<Compound> {
+        if !matches!(
+            self.structure.as_str(),
+            "minecraft:shipwreck" | "minecraft:shipwreck_beached"
+        ) {
+            return Vec::new();
+        }
         if initial_burial {
             random.next_int_bounded(3);
         }
@@ -120,7 +147,7 @@ impl StructureStart {
             {
                 continue;
             }
-            adjust_height(piece, blocks, &mut random, &mut |kind, x, z| {
+            adjust_height(piece, blocks, random, &mut |kind, x, z| {
                 if (x >> 4, z >> 4) == (chunk.chunk_x(), chunk.chunk_z()) {
                     chunk
                         .heightmaps()

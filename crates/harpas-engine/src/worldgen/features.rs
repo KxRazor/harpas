@@ -19,12 +19,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use harpas_anvil::{Chunk, ChunkSection};
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_worldgen::{
-    DecorationStructures, FeatureIndex, GeneratedChunk, HeightmapType, RegionFeatureWorld,
-    StructureTemplates, WorldgenData, apply_biome_decoration,
+    DecorationStructures, DecorationTerrain, FeatureIndex, GeneratedChunk, HeightmapType,
+    RegionFeatureWorld, StructureStart, StructureTemplates, WorldgenData, apply_biome_decoration,
     apply_biome_decoration_with_structures,
 };
 
 use super::StartSource;
+use super::structures::{DecorationStarts, terrain_block, terrain_height};
 
 use crate::world::{ChunkGenerator, ChunkPos, ChunkSource, ChunkStorage, Generated};
 
@@ -428,15 +429,20 @@ impl Decorator {
         let mut world = RegionFeatureWorld::with_stored_biomes(blocks, self.seed)
             .ok_or_else(|| io::Error::other("chunks around a target differ in height"))?;
         if let Some(structures) = &self.structures {
-            let mut starts = (structures.starts)(target, &|pos| storage.read(pos))?;
-            let own = |starts: &[harpas_worldgen::StructureStart]| -> Vec<(String, Compound)> {
-                starts
-                    .iter()
-                    .filter(|start| start.chunk == (target.x, target.z))
-                    .map(|start| (start.structure.clone(), start.to_nbt()))
-                    .collect()
-            };
-            let before = own(&starts);
+            let found = (structures.starts)(target, &|pos| storage.read(pos))?;
+            let DecorationStarts {
+                mut starts,
+                terrain,
+                portals,
+                initial_shipwreck_burials,
+                min_y,
+            } = found;
+            let portals: Vec<_> = portals
+                .iter()
+                .map(|(structure, plans, index)| (structure.as_str(), &plans[*index]))
+                .collect();
+            let block_at = |x, y, z| terrain_block(&terrain, x, y, z);
+            let height_at = |kind, x, z| terrain_height(&terrain, kind, x, z, min_y);
             apply_biome_decoration_with_structures(
                 &mut world,
                 &self.index,
@@ -447,27 +453,42 @@ impl Decorator {
                     data: &structures.data,
                     templates: &structures.templates,
                     starts: &mut starts,
+                    terrain: Some(DecorationTerrain {
+                        block_at: &block_at,
+                        height_at: &height_at,
+                    }),
+                    portals: &portals,
+                    initial_shipwreck_burials: &initial_shipwreck_burials,
                 },
             )
             .map_err(io::Error::other)?;
-            // A start this chunk holds that its placement changed is saved with the change, as vanilla's is.
-            let changed: Vec<_> = own(&starts)
-                .into_iter()
-                .filter(|start| !before.contains(start))
-                .collect();
-            if !changed.is_empty() {
-                let (shell, _) = shells.get_mut(&target).expect("the target's shell");
-                if let Some(Nbt::Compound(mut saved)) = shell.rest.remove("structures") {
-                    if let Some(Nbt::Compound(mut held)) = saved.remove("starts") {
-                        for (structure, tag) in changed {
-                            if held.get(&structure).is_some() {
-                                held.insert(structure, Nbt::Compound(tag));
-                            }
+            // The starts this chunk holds are saved as decoration left them, as vanilla's are: with the heights
+            // fixed for them and what their placement changed.
+            let (shell, _) = shells.get_mut(&target).expect("the target's shell");
+            if let Some(Nbt::Compound(mut saved)) = shell.rest.remove("structures") {
+                if let Some(Nbt::Compound(mut held)) = saved.remove("starts") {
+                    for start in starts
+                        .iter()
+                        .filter(|start| start.chunk == (target.x, target.z))
+                    {
+                        let Some(Nbt::Compound(saved)) = held.get(&start.structure) else {
+                            continue;
+                        };
+                        // Compared as Harpas writes them, so a start decoration did not change keeps its NBT.
+                        let original = StructureStart::from_nbt(
+                            saved,
+                            &structures.data,
+                            &structures.templates,
+                        )?
+                        .map(|saved| saved.to_nbt());
+                        let tag = start.to_nbt();
+                        if original.as_ref() != Some(&tag) {
+                            held.insert(start.structure.clone(), Nbt::Compound(tag));
                         }
-                        saved.insert("starts", held);
                     }
-                    shell.rest.insert("structures", saved);
+                    saved.insert("starts", held);
                 }
+                shell.rest.insert("structures", saved);
             }
         } else {
             apply_biome_decoration(&mut world, &self.index, self.seed, target.x, target.z)

@@ -5,7 +5,7 @@ mod reference;
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{Beardifier, NoiseBasedChunkGenerator, StructureState};
 use harpas_worldgen::{
     GeneratedChunk, HeightmapType, Mirror, Rotation, RuinedPortalGenerator, StructurePiece,
@@ -557,10 +557,14 @@ fn worker_cases(
                 source.chunk.0,
                 source.chunk.1
             ));
-            let generator =
-                overworld_generator(seed, Arc::clone(data), Arc::clone(templates), true, &biomes)
-                    .unwrap();
-            let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+            // These structures are placed in decoration. Decorate without features, so that the workers' chunks
+            // are the carved terrain with their structures, as vanilla's probe places them.
+            let mut world = World::open_with_source(
+                &folder,
+                &biomes,
+                structures_only_source(seed, data, templates, None),
+            )
+            .unwrap();
             wait(&mut world, &positions);
             let mut saved = Vec::new();
             for &pos in &positions {
@@ -729,11 +733,12 @@ fn worker_cases(
             world.flush().unwrap();
             drop(world);
             let reverse_folder = folder.with_extension("reverse");
-            let generator =
-                overworld_generator(seed, Arc::clone(data), Arc::clone(templates), true, &biomes)
-                    .unwrap();
-            let mut reversed_world =
-                World::open_with_generator(&reverse_folder, &biomes, generator).unwrap();
+            let mut reversed_world = World::open_with_source(
+                &reverse_folder,
+                &biomes,
+                structures_only_source(seed, data, templates, None),
+            )
+            .unwrap();
             let reversed: Vec<_> = positions.iter().rev().copied().collect();
             wait(&mut reversed_world, &reversed);
             for (pos, nbt) in &saved {
@@ -860,9 +865,15 @@ fn saved_neighbor_case(
         records.insert("starts", Compound::new());
         records.insert("References", Compound::new());
         empty.insert("structures", records);
-        let generator =
-            overworld_generator(seed, Arc::clone(data), Arc::clone(templates), true, &biomes)
-                .unwrap();
+        let generator = overworld_generator(
+            seed,
+            structures_only(data),
+            Arc::clone(templates),
+            true,
+            &biomes,
+        )
+        .unwrap();
+        // The generator saves the target at carvers with the reference but none of the structure's blocks.
         let result = generator(target, &|p| {
             Ok(Some(if p == origin {
                 source_nbt.clone()
@@ -871,14 +882,34 @@ fn saved_neighbor_case(
             }))
         })
         .unwrap();
-        let nbt = result.to_nbt(&biomes);
-        let mut generated = GeneratedChunk::new(target.x, target.z, -64, 384, biomes.len());
-        for section in &result.sections {
-            if let Some(blocks) = &section.section {
-                let index = (i32::from(section.y) - generated.min_section_y()) as usize;
-                generated.sections_mut()[index] = blocks.clone();
-            }
-        }
+        assert_eq!(
+            blocks(&loaded_blocks(&result, target, biomes.len())),
+            blocks(&carved[&target])
+        );
+        // Decoration places it, reading the saved source.
+        let folder = reference
+            .temp
+            .0
+            .join(format!("saved-ruined-portal-neighbor-{adjusted}"));
+        let reader = Arc::new(move |p: ChunkPos| -> std::io::Result<Option<Compound>> {
+            Ok(Some(if p == origin {
+                source_nbt.clone()
+            } else {
+                empty.clone()
+            }))
+        });
+        let mut world = World::open_with_source(
+            &folder,
+            &biomes,
+            structures_only_source(seed, data, templates, Some(reader)),
+        )
+        .unwrap();
+        wait(&mut world, &[target]);
+        let Some(ChunkState::Loaded(chunk)) = world.chunk(target) else {
+            panic!("neighbor worker")
+        };
+        let nbt = chunk.to_nbt(&biomes);
+        let mut generated = loaded_blocks(chunk, target, biomes.len());
         generated.recompute_heightmaps();
         let block = |x: i32, y: i32, z: i32| {
             carved
@@ -915,26 +946,7 @@ fn saved_neighbor_case(
             panic!("refs")
         };
         assert_eq!(refs.get(&source.structure), Some(&Nbt::LongArray(vec![0])));
-        let folder = reference
-            .temp
-            .0
-            .join(format!("saved-ruined-portal-neighbor-{adjusted}"));
         let expected_nbt = nbt.clone();
-        let generator = Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
-            generator(pos, &|p| {
-                Ok(Some(if p == origin {
-                    source_nbt.clone()
-                } else {
-                    empty.clone()
-                }))
-            })
-        });
-        let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
-        wait(&mut world, &[target]);
-        let Some(ChunkState::Loaded(chunk)) = world.chunk(target) else {
-            panic!("neighbor worker")
-        };
-        assert_eq!(chunk.to_nbt(&biomes), expected_nbt);
         world.flush().unwrap();
         drop(world);
         let mut world = World::open(&folder, &biomes).unwrap();
@@ -944,4 +956,69 @@ fn saved_neighbor_case(
         };
         assert_eq!(chunk.to_nbt(&biomes), expected_nbt);
     }
+}
+
+/// Worldgen data whose biomes list no features, so that decoration places only structures.
+fn structures_only(data: &WorldgenData) -> Arc<WorldgenData> {
+    let mut data = data.clone();
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
+    Arc::new(data)
+}
+
+type SavedReader = Arc<dyn Fn(ChunkPos) -> std::io::Result<Option<Compound>> + Send + Sync>;
+
+/// Workers that generate chunks and decorate them with structures only, leaving out jigsaw structures, which
+/// `jigsaw_chunk_parity` compares and this probe does not place. With `saved`, generation and the decoration's
+/// starts read saved chunks from it instead of the world.
+fn structures_only_source(
+    seed: i64,
+    data: &WorldgenData,
+    templates: &Arc<StructureTemplates>,
+    saved: Option<SavedReader>,
+) -> Arc<dyn harpas_engine::world::ChunkSource> {
+    let data = structures_only(data);
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    let overworld = overworld_starts(seed, Arc::clone(&data), Arc::clone(templates)).unwrap();
+    let starts: Arc<harpas_engine::worldgen::StartSource> = Arc::new(move |pos, read| {
+        let mut found = overworld(pos, read)?;
+        found.starts.retain(|start| !start.is_jigsaw());
+        Ok(found)
+    });
+    let (generator, starts): (Arc<harpas_engine::world::ChunkGenerator>, _) = match saved {
+        Some(saved) => {
+            let read = Arc::clone(&saved);
+            (
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    generator(pos, &|p| read(p))
+                }),
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    starts(pos, &|p| saved(p))
+                }) as Arc<harpas_engine::worldgen::StartSource>,
+            )
+        }
+        None => (generator, starts),
+    };
+    decorated_with_structures(generator, starts, seed, data, Arc::clone(templates)).unwrap()
+}
+
+/// The blocks of a loaded chunk.
+fn loaded_blocks(chunk: &harpas_anvil::Chunk, pos: ChunkPos, biome_count: usize) -> GeneratedChunk {
+    let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biome_count);
+    for section in &chunk.sections {
+        if let Some(blocks) = &section.section {
+            let i = (i32::from(section.y) - generated.min_section_y()) as usize;
+            generated.sections_mut()[i] = blocks.clone();
+        }
+    }
+    generated
 }

@@ -643,6 +643,9 @@ fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
                 );
                 assert!(nearby.iter().any(|s| s.structure == "minecraft:mineshaft"));
             }
+            // The workers save this chunk at carvers with its mines only: buried treasure is placed later, in
+            // decoration, and `buried_treasure_parity` compares it.
+            nearby.retain(|s| s.structure != "minecraft:buried_treasure");
             let base = terrain.generate_chunk_carved(x, z, &data).unwrap();
             let mut noise = terrain.create_noise_chunk(x, z);
             let input = case_input(&base, seed, &nearby, &mut |bx, by, bz| {

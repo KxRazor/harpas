@@ -1,5 +1,6 @@
 //! Compares every block state's solid, replaceable, liquid and motion-blocking flags, the full and center
-//! support and occlusion of each face, the solid render flag and whether the block has a block entity with vanilla's.
+//! support and occlusion of each face, the solid render flag and whether the block has a block entity with vanilla's,
+//! then the faces each state occludes light with and whether light passes between every pair of distinct faces.
 mod reference;
 
 use std::fs;
@@ -24,7 +25,13 @@ fn block_behavior_matches_vanilla() {
     let states = block_states();
     let mut compared = 0;
     let mut mismatches = Vec::new();
-    for line in text.lines().filter(|line| !line.starts_with("block ")) {
+    let light_lines = text.lines().filter(|line| line.starts_with("light "));
+    let pair_lines = text.lines().filter(|line| line.starts_with("pair "));
+    for line in text.lines().filter(|line| {
+        !["block ", "light ", "pair "]
+            .iter()
+            .any(|p| line.starts_with(p))
+    }) {
         let fields: Vec<u32> = line
             .split(' ')
             .map(|field| field.parse().expect("a number"))
@@ -87,4 +94,58 @@ fn block_behavior_matches_vanilla() {
         mismatches[..mismatches.len().min(30)].join("\n")
     );
     eprintln!("Compared the behavior flags of {compared} block states");
+
+    let mut faces = 0;
+    let mut mismatches = Vec::new();
+    for line in light_lines {
+        let mut fields = line.split(' ').skip(1);
+        let id: u32 = fields.next().unwrap().parse().unwrap();
+        for (&face, field) in Face::ALL.iter().zip(fields) {
+            let expected: Vec<u32> = if field == "-" {
+                vec![0; 32]
+            } else {
+                field
+                    .split(',')
+                    .map(|row| u32::from_str_radix(row, 16).unwrap())
+                    .collect()
+            };
+            if behavior.light_face(id, face).as_slice() != expected {
+                mismatches.push(format!("{:?} {face:?}", states.properties(id)));
+            }
+            faces += 1;
+        }
+    }
+    assert_eq!(
+        faces,
+        states.len() as usize * 6,
+        "every face of every state"
+    );
+    let mut pairs = 0;
+    for line in pair_lines {
+        let fields: Vec<u32> = line
+            .split(' ')
+            .skip(1)
+            .map(|field| field.parse().unwrap())
+            .collect();
+        let &[from, to, face, occludes] = fields.as_slice() else {
+            panic!("malformed line {line}");
+        };
+        let face = Face::ALL[face as usize];
+        if behavior.light_occludes(from, to, face) != (occludes == 1) {
+            mismatches.push(format!(
+                "{:?} towards {face:?} {:?}: vanilla {}",
+                states.properties(from),
+                states.properties(to),
+                occludes == 1
+            ));
+        }
+        pairs += 1;
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} light faces or pairs differ:\n{}",
+        mismatches.len(),
+        mismatches[..mismatches.len().min(30)].join("\n")
+    );
+    eprintln!("Compared {faces} light occlusion faces and {pairs} pairs of faces");
 }

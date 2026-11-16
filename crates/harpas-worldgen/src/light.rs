@@ -5,6 +5,7 @@
 //! the extra chunk is enough for every value that can reach the target.
 
 use harpas_core::block::block_states;
+use harpas_core::block_behavior::{BlockBehavior, Face, block_behavior};
 
 /// Bytes in one section's light layer: 4,096 blocks at four bits each.
 pub const LIGHT_BYTES: usize = 2048;
@@ -71,15 +72,24 @@ pub fn light_chunk(world: &dyn LightWorld, chunk_x: i32, chunk_z: i32) -> ChunkL
     let mut sky_queue: Vec<Vec<usize>> = vec![Vec::new(); 16];
     let mut block_queue: Vec<Vec<usize>> = vec![Vec::new(); 16];
 
-    // Sky light starts at fifteen above the first block that dampens it in each column.
+    let behavior = block_behavior();
+    // Sky light is fifteen down each column to the first block that dampens it, or whose top face closes the
+    // column together with the bottom face of the block above (`ChunkSkyLightSources.isEdgeOccluded`).
+    let air = states
+        .default_state("minecraft:air")
+        .expect("air is a block");
     for x in 0..VOLUME {
         for z in 0..VOLUME {
             let mut y = min_y + height - 1;
+            let mut above = air;
             while y >= min_y {
                 let state = world.block_state(min_x + x, y, min_z + z);
-                if states.light_dampening(state) > 0 {
+                if states.light_dampening(state) > 0
+                    || behavior.light_occludes(above, state, Face::Down)
+                {
                     break;
                 }
+                above = state;
                 let at = index(min_x + x, y, min_z + z);
                 sky[at] = 15;
                 sky_queue[15].push(at);
@@ -108,6 +118,7 @@ pub fn light_chunk(world: &dyn LightWorld, chunk_x: i32, chunk_z: i32) -> ChunkL
     propagate(
         world,
         states,
+        behavior,
         min_x,
         min_y,
         min_z,
@@ -121,6 +132,7 @@ pub fn light_chunk(world: &dyn LightWorld, chunk_x: i32, chunk_z: i32) -> ChunkL
     propagate(
         world,
         states,
+        behavior,
         min_x,
         min_y,
         min_z,
@@ -176,6 +188,7 @@ pub fn light_chunk(world: &dyn LightWorld, chunk_x: i32, chunk_z: i32) -> ChunkL
 fn propagate(
     world: &dyn LightWorld,
     states: &harpas_core::block::BlockStates,
+    behavior: &BlockBehavior,
     min_x: i32,
     min_y: i32,
     min_z: i32,
@@ -186,13 +199,13 @@ fn propagate(
     queue: &mut [Vec<usize>],
     sky: bool,
 ) {
-    const NEIGHBORS: [(i32, i32, i32); 6] = [
-        (1, 0, 0),
-        (-1, 0, 0),
-        (0, 1, 0),
-        (0, -1, 0),
-        (0, 0, 1),
-        (0, 0, -1),
+    const NEIGHBORS: [(i32, i32, i32, Face); 6] = [
+        (1, 0, 0, Face::East),
+        (-1, 0, 0, Face::West),
+        (0, 1, 0, Face::Up),
+        (0, -1, 0, Face::Down),
+        (0, 0, 1, Face::South),
+        (0, 0, -1, Face::North),
     ];
     let max_y = min_y + height as i32 - 1;
     for level in (1..=15_u8).rev() {
@@ -207,7 +220,8 @@ fn propagate(
             let world_x = min_x + x as i32;
             let world_y = min_y + y as i32;
             let world_z = min_z + z as i32;
-            for (dx, dy, dz) in NEIGHBORS {
+            let from = world.block_state(world_x, world_y, world_z);
+            for (dx, dy, dz, face) in NEIGHBORS {
                 let nx = world_x + dx;
                 let ny = world_y + dy;
                 let nz = world_z + dz;
@@ -221,6 +235,10 @@ fn propagate(
                 }
                 let neighbor = (ny - min_y) as usize * depth * width + local_z * width + local_x;
                 let state = world.block_state(nx, ny, nz);
+                // Slabs, stairs and the other blocks that use their shape close the faces they cover.
+                if behavior.light_occludes(from, state, face) {
+                    continue;
+                }
                 let dampening = states.light_dampening(state);
                 // Direct sky light (fifteen) falls through clear blocks without fading; any dimmer light
                 // loses a level per block in every direction, including down.
@@ -330,6 +348,46 @@ mod tests {
         assert!(above.block.iter().all(|byte| *byte == 0));
         let below = section(&light, -1);
         assert!(below.sky.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn slabs_and_stairs_close_the_faces_they_cover() {
+        let mut world = TestWorld::flat();
+        let state = |name: &str, properties: &[(&str, &str)]| {
+            block_states()
+                .state(name, properties.iter().copied())
+                .unwrap()
+                .0
+        };
+        // Lower halves close the column below them; they still let sky light in from above.
+        world.blocks.insert(
+            (4, 10, 4),
+            state("minecraft:oak_stairs", &[("half", "bottom")]),
+        );
+        world.blocks.insert(
+            (8, 10, 8),
+            state("minecraft:stone_slab", &[("type", "bottom")]),
+        );
+        // An upper half closes its top face, so the sky reaches it only from the side.
+        world.blocks.insert(
+            (12, 10, 12),
+            state("minecraft:stone_slab", &[("type", "top")]),
+        );
+        // A double slab has no shape to occlude with, and dampens like any full block.
+        world.blocks.insert(
+            (12, 10, 4),
+            state("minecraft:stone_slab", &[("type", "double")]),
+        );
+        let light = light_chunk(&world, 0, 0);
+        let sky = |x, y, z| nibble(&section(&light, 0).sky, index(x, y, z));
+        for (x, z) in [(4, 4), (8, 8)] {
+            assert_eq!(sky(x, 10, z), 15, "{x}, {z}: the lower half itself");
+            assert_eq!(sky(x, 9, z), 14, "{x}, {z}: below it, from the side");
+        }
+        assert_eq!(sky(12, 10, 12), 14);
+        assert_eq!(sky(12, 9, 12), 14);
+        assert_eq!(sky(12, 10, 4), 0);
+        assert_eq!(sky(12, 9, 4), 14);
     }
 
     #[test]

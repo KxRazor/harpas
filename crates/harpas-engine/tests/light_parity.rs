@@ -1,6 +1,7 @@
 //! Compares the light engine with a vanilla server's saved chunks.
 //!
-//! The server generates and lights a small area; the test reads its blocks, computes light for the same blocks
+//! The server generates and lights a small area, with roofs of slabs and stairs built high above the origin
+//! chunk, which close the faces they cover to light; the test reads its blocks, computes light for the same blocks
 //! with Harpas, and compares every saved light array. Vanilla omits a sky-light layer when every value is
 //! fifteen and a block-light layer when every value is zero, so a missing layer is accepted only when
 //! Harpas's layer is uniform.
@@ -62,6 +63,30 @@ fn wait_for_log(server: &mut Server, log: &Path, text: &str) {
             "timed out waiting for {text:?}:\n{contents}"
         );
         thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Sends `command` until the log holds one more `success` than before, as a command on a chunk that is still
+/// loading fails.
+fn command_until(server: &mut Server, log: &Path, command_text: &str, success: &str) {
+    let count = || {
+        fs::read_to_string(log)
+            .unwrap_or_default()
+            .matches(success)
+            .count()
+    };
+    let before = count();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        command(server, command_text);
+        thread::sleep(Duration::from_millis(300));
+        if count() > before {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{command_text:?} never succeeded"
+        );
     }
 }
 
@@ -215,6 +240,28 @@ fn light_matches_vanillas_saved_chunks() {
     wait_for_log(&mut server, &log, "Done (");
     command(&mut server, "forceload add -48 -48 63 63");
     wait_for_log(&mut server, &log, "Marked 49 chunks");
+    // Lower and upper halves of slabs and stairs, facing every way, with light sources under them and a wall of
+    // stairs on its side: each closes some faces to sky and block light and leaves the others open.
+    for fill in [
+        "2 150 2 6 150 6 minecraft:stone_slab[type=bottom]",
+        "9 150 2 13 150 6 minecraft:stone_slab[type=top]",
+        "2 150 9 6 150 13 minecraft:oak_stairs[half=bottom,facing=east]",
+        "9 150 9 13 150 13 minecraft:oak_stairs[half=top,facing=south]",
+        "0 140 7 15 146 7 minecraft:stone_stairs[half=bottom,facing=north]",
+        "0 130 0 15 130 3 minecraft:oak_stairs[half=top,facing=west,shape=outer_left]",
+        "4 148 4 4 148 4 minecraft:glowstone",
+        "11 148 11 11 148 11 minecraft:sea_lantern",
+        "3 138 3 3 138 3 minecraft:glowstone",
+    ] {
+        command_until(
+            &mut server,
+            &log,
+            &format!("fill {fill}"),
+            "Successfully filled",
+        );
+    }
+    // The light engine finishes before the save on its own thread; give it time to.
+    thread::sleep(Duration::from_secs(2));
     command(&mut server, "save-all flush");
     wait_for_log(&mut server, &log, "Saved the game");
     let contents = fs::read_to_string(&log).unwrap();

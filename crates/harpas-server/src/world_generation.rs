@@ -144,7 +144,7 @@ pub(crate) fn prepare(
                 generator, starts, seed, data, templates,
             )?
         } else {
-            harpas_engine::worldgen::decorated(generator, seed, &data)?
+            harpas_engine::worldgen::decorated(generator, seed, &data, templates)?
         }
     } else {
         harpas_engine::world::generator_source(generator)

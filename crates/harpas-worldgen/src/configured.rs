@@ -45,6 +45,7 @@ use crate::pointed_dripstone::{CompiledPointedDripstone, place_pointed_dripstone
 use crate::root_system::{CompiledRootSystem, place_root_system};
 use crate::surface::resolve_block_state;
 use crate::survival::{SurvivalRule, compile_block_survival};
+use crate::template::StructureTemplates;
 use crate::tree::{CompiledTree, TreeBlocks, place_tree};
 use crate::underwater_magma::{CompiledUnderwaterMagma, place_underwater_magma};
 use crate::vegetation_patch::{CompiledVegetationPatch, place_vegetation_patch};
@@ -119,6 +120,8 @@ pub enum CompiledFeature {
     BlockPile(StateProvider),
     /// `minecraft:desert_well`.
     DesertWell,
+    /// `minecraft:fossil`.
+    Fossil(Box<crate::fossil::Fossil>),
     /// `minecraft:monster_room`.
     MonsterRoom,
     /// `minecraft:geode`.
@@ -457,6 +460,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         } => place_block_blob(world, *state, can_place_on, random, origin),
         CompiledFeature::BlockPile(provider) => place_block_pile(world, provider, random, origin),
         CompiledFeature::DesertWell => place_desert_well(world, random, origin),
+        CompiledFeature::Fossil(fossil) => {
+            crate::fossil::place_fossil(world, fossil, random, origin)
+        }
         CompiledFeature::MonsterRoom => place_monster_room(world, random, origin),
         CompiledFeature::Geode(geode) => place_geode(world, geode, random, origin),
         CompiledFeature::UnderwaterMagma(magma) => {
@@ -714,6 +720,7 @@ pub struct FeatureCompiler<'a> {
     placed: HashMap<String, Option<Arc<CompiledPlaced>>>,
     active: HashSet<String>,
     tree_blocks: Option<Arc<TreeBlocks>>,
+    templates: Option<Arc<StructureTemplates>>,
 }
 
 impl<'a> FeatureCompiler<'a> {
@@ -725,6 +732,15 @@ impl<'a> FeatureCompiler<'a> {
             placed: HashMap::new(),
             active: HashSet::new(),
             tree_blocks: None,
+            templates: None,
+        }
+    }
+
+    /// A compiler that also compiles the features that place the owner's templates, such as fossils.
+    pub fn with_templates(data: &'a WorldgenData, templates: Arc<StructureTemplates>) -> Self {
+        Self {
+            templates: Some(templates),
+            ..Self::new(data)
         }
     }
 
@@ -1006,6 +1022,21 @@ impl<'a> FeatureCompiler<'a> {
             | "minecraft:coral_claw"
             | "minecraft:coral_mushroom") => CompiledFeature::Coral(Box::new(self.coral(kind)?)),
             "minecraft:desert_well" => CompiledFeature::DesertWell,
+            // Fossils place templates, which only a compiler given the owner's templates can read.
+            "minecraft:fossil" => match &self.templates {
+                Some(templates) => {
+                    match crate::fossil::Fossil::compile(
+                        name,
+                        config,
+                        self.data,
+                        Arc::clone(templates),
+                    )? {
+                        Some(fossil) => CompiledFeature::Fossil(Box::new(fossil)),
+                        None => return Ok(None),
+                    }
+                }
+                None => return Ok(None),
+            },
             "minecraft:monster_room" => CompiledFeature::MonsterRoom,
             "minecraft:geode" => match self.geode(name, config)? {
                 Some(geode) => CompiledFeature::Geode(Box::new(geode)),

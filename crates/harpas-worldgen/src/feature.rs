@@ -425,6 +425,15 @@ pub struct FeatureIndex {
 impl FeatureIndex {
     /// Indexes the features of a world with the normal Overworld's biome source.
     pub fn overworld(data: &WorldgenData) -> Result<Self, WorldgenDataError> {
+        Self::overworld_with(data, None)
+    }
+
+    /// Like [`Self::overworld`], with the owner's templates for the features that place them, such as fossils.
+    /// Without templates those features are left out.
+    pub fn overworld_with(
+        data: &WorldgenData,
+        templates: Option<Arc<StructureTemplates>>,
+    ) -> Result<Self, WorldgenDataError> {
         let mut biomes = Vec::new();
         let mut seen = HashSet::new();
         for (_, name) in overworld_biome_parameters() {
@@ -436,12 +445,21 @@ impl FeatureIndex {
                 biomes.push(id as u32);
             }
         }
-        Self::new(data, &biomes)
+        Self::new_with(data, &biomes, templates)
     }
 
     /// Resolves every biome's feature lists, orders the features of `possible_biomes`, the IDs a world's
     /// biome source can produce in its own order, and compiles the ore features.
     pub fn new(data: &WorldgenData, possible_biomes: &[u32]) -> Result<Self, WorldgenDataError> {
+        Self::new_with(data, possible_biomes, None)
+    }
+
+    /// Like [`Self::new`], with the owner's templates for the features that place them.
+    pub fn new_with(
+        data: &WorldgenData,
+        possible_biomes: &[u32],
+        templates: Option<Arc<StructureTemplates>>,
+    ) -> Result<Self, WorldgenDataError> {
         let placed_count = data.placed_features.len();
         let mut biome_features = Vec::with_capacity(data.biomes.len());
         let mut allowed_biomes = vec![HashSet::new(); placed_count];
@@ -474,7 +492,10 @@ impl FeatureIndex {
         let mut modifiers = Vec::with_capacity(placed_count);
         let mut ores = Vec::with_capacity(placed_count);
         let mut compiled = Vec::with_capacity(placed_count);
-        let mut compiler = FeatureCompiler::new(data);
+        let mut compiler = match templates {
+            Some(templates) => FeatureCompiler::with_templates(data, templates),
+            None => FeatureCompiler::new(data),
+        };
         for (name, placed) in &data.placed_features {
             compiled.push(compiler.placed(name)?);
             placements.push(placed.placement.clone());

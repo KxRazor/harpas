@@ -96,7 +96,7 @@ pub use structure::{
     BoundingBox, Direction, JigsawJunction, JigsawPiece, MonumentLayout, MonumentRoom,
     MonumentRoomKind, MonumentRoomPiece, RuinedPortalBlocks, RuinedPortalGenerator,
     SingleElementPlacement, StructurePiece, StructureReference, StructureStart, StructureState,
-    TemplatePiece, decoration_slot, place_mineshafts_in_chunk,
+    TemplatePiece, decoration_slot, place_mineshafts, place_mineshafts_in_chunk,
 };
 pub use surface::{
     BiomeTemperatureSampler, CaveSurface, SurfaceChunkAccess, SurfaceCondition, SurfaceRule,

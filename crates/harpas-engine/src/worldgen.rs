@@ -1,6 +1,5 @@
 //! Connecting the terrain generator to the engine's chunk workers and Anvil storage.
 
-use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
@@ -66,7 +65,8 @@ pub fn overworld_generator(
         } else {
             structures::ChunkStructures::empty()
         };
-        let mut generated = generator
+        // Structures place their blocks in decoration; carvers adapts the terrain around them.
+        let generated = generator
             .generate_chunk_carved_with_beardifier(
                 pos.x,
                 pos.z,
@@ -74,20 +74,7 @@ pub fn overworld_generator(
                 std::mem::take(&mut structures.beardifier),
             )
             .map_err(io::Error::other)?;
-        let terrain_chunks = if let Some(source) = &structure_source {
-            source.terrain_for_placements(&generated, &structures, &generator, &data, read)?
-        } else {
-            HashMap::new()
-        };
-        let blocking_biomes = structures.mineshaft_biomes(&generated, &generator, &data, read)?;
-        let entities =
-            structures.place_blocks(&mut generated, seed, &terrain_chunks, &blocking_biomes);
         let mut chunk = into_anvil(generated)?;
-        if !entities.is_empty() {
-            chunk
-                .rest
-                .insert("block_entities", List::Compound(entities));
-        }
         chunk.rest.insert("structures", structures.into_nbt());
         Ok(chunk)
     }))

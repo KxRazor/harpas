@@ -266,7 +266,9 @@ vanilla for the same seed.
     - [x] Shipwrecks, ocean ruins and ruined portals in `surface_structures`, reading the terrain before
           decoration around the chunk, with shared shipwreck heights and portal placements prepared once
           (`shipwreck_parity`, `ocean_ruin_parity`, `ruined_portal_parity`).
-    - [ ] The other structures in their steps, then full resumption from `features`.
+    - [x] Mineshafts in `underground_structures` after buried treasure, and strongholds in `surface_structures`,
+          leaving carvers to adapt the terrain only (`mineshaft_parity`, `stronghold_parity`).
+    - [ ] Full resumption from `features`.
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.
   - [x] Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with

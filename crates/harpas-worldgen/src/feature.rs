@@ -979,12 +979,12 @@ pub struct DecorationStructures<'a> {
     pub data: &'a WorldgenData,
     /// The owner's templates.
     pub templates: &'a StructureTemplates,
-    /// The starts whose pieces reach the chunk (its structure references). Mineshafts and strongholds are still
-    /// placed after carvers; the other structures place blocks here. Placement can change
+    /// The starts whose pieces reach the chunk (its structure references), which place their blocks here. Placement can change
     /// a start, as a buried treasure moves its piece to its chest and a swamp hut saves its ground height.
     pub starts: &'a mut [StructureStart],
-    /// The terrain around the chunk before decoration, which shipwrecks and ocean ruins read outside the chunk so
-    /// that their blocks do not depend on the order in which chunks decorate. Without it they read the region.
+    /// The terrain around the chunk before decoration, which shipwrecks, ocean ruins and strongholds read outside
+    /// the chunk so that their blocks do not depend on the order in which chunks decorate. Without it they read
+    /// the region.
     pub terrain: Option<DecorationTerrain<'a>>,
     /// Ruined portals placed beforehand against the terrain before decoration, by structure, for each portal
     /// whose blocks reach the chunk; its step applies the chunk's part.
@@ -1028,6 +1028,7 @@ pub fn apply_biome_decoration_with_structures(
         .noise_settings
         .get("minecraft:overworld")
         .map_or(63, |settings| settings.sea_level);
+    let blocking = data.resolve_biomes(&["#minecraft:mineshaft_blocking".to_owned()])?;
     let mut features = FeatureCompiler::new(data);
     decorate(
         world,
@@ -1053,6 +1054,43 @@ pub fn apply_biome_decoration_with_structures(
                         world.put_back(chunk);
                         set_block_entities(world, entities);
                     }
+                }
+                if matches!(id, "minecraft:mineshaft" | "minecraft:mineshaft_mesa") {
+                    // A structure's mines share its random source, in the chunk's reference order. The biomes
+                    // that block a mine are read before the chunk leaves the region.
+                    let Some(target) = world.chunk(chunk_x, chunk_z) else {
+                        continue;
+                    };
+                    let samples: HashMap<[i32; 3], bool> = starts
+                        .iter()
+                        .filter(|start| start.structure == id)
+                        .flat_map(|start| start.mineshaft_biome_samples(target))
+                        .map(|[x, y, z]| ([x, y, z], blocking.contains(&world.biome(x, y, z))))
+                        .collect();
+                    let Some(mut chunk) = world.take(chunk_x, chunk_z) else {
+                        continue;
+                    };
+                    let mut entities = crate::structure::place_mineshafts(
+                        starts.iter_mut(),
+                        id,
+                        &mut chunk,
+                        random,
+                        &mut |x, y, z| samples[&[x, y, z]],
+                    );
+                    // A later mine can excavate an earlier spawner or replace it at the same position.
+                    let spawner = block_states().default_state("minecraft:spawner").unwrap();
+                    let mut seen = HashSet::new();
+                    entities.retain(|entity| {
+                        let [x, y, z] = ["x", "y", "z"].map(|key| match entity.get(key) {
+                            Some(harpas_core::nbt::Nbt::Int(value)) => *value,
+                            _ => unreachable!("a placed spawner has a position"),
+                        });
+                        chunk.block_state((x & 15) as usize, y, (z & 15) as usize) == spawner
+                            && seen.insert([x, y, z])
+                    });
+                    world.put_back(chunk);
+                    set_block_entities(world, entities);
+                    continue;
                 }
                 for start in starts.iter_mut().filter(|start| start.structure == id) {
                     if start.is_jigsaw() {
@@ -1150,6 +1188,21 @@ pub fn apply_biome_decoration_with_structures(
                                 &mut |x, y, z| world.block_state(x, y, z),
                                 burial,
                             ),
+                        };
+                        world.put_back(chunk);
+                        set_block_entities(world, entities);
+                    } else if id == "minecraft:stronghold"
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        let entities = match terrain {
+                            Some(terrain) => {
+                                start.place_stronghold(&mut chunk, random, &mut |x, y, z| {
+                                    (terrain.block_at)(x, y, z)
+                                })
+                            }
+                            None => start.place_stronghold(&mut chunk, random, &mut |x, y, z| {
+                                world.block_state(x, y, z)
+                            }),
                         };
                         world.put_back(chunk);
                         set_block_entities(world, entities);

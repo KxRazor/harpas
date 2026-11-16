@@ -5,9 +5,14 @@
 mod reference;
 
 use harpas_core::block::block_states;
+use std::sync::Arc;
+
 use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_engine::world::ChunkPos;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
     BoundingBox, Direction, GeneratedChunk, HeightmapType, StructurePiece, StructureStart,
+    StructureTemplates, WorldgenData,
 };
 use reference::Reference;
 
@@ -516,7 +521,6 @@ fn compare_cases(reference: &Reference, inputs: Compound, expected: Compound) {
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
     use harpas_engine::world::{ChunkPos, ChunkState, World};
-    use harpas_engine::worldgen::overworld_generator;
     use harpas_worldgen::{
         NoiseBasedChunkGenerator, StructureState, StructureTemplates, WorldgenData,
     };
@@ -593,22 +597,25 @@ fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
                 corridor.bounding_box.max[2] >> 4,
             ));
         }
-        let generator = overworld_generator(
-            seed,
-            Arc::clone(&data),
-            Arc::clone(&templates),
-            true,
+        // Mines and treasure are placed in decoration. Decorate without features, so that the workers' chunks
+        // are the carved terrain with their structures, as vanilla's probe places them, in both request orders.
+        let ordered: Vec<_> = positions.iter().map(|&(x, z)| ChunkPos { x, z }).collect();
+        let folder = reference.temp.0.join(format!("world-{seed}"));
+        let mut world = World::open_with_source(
+            &folder,
             &names,
+            structures_only_source(seed, &data, &templates, None),
         )
         .unwrap();
-        let reversed = overworld_generator(
-            seed,
-            Arc::clone(&data),
-            Arc::clone(&templates),
-            true,
+        wait(&mut world, &ordered);
+        let reversed_order: Vec<_> = ordered.iter().rev().copied().collect();
+        let mut reversed = World::open_with_source(
+            &folder.with_extension("reverse"),
             &names,
+            structures_only_source(seed, &data, &templates, None),
         )
         .unwrap();
+        wait(&mut reversed, &reversed_order);
         let mut saved = BTreeMap::new();
         let mut changed = 0;
         for &(x, z) in &positions {
@@ -643,9 +650,6 @@ fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
                 );
                 assert!(nearby.iter().any(|s| s.structure == "minecraft:mineshaft"));
             }
-            // The workers save this chunk at carvers with its mines only: buried treasure is placed later, in
-            // decoration, and `buried_treasure_parity` compares it.
-            nearby.retain(|s| s.structure != "minecraft:buried_treasure");
             let base = terrain.generate_chunk_carved(x, z, &data).unwrap();
             let mut noise = terrain.create_noise_chunk(x, z);
             let input = case_input(&base, seed, &nearby, &mut |bx, by, bz| {
@@ -661,7 +665,9 @@ fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
                 });
                 blocking.contains(&id)
             });
-            let actual = generator(pos, &|_| Ok(None)).unwrap();
+            let Some(ChunkState::Loaded(actual)) = world.chunk(pos) else {
+                panic!("worker chunk {pos:?}");
+            };
             let mut placed = GeneratedChunk::new(x, z, -64, 384, data.biomes.len());
             for section in &actual.sections {
                 if let Some(blocks) = &section.section {
@@ -700,31 +706,17 @@ fn workers_generate_mines_of_both_types_and_preserve_anvil_data() {
             "workers must place mine blocks for seed {seed}"
         );
         for (&(x, z), want) in saved.iter().rev() {
+            let Some(ChunkState::Loaded(chunk)) = reversed.chunk(ChunkPos { x, z }) else {
+                panic!("reversed chunk");
+            };
             assert_eq!(
-                &reversed(ChunkPos { x, z }, &|_| Ok(None))
-                    .unwrap()
-                    .to_nbt(&names),
+                &chunk.to_nbt(&names),
                 want,
                 "reversed requests {seed} {x} {z}"
             );
         }
-        let folder = reference.temp.0.join(format!("world-{seed}"));
-        let mut world = World::open_with_generator(&folder, &names, generator).unwrap();
-        let positions: Vec<_> = positions
-            .into_iter()
-            .map(|(x, z)| ChunkPos { x, z })
-            .collect();
-        wait(&mut world, &positions);
-        for pos in &positions {
-            let Some(ChunkState::Loaded(chunk)) = world.chunk(*pos) else {
-                panic!("loaded chunk");
-            };
-            assert_eq!(
-                chunk.to_nbt(&names),
-                saved[&(pos.x, pos.z)],
-                "worker result {seed} {pos:?}"
-            );
-        }
+        drop(reversed);
+        let positions = ordered;
         world.flush().unwrap();
         drop(world);
         let mut world = World::open(&folder, &names).unwrap();
@@ -768,7 +760,6 @@ fn wait(world: &mut harpas_engine::world::World, positions: &[harpas_engine::wor
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn workers_use_saved_mine_records_and_neighbor_biomes() {
-    use harpas_engine::world::ChunkPos;
     use harpas_engine::worldgen::overworld_generator;
     use harpas_worldgen::{
         BiomeManager, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData,
@@ -854,51 +845,155 @@ fn workers_use_saved_mine_records_and_neighbor_biomes() {
             empty.get("structures").unwrap().clone()
         },
     );
+    let source_tag = Arc::new(source_tag);
+    let empty = Arc::new(empty);
     for blocked in [false, true] {
+        // The generator saves the target at carvers with the mine's reference but none of its blocks.
         let generator = overworld_generator(
             seed,
-            Arc::clone(&data),
+            structures_only(&data),
             Arc::clone(&templates),
             true,
             &names,
         )
         .unwrap();
-        let actual = generator(target, &|p| {
-            Ok(Some(if blocked && p == neighbor {
-                blocked_neighbor.clone()
-            } else if p == source {
-                source_tag.clone()
+        let carved = generator(target, &|p| {
+            Ok(Some(if p == source {
+                (*source_tag).clone()
             } else {
-                empty.clone()
+                (*empty).clone()
             }))
         })
         .unwrap();
-        let baseline = if blocked {
-            base.clone()
-        } else {
-            placed.clone()
-        };
-        let mut expected = harpas_engine::worldgen::into_anvil(baseline).unwrap();
         let mut references = Compound::new();
         references.insert("minecraft:mineshaft", Nbt::LongArray(vec![0]));
         let mut records = Compound::new();
         records.insert("starts", Compound::new());
         records.insert("References", references);
-        expected.rest.insert("structures", records);
-        if !blocked {
-            expected
-                .rest
-                .insert("block_entities", List::Compound(entities.clone()));
-        }
+        let mut expected = harpas_engine::worldgen::into_anvil(base.clone()).unwrap();
+        expected.rest.insert("structures", records.clone());
         assert_eq!(
-            actual.to_nbt(&names),
+            carved.to_nbt(&names),
             expected.to_nbt(&names),
+            "carvers blocked={blocked}"
+        );
+        // Decoration places the saved mine, reading the biome of the saved neighbor, saved as decorated so that
+        // its biomes are the ones every decoration around it reads.
+        let folder = reference
+            .temp
+            .0
+            .join(format!("saved-mine-neighbor-{blocked}"));
+        if blocked {
+            let region = harpas_anvil::dimension_dir(&folder, "minecraft:overworld").join("region");
+            std::fs::create_dir_all(&region).unwrap();
+            let mut decorated = blocked_neighbor.clone();
+            decorated.insert("Status", "minecraft:features");
+            let (rx, rz) = harpas_anvil::region_of(neighbor.x, neighbor.z);
+            harpas_anvil::write_chunks(&region, rx, rz, &[((neighbor.x, neighbor.z), &decorated)])
+                .unwrap();
+        }
+        let (source_tag, empty) = (Arc::clone(&source_tag), Arc::clone(&empty));
+        let reader: SavedReader = Arc::new(move |p| {
+            Ok(Some(if p == source {
+                (*source_tag).clone()
+            } else {
+                (*empty).clone()
+            }))
+        });
+        let mut world = harpas_engine::world::World::open_with_source(
+            &folder,
+            &names,
+            structures_only_source(seed, &data, &templates, Some(reader)),
+        )
+        .unwrap();
+        wait(&mut world, &[target]);
+        let Some(harpas_engine::world::ChunkState::Loaded(actual)) = world.chunk(target) else {
+            panic!("decorated target");
+        };
+        let want = if blocked { &base } else { &placed };
+        assert_eq!(
+            blocks(&loaded_blocks(actual, target, names.len())),
+            blocks(want),
             "saved neighbor blocked={blocked}"
         );
+        let nbt = actual.to_nbt(&names);
+        assert_eq!(nbt.get("structures"), Some(&Nbt::Compound(records)));
+        let want_entities = if blocked {
+            Nbt::List(List::Empty)
+        } else {
+            Nbt::List(List::Compound(entities.clone()))
+        };
+        assert_eq!(nbt.get("block_entities"), Some(&want_entities));
     }
     assert_eq!(
         mine.pieces[0].save_data.get("hps"),
         Some(&Nbt::Byte(0)),
-        "saved source flags remain deferred"
+        "the saved source record is not changed"
     );
+}
+
+/// Worldgen data whose biomes list no features, so that decoration places only structures.
+fn structures_only(data: &WorldgenData) -> Arc<WorldgenData> {
+    let mut data = data.clone();
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
+    Arc::new(data)
+}
+
+type SavedReader = Arc<dyn Fn(ChunkPos) -> std::io::Result<Option<Compound>> + Send + Sync>;
+
+/// Workers that generate chunks and decorate them with structures only, leaving out jigsaw structures, which
+/// `jigsaw_chunk_parity` compares and this probe does not place. With `saved`, generation and the decoration's
+/// starts read saved chunks from it instead of the world.
+#[allow(clippy::type_complexity)]
+fn structures_only_source(
+    seed: i64,
+    data: &WorldgenData,
+    templates: &Arc<StructureTemplates>,
+    saved: Option<SavedReader>,
+) -> Arc<dyn harpas_engine::world::ChunkSource> {
+    let data = structures_only(data);
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    let overworld = overworld_starts(seed, Arc::clone(&data), Arc::clone(templates)).unwrap();
+    let starts: Arc<harpas_engine::worldgen::StartSource> = Arc::new(move |pos, read| {
+        let mut found = overworld(pos, read)?;
+        found.starts.retain(|start| !start.is_jigsaw());
+        Ok(found)
+    });
+    let (generator, starts): (Arc<harpas_engine::world::ChunkGenerator>, _) = match saved {
+        Some(saved) => {
+            let read = Arc::clone(&saved);
+            (
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    generator(pos, &|p| read(p))
+                }),
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    starts(pos, &|p| saved(p))
+                }) as Arc<harpas_engine::worldgen::StartSource>,
+            )
+        }
+        None => (generator, starts),
+    };
+    decorated_with_structures(generator, starts, seed, data, Arc::clone(templates)).unwrap()
+}
+
+/// The blocks of a loaded chunk.
+fn loaded_blocks(chunk: &harpas_anvil::Chunk, pos: ChunkPos, biome_count: usize) -> GeneratedChunk {
+    let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biome_count);
+    for section in &chunk.sections {
+        if let Some(blocks) = &section.section {
+            let i = (i32::from(section.y) - generated.min_section_y()) as usize;
+            generated.sections_mut()[i] = blocks.clone();
+        }
+    }
+    generated
 }

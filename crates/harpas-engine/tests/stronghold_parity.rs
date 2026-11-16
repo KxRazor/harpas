@@ -5,7 +5,7 @@ mod reference;
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
-use harpas_engine::worldgen::overworld_generator;
+use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{Beardifier, NoiseBasedChunkGenerator, StructureState};
 use harpas_worldgen::{
     BoundingBox, Direction, GeneratedChunk, HeightmapType, StructurePiece, StructureStart,
@@ -559,15 +559,14 @@ fn natural_strongholds_on_workers_match_vanilla_and_survive_anvil_reload() {
                 .temp
                 .0
                 .join(format!("stronghold-{seed}-{reverse}"));
-            let generator = overworld_generator(
-                seed,
-                Arc::clone(&data),
-                Arc::clone(&templates),
-                true,
+            // Strongholds are placed in decoration. Decorate without features, so that the workers' chunks are
+            // the carved terrain with the stronghold, as vanilla's probe places it.
+            let mut world = World::open_with_source(
+                &folder,
                 &biomes,
+                structures_only_source(seed, &data, &templates, None),
             )
             .unwrap();
-            let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
             let mut order = positions.clone();
             if reverse {
                 order.reverse();
@@ -616,7 +615,6 @@ fn natural_strongholds_on_workers_match_vanilla_and_survive_anvil_reload() {
                         &block,
                     );
                     inp.insert("keep_neighbor_starts", 0_i8);
-                    inp.insert("defer_containers", 1_i8);
                     let name = format!("worker-{seed}-{},{}", pos.x, pos.z);
                     inputs.insert(name.clone(), inp);
                     expected.insert(name, result);
@@ -629,13 +627,6 @@ fn natural_strongholds_on_workers_match_vanilla_and_survive_anvil_reload() {
                         refs.get("minecraft:stronghold"),
                         Some(&Nbt::LongArray(vec![packed]))
                     );
-                    if (pos.x, pos.z) == source.chunk {
-                        assert_eq!(
-                            records.get("starts"),
-                            Some(&Nbt::Compound(starts(std::slice::from_ref(&source)))),
-                            "deferred flags/source record"
-                        );
-                    }
                 }
                 saved.push((pos, nbt));
             }
@@ -725,6 +716,7 @@ fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
             empty.clone()
         }))
     };
+    let data = structures_only(&data);
     let generator = overworld_generator(
         seed,
         Arc::clone(&data),
@@ -733,7 +725,17 @@ fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
         &biomes,
     )
     .unwrap();
+    // The generator saves the target at carvers with the stronghold's reference but none of its blocks.
     let actual = generator(target, &reader).unwrap();
+    let mut records = Compound::new();
+    records.insert("starts", Compound::new());
+    let mut refs = Compound::new();
+    refs.insert("minecraft:stronghold", Nbt::LongArray(vec![0]));
+    records.insert("References", refs);
+    let mut want = harpas_engine::worldgen::into_anvil(carved[&target].clone()).unwrap();
+    want.rest.insert("structures", records.clone());
+    assert_eq!(actual.to_nbt(&biomes), want.to_nbt(&biomes));
+    // Decoration places it, orienting the chest from the saved source's blocks.
     let block = |x: i32, y: i32, z: i32| {
         carved
             .get(&ChunkPos {
@@ -752,16 +754,6 @@ fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
         &mut |_, _| unreachable!(),
         &mut |x, y, z| block(x, y, z),
     );
-    let mut want = harpas_engine::worldgen::into_anvil(placed.clone()).unwrap();
-    want.rest
-        .insert("block_entities", entity_list(entities.clone()));
-    let mut records = Compound::new();
-    records.insert("starts", Compound::new());
-    let mut refs = Compound::new();
-    refs.insert("minecraft:stronghold", Nbt::LongArray(vec![0]));
-    records.insert("References", refs);
-    want.rest.insert("structures", records);
-    assert_eq!(actual.to_nbt(&biomes), want.to_nbt(&biomes));
     let mut inp = input_with_terrain(
         &carved[&target],
         seed,
@@ -769,8 +761,7 @@ fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
         &block,
     );
     inp.insert("keep_neighbor_starts", 0_i8);
-    inp.insert("defer_containers", 1_i8);
-    let mut result = snapshot(&placed, &[], entities);
+    let mut result = snapshot(&placed, &[], entities.clone());
     let Some(Nbt::Compound(mut maps)) = result.remove("Heightmaps") else {
         panic!("maps");
     };
@@ -784,17 +775,38 @@ fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
     compile_probe(&reference);
     compare(&reference, inputs, expected);
     let folder = reference.temp.0.join("saved-stronghold-neighbor");
-    let generator = Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
-        generator(pos, &|p| {
-            Ok(Some(if p == origin {
-                saved_nbt.clone()
-            } else {
-                empty.clone()
-            }))
-        })
+    let reader: SavedReader = Arc::new(move |p| {
+        Ok(Some(if p == origin {
+            saved_nbt.clone()
+        } else {
+            empty.clone()
+        }))
     });
-    let mut world = World::open_with_generator(&folder, &biomes, generator).unwrap();
+    let mut world = World::open_with_source(
+        &folder,
+        &biomes,
+        structures_only_source(seed, &data, &templates, Some(reader)),
+    )
+    .unwrap();
     wait(&mut world, &[target]);
+    let Some(ChunkState::Loaded(chunk)) = world.chunk(target) else {
+        panic!("decorated target");
+    };
+    let nbt = chunk.to_nbt(&biomes);
+    assert_eq!(
+        blocks(&loaded_blocks(chunk, target, biomes.len())),
+        blocks(&placed)
+    );
+    let mut got = match nbt.get("block_entities").unwrap() {
+        Nbt::List(List::Compound(v)) => v.clone(),
+        Nbt::List(List::Empty) => Vec::new(),
+        _ => panic!("entities"),
+    };
+    got.sort_by_key(packed_position);
+    let mut want_entities = entities;
+    want_entities.sort_by_key(packed_position);
+    assert_eq!(got, want_entities);
+    assert_eq!(nbt.get("structures"), Some(&Nbt::Compound(records)));
     world.flush().unwrap();
     drop(world);
     let mut world = World::open(&folder, &biomes).unwrap();
@@ -802,7 +814,7 @@ fn saved_stronghold_neighbors_supply_chest_facing_without_moving_the_source() {
     let Some(ChunkState::Loaded(chunk)) = world.chunk(target) else {
         panic!("reload");
     };
-    assert_eq!(chunk.to_nbt(&biomes), want.to_nbt(&biomes));
+    assert_eq!(chunk.to_nbt(&biomes), nbt);
 }
 
 #[test]
@@ -861,4 +873,69 @@ fn stronghold_flags_recreate_containers_on_a_carvers_retry() {
             .0,
         "minecraft:spawner"
     );
+}
+
+/// Worldgen data whose biomes list no features, so that decoration places only structures.
+fn structures_only(data: &WorldgenData) -> Arc<WorldgenData> {
+    let mut data = data.clone();
+    for biome in data.biomes.values_mut() {
+        biome.features = vec![Vec::new(); biome.features.len()];
+    }
+    Arc::new(data)
+}
+
+type SavedReader = Arc<dyn Fn(ChunkPos) -> std::io::Result<Option<Compound>> + Send + Sync>;
+
+/// Workers that generate chunks and decorate them with structures only, leaving out jigsaw structures, which
+/// `jigsaw_chunk_parity` compares and this probe does not place. With `saved`, generation and the decoration's
+/// starts read saved chunks from it instead of the world.
+fn structures_only_source(
+    seed: i64,
+    data: &WorldgenData,
+    templates: &Arc<StructureTemplates>,
+    saved: Option<SavedReader>,
+) -> Arc<dyn harpas_engine::world::ChunkSource> {
+    let data = structures_only(data);
+    let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+    let generator = overworld_generator(
+        seed,
+        Arc::clone(&data),
+        Arc::clone(templates),
+        true,
+        &biomes,
+    )
+    .unwrap();
+    let overworld = overworld_starts(seed, Arc::clone(&data), Arc::clone(templates)).unwrap();
+    let starts: Arc<harpas_engine::worldgen::StartSource> = Arc::new(move |pos, read| {
+        let mut found = overworld(pos, read)?;
+        found.starts.retain(|start| !start.is_jigsaw());
+        Ok(found)
+    });
+    let (generator, starts): (Arc<harpas_engine::world::ChunkGenerator>, _) = match saved {
+        Some(saved) => {
+            let read = Arc::clone(&saved);
+            (
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    generator(pos, &|p| read(p))
+                }),
+                Arc::new(move |pos, _: &harpas_engine::world::ChunkReader<'_>| {
+                    starts(pos, &|p| saved(p))
+                }) as Arc<harpas_engine::worldgen::StartSource>,
+            )
+        }
+        None => (generator, starts),
+    };
+    decorated_with_structures(generator, starts, seed, data, Arc::clone(templates)).unwrap()
+}
+
+/// The blocks of a loaded chunk.
+fn loaded_blocks(chunk: &harpas_anvil::Chunk, pos: ChunkPos, biome_count: usize) -> GeneratedChunk {
+    let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biome_count);
+    for section in &chunk.sections {
+        if let Some(blocks) = &section.section {
+            let i = (i32::from(section.y) - generated.min_section_y()) as usize;
+            generated.sections_mut()[i] = blocks.clone();
+        }
+    }
+    generated
 }

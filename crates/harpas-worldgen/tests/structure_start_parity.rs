@@ -22,6 +22,16 @@ fn radius() -> i32 {
     if reference::reduced_sample() { 64 } else { 256 }
 }
 
+/// Chunks in each direction around the origin where woodland mansions may start are also compared, because
+/// mansions are rare and the rooms they rarely have only show in many of them.
+fn mansion_radius() -> i32 {
+    if reference::reduced_sample() {
+        512
+    } else {
+        1024
+    }
+}
+
 /// Block coordinates whose base heights are compared, as in `StructureStartProbe.heightCoordinates`.
 fn height_coordinates() -> Vec<i32> {
     let mut coordinates: Vec<_> = (-3000..=3000).step_by(151).collect();
@@ -72,6 +82,7 @@ fn start_lines(start: &StructureStart) -> Vec<String> {
                 .expect("a rotation");
             let mirror = match template.mirror {
                 Mirror::None => "NONE",
+                Mirror::LeftRight => "LEFT_RIGHT",
                 Mirror::FrontBack => "FRONT_BACK",
             };
             lines.push(format!(
@@ -103,11 +114,16 @@ fn compare_seed(
     seed: i64,
 ) -> (usize, usize, usize) {
     let generator = NoiseBasedChunkGenerator::overworld(seed, data).expect("compile generator");
-    let state = StructureState::new(seed, data, &generator).expect("structure state");
-    assert!(
-        state.supports_set(data, "minecraft:ocean_monuments"),
-        "ocean monuments must take part in the comparison"
-    );
+    // Woodland mansions take part before Harpas places their blocks.
+    let state = StructureState::new(seed, data, &generator)
+        .expect("structure state")
+        .with_unplaced_structures();
+    for set in ["minecraft:ocean_monuments", "minecraft:woodland_mansions"] {
+        assert!(
+            state.supports_set(data, set),
+            "{set} must take part in the comparison"
+        );
+    }
     let sets: Vec<_> = state
         .possible_sets()
         .iter()
@@ -175,6 +191,32 @@ fn compare_seed(
             }
         }
     }
+    // The chunks beyond the area where mansions may start, compared with every structure that starts there.
+    let mut mansion_chunks = Vec::new();
+    let mansions = mansion_radius();
+    for x in -mansions..mansions {
+        for z in -mansions..mansions {
+            if (-radius..radius).contains(&x) && (-radius..radius).contains(&z)
+                || !state.is_structure_chunk("minecraft:woodland_mansions", x, z)
+            {
+                continue;
+            }
+            mansion_chunks.push((x, z));
+            for start in state
+                .starts_in_chunk(&generator, data, templates, x, z)
+                .unwrap()
+            {
+                start_count += 1;
+                *structures.entry(start.structure.clone()).or_default() += 1;
+                sample_saved(&start, data, templates, &mut saved, &mut saved_counts);
+                expected.extend(start_lines(&start));
+            }
+        }
+    }
+    assert!(
+        structures.get("minecraft:mansion").copied().unwrap_or(0) >= 4,
+        "the sample must exercise woodland mansion starts for seed {seed}"
+    );
     let mut starts_of = |x: i32, z: i32| {
         if let Some(starts) = known_starts.get(&(x, z)) {
             return Ok(Vec::clone(starts));
@@ -204,6 +246,12 @@ fn compare_seed(
         .map(|(x, z)| format!("{x} {z}"))
         .collect();
     std::fs::write(&chunk_file, chunk_list.join("\n") + "\n").unwrap();
+    let mansion_file = reference.temp.0.join("mansion-chunks.txt");
+    let mansion_list: Vec<_> = mansion_chunks
+        .iter()
+        .map(|(x, z)| format!("{x} {z}"))
+        .collect();
+    std::fs::write(&mansion_file, mansion_list.join("\n") + "\n").unwrap();
     let saved_file = reference.temp.0.join("saved-starts.nbt");
     let mut bytes = Vec::new();
     Nbt::Compound(saved).write_named("", &mut bytes);
@@ -215,6 +263,7 @@ fn compare_seed(
         radius.to_string(),
         chunk_file.display().to_string(),
         saved_file.display().to_string(),
+        mansion_file.display().to_string(),
     ];
     args.extend(sets.iter().cloned());
     reference.java("StructureStartProbe", args);

@@ -43,6 +43,21 @@ fn projection(name: &str) -> io::Result<Projection> {
     }
 }
 
+/// The piece type of woodland mansion pieces, which save their mirror as `Mi`.
+const MANSION_PIECE: &str = "minecraft:wmp";
+/// Where the templates of woodland mansion pieces are.
+const MANSION_TEMPLATES: &str = "minecraft:woodland_mansion/";
+
+/// A saved template mirror.
+fn mirror(name: &str) -> io::Result<crate::Mirror> {
+    Ok(match name {
+        "NONE" => crate::Mirror::None,
+        "LEFT_RIGHT" => crate::Mirror::LeftRight,
+        "FRONT_BACK" => crate::Mirror::FrontBack,
+        _ => return Err(invalid("invalid template mirror")),
+    })
+}
+
 impl StructureStart {
     /// The `starts` entry vanilla can load to continue generating this structure.
     pub fn to_nbt(&self) -> Compound {
@@ -122,7 +137,15 @@ impl StructurePiece {
         tag.insert("O", self.orientation.map_or(-1, Direction::data_value));
         tag.insert("GD", self.gen_depth);
         if let Some(template) = &self.template {
-            tag.insert("Template", template.template.clone());
+            // Mansion pieces save their template's name within `woodland_mansion/`.
+            let name = match self.kind.as_str() {
+                MANSION_PIECE => template
+                    .template
+                    .strip_prefix(MANSION_TEMPLATES)
+                    .unwrap_or(&template.template),
+                _ => &template.template,
+            };
+            tag.insert("Template", name.to_string());
             for (key, value) in ["TPX", "TPY", "TPZ"].into_iter().zip(template.position) {
                 tag.insert(key, value);
             }
@@ -131,14 +154,16 @@ impl StructurePiece {
                 if ruined { "Rotation" } else { "Rot" },
                 rotation_name(template.rotation),
             );
+            // Ruined portals and woodland mansions are the template pieces that may be reflected.
+            let mirror = match template.mirror {
+                crate::Mirror::None => "NONE",
+                crate::Mirror::LeftRight => "LEFT_RIGHT",
+                crate::Mirror::FrontBack => "FRONT_BACK",
+            };
             if ruined {
-                tag.insert(
-                    "Mirror",
-                    match template.mirror {
-                        crate::Mirror::None => "NONE",
-                        crate::Mirror::FrontBack => "FRONT_BACK",
-                    },
-                );
+                tag.insert("Mirror", mirror);
+            } else if self.kind == MANSION_PIECE {
+                tag.insert("Mi", mirror);
             }
         }
         if let Some(jigsaw) = &self.jigsaw {
@@ -226,9 +251,16 @@ impl StructurePiece {
         };
         let template = if matches!(
             kind.as_str(),
-            "minecraft:iglu" | "minecraft:shipwreck" | "minecraft:orp" | "minecraft:rupo"
+            "minecraft:iglu"
+                | "minecraft:shipwreck"
+                | "minecraft:orp"
+                | "minecraft:rupo"
+                | MANSION_PIECE
         ) {
-            let template = string(tag, "Template")?.to_string();
+            let template = match kind.as_str() {
+                MANSION_PIECE => format!("{MANSION_TEMPLATES}{}", string(tag, "Template")?),
+                _ => string(tag, "Template")?.to_string(),
+            };
             let ruined = kind == "minecraft:rupo";
             let pivot = if ruined {
                 let size = templates
@@ -236,7 +268,7 @@ impl StructurePiece {
                     .unwrap_or(&StructureTemplate::empty())
                     .size;
                 [size[0] / 2, 0, size[2] / 2]
-            } else if kind == "minecraft:orp" {
+            } else if kind == "minecraft:orp" || kind == MANSION_PIECE {
                 [0, 0, 0]
             } else if kind == "minecraft:shipwreck" {
                 [4, 0, 15]
@@ -253,14 +285,10 @@ impl StructurePiece {
                     integer(tag, "TPZ")?,
                 ],
                 rotation: rotation(string(tag, if ruined { "Rotation" } else { "Rot" })?)?,
-                mirror: if ruined {
-                    match string(tag, "Mirror")? {
-                        "NONE" => crate::Mirror::None,
-                        "FRONT_BACK" => crate::Mirror::FrontBack,
-                        _ => return Err(invalid("invalid ruined portal mirror")),
-                    }
-                } else {
-                    crate::Mirror::None
+                mirror: match (ruined, kind == MANSION_PIECE) {
+                    (true, _) => mirror(string(tag, "Mirror")?)?,
+                    (_, true) => mirror(string(tag, "Mi")?)?,
+                    _ => crate::Mirror::None,
                 },
                 pivot,
             })

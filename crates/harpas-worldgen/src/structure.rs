@@ -20,6 +20,8 @@ mod jigsaw_blocks;
 pub(crate) use jigsaw_blocks::STEPS;
 pub use jigsaw_blocks::decoration_slot;
 mod jungle_temple;
+mod mansion;
+pub use mansion::mansion_layout_grids;
 mod mineshaft;
 mod mineshaft_blocks;
 pub use mineshaft_blocks::{place_mineshafts, place_mineshafts_in_chunk};
@@ -60,6 +62,8 @@ pub struct StructureState {
     possible_sets: Vec<String>,
     rings: HashMap<String, HashSet<(i32, i32)>>,
     ring_positions: HashMap<String, Vec<(i32, i32)>>,
+    /// Whether to make the starts of structures whose blocks Harpas cannot place yet.
+    unplaced: bool,
 }
 
 impl StructureState {
@@ -123,7 +127,16 @@ impl StructureState {
             possible_sets,
             rings,
             ring_positions,
+            unplaced: false,
         })
+    }
+
+    /// Also makes the starts of structures whose blocks Harpas cannot place yet, such as woodland mansions, to
+    /// compare them with vanilla's. Worlds leave them out until their blocks are placed, so that no saved
+    /// structure is missing its blocks.
+    pub fn with_unplaced_structures(mut self) -> Self {
+        self.unplaced = true;
+        self
     }
 
     /// The structure sets that can generate in this world (`possibleStructureSets`), in lexicographical order.

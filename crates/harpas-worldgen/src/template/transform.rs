@@ -17,7 +17,7 @@ impl Rotation {
             |facing| self.rotate(facing),
             turns % 2 == 1,
             |step| (step + 4 * turns) % 16,
-            false,
+            None,
         )
     }
 }
@@ -25,16 +25,41 @@ impl Rotation {
 impl Mirror {
     /// The state reflected with a template (`BlockState.mirror`).
     pub fn mirror_state(self, state: u32) -> u32 {
-        let reflect = |facing| match facing {
+        let reflect_x = |facing| match facing {
             Facing::West => Facing::East,
             Facing::East => Facing::West,
             other => other,
         };
+        let reflect_z = |facing| match facing {
+            Facing::North => Facing::South,
+            Facing::South => Facing::North,
+            other => other,
+        };
         match self {
             Self::None => state,
-            Self::FrontBack => transform(state, reflect, false, |step| (16 - step) % 16, true),
+            Self::LeftRight => transform(
+                state,
+                reflect_z,
+                false,
+                |step| (24 - step) % 16,
+                Some(Axis::Z),
+            ),
+            Self::FrontBack => transform(
+                state,
+                reflect_x,
+                false,
+                |step| (16 - step) % 16,
+                Some(Axis::X),
+            ),
         }
     }
+}
+
+/// The horizontal axis a reflection reverses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Z,
 }
 
 /// Applies a horizontal direction map to every property that names or depends on a direction.
@@ -43,15 +68,25 @@ fn transform(
     turn: impl Fn(Facing) -> Facing,
     swaps_axes: bool,
     turn_rotation: impl Fn(u8) -> u8,
-    reflects: bool,
+    reflects: Option<Axis>,
 ) -> u32 {
     let states = block_states();
     let (name, properties) = states.properties(state).expect("a block state");
     let turn_name = |name| turned(name, &turn);
     // Fire and chorus plants keep their faces.
     let fixed_faces = matches!(name, "minecraft:fire" | "minecraft:chorus_plant");
-    let faces_x =
-        properties.contains(&("facing", "east")) || properties.contains(&("facing", "west"));
+    // Whether the block faces along the axis that the reflection reverses.
+    let faces_reversed_axis = match reflects {
+        Some(Axis::X) => {
+            properties.contains(&("facing", "east")) || properties.contains(&("facing", "west"))
+        }
+        Some(Axis::Z) => {
+            properties.contains(&("facing", "north")) || properties.contains(&("facing", "south"))
+        }
+        None => false,
+    };
+    let reflected = reflects;
+    let reflects = reflects.is_some();
     let values: Vec<(&str, String)> = properties
         .iter()
         .map(|&(key, value)| {
@@ -71,10 +106,14 @@ fn transform(
                     format!("{}_{}", turn_name(front), turn_name(top))
                 }
                 "shape" if name.ends_with("rail") => rail_shape(value, &turn_name),
-                // A reflected door swaps its hinge. A reflected stair keeps its inner corners, and its
-                // outer corners too unless it faces along X; chests keep their side.
-                "hinge" if reflects => swap_sides(value),
-                "shape" if reflects && name.ends_with("_stairs") && faces_x => swap_sides(value),
+                // A reflected door swaps its hinge; chests keep their side. A stair facing along the
+                // reversed axis swaps its outer corners, and in a left-to-right reflection its inner corners
+                // too; other stairs keep their shape.
+                "hinge" if reflects => swap_sides(value, false),
+                "shape" if name.ends_with("_stairs") && faces_reversed_axis => {
+                    let inner = reflected == Some(Axis::Z);
+                    swap_sides(value, inner)
+                }
                 _ => value.to_string(),
             };
             (key, value)
@@ -87,13 +126,16 @@ fn transform(
     states.state(name, turned_values).expect("the same block").0
 }
 
-/// `left` and `outer_left` become `right` and `outer_right`, and the reverse; inner corners stay.
-fn swap_sides(value: &str) -> String {
+/// `left` and `outer_left` become `right` and `outer_right`, and the reverse; inner corners swap too with
+/// `inner`.
+fn swap_sides(value: &str, inner: bool) -> String {
     match value {
         "left" => "right",
         "right" => "left",
         "outer_left" => "outer_right",
         "outer_right" => "outer_left",
+        "inner_left" if inner => "inner_right",
+        "inner_right" if inner => "inner_left",
         other => other,
     }
     .to_string()

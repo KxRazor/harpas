@@ -1,5 +1,5 @@
-//! Compares how every block state turns with each rotation and reflects front to back with vanilla's
-//! `BlockState.rotate` and `BlockState.mirror`.
+//! Compares how every block state turns with each rotation and reflects front to back and left to right with
+//! vanilla's `BlockState.rotate` and `BlockState.mirror`.
 mod reference;
 
 use std::collections::BTreeMap;
@@ -31,7 +31,16 @@ fn every_block_state_turns_and_reflects_as_in_vanilla() {
             .split(' ')
             .map(|field| field.parse().expect("a state id"))
             .collect();
-        let &[id, none, clockwise, half, counterclockwise, front_back] = ids.as_slice() else {
+        let &[
+            id,
+            none,
+            clockwise,
+            half,
+            counterclockwise,
+            front_back,
+            left_right,
+        ] = ids.as_slice()
+        else {
             panic!("malformed line {line}");
         };
         let expected = [
@@ -52,6 +61,11 @@ fn every_block_state_turns_and_reflects_as_in_vanilla() {
                 front_back,
                 Mirror::FrontBack.mirror_state(id),
             ),
+            (
+                "mirror left_right",
+                left_right,
+                Mirror::LeftRight.mirror_state(id),
+            ),
         ];
         for (transform, vanilla, harpas) in expected {
             if vanilla != harpas {
@@ -68,7 +82,7 @@ fn every_block_state_turns_and_reflects_as_in_vanilla() {
             compared += 1;
         }
     }
-    assert_eq!(compared, states.len() as usize * 5, "every state compared");
+    assert_eq!(compared, states.len() as usize * 6, "every state compared");
     assert!(
         mismatches.is_empty(),
         "{} block transforms differ from vanilla:\n{}",

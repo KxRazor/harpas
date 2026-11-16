@@ -4,13 +4,15 @@
 use harpas_core::nbt::Compound;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom};
 
-use super::{StructureState, jigsaw, mineshaft, monument, ruined_portal, stronghold, templated};
+use super::{
+    StructureState, jigsaw, mansion, mineshaft, monument, ruined_portal, stronghold, templated,
+};
 use crate::data::{
     JigsawDef, OceanRuinDef, PoolElementDef, RuinedPortalSetupDef, StructureDef,
     StructureSetEntryDef, WorldgenData, WorldgenDataError,
 };
 use crate::generator::{HeightmapType, NoiseBasedChunkGenerator};
-use crate::template::StructureTemplates;
+use crate::template::{Rotation, StructureTemplates};
 
 /// How far the bounding box of a structure that adapts the terrain reaches past its pieces
 /// (`Structure.adjustBoundingBox`).
@@ -242,6 +244,7 @@ enum StructureKind<'d> {
     Mineshaft {
         mesa: bool,
     },
+    WoodlandMansion,
     /// Single pieces of a fixed size: desert pyramids, jungle temples and swamp huts.
     ScatteredFeature {
         piece: &'static str,
@@ -284,19 +287,27 @@ impl<'d> StructureKind<'d> {
             "minecraft:desert_pyramid" => scattered("minecraft:tedp", 21, 15, 21, true),
             "minecraft:jungle_temple" => scattered("minecraft:tejp", 12, 10, 15, true),
             "minecraft:swamp_hut" => scattered("minecraft:tesh", 7, 7, 9, false),
+            "minecraft:woodland_mansion" => Self::WoodlandMansion,
             _ => return None,
         })
+    }
+
+    /// Whether Harpas places the structure's blocks, and so makes its starts in worlds.
+    const fn places_blocks(&self) -> bool {
+        !matches!(self, Self::WoodlandMansion)
     }
 }
 
 impl StructureState {
-    /// Whether Harpas can make the starts of every structure in a set.
+    /// Whether Harpas can make the starts of every structure in a set, and places their blocks unless this
+    /// state was made [`with_unplaced_structures`](Self::with_unplaced_structures).
     pub fn supports_set(&self, data: &WorldgenData, set: &str) -> bool {
         data.structure_sets.get(set).is_some_and(|set| {
             set.structures.iter().all(|entry| {
                 data.structures
                     .get(&entry.structure)
-                    .is_some_and(|structure| StructureKind::of(structure).is_some())
+                    .and_then(StructureKind::of)
+                    .is_some_and(|kind| self.unplaced || kind.places_blocks())
             })
         })
     }
@@ -429,6 +440,7 @@ fn try_generate(
     let mut jigsaw_start = None;
     // The pieces of structures that make them while finding their generation point.
     let mut made_pieces = None;
+    let mut mansion_rotation = None;
     let position = match kind {
         StructureKind::Jigsaw(jigsaw) => {
             let Some(start) = jigsaw::start(
@@ -479,6 +491,21 @@ fn try_generate(
             let (position, pieces) = mineshaft::start(generator, &mut random, mesa, min_x, min_z);
             made_pieces = Some(pieces);
             position
+        }
+        StructureKind::WoodlandMansion => {
+            let rotation = Rotation::random(&mut random);
+            let (x, z) = (min_x + 7, min_z + 7);
+            let (dx, dz) = mansion::corner_offsets(rotation);
+            let lowest = [(0, 0), (0, dz), (dx, 0), (dx, dz)]
+                .into_iter()
+                .map(|(ox, oz)| first_occupied(x + ox, z + oz, HeightmapType::WorldSurfaceWg))
+                .min()
+                .expect("four corners");
+            if lowest < mansion::MIN_Y {
+                return Ok(None);
+            }
+            mansion_rotation = Some(rotation);
+            [x, lowest, z]
         }
         StructureKind::Igloo | StructureKind::Shipwreck { beached: true } => [
             min_x + 8,
@@ -542,6 +569,12 @@ fn try_generate(
         ),
         StructureKind::OceanMonument => vec![monument::piece(&mut random, min_x, min_z)],
         StructureKind::Igloo => templated::igloo(templates, &mut random, min_x, min_z)?,
+        StructureKind::WoodlandMansion => mansion::pieces(
+            templates,
+            &mut random,
+            position,
+            mansion_rotation.expect("the rotation chosen with the generation point"),
+        )?,
         StructureKind::Shipwreck { beached } => {
             templated::shipwreck(templates, &mut random, beached, min_x, min_z)?
         }

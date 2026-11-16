@@ -291,23 +291,16 @@ impl<'d> StructureKind<'d> {
             _ => return None,
         })
     }
-
-    /// Whether Harpas places the structure's blocks, and so makes its starts in worlds.
-    const fn places_blocks(&self) -> bool {
-        !matches!(self, Self::WoodlandMansion)
-    }
 }
 
 impl StructureState {
-    /// Whether Harpas can make the starts of every structure in a set, and places their blocks unless this
-    /// state was made [`with_unplaced_structures`](Self::with_unplaced_structures).
+    /// Whether Harpas can make the starts of every structure in a set.
     pub fn supports_set(&self, data: &WorldgenData, set: &str) -> bool {
         data.structure_sets.get(set).is_some_and(|set| {
             set.structures.iter().all(|entry| {
                 data.structures
                     .get(&entry.structure)
-                    .and_then(StructureKind::of)
-                    .is_some_and(|kind| self.unplaced || kind.places_blocks())
+                    .is_some_and(|structure| StructureKind::of(structure).is_some())
             })
         })
     }

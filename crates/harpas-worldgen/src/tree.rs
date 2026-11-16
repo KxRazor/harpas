@@ -86,8 +86,8 @@ pub struct TreeBlocks {
     pub(crate) vine: StateSet,
     /// `#leaves`.
     leaves_tag: StateSet,
-    /// Shape updates for the blocks around a tree.
-    updates: ShapeUpdates,
+    /// Shape updates for the blocks around a tree, which structure templates use too.
+    pub(crate) updates: ShapeUpdates,
     /// The default vine, cocoa and bee nest states.
     pub(crate) vine_default: u32,
     pub(crate) cocoa: u32,

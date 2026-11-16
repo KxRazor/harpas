@@ -10,6 +10,7 @@ pub mod block_blob;
 pub mod block_pile;
 pub mod carver;
 pub mod configured;
+mod connection_shape;
 pub mod coral;
 pub mod data;
 pub mod density;

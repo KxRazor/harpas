@@ -1167,6 +1167,19 @@ pub fn apply_biome_decoration_with_structures(
                             world.set_block_state(x, y, z, state);
                         }
                         set_block_entities(world, entities);
+                    } else if id == "minecraft:mansion" {
+                        // Mansions place into the whole region: template edges update the blocks beside the
+                        // chunk.
+                        let blocks = features.tree_blocks()?;
+                        let entities = start.place_mansion(
+                            world,
+                            chunk_x,
+                            chunk_z,
+                            templates,
+                            &blocks.updates,
+                            random,
+                        );
+                        set_block_entities(world, entities);
                     } else if matches!(
                         id,
                         "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm"

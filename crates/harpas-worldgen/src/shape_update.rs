@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
 
+use crate::connection_shape::{Connecting, Connections};
 use crate::data::{WorldgenData, WorldgenDataError};
 use crate::feature::FeatureWorld;
 use crate::placement::StateSet;
@@ -125,6 +126,8 @@ enum Update {
     Bamboo,
     /// `BambooSaplingBlock`: breaks without support below, or becomes a stalk below another stalk.
     BambooSapling(SurvivalRule),
+    /// Fences, panes and bars, walls, fence gates, stairs, doors and chests, which connect to their neighbors.
+    Connect(Connecting),
 }
 
 /// The shape updates of the blocks they are ported for.
@@ -134,6 +137,7 @@ pub struct ShapeUpdates {
     kinds: Vec<u16>,
     updates: Vec<Update>,
     snow: StateSet,
+    connections: Connections,
     air: u32,
 }
 
@@ -175,6 +179,7 @@ impl ShapeUpdates {
             kinds,
             updates,
             snow: StateSet::from_membership(&data.block_tag_states("minecraft:snow")?),
+            connections: Connections::new(data)?,
             air: states.default_state("minecraft:air").unwrap_or(0),
         })
     }
@@ -201,6 +206,9 @@ impl ShapeUpdates {
         }
         if short == "big_dripleaf_stem" {
             return Ok(None);
+        }
+        if let Some(kind) = Connecting::of(block, data)? {
+            return Ok(Some(Update::Connect(kind)));
         }
         if short == "cocoa" {
             let support = data.block_tag_states("minecraft:supports_cocoa")?;
@@ -345,6 +353,13 @@ impl ShapeUpdates {
                 } else {
                     state
                 }
+            }
+            Update::Connect(kind) => {
+                self.connections
+                    .update(*kind, state, direction, neighbor, &|d| {
+                        let [x, y, z] = d.step(position);
+                        world.block_state(x, y, z)
+                    })
             }
             Update::Cocoa(support) => {
                 let facing = property(state, "facing");

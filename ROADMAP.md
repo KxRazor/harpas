@@ -358,11 +358,12 @@ vanilla for the same seed.
         Worker chunks, reversed request order and Anvil reloads are compared with the direct API, and
         complete passes block by block with vanilla. Elder guardians, scheduled fluid ticks and the
         complete FEATURES stage remain pending.
-- [ ] Light engine port.
+- [x] Light engine port.
   - [x] Sky and block light for generated chunks, with per-state emission and dampening from the block registry,
         one-chunk border propagation and vanilla's saved-light parity harness. Generated chunks are lit when
         sent; their carver records keep no light so vanilla can still run features and light.
-  - [ ] Run light on the worker pool and apply queued updates at defined points, including block changes in M4.
+  - [x] Run light on the worker pool: the workers light each chunk once its neighbors are loaded, and again when
+        a chunk of its volume changes. Light updates from block changes follow with them in M4.
   - [x] Save light at the `light` stage: a final chunk that ran FEATURES is saved with the light the workers
         computed, `isLightOn` and vanilla's `light` status, so vanilla keeps the light and spawns its mobs, and
         the server's own light on the same chunks matches it (`world_edge_parity`).
@@ -387,6 +388,8 @@ vanilla for the same seed.
 as shown by the parity report.
 
 - [ ] Block placement and breaking, block updates, scheduled and random ticks.
+- [ ] Light updates from block changes, queued and applied at defined points as vanilla's light engine applies
+      them, with their timing compared against vanilla ([docs/engine-core.md](docs/engine-core.md)).
 - [ ] Redstone components and block events, with tick-by-tick parity harnesses.
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and

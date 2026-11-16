@@ -36,7 +36,6 @@ minecraft:damage_type
   minecraft:avoids_guardian_thorns
   minecraft:burns_armor_stands
   minecraft:bypasses_armor
-  minecraft:bypasses_cooldown
   minecraft:bypasses_effects
   minecraft:bypasses_enchantments
   minecraft:bypasses_invulnerability
@@ -76,7 +75,6 @@ minecraft:enchantment
 minecraft:entity_type
   minecraft:arrows
   minecraft:can_equip_saddle
-  minecraft:can_wear_harness
   minecraft:can_wear_horse_armor
   minecraft:can_wear_nautilus_armor
   minecraft:sensitive_to_bane_of_arthropods

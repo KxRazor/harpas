@@ -88,12 +88,17 @@ fn verify_jar(jar: &Path) -> io::Result<()> {
 
 /// Generate missing IDs during data installation without making Java a startup requirement.
 fn generate_if_possible(server: &Path, jar: &Path) {
-    if matches!(crate::block_entity_registry::load(server), Ok(Some(_))) {
+    if matches!(crate::block_entity_registry::load(server), Ok(Some(_)))
+        && matches!(
+            crate::block_entity_registry::load_builtin(server),
+            Ok(Some(_))
+        )
+    {
         return;
     }
     if let Err(error) = crate::block_entity_registry::generate(server, jar) {
         warn!(
-            "Could not generate block entity IDs: {error}. Install Java 25 and run `harpas vanilla-data generate-registry`"
+            "Could not generate registry IDs: {error}. Install Java 25 and run `harpas vanilla-data generate-registry`"
         );
     }
 }

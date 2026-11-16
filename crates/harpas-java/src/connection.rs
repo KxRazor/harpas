@@ -892,21 +892,7 @@ impl Connection {
                         .into(),
                     );
                 }
-                // Tags the registry data refers to, empty until Harpas has vanilla's data.
-                let registries = registries::required_tags()
-                    .iter()
-                    .map(|registry| configuration::RegistryTags {
-                        registry: registry.id.to_owned(),
-                        tags: registry
-                            .entries
-                            .iter()
-                            .map(|tag| configuration::Tag {
-                                name: (*tag).to_owned(),
-                                entries: Vec::new(),
-                            })
-                            .collect(),
-                    })
-                    .collect();
+                let registries = info.tags.registries().to_vec();
                 self.send_configuration(
                     configuration::clientbound::UpdateTags { registries }.into(),
                 );

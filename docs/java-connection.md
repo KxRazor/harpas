@@ -166,12 +166,44 @@ How it works now:
    28 synchronized registries **by name only**, in vanilla's order, and the client takes their data from its
    own copy. The names come from minecraft-data ([versions.md](versions.md)); a client without the core pack is
    disconnected with a message, since sending the data itself needs vanilla's data files (M3).
-3. Tags: the registry data and the client's item components refer to tags, and the client refuses the
-   registries, or fails when it builds its items, if one is missing. Until Harpas has vanilla's data
-   ([world.md](world.md#vanilla-game-data)), the server sends the tags the client needs **empty**: 122 of them,
-   found from the errors a 26.1 client reports and completed with the vanilla tags its item components use.
-   Empty tags change nothing in a void world; replacing them with real tags for loaded worlds remains pending.
+3. Update Tags, with vanilla's tags: see [Tags](#tags).
 4. Finish Configuration; the client acknowledges it and the connection moves to Play.
+
+### Tags
+
+The client decides much of what it does from tags, not from block or item names: it puts the camera in water,
+draws the blue fog and lets the player swim when the fluid at the eyes is in `#minecraft:water`, and the same goes
+for lava, climbable blocks, the items an enchantment applies to and many more. The registry data refers to tags
+too, and the client refuses the registries if one of those is missing.
+
+A vanilla 26.1 server sends **661 tags of 15 registries**: the built-in `block`, `item`, `fluid`, `entity_type`,
+`game_event`, `point_of_interest_type` and `potion`, and the synchronized `worldgen/biome`, `damage_type`,
+`enchantment`, `banner_pattern`, `instrument`, `painting_variant`, `dialog` and `timeline`. Tags of registries the
+client does not have, such as `worldgen/structure` or `villager_trade`, are not sent. Harpas sends the same:
+
+- **Where they come from.** The tags are vanilla's own files, `data/<namespace>/tags/<registry>/<tag>.json` in the
+  data pack provisioned at startup ([world.md](world.md#vanilla-game-data)); the packs nested under
+  `data/minecraft/datapacks/` are not enabled, as in vanilla, and are skipped. Nothing from them is in the
+  repository.
+- **Numeric IDs.** An entry is sent as its numeric ID in its registry. The synchronized registries' IDs are their
+  order in Registry Data (`crates/harpas-java/data/registries-26.1.txt`). The built-in registries' IDs are not in
+  the data pack: the installation runs vanilla's data generator and keeps the entries of every built-in registry in
+  `.harpas/vanilla-data/26.1-registries.json`, next to the block entity types.
+- **Resolution, as vanilla's `TagLoader`.** A tag's entries follow its file, a referenced `#tag`'s entries take its
+  place, and an entry that appears again keeps its first place. An entry or tag marked `"required": false` that does
+  not exist is skipped; a required one that does not exist leaves the tag out, with a warning, and so every tag
+  that requires it. `crates/harpas-java/src/tags.rs` does this once at startup, and every connection sends the
+  result.
+- **Order.** Vanilla's order of registries, and of tags within a registry, changes from one run of its server to
+  the next; only the order of the entries inside a tag is the same every time, and Harpas keeps it. Harpas sorts
+  registries and tags by name.
+- **Without Java.** If the built-in registries were never generated, because Java was missing at installation,
+  only the synchronized registries' tags are vanilla's. The tags the client requires before it accepts the
+  registries (`crates/harpas-java/data/tags-26.1.txt`) are then sent **empty**, which lets the client join but
+  leaves water without fog, and the server warns to run `harpas vanilla-data generate-registry`.
+
+`tags_parity` in `harpas-server` joins vanilla's server and Harpas with the same client and compares every tag
+and its entries, in order ([parity.md](parity.md#coverage)).
 
 ---
 

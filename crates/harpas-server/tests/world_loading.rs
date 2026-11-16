@@ -74,8 +74,11 @@ fn prepare(folder: &Folder, chunk: &Compound) {
     .unwrap();
     let pack = folder.0.join(".harpas/vanilla-data/26.1.zip");
     fs::create_dir_all(pack.parent().unwrap()).unwrap();
-    // Provisioning checks for the pack's presence; generation does not use it in this test.
-    fs::write(pack, []).unwrap();
+    // Provisioning checks for the pack's presence, and the tags are read from it; generation does not use it in
+    // this test. An empty zip is its end of central directory record alone.
+    let mut empty_zip = b"PK\x05\x06".to_vec();
+    empty_zip.resize(22, 0);
+    fs::write(pack, empty_zip).unwrap();
 
     let world = folder.0.join("world");
     let mut level = Compound::new();

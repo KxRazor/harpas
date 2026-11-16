@@ -15,6 +15,7 @@ mod legacy;
 mod prepared;
 mod registries;
 mod status;
+mod tags;
 mod void_world;
 
 pub use chat::{ChatAuthority, ChatEvent, VerifiedMessage};
@@ -27,3 +28,4 @@ pub use frame::{FrameError, FrameReader, MAX_FRAME_LEN, write_frame};
 pub use prepared::PreparedPlayPacket;
 pub use registries::biome_names;
 pub use status::ServerInfo;
+pub use tags::{TagError, Tags};

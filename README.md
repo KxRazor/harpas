@@ -13,11 +13,13 @@ A Minecraft server written in Rust, for Java and Bedrock players on the same wor
 
 ## Status
 
-**Harpas is in early development.** The first release, [0.1.0](https://github.com/KxRazor/harpas/releases),
-lets Java Edition 26.1 clients join a void world, move around, see each other and chat; there is no gameplay,
-world or Bedrock support yet. Progress is tracked in [ROADMAP.md](ROADMAP.md).
+**Harpas is in early development.** Release [0.2.0](https://github.com/KxRazor/harpas/releases) opens vanilla
+26.1 worlds and generates new ones as vanilla does for the same seed, and Java Edition 26.1 clients explore them,
+see each other and chat. There is no gameplay yet, such as breaking blocks, mobs or items, and no Bedrock support.
+Progress is tracked in [ROADMAP.md](ROADMAP.md).
 
-Release binaries for Linux and Windows are attached to each [release](https://github.com/KxRazor/harpas/releases).
+Release binaries for Linux, Windows and macOS are attached to each
+[release](https://github.com/KxRazor/harpas/releases).
 Run `harpas` from the server folder; it reads `server.properties` like vanilla.
 
 ## Building

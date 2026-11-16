@@ -1,1 +1,0 @@
-- Releases carry `harpas` binaries for macOS on Intel and on Apple Silicon, next to those for Linux and Windows.

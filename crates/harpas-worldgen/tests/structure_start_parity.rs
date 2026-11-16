@@ -114,10 +114,7 @@ fn compare_seed(
     seed: i64,
 ) -> (usize, usize, usize) {
     let generator = NoiseBasedChunkGenerator::overworld(seed, data).expect("compile generator");
-    // Woodland mansions take part before Harpas places their blocks.
-    let state = StructureState::new(seed, data, &generator)
-        .expect("structure state")
-        .with_unplaced_structures();
+    let state = StructureState::new(seed, data, &generator).expect("structure state");
     for set in ["minecraft:ocean_monuments", "minecraft:woodland_mansions"] {
         assert!(
             state.supports_set(data, set),

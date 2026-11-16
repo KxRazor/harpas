@@ -454,7 +454,10 @@ and the owner **accepts it once**:
     (`harpas_worldgen::shape_update`): grass blocks, podzol and mycelium follow the snow above them, and
     vegetation, carpets, spore blossoms and double plants break when they lose their support, vines lose the
     faces that no block beside them (or the vine above) holds and break without faces, and cocoa breaks when the
-    block it faces is not in `#supports_cocoa`. Ticks that leaves and liquids schedule there, and postprocessing
+    block it faces is not in `#supports_cocoa`. The blocks of structure templates that connect to their neighbors
+    update as well (`connection_shape`): fences, panes and bars, walls with their low and tall sides and post,
+    fence gates in walls, stair corners, door halves, double chests, and ladders, torches, wall banners and levers
+    that break without what holds them. Ticks that leaves and liquids schedule there, and postprocessing
     marks, are not kept yet. Before those updates the tree's decorators run in order, on lists of its logs,
     leaves and roots taken in `HashSet` order and sorted by height, and their blocks join the decoration set:
     `trunk_vine` and `leave_vine` attach vines beside logs and leaves (hanging down to four more blocks below
@@ -679,9 +682,7 @@ and the owner **accepts it once**:
     the biome there and makes the pieces. `references_in_chunk` lists the starts within 8 chunks whose bounding
     boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts, igloos, shipwrecks, ocean ruins,
     ruined portals, mineshafts, ocean monuments, strongholds and the jigsaw structures above are made so far; sets with
-    other structure types are skipped. Woodland mansion starts are made too, but worlds leave their set out until
-    their blocks are placed, so that no saved mansion is missing its blocks
-    (`StructureState::with_unplaced_structures` includes them for the comparisons). Ocean monuments check the full 3D biome volume within 29 blocks of a point
+    other structure types are skipped. Woodland mansions are made as well. Ocean monuments check the full 3D biome volume within 29 blocks of a point
     9 blocks into the start chunk at sea level, against `required_ocean_monument_surrounding`. The biome at the
     generation point on the ocean floor is checked separately against the structure's allowed biomes. Their one
     saved building piece is laid out; its internal rooms are reconstructed as described below. Vanilla
@@ -707,7 +708,21 @@ and the owner **accepts it once**:
     secret rooms. Pieces save their template's name within `woodland_mansion/`, their rotation and their mirror
     (`Mi`), which may be left-right as well as front-back. `mansion_layout_parity` compares the three grids of
     4,100 layouts cell by cell and the following random draw with vanilla's; `structure_start_parity` compares
-    the pieces and saved records. Block placement follows.
+    the pieces and saved records.
+  - Chunk workers place woodland mansions in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_mansion`), writing into the decoration region. Each piece that reaches the chunk
+    places its template inside it, reflected then turned, without structure blocks; blocks that can hold water
+    take the source water they replace and then the source water beside or above them, but not the template's
+    own liquids. As the templates have no known shape, both sides of every face at the edge of what a piece
+    placed update against each other, which can reshape blocks in the neighboring chunks, and then every placed
+    block updates against all its neighbors. Data markers then place chests facing the turned marker direction
+    with the mansion's loot table, drawing their loot seeds after those of the template's own chests, and turn
+    the markers of the evokers, vindicators and allays inside the chunk into air; the mobs follow with
+    gameplay in M4. Once every piece is placed, cobblestone fills each column below the lowest floor down to
+    the first block that is neither air nor liquid. `mansion_parity` places four natural mansions of two seeds
+    chunk by chunk on their carved terrain, 120 chunks (30 on pull requests), and compares every block, the
+    blocks reshaped beside each chunk, the chests and banners and the decoration random with vanilla's own
+    `StructureStart.placeInChunk`.
   - `MonumentLayout` builds ocean monuments' 46 grid cells and three special connectors, closes passages
     while retaining access to the entrance, reserves the eight-cell treasure core and fits the remaining
     cells into rooms in vanilla's order. It records every internal piece's bounds and the simple-room and

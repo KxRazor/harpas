@@ -1,9 +1,11 @@
 // Test driver only: runs the owner-provided server's own createStructures and createReferences and writes their
 // starts and references.
 //
-// Arguments: <output> <seed> <radius in chunks> <file of reference chunks, "x z" per line> <Harpas saved starts NBT> <structure set>...
+// Arguments: <output> <seed> <radius in chunks> <file of reference chunks, "x z" per line> <Harpas saved starts NBT>
+// <file of further chunks, "x z" per line> <structure set>...
 // Writes the base heights of a grid of columns, then the starts of each chunk around the origin, then those of
-// every ring position of the concentric ring sets, then the references of the listed chunks.
+// every ring position of the concentric ring sets, then those of the further chunks, then the references of the
+// reference chunks.
 // Only the given structure sets are possible, so that structures Harpas cannot make yet are left out.
 import java.io.PrintWriter;
 import java.nio.file.Files;
@@ -61,7 +63,7 @@ public final class StructureStartProbe {
         var generator = WorldPresets.getNormalOverworld(registries).generator();
         var random = RandomState.create(registries, NoiseGeneratorSettings.OVERWORLD, seed);
         var chosen = new ArrayList<net.minecraft.core.Holder<net.minecraft.world.level.levelgen.structure.StructureSet>>();
-        for (int index = 5; index < args.length; index++) {
+        for (int index = 6; index < args.length; index++) {
             chosen.add(sets.getOrThrow(ResourceKey.create(Registries.STRUCTURE_SET, Identifier.parse(args[index]))));
         }
         // A normal world's state, with the level seed for concentric rings, but only with the given sets.
@@ -102,6 +104,16 @@ public final class StructureStartProbe {
                     starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
                     for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());
                 }
+            }
+            for (var line : Files.readAllLines(Path.of(args[5]))) {
+                if (line.isEmpty()) continue;
+                var coordinates = line.split(" ");
+                var position = new ChunkPos(Integer.parseInt(coordinates[0]), Integer.parseInt(coordinates[1]));
+                var proto = new ProtoChunk(position, UpgradeData.EMPTY, height, factory, null);
+                generator.createStructures(registries, state, manager, proto, templates, Level.OVERWORLD);
+                var starts = new ArrayList<>(proto.getAllStarts().entrySet());
+                starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
+                for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());
             }
             for (var line : Files.readAllLines(Path.of(args[3]))) {
                 var coordinates = line.split(" ");
@@ -178,12 +190,13 @@ public final class StructureStartProbe {
                 + bb.minY() + " " + bb.minZ() + " " + bb.maxX() + " " + bb.maxY() + " " + bb.maxZ() + " "
                 + (orientation == null ? -1 : orientation.get2DDataValue()) + " " + piece.getGenDepth());
             if (piece instanceof net.minecraft.world.level.levelgen.structure.TemplateStructurePiece template) {
-                var name = net.minecraft.world.level.levelgen.structure.TemplateStructurePiece.class
-                    .getDeclaredField("templateName");
-                name.setAccessible(true);
+                // The template the piece places, which some pieces find from a shorter saved name.
+                var location = net.minecraft.world.level.levelgen.structure.TemplateStructurePiece.class
+                    .getDeclaredMethod("makeTemplateLocation");
+                location.setAccessible(true);
                 var position = template.templatePosition();
                 var pivot = template.placeSettings().getRotationPivot();
-                out.println("template " + Identifier.parse((String) name.get(template)) + " " + position.getX() + " "
+                out.println("template " + location.invoke(template) + " " + position.getX() + " "
                     + position.getY() + " " + position.getZ() + " " + template.getRotation().ordinal() + " "
                     + template.placeSettings().getMirror().name() + " "
                     + pivot.getX() + " " + pivot.getY() + " " + pivot.getZ());

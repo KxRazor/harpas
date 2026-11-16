@@ -86,11 +86,13 @@ impl Rotation {
     }
 }
 
-/// A reflection of a template, of the two that structures use (`Mirror`).
+/// A reflection of a template (`Mirror`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mirror {
     /// No reflection.
     None,
+    /// Reflected across the X axis, which negates Z.
+    LeftRight,
     /// Reflected across the Z axis, which negates X.
     FrontBack,
 }
@@ -100,6 +102,7 @@ impl Mirror {
     pub const fn apply(self, [x, y, z]: [i32; 3]) -> [i32; 3] {
         match self {
             Self::None => [x, y, z],
+            Self::LeftRight => [x, y, -z],
             Self::FrontBack => [-x, y, z],
         }
     }

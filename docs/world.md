@@ -337,7 +337,7 @@ and the owner **accepts it once**:
     16 sign, banner and skull steps turn by four per quarter. Vanilla's exceptions are kept: fire and
     chorus plants keep their faces, anvils keep their facing in a mirror, chests keep their side, and a
     reflected stair keeps its inner corners and keeps its outer corners unless it faces along X.
-    `block_transform_parity` compares every registry state with each rotation and the front-back mirror.
+    `block_transform_parity` compares every registry state with each rotation and both mirrors.
   - Single and legacy single pool elements place their template in one chunk as vanilla's
     `SinglePoolElement.place` does (`SingleElementPlacement`). The whole template is processed first: the
     element ignores structure blocks, applies jigsaw replacement, then its processor list and, for terrain
@@ -679,7 +679,9 @@ and the owner **accepts it once**:
     the biome there and makes the pieces. `references_in_chunk` lists the starts within 8 chunks whose bounding
     boxes reach a chunk. Buried treasure, desert pyramids, jungle temples, swamp huts, igloos, shipwrecks, ocean ruins,
     ruined portals, mineshafts, ocean monuments, strongholds and the jigsaw structures above are made so far; sets with
-    other structure types are skipped. Ocean monuments check the full 3D biome volume within 29 blocks of a point
+    other structure types are skipped. Woodland mansion starts are made too, but worlds leave their set out until
+    their blocks are placed, so that no saved mansion is missing its blocks
+    (`StructureState::with_unplaced_structures` includes them for the comparisons). Ocean monuments check the full 3D biome volume within 29 blocks of a point
     9 blocks into the start chunk at sea level, against `required_ocean_monument_surrounding`. The biome at the
     generation point on the ocean floor is checked separately against the structure's allowed biomes. Their one
     saved building piece is laid out; its internal rooms are reconstructed as described below. Vanilla
@@ -687,11 +689,25 @@ and the owner **accepts it once**:
     refuses them. The `structure_start_parity`
     harness compares base heights at 1,764 columns, the starts, pieces and references of 4 seeds in 512×512 chunks,
     and the strongholds at all 128 ring positions of each seed, with vanilla's own `createStructures` and
-    `createReferences`. It also compares the full saved NBT of up to eight starts of each structure per seed,
+    `createReferences`. Woodland mansions are rare, so it also compares every chunk where one may start in
+    2048×2048 chunks, 56 mansions in all (1024×1024 chunks on pull requests). It also compares the full saved NBT of up to eight starts of each structure per seed,
     including every piece's placement state, and compares reading those records with vanilla's own loader.
     Jigsaw pieces reconstruct their template bounds on reload, as vanilla does, dropping any extra height reserved
     by the expansion hack. Ring positions and the biome checks of starts search biomes starting without a last
     result, whereas vanilla's depends on its worker threads, so a tie may resolve differently in a vanilla world.
+  - Woodland mansions start on the lowest of four surface heights around a point 7 blocks into the chunk, at Y 60
+    or above, turned at random. Their layout is three 11×11 grids of 8-block cells: corridors grow from the
+    entrance with random turns, the cells around them become rooms, enclosed gaps are filled, and rooms are
+    grouped in a shuffled order into four, two or one cells, each with a door on the first of its corners that
+    borders a corridor, or none. A two-cell room with a door on the second floor may hold the stairs to a third
+    floor, whose corridors grow from the landing. The layout becomes template pieces of type `wmp`: the entrance,
+    outer walls traced clockwise around each floor, roofs with their fronts and corners, small walls where the
+    third floor covers the second, corridor floors and carpets, inner walls and doors, and one room template per
+    room, drawn from its floor's collection and turned and reflected for its door; rooms without a door are
+    secret rooms. Pieces save their template's name within `woodland_mansion/`, their rotation and their mirror
+    (`Mi`), which may be left-right as well as front-back. `mansion_layout_parity` compares the three grids of
+    4,100 layouts cell by cell and the following random draw with vanilla's; `structure_start_parity` compares
+    the pieces and saved records. Block placement follows.
   - `MonumentLayout` builds ocean monuments' 46 grid cells and three special connectors, closes passages
     while retaining access to the entrance, reserves the eight-cell treasure core and fits the remaining
     cells into rooms in vanilla's order. It records every internal piece's bounds and the simple-room and

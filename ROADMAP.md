@@ -292,6 +292,11 @@ vanilla for the same seed.
         surface in badlands.
   - [x] Ocean monument starts: the surrounding biome volume, the saved building piece and its references.
         Room layouts and block placement are tracked separately below.
+  - [x] Woodland mansion starts: the layout of corridors, rooms and the third floor, and its template pieces with
+        their rotations and left-right and front-back mirrors, compared with vanilla (`mansion_layout_parity`,
+        `structure_start_parity`, `block_transform_parity`). Worlds make them once their blocks are placed.
+  - [ ] Woodland mansion block placement on chunk workers: templates with both mirrors, cobblestone foundations,
+        chest loot and the data markers of its mobs, in `surface_structures`.
   - [x] Structure terrain adaptation (`Beardifier`): rigid pieces, jigsaw junctions and all five adjustment
         modes, connected to chunk generation and compared against vanilla.
   - [x] Structure terrain adaptation on the chunk workers, with a shared bounded cache of starts, saved-neighbor

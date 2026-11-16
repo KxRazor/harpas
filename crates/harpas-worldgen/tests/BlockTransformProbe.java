@@ -1,6 +1,6 @@
 // Parity probe: writes, for every block state in registry order, its id followed by the ids of the state
-// turned by each rotation (none, clockwise 90, 180, counterclockwise 90) and then reflected front to back,
-// the mirror structures use, as BlockState.rotate and BlockState.mirror return them.
+// turned by each rotation (none, clockwise 90, 180, counterclockwise 90) and then reflected front to back and
+// left to right, as BlockState.rotate and BlockState.mirror return them.
 import java.io.*;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -19,6 +19,7 @@ public final class BlockTransformProbe {
                     var line = new StringBuilder().append(Block.getId(state));
                     for (var rotation : Rotation.values()) line.append(' ').append(Block.getId(state.rotate(rotation)));
                     line.append(' ').append(Block.getId(state.mirror(Mirror.FRONT_BACK)));
+                    line.append(' ').append(Block.getId(state.mirror(Mirror.LEFT_RIGHT)));
                     out.println(line);
                 }
             }

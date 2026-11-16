@@ -188,8 +188,7 @@ fn run() -> io::Result<()> {
     };
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
-    let features = harpas_toml::generation_features(&settings)?;
-    let generator = world_generation::prepare(&world_dir, &properties, &data_pack, features)?;
+    let generator = world_generation::prepare(&world_dir, &properties, &data_pack)?;
     let mut server_info = server_info(&properties);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
         && let Some(spawn) = harpas_anvil::overworld_spawn(&level)

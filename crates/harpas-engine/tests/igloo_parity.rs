@@ -102,13 +102,23 @@ fn input(chunk: &GeneratedChunk, seed: i64, own: &[StructureStart]) -> Compound 
     tag
 }
 
+/// The blocks beside the chunk that its placement reshapes, as the probe records them.
+fn edge_writes(edges: &[([i32; 3], u32)]) -> Compound {
+    edges
+        .iter()
+        .map(|&([x, y, z], state)| (format!("{x},{y},{z}"), Nbt::Int(state as i32)))
+        .collect()
+}
+
 fn snapshot(
     chunk: &GeneratedChunk,
     own: &[StructureStart],
     mut entities: Vec<Compound>,
+    edges: &[([i32; 3], u32)],
 ) -> Compound {
     entities.sort_by_key(packed_position);
     let mut tag = Compound::new();
+    tag.insert("edge_writes", edge_writes(edges));
     tag.insert("blocks", blocks(chunk));
     tag.insert("PostProcessing", postprocessing(chunk));
     tag.insert("starts", starts(own));
@@ -185,30 +195,40 @@ fn igloo_blocks_and_metadata_match_vanilla() {
                         let mut own = vec![source.clone()];
                         let name = format!("synthetic-{seed}-{rotation:?}-{scenario}-{cx}-{cz}");
                         let inp = input_with_terrain(&chunk, seed, &own, &terrain, &surface);
+                        let mut edges = Vec::new();
                         let entities = own[0].place_igloo_in_chunk(
                             &mut chunk,
                             seed,
                             &templates,
                             &mut |x, z| surface(x, z),
                             &mut |x, y, z| terrain(x, y, z),
+                            &mut edges,
                         );
                         inputs.insert(name.clone(), inp);
-                        expected.insert(name.clone(), snapshot(&chunk, &own, entities.clone()));
+                        expected.insert(
+                            name.clone(),
+                            snapshot(&chunk, &own, entities.clone(), &edges),
+                        );
                         own[0] = StructureStart::from_nbt(&own[0].to_nbt(), &data, &templates)
                             .unwrap()
                             .unwrap();
                         let mut inp = input_with_terrain(&chunk, seed, &own, &terrain, &surface);
                         inp.insert("initial_entities", entity_list(entities.clone()));
                         inputs.insert(format!("resume-{name}"), inp);
+                        let mut edges = Vec::new();
                         let resumed = own[0].place_igloo_in_chunk(
                             &mut chunk,
                             seed,
                             &templates,
                             &mut |x, z| surface(x, z),
                             &mut |x, y, z| terrain(x, y, z),
+                            &mut edges,
                         );
                         let entities = merge_entities(&chunk, resumed, entities);
-                        expected.insert(format!("resume-{name}"), snapshot(&chunk, &own, entities));
+                        expected.insert(
+                            format!("resume-{name}"),
+                            snapshot(&chunk, &own, entities, &edges),
+                        );
                     }
                 }
             }
@@ -254,15 +274,28 @@ fn igloo_blocks_and_metadata_match_vanilla() {
     let mut failures = Vec::new();
     for (name, tag) in expected.iter() {
         if name.starts_with(ALTERNATIVE) {
+            // Whichever order the workers took, the neighboring blocks that the chunk's edges reshape given
+            // decorated neighbors must match vanilla's.
+            let (Some(Nbt::Compound(case)), Nbt::Compound(tag)) = (actual.get(name), tag) else {
+                panic!("missing case")
+            };
+            if case.get("edge_writes") != tag.get("edge_writes") {
+                failures.push(format!(
+                    "{name} edge_writes: Rust={:?} vanilla={:?}",
+                    tag.get("edge_writes"),
+                    case.get("edge_writes")
+                ));
+            }
             continue;
         }
         let mut case = case_failures(name, tag, &actual);
-        // A worker chunk may have decorated after its neighbors placed their part of the igloo, as vanilla's
-        // may: it then matches vanilla given those neighbors.
+        // A worker chunk may have decorated before or after its neighbors placed their part of the igloo, as
+        // vanilla's may: it then matches vanilla given those neighbors, and both reshape the same neighboring
+        // blocks.
         let alternative = format!("{ALTERNATIVE}{name}");
         if !case.is_empty()
-            && actual.get(&alternative).is_some()
-            && case_failures(&alternative, tag, &actual).is_empty()
+            && let Some(alternative_tag) = expected.get(&alternative)
+            && case_failures(&alternative, alternative_tag, &actual).is_empty()
         {
             case.clear();
         }
@@ -603,6 +636,16 @@ fn worker_cases(
                 alternative.insert("starts", starts(&all));
                 alternative.insert("keep_neighbor_starts", 0_i8);
                 inputs.insert(format!("{ALTERNATIVE}{name}"), alternative);
+                // The neighboring blocks that this chunk's igloo reshapes, given its neighbors as decorated.
+                let mut alternative_edges = Vec::new();
+                source.clone().place_igloo_in_chunk(
+                    &mut carved[&pos].clone(),
+                    seed,
+                    templates,
+                    &mut |x, z| surface(x, z),
+                    &mut |x, y, z| decorated_block(x, y, z),
+                    &mut alternative_edges,
+                );
                 let mut generated = GeneratedChunk::new(pos.x, pos.z, -64, 384, biomes.len());
                 for section in &chunk.sections {
                     if let Some(blocks) = &section.section {
@@ -626,7 +669,12 @@ fn worker_cases(
                 };
                 entities.sort_by_key(packed_position);
                 actual.insert("block_entities", entity_list(entities.clone()));
+                // Carved neighbors hold no iron bars for the template's edges to reshape.
+                actual.insert("edge_writes", Compound::new());
                 expected.insert(name.clone(), actual.clone());
+                let mut alternative_tag = actual.clone();
+                alternative_tag.insert("edge_writes", edge_writes(&alternative_edges));
+                expected.insert(format!("{ALTERNATIVE}{name}"), alternative_tag);
                 let Some(Nbt::Compound(refs)) = records.get("References") else {
                     panic!("references")
                 };
@@ -664,6 +712,7 @@ fn worker_cases(
                 resumed_input.insert("initial_entities", entity_list(entities.clone()));
                 let mut resumed = generated.clone();
                 let mut resumed_entities = Vec::new();
+                let mut resumed_edges = Vec::new();
                 for start in &mut all {
                     resumed_entities.extend(start.place_igloo_in_chunk(
                         &mut resumed,
@@ -671,6 +720,7 @@ fn worker_cases(
                         templates,
                         &mut |x, z| surface(x, z),
                         &mut |x, y, z| block(x, y, z),
+                        &mut resumed_edges,
                     ));
                 }
                 let own: Vec<_> = all
@@ -681,6 +731,7 @@ fn worker_cases(
                     &resumed,
                     &own,
                     merge_entities(&resumed, resumed_entities, entities),
+                    &resumed_edges,
                 );
                 if let Some(Nbt::Compound(mut maps)) = resumed_snapshot.remove("Heightmaps") {
                     maps.remove("WORLD_SURFACE_WG");
@@ -862,7 +913,8 @@ fn saved_neighbor_case(
         !entities.is_empty(),
         "saved-neighbor igloo placed no block entities"
     );
-    let mut snapshot = snapshot(&generated, &[], entities);
+    // The saved source is carved terrain, with no iron bars for the target's edges to reshape.
+    let mut snapshot = snapshot(&generated, &[], entities, &[]);
     snapshot.insert("Heightmaps", nbt.get("Heightmaps").unwrap().clone());
     snapshot.insert("PostProcessing", nbt.get("PostProcessing").unwrap().clone());
     inputs.insert("worker-saved-neighbor", inp);

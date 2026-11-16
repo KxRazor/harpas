@@ -28,7 +28,9 @@ impl StructureStart {
 
     /// Places igloo templates in one chunk and returns its block entities. `surface_height` supplies
     /// WORLD_SURFACE_WG outside this chunk, and `block_at` reads neighboring terrain for template edge
-    /// connections. Entity spawning belongs to gameplay.
+    /// connections. The blocks that the template's edge updates reshape in neighboring chunks are pushed to
+    /// `neighbors`, for the caller to write as vanilla's generation region does. Entity spawning belongs to
+    /// gameplay.
     pub fn place_igloo_in_chunk(
         &mut self,
         chunk: &mut GeneratedChunk,
@@ -36,6 +38,7 @@ impl StructureStart {
         templates: &StructureTemplates,
         surface_height: &mut impl FnMut(i32, i32) -> i32,
         block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+        neighbors: &mut Vec<([i32; 3], u32)>,
     ) -> Vec<Compound> {
         if self.structure != "minecraft:igloo" {
             return Vec::new();
@@ -44,7 +47,14 @@ impl StructureStart {
         let decoration =
             random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
         random.set_feature_seed(decoration, 3, 4);
-        self.place_igloo(chunk, &mut random, templates, surface_height, block_at)
+        self.place_igloo(
+            chunk,
+            &mut random,
+            templates,
+            surface_height,
+            block_at,
+            neighbors,
+        )
     }
 
     /// Places igloo templates in one chunk like [`Self::place_igloo_in_chunk`], drawing from `random`, which
@@ -56,6 +66,7 @@ impl StructureStart {
         templates: &StructureTemplates,
         surface_height: &mut impl FnMut(i32, i32) -> i32,
         block_at: &mut impl FnMut(i32, i32, i32) -> u32,
+        neighbors: &mut Vec<([i32; 3], u32)>,
     ) -> Vec<Compound> {
         if self.structure != "minecraft:igloo" {
             return Vec::new();
@@ -178,6 +189,46 @@ impl StructureStart {
                     }
                 }
                 set(chunk, pos, block_states().state(name, props).unwrap().0);
+            }
+            // The same edge updates reshape the neighbor's side of each face: iron bars that a neighboring
+            // chunk already placed connect to this chunk's template block, or stop connecting. Data markers
+            // are ignored by the placement, so they are outside the shape.
+            for block in blocks.blocks(placed.position) {
+                let pos @ [x, y, z] = position(&placed, block.pos);
+                if !contains(chunk, pos)
+                    || block_states().properties(block.state).unwrap().0
+                        == "minecraft:structure_block"
+                {
+                    continue;
+                }
+                let state = chunk.block_state((x & 15) as usize, y, (z & 15) as usize);
+                for (key, dx, dz) in [
+                    ("south", 0, -1),
+                    ("west", 1, 0),
+                    ("north", 0, 1),
+                    ("east", -1, 0),
+                ] {
+                    let (nx, nz) = (x + dx, z + dz);
+                    if (nx >> 4, nz >> 4) == (chunk.chunk_x(), chunk.chunk_z()) {
+                        continue;
+                    }
+                    let neighbor = neighbors
+                        .iter()
+                        .rev()
+                        .find(|(at, _)| *at == [nx, y, nz])
+                        .map_or_else(|| block_at(nx, y, nz), |&(_, state)| state);
+                    let (name, mut props) = block_states().properties(neighbor).unwrap();
+                    if name != "minecraft:iron_bars" {
+                        continue;
+                    }
+                    let value = if connects(state) { "true" } else { "false" };
+                    if let Some(p) = props.iter_mut().find(|p| p.0 == key)
+                        && p.1 != value
+                    {
+                        p.1 = value;
+                        neighbors.push(([nx, y, nz], block_states().state(name, props).unwrap().0));
+                    }
+                }
             }
             // Template shape updates precede the top piece's separate snow-seal write.
             for block in blocks.blocks(placed.position) {
@@ -422,6 +473,7 @@ mod tests {
     fn clips_template_writes_and_keeps_original_position_and_loot_draw_order() {
         let (mut start, templates) = fixture();
         let original = start.pieces[0].template.clone();
+        let mut neighbors = Vec::new();
         let mut chunk = GeneratedChunk::new(1, 1, -64, 384, 1);
         chunk.set_block_state(
             1,
@@ -439,8 +491,10 @@ mod tests {
                 assert_eq!((x, z), (18, 15));
                 65
             },
-            &mut |_, _, _| unreachable!("synthetic template has no bars"),
+            &mut |_, _, _| 0,
+            &mut neighbors,
         );
+        assert!(neighbors.is_empty(), "air beside the chunk keeps its shape");
         assert_eq!(entities.len(), 1);
         assert_eq!(
             chunk.block_state(1, 63, 2),
@@ -476,11 +530,54 @@ mod tests {
                     42,
                     &templates,
                     &mut |_, _| panic!("outside piece"),
-                    &mut |_, _, _| unreachable!("outside piece")
+                    &mut |_, _, _| unreachable!("outside piece"),
+                    &mut Vec::new(),
                 )
                 .is_empty()
         );
         assert_eq!(start, before);
+    }
+
+    #[test]
+    fn reshapes_iron_bars_beside_the_chunk_against_its_template_blocks() {
+        let (mut start, templates) = fixture();
+        // Move the template one block west, so that its snow block is on the chunk's west edge and its chest
+        // and marker are in the chunk beside it.
+        let piece = &mut start.pieces[0];
+        let template = piece.template.as_mut().unwrap();
+        template.position[0] -= 1;
+        piece.bounding_box = templates
+            .get(&template.template)
+            .unwrap()
+            .bounding_box(template.position, template.rotation);
+        let bars = |connected: &[&'static str]| {
+            let properties = ["north", "east", "south", "west"].map(|side| {
+                (
+                    side,
+                    if connected.contains(&side) {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                )
+            });
+            block_states()
+                .state("minecraft:iron_bars", properties)
+                .unwrap()
+                .0
+        };
+        let mut neighbors = Vec::new();
+        start.place_igloo_in_chunk(
+            &mut GeneratedChunk::new(1, 1, -64, 384, 1),
+            42,
+            &templates,
+            &mut |_, _| 65,
+            &mut |x, _, _| if x == 15 { bars(&[]) } else { 0 },
+            &mut neighbors,
+        );
+        // The snow block at (16, 64, 18) is a full face for the bars west of it; the bars beside the chunk's
+        // other edge blocks see air, as they already do.
+        assert_eq!(neighbors, [([15, 64, 18], bars(&["east"]))]);
     }
 
     #[test]

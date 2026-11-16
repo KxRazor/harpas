@@ -983,7 +983,10 @@ and the owner **accepts it once**:
   ([engine-core.md](engine-core.md#2-parallel-only-where-it-cannot-be-observed)).
   - `harpas_worldgen::light` computes sky and block light for a chunk from its blocks and one chunk around it,
     using the block registry's per-state emission and dampening. Direct sky light falls without fading;
-    dimmer light loses a level per block, and water, leaves and partial blocks dampen it. A generated chunk is
+    dimmer light loses a level per block, and water, leaves and partial blocks dampen it. Slabs, stairs, snow
+    layers and the other blocks that use their shape for light occlusion close the faces their shape covers:
+    light does not pass between two blocks whose facing faces cover the whole face together, and direct sky
+    light stops at such a face, as vanilla's `shapeOccludes` and sky light sources do. A generated chunk is
     lit from its eight loaded neighbours, so a generating world keeps one extra chunk loaded around each
     player's view. The carver chunk on disk keeps no light, leaving vanilla free to run features and its own
     light later.

@@ -6,7 +6,8 @@
 //! covers a whole face, or its center. The support shape is the collision shape except for the blocks listed in
 //! `support_shape`. `isSolidRender` asks whether a block that occludes has a full occlusion shape, which is a
 //! full collision shape except for the blocks listed in `is_solid_render`. Directional occlusion uses the
-//! same shape, except for mud, soul sand and snow, and excludes blocks whose properties call `noOcclusion`.
+//! same shape, except for mud, soul sand and snow, and excludes blocks whose properties call `noOcclusion`. Light
+//! occlusion uses the faces of that shape for the blocks that `useShapeForLightOcclusion`, with every layer of snow.
 
 use std::sync::OnceLock;
 
@@ -42,6 +43,18 @@ impl Face {
 
     /// The four horizontal faces in vanilla's order (`Direction.Plane.HORIZONTAL`).
     pub const HORIZONTAL: [Self; 4] = [Self::North, Self::East, Self::South, Self::West];
+
+    /// The face on the other side of the block.
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::Down => Self::Up,
+            Self::Up => Self::Down,
+            Self::North => Self::South,
+            Self::South => Self::North,
+            Self::West => Self::East,
+            Self::East => Self::West,
+        }
+    }
 
     /// The unit offset towards this face.
     pub const fn offset(self) -> [i32; 3] {
@@ -102,7 +115,17 @@ pub struct BlockBehavior {
     shape_faces: Vec<u16>,
     /// For each state, the full faces of its occlusion shape when it can occlude.
     occlusion_faces: Vec<u8>,
+    /// For each state, the index in `light_faces` of the faces it occludes light with, or [`NO_LIGHT_SHAPE`].
+    light_shapes: Vec<u16>,
+    /// The distinct faces that states occlude light with, one mask per [`Face`].
+    light_faces: Vec<[FaceMask; 6]>,
 }
+
+/// A face of a shape: 32 rows of 32 bits, one bit per 1/32 of a block it covers.
+type FaceMask = [u32; 32];
+
+/// A state that occludes light by its block light dampening alone.
+const NO_LIGHT_SHAPE: u16 = u16::MAX;
 
 /// The block behavior of Java 26.1.
 pub fn block_behavior() -> &'static BlockBehavior {
@@ -158,6 +181,11 @@ impl BlockBehavior {
         let mut flags = Vec::with_capacity(state_shapes.len());
         let mut sturdy = Vec::with_capacity(state_shapes.len());
         let mut occlusion_faces = Vec::with_capacity(state_shapes.len());
+        let mut light_shapes = Vec::with_capacity(state_shapes.len());
+        let mut light_faces = Vec::new();
+        // Light faces by collision shape index, or by snow layers past the shapes.
+        let mut light_face_index: std::collections::HashMap<usize, u16> =
+            std::collections::HashMap::new();
         for (id, &shape) in state_shapes.iter().enumerate() {
             let (name, properties) = states.properties(id as u32).expect("known block state");
             let name = name.strip_prefix("minecraft:").unwrap_or(name);
@@ -192,6 +220,29 @@ impl BlockBehavior {
                     _ => (shape_faces[shape as usize] & 63) as u8,
                 }
             });
+            light_shapes.push(if uses_shape_for_light_occlusion(name, &properties) {
+                // A snow layer occludes with all its layers, one more than it collides with.
+                let layers = properties
+                    .iter()
+                    .find(|(key, _)| *key == "layers")
+                    .map(|(_, value)| value.parse::<i8>().expect("snow layers"));
+                let (key, boxes) = match (name, layers) {
+                    ("snow", Some(layers)) => (
+                        shapes.len() + layers as usize,
+                        vec![ShapeBox {
+                            min: [0; 3],
+                            max: [32, layers * 4, 32],
+                        }],
+                    ),
+                    _ => (shape as usize, shapes[shape as usize].clone()),
+                };
+                *light_face_index.entry(key).or_insert_with(|| {
+                    light_faces.push(Face::ALL.map(|face| face_mask(&boxes, face)));
+                    u16::try_from(light_faces.len() - 1).expect("fewer light shapes than u16")
+                })
+            } else {
+                NO_LIGHT_SHAPE
+            });
             sturdy.push(match support_shape(name, &properties) {
                 Some(support) => full_faces(&support),
                 None => shape_faces[shape as usize],
@@ -204,6 +255,8 @@ impl BlockBehavior {
             sturdy,
             shape_faces,
             occlusion_faces,
+            light_shapes,
+            light_faces,
         }
     }
 
@@ -270,6 +323,37 @@ impl BlockBehavior {
         self.occlusion_faces
             .get(id as usize)
             .is_some_and(|faces| faces & (1 << face as u8) != 0)
+    }
+
+    /// The face of the shape a state occludes light with (`LightEngine.getOcclusionShape`), as 32 rows of 32 bits:
+    /// empty unless the state can occlude and uses its shape for light occlusion. Rows run along Y for the X faces
+    /// and along X otherwise; bits run along Z for the X and Y faces and along Y for the Z faces.
+    pub fn light_face(&self, id: u32, face: Face) -> FaceMask {
+        match self.light_shapes.get(id as usize) {
+            Some(&index) if index != NO_LIGHT_SHAPE => {
+                self.light_faces[index as usize][face as usize]
+            }
+            _ => [0; 32],
+        }
+    }
+
+    /// Whether light cannot pass from a block of state `from` to the block beside it towards `face`, of state `to`
+    /// (`LightEngine.shapeOccludes`): the face of `from` and the opposite face of `to` cover the whole face between
+    /// them together. Only blocks that use their shape for light occlusion, such as slabs and stairs, have faces.
+    pub fn light_occludes(&self, from: u32, to: u32, face: Face) -> bool {
+        let from = self.light_shapes.get(from as usize).copied();
+        let to = self.light_shapes.get(to as usize).copied();
+        let faces = |index: Option<u16>, face: Face| match index {
+            Some(index) if index != NO_LIGHT_SHAPE => {
+                Some(&self.light_faces[index as usize][face as usize])
+            }
+            _ => None,
+        };
+        match (faces(from, face), faces(to, face.opposite())) {
+            (None, None) => false,
+            (Some(a), None) | (None, Some(a)) => a.iter().all(|row| *row == u32::MAX),
+            (Some(a), Some(b)) => a.iter().zip(b).all(|(a, b)| a | b == u32::MAX),
+        }
     }
 
     /// Whether the state's block has a block entity (`BlockState.hasBlockEntity`).
@@ -578,6 +662,65 @@ const fn column(size_x: i8, size_z: i8, min_y: i8, max_y: i8) -> ShapeBox {
 
 /// One bit per [`Face`] that the boxes cover entirely (`Block.isFaceFull`), and from bit 8 one per face whose
 /// center they cover (`SupportType.CENTER`).
+/// Whether a block uses its shape to occlude light (`BlockState.useShapeForLightOcclusion`): slabs other than
+/// double ones, stairs, extended pistons and piston heads, shelves, sculk sensors and shriekers, daylight
+/// detectors, dirt paths, enchanting tables, end portal frames, farmland, lecterns, snow layers and stonecutters.
+/// They can all occlude.
+fn uses_shape_for_light_occlusion(name: &str, properties: &[(&str, &str)]) -> bool {
+    if name.ends_with("_slab") {
+        return !properties.contains(&("type", "double"));
+    }
+    if matches!(name, "piston" | "sticky_piston") {
+        return properties.contains(&("extended", "true"));
+    }
+    name.ends_with("_stairs")
+        || name.ends_with("_shelf")
+        || matches!(
+            name,
+            "calibrated_sculk_sensor"
+                | "daylight_detector"
+                | "dirt_path"
+                | "enchanting_table"
+                | "end_portal_frame"
+                | "farmland"
+                | "lectern"
+                | "piston_head"
+                | "sculk_sensor"
+                | "sculk_shrieker"
+                | "snow"
+                | "stonecutter"
+        )
+}
+
+/// The face of a shape (`VoxelShape.getFaceShape`): the boxes that reach the face's side of the block, projected
+/// onto it. Rows run along the first of the other two axes, bits along the second.
+fn face_mask(boxes: &[ShapeBox], face: Face) -> FaceMask {
+    let (axis, negative) = face.axis();
+    let (u, v) = match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let mut mask = [0_u32; 32];
+    for b in boxes {
+        let touches = if negative {
+            b.min[axis] <= 0 && b.max[axis] > 0
+        } else {
+            b.min[axis] < 32 && b.max[axis] >= 32
+        };
+        if !touches {
+            continue;
+        }
+        let clip = |value: i8| value.clamp(0, 32) as u32;
+        let columns =
+            (clip(b.min[v])..clip(b.max[v])).fold(0_u32, |bits, column| bits | 1 << column);
+        for row in clip(b.min[u])..clip(b.max[u]) {
+            mask[row as usize] |= columns;
+        }
+    }
+    mask
+}
+
 fn full_faces(boxes: &[ShapeBox]) -> u16 {
     let mut faces = 0;
     for face in Face::ALL {

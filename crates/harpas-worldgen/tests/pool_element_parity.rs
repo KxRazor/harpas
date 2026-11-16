@@ -244,7 +244,14 @@ fn place(
             }
         }
         let mut chunk = target.unwrap();
-        let entities = chunk.take_block_entities();
+        // A generation region saves a `DUMMY` placeholder for a block entity a feature's block needs, such as a
+        // sculk sensor's. The probe's world creates block entities only when asked, so it has none to compare;
+        // feature_blocks_parity compares the placeholders.
+        let entities: Vec<_> = chunk
+            .take_block_entities()
+            .into_iter()
+            .filter(|entity| entity.get("id") != Some(&Nbt::from("DUMMY")))
+            .collect();
         (chunk, outside, entities)
     } else {
         let mut chunk = layered_chunk(CHUNK.0, CHUNK.1, layers);

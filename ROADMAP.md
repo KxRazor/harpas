@@ -217,6 +217,9 @@ vanilla for the same seed.
           with support checks and dirt-path coin flips, compared with vanilla's own features, including
           repeated placement, chunk edges and world limits (`block_pile_parity`), plus synthetic worker
           decoration and Anvil reload tests. Calling them from village pool elements follows with jigsaw blocks.
+    - [x] Sculk patches (`sculk_patch`) and sculk veins (`multiface_growth`): the world generation sculk
+          spreader with its charge cursors, vein spreading, sculk conversion, growths, catalysts and shriekers,
+          and the general `MultifaceSpreader`, compared with vanilla's own features (`sculk_feature_parity`).
     - [x] Fossils (`fossil`): bone templates and ore overlays buried under the ocean floor, with their processor
           lists and empty-corner checks, compared with vanilla's own features (`fossil_feature_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
@@ -247,11 +250,11 @@ vanilla for the same seed.
           chunk clipping, waterlogging, water filling, unchanged edge shapes and block entity loot seeds,
           compared for every single element of every pool (`pool_element_parity`).
     - [x] List and feature pool elements: lists in order with replaced block entities, and every village
-          feature placed through its placement modifiers into the generation region (`pool_element_parity`).
-          The ancient city's `sculk_patch` feature follows with the feature families.
+          feature placed through its placement modifiers into the generation region (`pool_element_parity`),
+          including the ancient city's sculk patches.
     - [x] Jigsaw pieces on chunk workers: decoration-seeded random, processor pivot, clipped templates and
-          feature elements written into the region, compared in 368 chunks of nine real starts and their
-          neighbors (`jigsaw_chunk_parity`). The ancient city's sculk patches follow with that feature.
+          feature elements written into the region, compared in 384 chunks of nine real starts and their
+          neighbors, sculk patches included (`jigsaw_chunk_parity`).
     - [ ] Remaining capped delegates.
   - [ ] Structures through the complete FEATURES schedule and full resumption.
     - [x] Structures placed by each decoration step before its features, with their own seeds, for every start

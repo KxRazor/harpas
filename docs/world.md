@@ -355,8 +355,8 @@ and the owner **accepts it once**:
     every pool, turned and crossing a chunk edge, over dry, flooded, deep and fence layered terrain, with and
     without waterlogging, and every feature element on grass with four seeds, comparing the blocks of the
     chunk and its neighbors, the block entities as vanilla loads and saves them, and the random tail. The
-    ancient city's `sculk_patch` feature is not ported yet; other capped delegates and worker integration
-    remain separate work.
+    ancient city's `sculk_patch` elements are compared too, without the block entity placeholders that only a
+    generation region saves.
   - Jigsaw structures grow from a start pool by connecting templates at their jigsaw blocks, as vanilla's
     `JigsawPlacement` does: highest placement priority first, the expansion hack for villages, and the
     free space a piece may still use, which is a box with the placed pieces taken out. A location with no
@@ -373,12 +373,12 @@ and the owner **accepts it once**:
     Template blocks are clipped to the chunk, and terrain matching reads the chunk's heights as blocks are
     placed. Templates read terrain across their whole extent, as vanilla's do: the region's chunks, and air
     with heights at the world's bottom farther away, as in a region whose farther chunks have no terrain
-    yet. Feature elements write into the whole region, as other features do; the ancient city's sculk
-    patches, not ported yet, place nothing. `jigsaw_chunk_parity` places real starts of all five villages,
+    yet. Feature elements write into the whole region, as other features do, including the ancient city's
+    sculk patches. `jigsaw_chunk_parity` places real starts of all five villages,
     a pillager outpost, trail ruins, trial chambers and an ancient city in the decoration regions of their
-    carved chunks with terrain adaptation, and compares 368 chunks block by block, the blocks written to
-    their neighbors, and their block entities and loot seeds against vanilla's `StructureStart.placeInChunk`;
-    16 ancient city chunks reached by sculk patches are left out. `feature_worker_parity` checks that the
+    carved chunks with terrain adaptation, and compares 384 chunks block by block, the blocks written to
+    their neighbors, and their block entities and loot seeds against vanilla's `StructureStart.placeInChunk`,
+    including the ancient city chunks its sculk patches reach. `feature_worker_parity` checks that the
     workers place a village chunk away from its start, and nothing of it without structures. The other
     structures are still placed after carvers.
   - The normal Overworld runs cave and canyon carvers from the surrounding 17×17 source chunks, using the
@@ -476,6 +476,17 @@ and the owner **accepts it once**:
     the first face, without down, they can attach to, and glow lichen on a shuffled `can_be_placed_on` neighbor of
     an air or water block, then by `chance_of_spreading` spreads it once with `MultifaceSpreader`; vanilla's search
     beyond the origin sets its position from the origin each time, so it tries only the six neighbors.
+    Sculk veins grow the same way with the sculk vein's spreader, which may also take replaceable, non-fire blocks
+    and water sources but not the face toward sculk, a catalyst or a moving piston. `harpas_worldgen::sculk` places
+    sculk patches (`SculkPatchFeature`) with vanilla's world generation `SculkSpreader`: each round adds charge
+    cursors at the origin and updates them; a cursor on sculk or a vein spreads veins from its block
+    (`MultifaceSpreader.spreadAll`), a vein turns a `#sculk_replaceable_world_gen` block behind a shuffled face
+    into sculk, sculk may grow a sensor or a shrieker that can summon, and both decay; a cursor that keeps charge
+    moves to a shuffled sculk or vein neighbor among the 18 that share a face or an edge, preferring one with
+    a face against `#sculk_replaceable`, and stops 15 blocks from the origin. The patch may then turn its
+    origin into a catalyst over a full block and add shriekers around it. `sculk_feature_parity` compares
+    every block and the random tails of 288 placements of vanilla's deep dark and ancient city patches and
+    sculk veins in test caves.
     `harpas_worldgen::bamboo` places five to sixteen bare stalk blocks over `#supports_bamboo`, then, if at least
     three fit, adds a leafy tip at the first position above them and changes the two blocks below it to leafy
     states; the tip can replace the obstruction that stopped the stalk. By the configured probability it first

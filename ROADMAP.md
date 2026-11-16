@@ -128,9 +128,9 @@ vanilla for the same seed.
         `rarity_filter`) is compared with vanilla's `applyBiomeDecoration` for ores.
         Workers share proto-chunks, decorate each chunk once its neighbors reach `carvers` and hand out a
         chunk once its neighbors have decorated, saving proto-chunks at `carvers` or `features` and resuming
-        them; final chunks match vanilla and reload unchanged (`feature_worker_parity`). Behind
-        `generation.features` in `harpas.toml` until the remaining families land; the structures of each step
-        are tracked under "Structures through the complete FEATURES schedule".
+        them; final chunks match vanilla and reload unchanged (`feature_worker_parity`). New chunks always run
+        it, as in vanilla; the structures of each step are tracked under "Structures through the complete
+        FEATURES schedule".
   - [x] Placement modifiers: all 15 types with their integer and height providers, and the block predicates
         that need no block shapes, compared position by position with vanilla's own (`placement_parity`).
   - [x] Block shapes and survival rules for the `solid`, `replaceable`, `would_survive` and `has_sturdy_face`

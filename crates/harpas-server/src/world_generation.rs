@@ -12,13 +12,12 @@ use log::{info, warn};
 
 use crate::properties::Properties;
 
-/// Initializes a normal Overworld before its worker pool can create or save chunks. With `features`, new
-/// chunks run the FEATURES stage before players receive them; otherwise they stay at `carvers`.
+/// Initializes a normal Overworld before its worker pool can create or save chunks. New chunks run the FEATURES
+/// stage, with structures unless `generate-structures` is off, before players receive them.
 pub(crate) fn prepare(
     world: &Path,
     properties: &Properties,
     pack: &Path,
-    features: bool,
 ) -> io::Result<Option<Arc<dyn ChunkSource>>> {
     let level = harpas_anvil::read_level(world)?;
     let saved = harpas_anvil::read_world_gen_settings(world)?;
@@ -130,24 +129,17 @@ pub(crate) fn prepare(
         let spawn_y = spawn_height(Arc::clone(&generator))?;
         harpas_anvil::write_level(world, &new_level(properties, spawn_y))?;
     }
-    let source = if features {
-        info!(
-            "New chunks run the FEATURES stage, which places only ores and simple vegetation so far"
-        );
-        if structures {
-            let starts = harpas_engine::worldgen::overworld_starts(
-                seed,
-                Arc::clone(&data),
-                Arc::clone(&templates),
-            )?;
-            harpas_engine::worldgen::decorated_with_structures(
-                generator, starts, seed, data, templates,
-            )?
-        } else {
-            harpas_engine::worldgen::decorated(generator, seed, &data, templates)?
-        }
+    let source = if structures {
+        let starts = harpas_engine::worldgen::overworld_starts(
+            seed,
+            Arc::clone(&data),
+            Arc::clone(&templates),
+        )?;
+        harpas_engine::worldgen::decorated_with_structures(
+            generator, starts, seed, data, templates,
+        )?
     } else {
-        harpas_engine::world::generator_source(generator)
+        harpas_engine::worldgen::decorated(generator, seed, &data, templates)?
     };
     info!("Prepared Overworld terrain generation for seed {seed}");
     Ok(Some(source))
@@ -420,7 +412,7 @@ mod tests {
         harpas_anvil::write_level(&folder.0, &level).unwrap();
         let props = Properties::parse("level-seed=123\n");
         assert!(
-            prepare(&folder.0, &props, Path::new("missing.zip"), false)
+            prepare(&folder.0, &props, Path::new("missing.zip"))
                 .unwrap()
                 .is_none()
         );
@@ -451,7 +443,7 @@ mod tests {
         harpas_anvil::write_world_gen_settings(&folder.0, &root).unwrap();
         let props = Properties::parse("level-seed=99\n");
         assert!(
-            prepare(&folder.0, &props, Path::new("missing.zip"), false)
+            prepare(&folder.0, &props, Path::new("missing.zip"))
                 .unwrap()
                 .is_none()
         );

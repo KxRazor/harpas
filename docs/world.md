@@ -514,8 +514,7 @@ and the owner **accepts it once**:
     compares blocks, four live heightmaps, block entity NBT, results and random consumption in 320 placements
     across five seeds with both legacy and Xoroshiro sources, including rejected supports, partial foundations,
     obstructions, chunk borders, replaced containers and world limits. A natural well crossing a chunk edge is
-    also checked through `applyBiomeDecoration`, worker generation and Anvil reloads. The feature participates
-    in the existing `generation.features` opt-in, with the other ported families.
+    also checked through `applyBiomeDecoration`, worker generation and Anvil reloads.
     `harpas_worldgen::coral` places the warm ocean's `coral_tree`, `coral_claw` and `coral_mushroom` reefs:
     branching columns, bent fingers and hollow shells with their edges omitted. Each draws its block from
     `#coral_blocks` in tag encounter order, expanding nested tags and keeping the first occurrence of each
@@ -524,7 +523,7 @@ and the owner **accepts it once**:
     blocks, four live heightmaps, results and random tails in 468 placements across three seeds and both random
     sources, including obstructions, existing vegetation, flowing water, chunk borders and world limits.
     Warm ocean reefs also participate in `feature_blocks_parity` and `feature_worker_parity`, including Anvil
-    reloads, behind the same `generation.features` opt-in.
+    reloads.
     `harpas_worldgen::underwater_magma` searches downward through water blocks for a floor strictly within
     `floor_search_range`, then considers the cube of `placement_radius_around_floor` around it. Each position
     draws a float before checking its blocks. The destination must be neither air nor a water block; below
@@ -534,7 +533,7 @@ and the owner **accepts it once**:
     and random tails in 216 placements across three seeds with both random sources, and every block state as
     the destination or one of its five closing neighbors. The full occluding faces of all 29,873 states are
     also checked by `block_behavior_parity`. A natural deposit crossing a chunk edge participates in
-    `feature_blocks_parity` and `feature_worker_parity`, including Anvil reloads, under `generation.features`.
+    `feature_blocks_parity` and `feature_worker_parity`, including Anvil reloads.
     `harpas_worldgen::freeze_top_layer` covers the 16×16 columns from the origin with snow and freezes source
     water at their motion-blocking surface. The biome at the surface decides both, using its temperature,
     altitude and frozen-ocean temperature pockets, even when it has no precipitation. Snow needs a full upper
@@ -574,8 +573,7 @@ and the owner **accepts it once**:
     four live heightmaps, results and random tails in 3,072 placements and replays across three seeds and both
     random sources, with eight configurations, missing and irregular boundaries, existing dripstone, wet and
     flooded caves, obstacles, search boundaries, chunk edges and world limits. Natural clusters with long
-    pointed columns participate in the decoration and worker comparisons, including Anvil reloads, under
-    `generation.features`.
+    pointed columns participate in the decoration and worker comparisons, including Anvil reloads.
     `harpas_worldgen::monster_room` places underground monster rooms after checking solid floors and ceilings
     and one to five two-block-high openings. It excavates in X/descending-Y/Z order, keeping existing chests
     and spawners inside the room, clearing unsupported boundary blocks and making three quarters of supported
@@ -586,8 +584,8 @@ and the owner **accepts it once**:
     block entity NBT, results and random tails in 576 placements and replays across three seeds and both random
     sources, with different opening counts, partial and non-opaque supports, liquids, existing containers and
     spawners, chunk borders and world limits. A natural room crossing a chunk edge participates in decoration
-    and worker comparisons, including chest and spawner NBT against vanilla and Anvil reloads, under
-    `generation.features`. Spawner ticking and loot opening follow in M4.
+    and worker comparisons, including chest and spawner NBT against vanilla and Anvil reloads. Spawner ticking
+    and loot opening follow in M4.
     `harpas_worldgen::vegetation_patch` also places `waterlogged_vegetation_patch`: after replacing the ground,
     it collects positions enclosed below and on all four sides by sturdy faces, fills them with water and grows
     vegetation in that water, in a fresh Java `HashSet`'s iteration order. Lush caves' clay patches and pools
@@ -599,7 +597,7 @@ and the owner **accepts it once**:
     results and random tails on controlled floors, including holes, partial supports, flooded and obstructed
     origins, repeated placement, chunk edges and world limits, and compares survival and shape updates against
     every block state. The natural decoration and worker comparisons require both dripleaves and waterlogged
-    plants in their samples and check their Anvil reloads under `generation.features`.
+    plants in their samples and check their Anvil reloads.
     `harpas_worldgen::geode` places hollow amethyst geodes: distribution points sum inverse distances with
     `NormalNoise` seeded from the world seed, independently of decoration, producing the filling, inner,
     calcite and basalt layers and optional cracks. Protected blocks keep their states, but their providers and
@@ -610,7 +608,7 @@ and the owner **accepts it once**:
     and protected blocks, different water fillings, decorations with horizontal or hopper facing properties,
     lenient codec defaults, chunk borders and world limits.
     A natural geode crossing into its eastern neighbor participates in decoration and worker comparisons,
-    including Anvil reloads, under `generation.features`. Fluid ticks requested beside cracks follow in M4.
+    including Anvil reloads. Fluid ticks requested beside cracks follow in M4.
     `harpas_worldgen::block_pile` places village piles of hay, melons, pumpkins, snow and ice in two layers,
     only in air with a sturdy top face below, or a successful coin flip above dirt paths. Hay's
     `rotated_block_provider` draws X, Y or Z from the block's default state, discarding other configured
@@ -934,11 +932,11 @@ and the owner **accepts it once**:
     saved at `carvers` without stronghold blocks, then decorated as vanilla places it.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
-- **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
-  stage on the chunk workers before players receive them. It is off by default while feature families and
-  structure scheduling remain incomplete: a chunk saved after FEATURES never runs the stage again, in Harpas
-  or in vanilla, so it would never receive the unported families. Without it, chunks stop at `carvers` as
-  described below.
+- **FEATURES on the workers:** new chunks run the FEATURES stage on the chunk workers before players receive
+  them, as vanilla does: every feature family and structure of the Overworld is placed, and structures are left
+  out only when `generate-structures` is off. There is no setting to skip the stage, as there is none in
+  vanilla; a world preset or data pack changes what it places. A chunk saved after FEATURES never runs the stage
+  again, in Harpas or in vanilla.
   - A chunk decorates once its eight neighbors have completed carvers, and it is **final** once its eight
     neighbors have decorated too: from then on no decoration writes into it. Until then it is a proto-chunk in
     a store shared by the workers. Each decoration takes its 3x3 chunks out of the store, runs on one worker
@@ -967,8 +965,9 @@ and the owner **accepts it once**:
   - Positions that left the store in this session are remembered for the rest of it, a few bytes each, so a
     final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
-- **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Every structure is placed in
+- **Parallel:** missing chunks are generated through carvers on the bounded worker pool; a proto-chunk saved
+  before it decorates keeps status `minecraft:carvers`, so either Harpas or vanilla can continue the later
+  stages. Every structure is placed in
   decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch and cat are left for vanilla or M4. Pyramid and
   temple container flags are saved as vanilla saves them, since a decorated chunk is never placed again.
   Igloo pass replays also match vanilla, including its height changing when the existing roof raises the

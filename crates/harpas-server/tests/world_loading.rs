@@ -455,7 +455,16 @@ fn a_new_world_generates_saves_and_reuses_its_seed_when_data_is_available() {
     stop(&mut server);
     let region = dimension_dir(&world, "minecraft:overworld").join("region");
     let chunk = harpas_anvil::read_chunk(&region, 0, 0).unwrap().unwrap();
-    assert_eq!(chunk.get("Status"), Some(&Nbt::from("minecraft:carvers")));
+    // New chunks run FEATURES, and a chunk whose neighbors were loaded is saved with its light.
+    let status = chunk.get("Status");
+    assert!(
+        [
+            Some(&Nbt::from("minecraft:features")),
+            Some(&Nbt::from("minecraft:light"))
+        ]
+        .contains(&status),
+        "{status:?}"
+    );
     fs::write(
         folder.0.join("server.properties"),
         properties.replace("level-seed=42", "level-seed=99"),

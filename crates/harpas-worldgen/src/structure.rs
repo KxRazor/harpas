@@ -22,7 +22,7 @@ pub use jigsaw_blocks::decoration_slot;
 mod jungle_temple;
 mod mineshaft;
 mod mineshaft_blocks;
-pub use mineshaft_blocks::place_mineshafts_in_chunk;
+pub use mineshaft_blocks::{place_mineshafts, place_mineshafts_in_chunk};
 mod monument;
 pub use monument::{MonumentLayout, MonumentRoom, MonumentRoomKind, MonumentRoomPiece};
 mod monument_blocks;

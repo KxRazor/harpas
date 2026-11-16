@@ -735,9 +735,7 @@ and the owner **accepts it once**:
     (`StructureStart::place_buried_treasure`): search down from `OCEAN_FLOOR_WG` for its foundation, fill exposed
     neighbors, orient the chest and save its loot table and decoration-seeded loot seed without rolling any
     items. The piece moves to the chest, and the chunk saves its start with that move, as vanilla's does. The
-    treasure's one-block shell fits in its source chunk. Mineshafts, still placed after carvers, therefore run
-    before it for now, while vanilla places treasure first; they differ only where a mine corridor crosses the
-    treasure's shell. `buried_treasure_parity` compares every block, heightmaps, chest NBT and saved starts in
+    treasure's one-block shell fits in its source chunk. Mineshafts follow it in the same step, as in vanilla. `buried_treasure_parity` compares every block, heightmaps, chest NBT and saved starts in
     38 synthetic cases and four actual chunks per seed in two seeds (one seed on pull requests); the actual
     chunks come from workers that decorate without features, and are saved and reloaded from Anvil. Vanilla
     also reloads its own saved records and places the treasure again, which changes nothing.
@@ -878,43 +876,41 @@ and the owner **accepts it once**:
     These comparisons use the same pre-placement neighbors for each complete portal pass; they do not
     establish the full feature-stage schedule or resumption. Ruined portals in the Nether follow with
     that dimension.
-  - Normal and badlands mineshaft blocks run on chunk workers, retaining the saved piece layout, entrances,
+  - Chunk workers place normal and badlands mineshafts in their chunk's decoration, in
+    `underground_structures` after buried treasure (`place_mineshafts`), retaining the saved piece layout, entrances,
     orientation, depth and reference count. Rooms carve their upper dome; crossings include upper floors
     and supported posts; stairs excavate their rotated slope. Corridors place oak or dark oak supports,
     floating floors, hanging fences/chains, rails, torches and cobwebs. Pieces check the liquid shell clipped
-    to the target chunk and the zoomed `mineshaft_blocking` biome at its clipped center. Biome samples use
-    saved neighboring sections when available, otherwise the noise biome source, without generating extra
-    terrain. Floor support and solid-render checks differ for slabs, stairs, leaves and glass.
+    to the target chunk and the zoomed `mineshaft_blocking` biome at its clipped center, read from the
+    biomes stored in the decoration region, as vanilla's `WorldGenRegion` does. Floor support and solid-render checks differ for slabs, stairs, leaves and glass.
     Each structure type shares one decoration-seeded stream across all its starts, in a new chunk's native
     reference-set iteration order. Spider corridors write cave-spider
-    spawner NBT; workers retain incoming `hps` flags at `carvers` so a later vanilla pass can recreate a
-    spawner which its excavation clears. Chest minecart entities and loot remain with M4; their placement
+    spawner NBT and save their `hps` flag as vanilla does. Chest minecart entities and loot remain with M4; their placement
     draws and rail blocks are already preserved. The light engine and spawner ticking are separate tasks.
     `mineshaft_parity` compares every block, all six heightmaps, postprocessing, saved records and spawner
     data in 558 synthetic chunks and their replays, including both types, all rotations, multiple references
     and reference-set growth, partial floors, liquids, blocked biomes, chunk edges and vertical limits.
-    Natural worker chunks across three seeds include a chunk shared with buried treasure, which these chunks
-    saved at `carvers` do not hold yet (it is placed in decoration), reversed requests and Anvil reloads. A saved-neighbor case checks piece records and a changed biome across a chunk edge.
-    These are individual placement-pass comparisons; the full FEATURES schedule and resumption remain pending.
-  - Stronghold blocks run on chunk workers using the existing saved piece layout, in piece order. Corridors,
+    Natural worker chunks across three seeds, decorated without features, include a chunk shared with buried
+    treasure, reversed requests and Anvil reloads. A saved-neighbor case checks piece records and a changed
+    biome across a chunk edge, read from a saved, decorated neighbor.
+  - Chunk workers place strongholds in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_stronghold`), using the existing saved piece layout, in piece order. Corridors,
     prisons, three- and five-way crossings, both stair types, filler corridors and short/tall libraries retain
     their doors, child openings and room variants. Masonry draws only on box boundaries; boxes which skip air
     also skip draws outside the target chunk, while portal-room masonry and library cobweb draws include
     clipped positions. All pieces of a start share the stronghold decoration stream (index 19, step 4 in 26.1).
     Chests retain loot table names and seeds without rolling items. Chest facing excludes transparent and
-    partial blocks; workers resolve only the neighboring positions needed for chests on a chunk edge,
-    preferring saved terrain. Portal rooms place lava, stairs, bars and all twelve independently drawn eyes,
+    partial blocks; chests on a chunk edge read their neighbors from the terrain before decoration, which the
+    start source resolves only for the positions they need, preferring saved terrain. Portal rooms place lava, stairs, bars and all twelve independently drawn eyes,
     including an active portal when every frame has an eye, and save silverfish spawner data. Spawner ticking
-    follows in M4. Workers retain incoming `Chest` and `Mob` flags at `carvers` so vanilla can recreate containers
-    which its next structure pass clears; the direct placement API updates them as vanilla does.
+    follows in M4. The `Chest` and `Mob` flags are saved as vanilla saves them.
     `stronghold_parity` compares blocks, six final-block heightmaps, block entities, postprocessing and saved
     records in 5,472 placements and replays across two seeds: every piece type and rotation, all door types,
     crossing/library variants, air, liquids, caves, chunk boundaries and vertical limits, including individual
     pass replays after loading the saved records. Eighteen natural worker chunks across two seeds cover
-    libraries, portal rooms, chests and crossings, reversed
-    requests and Anvil reloads. A saved-neighbor test changes a chest's neighboring block to glass and checks
-    the retained source record and target chunk against vanilla. Complete FEATURES scheduling and resumption
-    remain separate work.
+    libraries, portal rooms, chests and crossings, decorated without features, reversed requests and Anvil
+    reloads. A saved-neighbor test changes a chest's neighboring block to glass and checks that the target is
+    saved at `carvers` without stronghold blocks, then decorated as vanilla places it.
 - **Deterministic:** the same seed and data produce the same chunks, using the vanilla-exact random generators
   of [engine-core.md](engine-core.md#7-determinism).
 - **FEATURES on the workers:** with `generation.features = true` in `harpas.toml`, new chunks run the FEATURES
@@ -945,8 +941,8 @@ and the owner **accepts it once**:
     final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Every structure but mineshafts and
-  strongholds is placed in decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch and cat are left for vanilla or M4. Pyramid and
+  status `minecraft:carvers`, so vanilla can continue the later stages. Every structure is placed in
+  decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch and cat are left for vanilla or M4. Pyramid and
   temple container flags are saved as vanilla saves them, since a decorated chunk is never placed again.
   Igloo pass replays also match vanilla, including its height changing when the existing roof raises the
   entrance's `WORLD_SURFACE_WG` height. Shipwreck replays retain their saved height. A beached replay skips

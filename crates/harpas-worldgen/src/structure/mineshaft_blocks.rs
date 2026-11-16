@@ -44,56 +44,20 @@ pub fn place_mineshafts_in_chunk<'a>(
     seed: i64,
     blocking_biome: &mut impl FnMut(i32, i32, i32) -> bool,
 ) -> Vec<Compound> {
-    let mut starts: Vec<_> = starts
-        .into_iter()
-        .filter(|s| {
-            matches!(
-                s.structure.as_str(),
-                "minecraft:mineshaft" | "minecraft:mineshaft_mesa"
-            )
-        })
-        .collect();
+    let mut starts: Vec<_> = starts.into_iter().collect();
     let mut entities = Vec::new();
     for (structure, index) in [("minecraft:mineshaft", 1), ("minecraft:mineshaft_mesa", 2)] {
-        let mut matching: Vec<_> = starts
-            .iter_mut()
-            .filter(|s| s.structure == structure)
-            .collect();
-        matching.sort_by_key(|s| s.chunk);
-        let order = reference_order(matching.iter().map(|s| s.chunk));
-        matching.sort_by_key(|s| {
-            order
-                .iter()
-                .position(|p| *p == s.chunk)
-                .expect("referenced start")
-        });
         let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
         let decoration =
             random.set_decoration_seed(seed, chunk.chunk_x() * 16, chunk.chunk_z() * 16);
         random.set_feature_seed(decoration, index, 3);
-        for start in matching {
-            for piece in &mut start.pieces {
-                if clipped_bounds(piece, chunk).is_none() {
-                    continue;
-                }
-                let mut mine = Mine {
-                    piece,
-                    chunk,
-                    entities: Vec::new(),
-                };
-                if mine.invalid(blocking_biome) {
-                    continue;
-                }
-                match mine.piece.kind.as_str() {
-                    "minecraft:mscorridor" => mine.corridor(&mut random),
-                    "minecraft:msroom" => mine.room(),
-                    "minecraft:mscrossing" => mine.crossing(),
-                    "minecraft:msstairs" => mine.stairs(),
-                    _ => unreachable!(),
-                }
-                entities.extend(mine.entities);
-            }
-        }
+        entities.extend(place_mineshafts(
+            starts.iter_mut().map(|start| &mut **start),
+            structure,
+            chunk,
+            &mut random,
+            blocking_biome,
+        ));
     }
     // Another intersecting mine can excavate an earlier spawner or replace it at the same position.
     let mut seen = std::collections::HashSet::new();
@@ -105,6 +69,55 @@ pub fn place_mineshafts_in_chunk<'a>(
         chunk.block_state((x & 15) as usize, y, (z & 15) as usize) == state("spawner")
             && seen.insert([x, y, z])
     });
+    entities
+}
+
+/// Places the mineshafts of one structure among `starts` in a new chunk's vanilla reference-set order, all
+/// drawing from `random`, which the caller has seeded as vanilla's decoration does for that structure. Returns
+/// the spawners it creates; a later mine of the same pass can excavate one, so only those still standing count.
+pub fn place_mineshafts<'a, R: RandomSource>(
+    starts: impl IntoIterator<Item = &'a mut StructureStart>,
+    structure: &str,
+    chunk: &mut GeneratedChunk,
+    random: &mut WorldgenRandom<R>,
+    blocking_biome: &mut impl FnMut(i32, i32, i32) -> bool,
+) -> Vec<Compound> {
+    let mut matching: Vec<_> = starts
+        .into_iter()
+        .filter(|s| s.structure == structure)
+        .collect();
+    matching.sort_by_key(|s| s.chunk);
+    let order = reference_order(matching.iter().map(|s| s.chunk));
+    matching.sort_by_key(|s| {
+        order
+            .iter()
+            .position(|p| *p == s.chunk)
+            .expect("referenced start")
+    });
+    let mut entities = Vec::new();
+    for start in matching {
+        for piece in &mut start.pieces {
+            if clipped_bounds(piece, chunk).is_none() {
+                continue;
+            }
+            let mut mine = Mine {
+                piece,
+                chunk,
+                entities: Vec::new(),
+            };
+            if mine.invalid(blocking_biome) {
+                continue;
+            }
+            match mine.piece.kind.as_str() {
+                "minecraft:mscorridor" => mine.corridor(random),
+                "minecraft:msroom" => mine.room(),
+                "minecraft:mscrossing" => mine.crossing(),
+                "minecraft:msstairs" => mine.stairs(),
+                _ => unreachable!(),
+            }
+            entities.extend(mine.entities);
+        }
+    }
     entities
 }
 

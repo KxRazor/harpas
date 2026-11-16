@@ -18,6 +18,7 @@ pub mod dripstone_cluster;
 pub mod fallen_tree;
 pub mod feature;
 mod feature_provider;
+pub mod fossil;
 pub mod freeze_top_layer;
 pub mod generator;
 pub mod geode;

@@ -59,8 +59,9 @@ pub fn decorated(
     generator: Arc<ChunkGenerator>,
     seed: i64,
     data: &WorldgenData,
+    templates: Arc<StructureTemplates>,
 ) -> io::Result<Arc<dyn ChunkSource>> {
-    let index = FeatureIndex::overworld(data).map_err(io::Error::other)?;
+    let index = FeatureIndex::overworld_with(data, Some(templates)).map_err(io::Error::other)?;
     Ok(Arc::new(Decorator::new(
         generator,
         seed,
@@ -80,7 +81,8 @@ pub fn decorated_with_structures(
     data: Arc<WorldgenData>,
     templates: Arc<StructureTemplates>,
 ) -> io::Result<Arc<dyn ChunkSource>> {
-    let index = FeatureIndex::overworld(&data).map_err(io::Error::other)?;
+    let index = FeatureIndex::overworld_with(&data, Some(Arc::clone(&templates)))
+        .map_err(io::Error::other)?;
     let mut decorator = Decorator::new(generator, seed, index, data.biomes.len(), CAPACITY);
     decorator.structures = Some(Structures {
         starts,

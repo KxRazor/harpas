@@ -217,6 +217,8 @@ vanilla for the same seed.
           with support checks and dirt-path coin flips, compared with vanilla's own features, including
           repeated placement, chunk edges and world limits (`block_pile_parity`), plus synthetic worker
           decoration and Anvil reload tests. Calling them from village pool elements follows with jigsaw blocks.
+    - [x] Fossils (`fossil`): bone templates and ore overlays buried under the ocean floor, with their processor
+          lists and empty-corner checks, compared with vanilla's own features (`fossil_feature_parity`).
   - [ ] Jigsaw structure blocks: villages, pillager outposts, ancient cities, trail ruins and trial chambers.
     - [x] Processor lists and per-block `rule` substitutions: all six block predicates, distance and
           axis-distance tests, positional randomness and passthrough, clear and loot NBT modifiers,

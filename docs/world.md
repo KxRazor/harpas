@@ -607,6 +607,16 @@ and the owner **accepts it once**:
     placements across three seeds and both random sources, including partial supports, liquids, occupied
     positions, repeated placement, chunk edges and world limits. A synthetic biome schedule also checks
     worker decoration across chunk edges and Anvil reloads. Natural village placement awaits jigsaw blocks.
+    `harpas_worldgen::fossil` places fossils (`FossilFeature`): a random rotation and one of the configured
+    bone templates with its ore overlay, centered on the origin and buried 15 to 24 blocks below the lowest
+    `OCEAN_FLOOR_WG` height of its footprint, but at least 10 blocks above the bottom of the world. More empty
+    corners (air, water or lava) than allowed refuse it. Both templates go through their processor lists
+    (`fossil_rot`, `fossil_coal`, `fossil_diamonds`) with the feature's random source as the placement random,
+    which also draws each template's palette, and are clipped to the chunk and its eight neighbors. A feature
+    index compiles fossils only with the owner's templates, which the chunk workers' decoration passes it.
+    `fossil_feature_parity` compares every block of the region and the random tails of 288 placements of
+    vanilla's own `fossil_coal` and `fossil_diamonds` over oceans, land, caves, lava, slopes and the bottom of
+    the world, with both random sources.
     `harpas_worldgen::ice` places ice spikes, icebergs at the sea level and blue ice; an iceberg's ellipse can
     narrow to nothing under the water, where its distances are NaN and, as in vanilla, place nothing.
     `harpas_worldgen::liquid` places springs, where exactly `rock_count` of the five blocks beside and below are

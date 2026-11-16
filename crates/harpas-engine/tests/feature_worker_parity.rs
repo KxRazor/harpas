@@ -153,7 +153,7 @@ fn open(
         &biomes,
     )
     .unwrap();
-    let source = decorated(generator, seed, data).unwrap();
+    let source = decorated(generator, seed, data, Arc::clone(templates)).unwrap();
     World::open_with_source(folder, &biomes, source).unwrap()
 }
 
@@ -488,7 +488,7 @@ fn decoration_places_jigsaw_pieces_in_every_chunk_they_reach() {
             )
             .unwrap()
         } else {
-            decorated(generator, seed, &data).unwrap()
+            decorated(generator, seed, &data, Arc::clone(&templates)).unwrap()
         };
         let mut world = World::open_with_source(&folder, &biomes, source).unwrap();
         let chunk = load(&mut world, pos);

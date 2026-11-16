@@ -65,6 +65,10 @@ public final class IglooProbe {
                 entities.put(at, loaded);
             }
             int[] surrounding = input.getIntArray("surrounding").orElseThrow();
+            // Blocks that StructureTemplate.updateShapeAtEdge reshapes beside the target chunk. Vanilla's
+            // WorldGenRegion lets decoration write there; the neighbor's own case compares those blocks.
+            var edges = new HashMap<BlockPos, net.minecraft.world.level.block.state.BlockState>();
+            var edgeWrites = new CompoundTag();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
             var world = (WorldGenLevel) Proxy.newProxyInstance(IglooProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
@@ -91,6 +95,7 @@ public final class IglooProbe {
                     case "getBlockState" -> {
                         var at = (BlockPos) arguments[0];
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
+                        if (edges.containsKey(at)) yield edges.get(at);
                         int x = at.getX() - cx * 16 + 1, z = at.getZ() - cz * 16 + 1;
                         if (x < 0 || x >= 18 || z < 0 || z >= 18) {
                             int[] column = input.getCompoundOrEmpty("extra_columns").getIntArray(at.getX() + "," + at.getZ()).orElseThrow();
@@ -104,10 +109,18 @@ public final class IglooProbe {
                         if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) {
                             // IglooPieces seals the ladder hole without checking the chunk bounds. Its
                             // owning worker observes this same write on its own pass; compare that chunk there.
-                            if (arguments[1] != Blocks.SNOW_BLOCK.defaultBlockState()
-                                || !input.getCompoundOrEmpty("extra_columns").contains(at.getX() + "," + at.getZ()))
-                                throw new AssertionError("unexpected write outside target chunk");
-                            yield false;
+                            var state = (net.minecraft.world.level.block.state.BlockState) arguments[1];
+                            if (state == Blocks.SNOW_BLOCK.defaultBlockState()
+                                && input.getCompoundOrEmpty("extra_columns").contains(at.getX() + "," + at.getZ()))
+                                yield false;
+                            int x = at.getX() - cx * 16, z = at.getZ() - cz * 16;
+                            if (x >= -1 && x <= 16 && z >= -1 && z <= 16 && at.getY() >= -64 && at.getY() < 320) {
+                                edges.put(at, state);
+                                edgeWrites.putInt(at.getX() + "," + at.getY() + "," + at.getZ(), Block.getId(state));
+                                yield true;
+                            }
+                            throw new AssertionError("unexpected write outside target chunk in " + name + ": "
+                                    + arguments[1] + " at " + at + " over " + ((WorldGenLevel) proxy).getBlockState(at));
                         }
                         if (at.getY() < -64 || at.getY() >= 320) yield false;
                         var state = (net.minecraft.world.level.block.state.BlockState) arguments[1];
@@ -142,6 +155,7 @@ public final class IglooProbe {
                 post.add(entries);
             }
             result.put("PostProcessing", post);
+            result.put("edge_writes", edgeWrites);
             var saved = result.getCompoundOrEmpty("starts");
             for (var start : starts) {
                 var id = structures.getKey(start.getStructure()).toString();

@@ -816,14 +816,19 @@ and the owner **accepts it once**:
     snowy ground before the top's separate snow seal. The entrance height and template edge connections read the
     decoration region; `WORLD_SURFACE_WG` no longer changes after carvers, so the height does not depend on the
     order in which chunks decorate. Edge connections do: a chunk that decorates after its neighbor placed its part
-    of the igloo connects to those blocks instead of the terrain, as in vanilla. Workers clip writes to their own chunk, including the snow seal that vanilla
-    may write outside the target bounds. General block shape updates remain for later stages.
+    of the igloo connects to those blocks instead of the terrain, as in vanilla. The same edge updates reshape
+    the neighbor's side: iron bars that a neighbor already placed beside the chunk connect to the new template
+    block, or stop connecting, and decoration writes them into the neighbor as vanilla's generation region does,
+    so the result no longer depends on which chunk decorates first. Workers clip the template's own writes to
+    their chunk, including the snow seal that vanilla may write outside the target bounds. General block shape
+    updates remain for later stages.
     `igloo_parity` compares every block, all six heightmaps, saved records and block entity NBT in 126 synthetic
     chunks across two seeds and their replays after vanilla reloads Harpas records. Cases cover all rotations,
     igloos with and without basements, both shaft-depth extremes, slopes, water, negative coordinates, chunk
     boundaries and both vertical world limits. Four natural igloos across two seeds also run through workers
     that decorate without features, Anvil reloads and repeated placement; each worker chunk must match vanilla
-    given its neighbors either before or after their own decoration. A saved, decorated neighbor with an
+    given its neighbors either before or after their own decoration, including the neighboring blocks that
+    its edge updates reshape. A saved, decorated neighbor with an
     altered entrance column checks that its terrain controls the height. Pull requests use one seed. Entity spawning remains for M4; other structure types
     remain unplaced.
   - Chunk workers place ocean and beached shipwrecks in their chunk's decoration, in `surface_structures`

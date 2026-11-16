@@ -1153,14 +1153,19 @@ pub fn apply_biome_decoration_with_structures(
                     } else if id == "minecraft:igloo"
                         && let Some(mut chunk) = world.take(chunk_x, chunk_z)
                     {
+                        let mut neighbors = Vec::new();
                         let entities = start.place_igloo(
                             &mut chunk,
                             random,
                             templates,
                             &mut |x, z| world.heightmap(HeightmapType::WorldSurfaceWg, x, z),
                             &mut |x, y, z| world.block_state(x, y, z),
+                            &mut neighbors,
                         );
                         world.put_back(chunk);
+                        for ([x, y, z], state) in neighbors {
+                            world.set_block_state(x, y, z, state);
+                        }
                         set_block_entities(world, entities);
                     } else if matches!(
                         id,

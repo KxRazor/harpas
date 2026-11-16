@@ -131,6 +131,18 @@ impl Reference {
         run(&mut javac);
     }
 
+    /// The reference server itself, without its console window, to be run in `dir`. Not every test uses it.
+    #[allow(dead_code)]
+    pub fn server(&self, dir: &Path) -> Command {
+        let mut command = Command::new("java");
+        command
+            .current_dir(dir)
+            .args(["-Xms256M", "-Xmx2G", "-cp"])
+            .arg(&self.classpath)
+            .args(["net.minecraft.server.Main", "nogui"]);
+        command
+    }
+
     /// Runs a compiled class to completion.
     pub fn java(&self, class: &str, args: impl IntoIterator<Item = String>) {
         run(Command::new("java")

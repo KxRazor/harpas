@@ -31,6 +31,15 @@ use crate::world::{ChunkGenerator, ChunkPos, ChunkSource, ChunkStorage, Generate
 
 const CARVERS: &str = "minecraft:carvers";
 const FEATURES: &str = "minecraft:features";
+/// Vanilla's status after `features`. It needs nothing of the neighbors, so the decorations of neighbors that
+/// have not decorated yet still write into the chunk.
+const INITIALIZE_LIGHT: &str = "minecraft:initialize_light";
+const LIGHT: &str = "minecraft:light";
+const FULL: &str = "minecraft:full";
+
+/// Vanilla's statuses from `light` on. `light` needs every neighbor at `initialize_light`, so a chunk saved at
+/// one of them is final: every chunk around it has decorated.
+const FINAL: [&str; 3] = [LIGHT, "minecraft:spawn", FULL];
 
 /// Vanilla's proto-chunk statuses before `carvers`. A chunk saved at one of them has received no decoration
 /// writes, so it is generated again from the seed.
@@ -72,8 +81,7 @@ pub fn decorated(
 }
 
 /// Like [`decorated`], but each step also places the structures whose pieces reach the chunk, before its
-/// features, as vanilla's decoration does. Only jigsaw structures, buried treasure, swamp huts and ocean
-/// monuments are placed here so far; the generator places the others after carvers.
+/// features, as vanilla's decoration does.
 pub fn decorated_with_structures(
     generator: Arc<ChunkGenerator>,
     starts: Arc<StartSource>,
@@ -379,7 +387,11 @@ impl Decorator {
     ) -> io::Result<Option<Box<Proto>>> {
         let saved = storage.read(pos)?;
         let (chunk, decorated) = match saved {
-            Some(nbt) if status(&nbt) == Some(FEATURES) => {
+            Some(nbt) if status(&nbt).is_some_and(|status| FINAL.contains(&status)) && target => {
+                return Ok(None);
+            }
+            // Saved again at `features`, so that vanilla initializes its light from the blocks decoration left.
+            Some(nbt) if matches!(status(&nbt), Some(FEATURES | INITIALIZE_LIGHT)) => {
                 if target {
                     return Ok(None);
                 }
@@ -586,7 +598,10 @@ fn take(state: &mut State, positions: &[ChunkPos]) -> Vec<(ChunkPos, Box<Proto>)
 
 impl ChunkSource for Decorator {
     fn resumes(&self, status: &str) -> bool {
-        status == CARVERS || status == FEATURES || EARLIER.contains(&status)
+        status == CARVERS
+            || status == FEATURES
+            || status == INITIALIZE_LIGHT
+            || EARLIER.contains(&status)
     }
 
     fn generate(

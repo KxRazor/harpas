@@ -256,7 +256,7 @@ vanilla for the same seed.
           feature elements written into the region, compared in 384 chunks of nine real starts and their
           neighbors, sculk patches included (`jigsaw_chunk_parity`).
     - [ ] Remaining capped delegates.
-  - [ ] Structures through the complete FEATURES schedule and full resumption.
+  - [x] Structures through the complete FEATURES schedule and full resumption.
     - [x] Structures placed by each decoration step before its features, with their own seeds, for every start
           that reaches the chunk; jigsaw structures run there (`jigsaw_chunk_parity`, `feature_worker_parity`).
     - [x] Buried treasure in `underground_structures`, saving its moved piece with the chunk's start
@@ -273,7 +273,9 @@ vanilla for the same seed.
           (`shipwreck_parity`, `ocean_ruin_parity`, `ruined_portal_parity`).
     - [x] Mineshafts in `underground_structures` after buried treasure, and strongholds in `surface_structures`,
           leaving carvers to adapt the terrain only (`mineshaft_parity`, `stronghold_parity`).
-    - [ ] Full resumption from `features`.
+    - [x] Full resumption from `features`: chunks vanilla saved at `initialize_light`, whose neighbors can still
+          decorate, are resumed with the others, and chunks from `light` on are final, from a world the server
+          itself generated and completed again (`world_edge_parity`).
   - [x] Where structures may start: structure sets, random spread and concentric ring placements, frequency
         reduction and exclusion zones, in `harpas-worldgen`.
   - [x] Structure starts and references for buried treasure, desert pyramids, jungle temples and swamp huts, with

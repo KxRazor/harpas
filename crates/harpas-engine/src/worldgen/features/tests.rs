@@ -466,6 +466,51 @@ fn a_new_session_resumes_saved_proto_chunks_and_final_chunks() {
     assert!(counts.keys().all(|pos| pos.x == 3));
 }
 
+/// The edge of a world vanilla generated: a full chunk, the ring around it at `initialize_light`, which vanilla
+/// lights only once every neighbor has decorated, and the next ring at `carvers`.
+#[test]
+fn the_edge_of_a_vanilla_world_resumes_its_chunks_at_initialize_light() {
+    let folder = Folder::new();
+    let storage = folder.storage();
+    let center = ChunkPos { x: 0, z: 0 };
+    let vanilla = expected(&square(center, 2), &square(center, 1));
+    for pos in square(center, 2) {
+        let ring = (pos.x - center.x).abs().max((pos.z - center.z).abs());
+        let mut chunk = into_anvil_with_mask(
+            vanilla[&pos].clone(),
+            CarvingMask::new(-64, 384).to_raw_data(),
+        )
+        .unwrap();
+        let saved = [FULL, INITIALIZE_LIGHT, CARVERS][ring as usize];
+        chunk.rest.insert("Status", saved);
+        storage.write(&[(pos, &chunk)]).unwrap();
+    }
+
+    let (decorator, counts) = decorator(CAPACITY);
+    assert!(decorator.resumes(INITIALIZE_LIGHT));
+    for later in [LIGHT, "minecraft:spawn", FULL] {
+        assert!(!decorator.resumes(later), "{later} chunks are final");
+    }
+    // Next to the edge, the decorations write into the chunks at `initialize_light`, which are not decorated again.
+    let outside = ChunkPos { x: 2, z: 0 };
+    let edge = ChunkPos { x: 1, z: 0 };
+    let generated = decorator.complete(outside, &storage).unwrap();
+    let edge_chunk = decorator.complete(edge, &storage).unwrap();
+    assert!(edge_chunk.changed);
+    assert_eq!(status(&edge_chunk.chunk.rest), Some(FEATURES));
+
+    let mut decorated = square(center, 1);
+    decorated.extend(square(outside, 1).into_iter().filter(|pos| pos.x >= 2));
+    let blocks = expected(&square(edge, 3), &decorated);
+    assert_blocks(&generated.chunk, &blocks[&outside]);
+    assert_blocks(&edge_chunk.chunk, &blocks[&edge]);
+    let counts = counts.lock().unwrap();
+    assert!(
+        counts.keys().all(|pos| pos.x >= 3),
+        "only chunks the world did not have are generated: {counts:?}"
+    );
+}
+
 #[test]
 fn a_failed_generation_releases_its_chunk() {
     let folder = Folder::new();

@@ -955,6 +955,11 @@ and the owner **accepts it once**:
   - A saved chunk at `carvers` or `features`, written by Harpas or by vanilla, is resumed: its missing neighbors
     are generated and the chunks around it decorate, so a world generated before this setting existed gets its
     ores where players go. Earlier vanilla statuses have received no decoration writes and are generated again.
+  - The edge of a world vanilla generated also holds chunks at `minecraft:initialize_light`. They have decorated,
+    but vanilla's step to them needs nothing of the neighbors, so neighbors that have not decorated still write
+    into them: they are resumed like chunks at `features`, and saved at `features` once they have, so that vanilla
+    initializes their light again from the blocks decoration left. Vanilla's step to `minecraft:light` needs every
+    neighbor at `initialize_light`, so a chunk saved at `light`, `spawn` or `full` is final and used as saved.
   - Decorations near each other run in request order, as in vanilla: a vein ore that reaches a block another
     vein replaced already can use its randomness differently. A chunk is compared with vanilla decorating its
     3x3 chunks west to east, and north to south within each column, as the workers do for a single request.

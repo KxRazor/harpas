@@ -12,11 +12,8 @@ mod reference;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use harpas_anvil::{Chunk, dimension_dir, read_chunk, read_world_seed, region_of, write_chunks};
@@ -24,106 +21,12 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
 use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{StructureTemplates, WorldgenData};
-use reference::Reference;
+use reference::{Reference, Server, assert_no_chunk_errors};
 
 const SEED: i64 = -4_172_144_997_902_289_642;
 /// How far around the spawn chunk to look for the chunks vanilla saved.
 const SEARCH: i32 = 24;
 const TIMEOUT: Duration = Duration::from_secs(300);
-
-/// The reference server, with its console read on another thread.
-struct Server {
-    child: Child,
-    lines: Receiver<String>,
-    log: Vec<String>,
-}
-
-impl Server {
-    fn start(reference: &Reference, dir: &Path) -> Self {
-        let mut child = reference
-            .server(dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("start the reference server");
-        let stdout = child.stdout.take().unwrap();
-        let (send, lines) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if send.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut server = Self {
-            child,
-            lines,
-            log: Vec::new(),
-        };
-        server.wait_for("Done (");
-        server
-    }
-
-    fn command(&mut self, command: &str) {
-        let stdin = self.child.stdin.as_mut().unwrap();
-        writeln!(stdin, "{command}").unwrap();
-        stdin.flush().unwrap();
-    }
-
-    fn wait_for(&mut self, text: &str) {
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.lines.recv_timeout(left) {
-                Ok(line) => {
-                    let found = line.contains(text);
-                    self.log.push(line);
-                    if found {
-                        return;
-                    }
-                }
-                Err(_) => panic!(
-                    "the reference server did not log {text:?}:\n{}",
-                    self.log.join("\n")
-                ),
-            }
-        }
-    }
-
-    /// Stops the server, which saves every chunk, and returns its console.
-    fn stop(mut self) -> String {
-        self.command("stop");
-        let deadline = Instant::now() + TIMEOUT;
-        while self.child.try_wait().unwrap().is_none() {
-            assert!(
-                Instant::now() < deadline,
-                "the reference server did not stop"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        self.log.extend(self.lines.try_iter());
-        self.log.join("\n")
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn assert_no_chunk_errors(log: &str) {
-    for error in [
-        "Failed to load chunk",
-        "Couldn't load chunk",
-        "Recovering chunk",
-        "Exception",
-    ] {
-        assert!(!log.contains(error), "vanilla logged {error:?}:\n{log}");
-    }
-}
 
 fn status(chunk: &Compound) -> &str {
     match chunk.get("Status") {
@@ -418,15 +321,8 @@ fn complete(
             .collect();
         ready += 1;
         server.command(&format!("execute{checks} run say ready {ready}"));
-        let wait = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < wait {
-            if let Ok(line) = server.lines.recv_timeout(Duration::from_millis(100)) {
-                let found = line.contains("ready ");
-                server.log.push(line);
-                if found {
-                    break 'loaded;
-                }
-            }
+        if server.poll("ready ", Duration::from_secs(1)) {
+            break 'loaded;
         }
         assert!(Instant::now() < deadline, "vanilla did not load the area");
     }

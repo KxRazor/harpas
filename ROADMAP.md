@@ -378,7 +378,9 @@ vanilla for the same seed.
 - [x] Shared Java chunk encoding cache: complete compressed columns shared between viewers, bounded by
       retained bytes and entry count, invalidated by chunk/light snapshots and compression settings, with
       concurrent-viewer, content-change, reload and cipher-stream tests.
-- [ ] Round-trip test: vanilla → Harpas → vanilla with no differences.
+- [x] Round-trip test: vanilla → Harpas → vanilla with no differences: every chunk of a vanilla world, at every
+      status, rewritten whole by the server, holds what vanilla saved, and vanilla reopens it without chunk errors
+      (`round_trip_parity`).
 - [x] Older and newer world detection with clear errors.
 
 ## M4 — Vanilla gameplay (0.3.0)

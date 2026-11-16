@@ -2,9 +2,12 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
 
 pub struct TempDir(pub PathBuf);
 
@@ -224,4 +227,129 @@ fn run(command: &mut Command) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// How long the reference server may take to start or stop.
+const SERVER_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The reference server running as a server, with its console read on another thread. Not every test uses it.
+#[allow(dead_code)]
+pub struct Server {
+    child: Child,
+    lines: Receiver<String>,
+    log: Vec<String>,
+}
+
+#[allow(dead_code)]
+impl Server {
+    /// Starts the server in `dir` and waits until it is ready.
+    pub fn start(reference: &Reference, dir: &Path) -> Self {
+        let mut child = reference
+            .server(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("start the reference server");
+        let stdout = child.stdout.take().unwrap();
+        let (send, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut server = Self {
+            child,
+            lines,
+            log: Vec::new(),
+        };
+        server.wait_for("Done (");
+        server
+    }
+
+    /// Sends a console command.
+    pub fn command(&mut self, command: &str) {
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{command}").unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// The last lines the console logged.
+    pub fn tail(&self, lines: usize) -> String {
+        self.log[self.log.len().saturating_sub(lines)..].join("\n")
+    }
+
+    /// Waits up to `timeout` for the console to log `text`; returns whether it did.
+    pub fn poll(&mut self, text: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while let Ok(line) = self
+            .lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            let found = line.contains(text);
+            self.log.push(line);
+            if found {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Waits until the console logs `text`.
+    pub fn wait_for(&mut self, text: &str) {
+        let deadline = Instant::now() + SERVER_TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.lines.recv_timeout(left) {
+                Ok(line) => {
+                    let found = line.contains(text);
+                    self.log.push(line);
+                    if found {
+                        return;
+                    }
+                }
+                Err(_) => panic!(
+                    "the reference server did not log {text:?}:\n{}",
+                    self.log.join("\n")
+                ),
+            }
+        }
+    }
+
+    /// Stops the server, which saves every chunk, and returns its console.
+    pub fn stop(mut self) -> String {
+        self.command("stop");
+        let deadline = Instant::now() + SERVER_TIMEOUT;
+        while self.child.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the reference server did not stop"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        self.log.extend(self.lines.try_iter());
+        self.log.join("\n")
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Fails if vanilla logged trouble reading or saving chunks. Not every test uses it.
+#[allow(dead_code)]
+pub fn assert_no_chunk_errors(log: &str) {
+    for error in [
+        "Failed to load chunk",
+        "Couldn't load chunk",
+        "Recovering chunk",
+        "Exception",
+    ] {
+        assert!(!log.contains(error), "vanilla logged {error:?}:\n{log}");
+    }
 }

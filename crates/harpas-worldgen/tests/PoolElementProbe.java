@@ -87,7 +87,7 @@ public final class PoolElementProbe {
                     case "getLevel" -> level;
                     case "isClientSide" -> false;
                     case "getRandom" -> net.minecraft.util.RandomSource.create(0);
-                    case "blockUpdated", "updateNeighborsAt", "scheduleTick", "addParticle", "playSound", "gameEvent" -> null;
+                    case "blockUpdated", "updateNeighborsAt", "scheduleTick", "addParticle", "playSound", "gameEvent", "levelEvent" -> null;
                     case "getMinY" -> -64;
                     case "getMaxY" -> 319;
                     case "getSeed" -> seed;

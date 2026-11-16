@@ -38,6 +38,7 @@ pub mod placement;
 pub mod pointed_dripstone;
 pub mod processor;
 pub mod root_system;
+pub mod sculk;
 pub mod seed;
 pub mod shape_update;
 pub mod spline;

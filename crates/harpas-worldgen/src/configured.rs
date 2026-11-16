@@ -122,6 +122,8 @@ pub enum CompiledFeature {
     DesertWell,
     /// `minecraft:fossil`.
     Fossil(Box<crate::fossil::Fossil>),
+    /// `minecraft:sculk_patch`.
+    SculkPatch(Box<crate::sculk::SculkPatch>),
     /// `minecraft:monster_room`.
     MonsterRoom,
     /// `minecraft:geode`.
@@ -462,6 +464,9 @@ pub fn place_feature<W: FeatureWorld, R: RandomSource>(
         CompiledFeature::DesertWell => place_desert_well(world, random, origin),
         CompiledFeature::Fossil(fossil) => {
             crate::fossil::place_fossil(world, fossil, random, origin)
+        }
+        CompiledFeature::SculkPatch(patch) => {
+            crate::sculk::place_sculk_patch(world, patch, random, origin)
         }
         CompiledFeature::MonsterRoom => place_monster_room(world, random, origin),
         CompiledFeature::Geode(geode) => place_geode(world, geode, random, origin),
@@ -1022,6 +1027,12 @@ impl<'a> FeatureCompiler<'a> {
             | "minecraft:coral_claw"
             | "minecraft:coral_mushroom") => CompiledFeature::Coral(Box::new(self.coral(kind)?)),
             "minecraft:desert_well" => CompiledFeature::DesertWell,
+            "minecraft:sculk_patch" => {
+                match crate::sculk::SculkPatch::compile(name, config, self.data)? {
+                    Some(patch) => CompiledFeature::SculkPatch(Box::new(patch)),
+                    None => return Ok(None),
+                }
+            }
             // Fossils place templates, which only a compiler given the owner's templates can read.
             "minecraft:fossil" => match &self.templates {
                 Some(templates) => {

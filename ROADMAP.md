@@ -115,7 +115,7 @@ vanilla for the same seed.
         (surface rules, conditions, badlands bands/pillars and frozen ocean icebergs).
   - [x] Cave and canyon carvers, chunk heightmaps, `level-seed` handling and worker-pool chunk generation in
         `harpas-engine`.
-- [ ] Features and structures.
+- [x] Features and structures.
   - [x] Feature data: `worldgen/configured_feature`, `worldgen/placed_feature` and each biome's `features`
         lists, with `minecraft:ore` configurations (size, discard chance, rule tests and target states) and the
         `count`, `in_square`, `height_range` and `biome` placement modifiers. Other types keep their JSON for

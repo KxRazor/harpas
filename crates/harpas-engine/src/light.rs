@@ -1,15 +1,17 @@
 //! The light of generated chunks, computed on worker threads.
 //!
-//! A chunk generated through carvers or features is saved without light. Its light is computed once, from
-//! its blocks and its eight neighbors, as soon as they are loaded, and shared by every player it is sent to.
+//! A chunk generated through carvers or features arrives without light. Its light is computed once, from its
+//! blocks and its eight neighbors, as soon as they are loaded, and shared by every player it is sent to. A final
+//! chunk that ran FEATURES is then saved with it, at vanilla's `light` status.
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use harpas_anvil::Chunk;
+use harpas_anvil::{Chunk, ChunkSection};
 use harpas_core::chunk::Section;
+use harpas_core::nbt::{Compound, Nbt};
 use harpas_worldgen::{LightWorld, light_chunk};
 
 use crate::player::NEIGHBORS;
@@ -119,6 +121,52 @@ pub fn light(position: ChunkPos, chunk: &Chunk, neighbors: &[Option<Arc<Chunk>>;
     }
 }
 
+/// The bytes of a saved layer: four bits per block, as vanilla's `DataLayer` stores them.
+fn layer_bytes(layer: &Layer) -> Vec<i8> {
+    match layer {
+        Layer::Uniform(level) => vec![(level << 4 | level) as i8; LAYER_BYTES],
+        Layer::Values(values) => values.iter().map(|&byte| byte as i8).collect(),
+    }
+}
+
+const LAYER_BYTES: usize = 2048;
+
+/// `chunk` at vanilla's `light` status, with `light` in its sections, as vanilla saves a chunk it has lit.
+///
+/// A sky layer that is all fifteen is left out, as vanilla leaves it out, and every block layer is written, so
+/// the chunk is sent with the same light whether it was computed or read back. `isLightOn` tells vanilla that
+/// the light is correct, so it keeps it instead of lighting the chunk again.
+pub fn with_light(chunk: &Chunk, light: &Light) -> Chunk {
+    let mut lit = chunk.clone();
+    lit.rest.insert("Status", "minecraft:light");
+    lit.rest.insert("isLightOn", Nbt::Byte(1));
+    for section in &light.sections {
+        let Ok(y) = i8::try_from(section.y) else {
+            continue;
+        };
+        let index = match lit.sections.iter().position(|saved| saved.y == y) {
+            Some(index) => index,
+            None => {
+                lit.sections.push(ChunkSection {
+                    y,
+                    section: None,
+                    rest: Compound::new(),
+                });
+                lit.sections.len() - 1
+            }
+        };
+        let rest = &mut lit.sections[index].rest;
+        if section.sky == Layer::Uniform(15) {
+            rest.remove("SkyLight");
+        } else {
+            rest.insert("SkyLight", Nbt::ByteArray(layer_bytes(&section.sky)));
+        }
+        rest.insert("BlockLight", Nbt::ByteArray(layer_bytes(&section.block)));
+    }
+    lit.sections.sort_by_key(|section| section.y);
+    lit
+}
+
 /// The nine chunks of a light volume in the order of [`Volume::sections`].
 fn volume_chunks<'a>(
     chunk: &'a Chunk,
@@ -203,5 +251,76 @@ impl Drop for Lighter {
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lit_chunk_is_saved_at_light_with_every_layer_but_full_sky() {
+        let states = harpas_core::block::block_states();
+        let blocks = harpas_core::chunk::PalettedContainer::filled(
+            harpas_core::chunk::Strategy::block_states(states.global_bits()),
+            states.default_state("minecraft:stone").unwrap(),
+        );
+        let biomes = harpas_core::chunk::PalettedContainer::filled(
+            harpas_core::chunk::Strategy::biomes(1),
+            0,
+        );
+        let mut rest = Compound::new();
+        rest.insert("Status", "minecraft:features");
+        let mut section_rest = Compound::new();
+        section_rest.insert("SkyLight", Nbt::ByteArray(vec![1; LAYER_BYTES]));
+        let chunk = Chunk {
+            sections: vec![ChunkSection {
+                y: 1,
+                section: Some(Section::new(blocks, biomes)),
+                rest: section_rest,
+            }],
+            rest,
+        };
+        let mut values = vec![0x21_u8; LAYER_BYTES];
+        values[7] = 0xf0;
+        let sections = (-5..=20)
+            .map(|y| SectionLight {
+                y,
+                sky: match y {
+                    ..0 => Layer::Uniform(0),
+                    0 => Layer::Values(values.clone().into()),
+                    _ => Layer::Uniform(15),
+                },
+                block: if y == 20 {
+                    Layer::Uniform(3)
+                } else {
+                    Layer::Uniform(0)
+                },
+            })
+            .collect();
+        let lit = with_light(&chunk, &Light { sections });
+        assert_eq!(lit.rest.get("Status"), Some(&Nbt::from("minecraft:light")));
+        assert_eq!(lit.rest.get("isLightOn"), Some(&Nbt::Byte(1)));
+        let ys: Vec<_> = lit.sections.iter().map(|section| section.y).collect();
+        assert_eq!(ys, (-5..=20).collect::<Vec<i8>>());
+        let at = |y: i8| &lit.sections[(y + 5) as usize];
+        assert!(at(-5).section.is_none() && at(20).section.is_none());
+        assert_eq!(at(1).section, chunk.sections[0].section);
+        assert_eq!(
+            at(-5).rest.get("SkyLight"),
+            Some(&Nbt::ByteArray(vec![0; LAYER_BYTES]))
+        );
+        let packed: Vec<_> = values.iter().map(|&byte| byte as i8).collect();
+        assert_eq!(at(0).rest.get("SkyLight"), Some(&Nbt::ByteArray(packed)));
+        // Full sky is left out, also where an earlier save had a layer.
+        assert_eq!(at(1).rest.get("SkyLight"), None);
+        assert_eq!(
+            at(20).rest.get("BlockLight"),
+            Some(&Nbt::ByteArray(vec![0x33; LAYER_BYTES]))
+        );
+        assert_eq!(
+            at(1).rest.get("BlockLight"),
+            Some(&Nbt::ByteArray(vec![0; LAYER_BYTES]))
+        );
     }
 }

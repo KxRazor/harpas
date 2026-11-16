@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use harpas_anvil::{Chunk, Region};
-use harpas_core::nbt::{Compound, Nbt};
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkReader, ChunkState, World};
 use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{
@@ -285,7 +285,7 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
             panic!("{pos:?}: reloaded chunk");
         };
         assert_eq!(
-            chunk.to_nbt(&biomes),
+            without_light(chunk.to_nbt(&biomes)),
             final_chunks[&pos],
             "Anvil reload {pos:?}"
         );
@@ -364,4 +364,25 @@ fn wait(world: &mut World, positions: &[ChunkPos]) {
         assert!(Instant::now() < deadline, "chunks did not load");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// A reloaded chunk as the logic thread held it before saving it with its light: at `features`, without
+/// `isLightOn`, the light of its sections or the sections saved only for their light.
+fn without_light(mut chunk: Compound) -> Compound {
+    if chunk.remove("isLightOn").is_some() {
+        assert_eq!(chunk.get("Status"), Some(&Nbt::from("minecraft:light")));
+        chunk.insert("Status", "minecraft:features");
+    }
+    if let Some(Nbt::List(List::Compound(sections))) = chunk.remove("sections") {
+        let sections = sections
+            .into_iter()
+            .filter_map(|mut section| {
+                section.remove("SkyLight");
+                section.remove("BlockLight");
+                (section.len() > 1).then_some(section)
+            })
+            .collect();
+        chunk.insert("sections", Nbt::List(List::Compound(sections)));
+    }
+    chunk
 }

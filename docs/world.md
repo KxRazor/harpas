@@ -805,30 +805,34 @@ and the owner **accepts it once**:
     given its neighbors either before or after their own decoration. A saved, decorated neighbor with an
     altered entrance column checks that its terrain controls the height. Pull requests use one seed. Entity spawning remains for M4; other structure types
     remain unplaced.
-  - Ocean and beached shipwreck blocks run on chunk workers using the owner's 20 templates and their
+  - Chunk workers place ocean and beached shipwrecks in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_prepared_shipwreck`), using the owner's 20 templates and their
     palettes. Height sampling uses the unrotated footprint at the template origin, even when the hull turns
     around its pivot. Ocean pieces use the average `OCEAN_FLOOR_WG` height; beached pieces use the lowest
     `WORLD_SURFACE_WG` height, minus half the template height and a bounded burial draw. The adjusted origin
     and `height_adjusted` flag are saved, so a reloaded piece does not choose its height again. A separate
-    bounded cache shares adjusted starts for up to 4,096 source chunks. Workers choose the height with
+    bounded cache shares adjusted starts for up to 4,096 source chunks. The decoration's start source chooses the
+    height with
     the source chunk's random stream before placing any intersection, retaining the burial draw in that
     source chunk's loot stream. Neighboring workers reuse the chosen height and skip that draw, as vanilla
     does after its first piece pass. This fixes a source-first schedule; a vanilla world that first places
     another intersecting chunk can choose a different burial offset and loot seeds.
     Placement retains water and fills liquid containers from source water above or beside them, recomputes
     stair, fence and door shapes (including existing blocks beside the template), and assigns chest loot tables without rolling
-    items. Workers read saved neighboring terrain before regenerating missing columns, and clip writes to
-    the target chunk. Edge shape comparisons use pre-placement neighbors; general block updates and the
-    complete feature-stage schedule remain for later stages.
+    items. Outside the target chunk, heights and blocks come from the terrain before decoration, which the start
+    source reads from saved chunks or generates again through carvers: the template can reach beyond the
+    decoration region, and its blocks then do not depend on the order in which chunks decorate. Writes are
+    clipped to the target chunk. General block updates remain for later stages.
     `shipwreck_parity` compares every block, all six heightmaps, chest NBT, saved records and postprocessing
     in 656 synthetic chunks across two seeds, plus their replays after vanilla reloads Harpas records.
     Cases cover every template and rotation, multiple palettes, slopes, water, negative coordinates, chunk
     boundaries and both vertical world limits. Five natural shipwrecks across two seeds also run through
-    workers, reversed worker request order, Anvil reloads and repeated placement, including a chunk shared
-    with buried treasure. Two saved
+    workers that decorate without features, reversed worker request order, Anvil reloads and repeated
+    placement, including a chunk shared with buried treasure. Two saved
     neighbor cases check altered ocean-floor columns and an already adjusted origin. Pull requests use one
     seed; the treasure overlap is included in the full sample.
-  - Cold and warm ocean ruin blocks run on chunk workers using the owner's 48 templates. Each intersecting
+  - Chunk workers place cold and warm ocean ruins in their chunk's decoration, in `surface_structures`
+    (`StructureStart::place_ocean_ruin`), using the owner's 48 templates. Each intersecting
     piece samples `OCEAN_FLOOR_WG` at its origin and checks support across its rotated footprint before
     placement. The fitted origin and piece bounds are saved; a repeated pass fits the piece again, as vanilla
     does. Cold ruins overlay their brick, cracked and mossy pieces in order, removing block entities when a
@@ -844,11 +848,13 @@ and the owner **accepts it once**:
     limits, including repeated placement after
     vanilla reloads Harpas records. Additional kelp cases compare fitting and metadata, allowing only the
     deferred conversion of neighboring kelp plants to randomized tips; general plant shape updates belong
-    to gameplay. Natural cold and warm ruins also run through workers, reversed request order, Anvil reloads
-    and repeated placement. Saved-neighbor cases verify fitting against saved terrain and piece records.
-    Workers resolve missing neighboring terrain through carvers and prefer saved blocks;
-    comparisons use those pre-placement neighbors, not the complete feature-stage schedule.
-  - Overworld ruined portal blocks run on chunk workers using the owner's 13 templates. Rotations and
+    to gameplay. Natural cold and warm ruins also run through workers that decorate without features, reversed
+    request order, Anvil reloads and repeated placement. Saved-neighbor cases verify fitting against saved
+    terrain and piece records, and that the target is saved at `carvers` without ruin blocks. Like shipwrecks,
+    ruins read the terrain before decoration outside the target chunk, from saved blocks or generated again
+    through carvers.
+  - Chunk workers place Overworld ruined portals in their chunk's decoration, in `surface_structures`, using
+    the owner's 13 templates. Rotations and
     front/back mirrors preserve each template's pivot. The saved `Properties` and `VerticalPlacement`
     rebuild the positional processors: gold removal, cold/ocean lava replacement, magma substitutions,
     block ageing and mossiness, protected blocks, lava submersion and optional blackstone replacements.
@@ -858,9 +864,9 @@ and the owner **accepts it once**:
     world's vertical bounds skips the pass, as vanilla does. Replays also update existing vines whose
     supporting blocks were cleared.
     A portal's owning pass writes the entire piece and surrounding
-    terrain, including positions outside the saved piece bounds. Workers prepare this complete sparse
-    result against carved or saved terrain and share up to 256 source chunks through a bounded cache,
-    applying only their target chunk's writes. The normal structure references retain vanilla's piece
+    terrain, including positions outside the saved piece bounds. The decoration's start source prepares this
+    complete sparse result against carved or saved terrain and shares up to 256 source chunks through a
+    bounded cache; each chunk's decoration applies only its own writes, in the portal's step. The normal structure references retain vanilla's piece
     bounds; spread-only chunks receive blocks without adding a reference to the portal. Saved neighbors
     restore the template, origin, pivot, rotation, mirror and processor properties before placement.
     `ruined_portal_parity` compares every block, all six heightmaps, chest NBT, saved records and
@@ -887,8 +893,8 @@ and the owner **accepts it once**:
     `mineshaft_parity` compares every block, all six heightmaps, postprocessing, saved records and spawner
     data in 558 synthetic chunks and their replays, including both types, all rotations, multiple references
     and reference-set growth, partial floors, liquids, blocked biomes, chunk edges and vertical limits.
-    Natural worker chunks across three seeds include a chunk shared with buried treasure, reversed requests
-    and Anvil reloads. A saved-neighbor case checks piece records and a changed biome across a chunk edge.
+    Natural worker chunks across three seeds include a chunk shared with buried treasure, which these chunks
+    saved at `carvers` do not hold yet (it is placed in decoration), reversed requests and Anvil reloads. A saved-neighbor case checks piece records and a changed biome across a chunk edge.
     These are individual placement-pass comparisons; the full FEATURES schedule and resumption remain pending.
   - Stronghold blocks run on chunk workers using the existing saved piece layout, in piece order. Corridors,
     prisons, three- and five-way crossings, both stair types, filler corridors and short/tall libraries retain
@@ -939,9 +945,8 @@ and the owner **accepts it once**:
     final chunk the logic thread has not saved yet is never generated again. A crash loses the proto-chunks in
     memory; chunks generated again next to decorated ones that were saved can then differ at the border.
 - **Parallel:** missing chunks are generated on the bounded worker pool and saved on unload or shutdown with
-  status `minecraft:carvers`, so vanilla can continue the later stages. Buried treasure, swamp huts, ocean
-  monuments, desert pyramids, jungle temples, igloos and jigsaw structures are placed in decoration, so a chunk
-  saved at `carvers` has none of their blocks yet; a hut's witch and cat are left for vanilla or M4. Pyramid and
+  status `minecraft:carvers`, so vanilla can continue the later stages. Every structure but mineshafts and
+  strongholds is placed in decoration, so a chunk saved at `carvers` has none of their blocks yet; a hut's witch and cat are left for vanilla or M4. Pyramid and
   temple container flags are saved as vanilla saves them, since a decorated chunk is never placed again.
   Igloo pass replays also match vanilla, including its height changing when the existing roof raises the
   entrance's `WORLD_SURFACE_WG` height. Shipwreck replays retain their saved height. A beached replay skips

@@ -21,7 +21,7 @@ use crate::data::{
 };
 use crate::generator::{GeneratedChunk, HeightmapType};
 use crate::placement::{CompiledModifier, compile_placement, place_positions};
-use crate::structure::StructureStart;
+use crate::structure::{RuinedPortalBlocks, StructureStart};
 use crate::surface::resolve_block_state;
 use crate::template::StructureTemplates;
 
@@ -979,11 +979,27 @@ pub struct DecorationStructures<'a> {
     pub data: &'a WorldgenData,
     /// The owner's templates.
     pub templates: &'a StructureTemplates,
-    /// The starts whose pieces reach the chunk (its structure references). Jigsaw, buried treasure, swamp hut,
-    /// ocean monument, jungle temple, desert pyramid and igloo starts place blocks here so far; the other
-    /// structures are placed after carvers. Placement can change
+    /// The starts whose pieces reach the chunk (its structure references). Mineshafts and strongholds are still
+    /// placed after carvers; the other structures place blocks here. Placement can change
     /// a start, as a buried treasure moves its piece to its chest and a swamp hut saves its ground height.
     pub starts: &'a mut [StructureStart],
+    /// The terrain around the chunk before decoration, which shipwrecks and ocean ruins read outside the chunk so
+    /// that their blocks do not depend on the order in which chunks decorate. Without it they read the region.
+    pub terrain: Option<DecorationTerrain<'a>>,
+    /// Ruined portals placed beforehand against the terrain before decoration, by structure, for each portal
+    /// whose blocks reach the chunk; its step applies the chunk's part.
+    pub portals: &'a [(&'a str, &'a RuinedPortalBlocks)],
+    /// The shipwrecks of this chunk whose shared height was fixed for it beforehand, so that their placement still
+    /// draws the burial offset first, as their source chunk does in vanilla.
+    pub initial_shipwreck_burials: &'a [String],
+}
+
+/// The terrain around a chunk before its decoration.
+pub struct DecorationTerrain<'a> {
+    /// A block outside the chunk.
+    pub block_at: &'a dyn Fn(i32, i32, i32) -> u32,
+    /// A heightmap's height outside the chunk.
+    pub height_at: &'a dyn Fn(HeightmapType, i32, i32) -> i32,
 }
 
 /// Decorates one chunk with its structures: vanilla's `applyBiomeDecoration`, in which each step places its
@@ -1001,8 +1017,12 @@ pub fn apply_biome_decoration_with_structures(
         data,
         templates,
         starts,
+        terrain,
+        portals,
+        initial_shipwreck_burials,
     } = structures;
-    let (data, templates) = (*data, *templates);
+    let (data, templates, portals, burials) =
+        (*data, *templates, *portals, *initial_shipwreck_burials);
     // Only the Overworld decorates so far; monuments fill their rooms with water up to its sea level.
     let sea_level = data
         .noise_settings
@@ -1027,6 +1047,13 @@ pub fn apply_biome_decoration_with_structures(
             ids.sort_unstable();
             for (structure_index, id) in ids.into_iter().enumerate() {
                 random.set_feature_seed(decoration, structure_index as i32, step as i32);
+                for (_, plan) in portals.iter().filter(|(portal, _)| *portal == id) {
+                    if let Some(mut chunk) = world.take(chunk_x, chunk_z) {
+                        let entities = plan.place_in_chunk(&mut chunk);
+                        world.put_back(chunk);
+                        set_block_entities(world, entities);
+                    }
+                }
                 for start in starts.iter_mut().filter(|start| start.structure == id) {
                     if start.is_jigsaw() {
                         start.place_jigsaw_in_region(
@@ -1074,6 +1101,56 @@ pub fn apply_biome_decoration_with_structures(
                             &mut |x, z| world.heightmap(HeightmapType::WorldSurfaceWg, x, z),
                             &mut |x, y, z| world.block_state(x, y, z),
                         );
+                        world.put_back(chunk);
+                        set_block_entities(world, entities);
+                    } else if matches!(
+                        id,
+                        "minecraft:ocean_ruin_cold" | "minecraft:ocean_ruin_warm"
+                    ) && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        let entities = match terrain {
+                            Some(terrain) => start.place_ocean_ruin(
+                                &mut chunk,
+                                world_seed,
+                                random,
+                                templates,
+                                &mut |kind, x, z| (terrain.height_at)(kind, x, z),
+                                &mut |x, y, z| (terrain.block_at)(x, y, z),
+                            ),
+                            None => start.place_ocean_ruin(
+                                &mut chunk,
+                                world_seed,
+                                random,
+                                templates,
+                                &mut |kind, x, z| world.heightmap(kind, x, z),
+                                &mut |x, y, z| world.block_state(x, y, z),
+                            ),
+                        };
+                        world.put_back(chunk);
+                        set_block_entities(world, entities);
+                    } else if matches!(id, "minecraft:shipwreck" | "minecraft:shipwreck_beached")
+                        && let Some(mut chunk) = world.take(chunk_x, chunk_z)
+                    {
+                        let burial = start.chunk == (chunk_x, chunk_z)
+                            && burials.iter().any(|structure| structure == id);
+                        let entities = match terrain {
+                            Some(terrain) => start.place_prepared_shipwreck(
+                                &mut chunk,
+                                random,
+                                templates,
+                                &mut |kind, x, z| (terrain.height_at)(kind, x, z),
+                                &mut |x, y, z| (terrain.block_at)(x, y, z),
+                                burial,
+                            ),
+                            None => start.place_prepared_shipwreck(
+                                &mut chunk,
+                                random,
+                                templates,
+                                &mut |kind, x, z| world.heightmap(kind, x, z),
+                                &mut |x, y, z| world.block_state(x, y, z),
+                                burial,
+                            ),
+                        };
                         world.put_back(chunk);
                         set_block_entities(world, entities);
                     } else if id == "minecraft:desert_pyramid" {

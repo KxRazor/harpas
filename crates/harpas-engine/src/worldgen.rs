@@ -7,8 +7,7 @@ use std::sync::Arc;
 use harpas_anvil::{Chunk, ChunkSection, DATA_VERSION};
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_worldgen::{
-    GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureStart, StructureTemplates,
-    WorldgenData,
+    GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData,
 };
 
 use crate::world::{ChunkGenerator, ChunkPos, ChunkReader};
@@ -18,9 +17,11 @@ mod structures;
 
 pub use features::{decorated, decorated_with_structures};
 
-/// The structure starts whose pieces reach a chunk, which its decoration places.
+pub use structures::DecorationStarts;
+
+/// The structure starts whose pieces reach a chunk, which its decoration places, with what they read around it.
 pub type StartSource =
-    dyn Fn(ChunkPos, &ChunkReader<'_>) -> io::Result<Vec<StructureStart>> + Send + Sync;
+    dyn Fn(ChunkPos, &ChunkReader<'_>) -> io::Result<DecorationStarts> + Send + Sync;
 
 /// The Overworld's structure starts for decoration, read from saved chunks where they have them.
 pub fn overworld_starts(
@@ -78,24 +79,9 @@ pub fn overworld_generator(
         } else {
             HashMap::new()
         };
-        if let Some(source) = &structure_source {
-            source.prepare_shipwrecks(&mut structures, pos, seed, &terrain_chunks)?;
-            source.prepare_portals(
-                &mut structures,
-                seed,
-                &terrain_chunks,
-                generated.min_y(),
-                generated.height(),
-            )?;
-        }
         let blocking_biomes = structures.mineshaft_biomes(&generated, &generator, &data, read)?;
-        let entities = structures.place_blocks(
-            &mut generated,
-            seed,
-            &terrain_chunks,
-            &templates,
-            &blocking_biomes,
-        );
+        let entities =
+            structures.place_blocks(&mut generated, seed, &terrain_chunks, &blocking_biomes);
         let mut chunk = into_anvil(generated)?;
         if !entities.is_empty() {
             chunk

@@ -741,7 +741,11 @@ fn worker_cases(
                 let Some(ChunkState::Loaded(chunk)) = world.chunk(pos) else {
                     panic!("Anvil reload")
                 };
-                assert_eq!(chunk.to_nbt(&biomes), nbt, "Anvil reload {pos:?}");
+                assert_eq!(
+                    without_light(chunk.to_nbt(&biomes)),
+                    nbt,
+                    "Anvil reload {pos:?}"
+                );
             }
         }
     }
@@ -1019,4 +1023,25 @@ fn loaded_blocks(chunk: &harpas_anvil::Chunk, pos: ChunkPos, biome_count: usize)
         }
     }
     generated
+}
+
+/// A reloaded chunk as the logic thread held it before saving it with its light: at `features`, without
+/// `isLightOn`, the light of its sections or the sections saved only for their light.
+fn without_light(mut chunk: Compound) -> Compound {
+    if chunk.remove("isLightOn").is_some() {
+        assert_eq!(chunk.get("Status"), Some(&Nbt::from("minecraft:light")));
+        chunk.insert("Status", "minecraft:features");
+    }
+    if let Some(Nbt::List(List::Compound(sections))) = chunk.remove("sections") {
+        let sections = sections
+            .into_iter()
+            .filter_map(|mut section| {
+                section.remove("SkyLight");
+                section.remove("BlockLight");
+                (section.len() > 1).then_some(section)
+            })
+            .collect();
+        chunk.insert("sections", Nbt::List(List::Compound(sections)));
+    }
+    chunk
 }

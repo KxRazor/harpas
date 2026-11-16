@@ -356,7 +356,9 @@ vanilla for the same seed.
         one-chunk border propagation and vanilla's saved-light parity harness. Generated chunks are lit when
         sent; their carver records keep no light so vanilla can still run features and light.
   - [ ] Run light on the worker pool and apply queued updates at defined points, including block changes in M4.
-  - [ ] Save light at the `light` stage once features are ported.
+  - [x] Save light at the `light` stage: a final chunk that ran FEATURES is saved with the light the workers
+        computed, `isLightOn` and vanilla's `light` status, so vanilla keeps the light and spawns its mobs, and
+        the server's own light on the same chunks matches it (`world_edge_parity`).
 - [x] Parity harness: block-by-block generation comparison against vanilla.
   - [x] Whole Overworld chunks through carvers, without structures, for every biome. Later stages join the
         comparison as they are ported.

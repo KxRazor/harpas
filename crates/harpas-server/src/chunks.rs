@@ -624,6 +624,52 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_saved_with_its_light_sends_what_was_computed() {
+        let mut rest = Compound::new();
+        rest.insert("Status", "minecraft:features");
+        let chunk = Chunk {
+            sections: vec![ChunkSection {
+                y: 0,
+                section: Some(section()),
+                rest: Compound::new(),
+            }],
+            rest,
+        };
+        let mut light = Light {
+            sections: Vec::new(),
+        };
+        for y in -5..=20 {
+            let (sky, block) = match y {
+                ..0 => (Layer::Uniform(0), Layer::Uniform(0)),
+                0 => {
+                    let mut values = vec![255_u8; LIGHT_BYTES];
+                    values[0] = 7;
+                    (Layer::Values(values.into()), Layer::Uniform(9))
+                }
+                1 => {
+                    let mut values = vec![0_u8; LIGHT_BYTES];
+                    values[0] = 3;
+                    (Layer::Uniform(15), Layer::Values(values.into()))
+                }
+                _ => (Layer::Uniform(15), Layer::Uniform(0)),
+            };
+            light
+                .sections
+                .push(harpas_engine::light::SectionLight { y, sky, block });
+        }
+        let saved = harpas_engine::light::with_light(&chunk, &light);
+        let sent = encode(
+            VisibleChunk {
+                position: ChunkPos { x: 0, z: 0 },
+                chunk: Some(Arc::new(saved)),
+                light: None,
+            },
+            &crate::block_entity_registry::Registry::default(),
+        );
+        assert_eq!(sent.light, packet_light(&light));
+    }
+
+    #[test]
     fn unsupported_block_entity_storage_is_not_leaked_to_the_client() {
         let mut entity = Compound::new();
         entity.insert("id", "minecraft:chest");

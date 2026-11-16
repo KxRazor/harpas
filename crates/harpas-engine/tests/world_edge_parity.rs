@@ -1,5 +1,6 @@
 //! A world that vanilla stopped part way through generating: the chunk workers resume the proto-chunks at its edge
-//! and generate past it, and vanilla then opens the result and completes it.
+//! and generate past it, saving the light of the chunks they lit, and vanilla then opens the result and completes
+//! it. A copy without that light shows that the server lights those chunks as the workers did.
 //!
 //! The reference server runs as a server here, so its chunk order depends on its threads. The test compares what
 //! that order cannot change: which chunks each side resumes, which it leaves as saved, and that vanilla can complete
@@ -18,8 +19,8 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use harpas_anvil::{dimension_dir, read_chunk, read_world_seed};
-use harpas_core::nbt::{Compound, Nbt};
+use harpas_anvil::{Chunk, dimension_dir, read_chunk, read_world_seed, region_of, write_chunks};
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::world::{ChunkPos, ChunkState, World};
 use harpas_engine::worldgen::{decorated_with_structures, overworld_generator, overworld_starts};
 use harpas_worldgen::{StructureTemplates, WorldgenData};
@@ -259,11 +260,15 @@ fn the_workers_resume_the_edge_of_a_vanilla_world_and_vanilla_completes_theirs()
             "minecraft:light" | "minecraft:spawn" | "minecraft:full" => {
                 assert_eq!(now, before, "{pos:?} was final, but the workers changed it");
             }
-            // Resumed: decorated, with the neighbors' writes, and lit by vanilla from those blocks.
+            // Resumed: decorated, with the neighbors' writes, and lit once its neighbors were loaded.
             "minecraft:initialize_light" | "minecraft:features" | "minecraft:carvers"
                 if wanted.contains(&ChunkPos { x: pos.0, z: pos.1 }) =>
             {
-                assert_eq!(status(now), "minecraft:features", "{pos:?} was resumed");
+                assert!(
+                    matches!(status(now), "minecraft:features" | "minecraft:light"),
+                    "{pos:?} was resumed, but is at {}",
+                    status(now)
+                );
             }
             _ => {}
         }
@@ -275,8 +280,120 @@ fn the_workers_resume_the_edge_of_a_vanilla_world_and_vanilla_completes_theirs()
         wanted.len() - carved.len(),
     );
 
-    // Vanilla completes every chunk the workers loaded, which needs their neighbors.
-    let mut server = Server::start(&reference, &folder);
+    // The workers lit and saved at `light` every chunk whose eight neighbors they loaded. A copy of the world
+    // without that light lets the server light the same chunks itself.
+    let lit: Vec<_> = after
+        .iter()
+        .filter(|(pos, chunk)| status(chunk) == "minecraft:light" && !is_final(&vanilla[pos]))
+        .map(|(&pos, _)| pos)
+        .collect();
+    assert!(!lit.is_empty(), "the workers saved no chunk with its light");
+    let unlit_folder = reference.temp.0.join("unlit");
+    copy_dir(&folder, &unlit_folder);
+    let unlit_region =
+        dimension_dir(&unlit_folder.join("world"), "minecraft:overworld").join("region");
+    for &(x, z) in &lit {
+        let mut chunk = after[&(x, z)].clone();
+        chunk.insert("Status", "minecraft:features");
+        chunk.remove("isLightOn");
+        if let Some(Nbt::List(List::Compound(mut sections))) = chunk.remove("sections") {
+            for section in &mut sections {
+                section.remove("SkyLight");
+                section.remove("BlockLight");
+            }
+            chunk.insert("sections", Nbt::List(List::Compound(sections)));
+        }
+        let (region_x, region_z) = region_of(x, z);
+        write_chunks(&unlit_region, region_x, region_z, &[((x, z), &chunk)]).unwrap();
+    }
+
+    // The server completes every chunk the workers loaded, which needs their neighbors.
+    let area = (min_x, max_x, min_z, max_z);
+    let completed = complete(&reference, &folder, &region, spawn, area);
+    for pos in &wanted {
+        assert_eq!(
+            status(&completed[&(pos.x, pos.z)]),
+            "minecraft:full",
+            "{pos:?} after vanilla completed it"
+        );
+    }
+    let relit = complete(&reference, &unlit_folder, &unlit_region, spawn, area);
+
+    // The server's own light must be the light the workers saved, except where completing the chunks changed
+    // the blocks: fence shapes and fluids marked for postprocessing, and what its ticks did.
+    let decode = |chunk: &Compound| Chunk::read(chunk.clone(), &biomes).unwrap().0;
+    let mut compared = 0;
+    let mut skipped = 0;
+    let mut problems = Vec::new();
+    for &(x, z) in &lit {
+        let mut changed = Vec::new();
+        for x in x - 1..=x + 1 {
+            for z in z - 1..=z + 1 {
+                let ours = blocks(&decode(&after[&(x, z)]));
+                let theirs = blocks(&decode(&relit[&(x, z)]));
+                for (index, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+                    if a != b {
+                        let index = index as i32;
+                        changed.push((
+                            x * 16 + (index & 15),
+                            index / 256 - 64,
+                            z * 16 + ((index >> 4) & 15),
+                        ));
+                    }
+                }
+            }
+        }
+        let counts = compare_light(
+            (x, z),
+            &after[&(x, z)],
+            &relit[&(x, z)],
+            &changed,
+            &mut problems,
+        );
+        compared += counts.0;
+        skipped += counts.1;
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert!(
+        compared > skipped,
+        "too few light values compared: {compared}, {skipped} skipped"
+    );
+    eprintln!(
+        "Saved the light of {} chunks: {compared} values match the server's own, {skipped} skipped near changed blocks",
+        lit.len()
+    );
+}
+
+fn is_final(chunk: &Compound) -> bool {
+    matches!(
+        status(chunk),
+        "minecraft:light" | "minecraft:spawn" | "minecraft:full"
+    )
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// Has the server in `folder` load the chunks of `area` (west, east, north and south chunk) to `full`, then
+/// returns every chunk it saved around the spawn chunk.
+fn complete(
+    reference: &Reference,
+    folder: &Path,
+    region: &Path,
+    spawn: ChunkPos,
+    (min_x, max_x, min_z, max_z): (i32, i32, i32, i32),
+) -> BTreeMap<(i32, i32), Compound> {
+    let mut server = Server::start(reference, folder);
     for x in min_x..=max_x {
         server.command(&format!(
             "forceload add {} {} {} {}",
@@ -315,12 +432,97 @@ fn the_workers_resume_the_edge_of_a_vanilla_world_and_vanilla_completes_theirs()
     }
     let log = server.stop();
     assert_no_chunk_errors(&log);
-    let completed = saved(&region, spawn);
-    for pos in &wanted {
-        assert_eq!(
-            status(&completed[&(pos.x, pos.z)]),
-            "minecraft:full",
-            "{pos:?} after vanilla completed it"
-        );
+    saved(region, spawn)
+}
+
+/// Every block state of a chunk, section by section from the bottom of the world.
+fn blocks(chunk: &Chunk) -> Vec<u32> {
+    let mut states = Vec::new();
+    for section in &chunk.sections {
+        let Some(blocks) = &section.section else {
+            continue;
+        };
+        for y in 0..16 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    states.push(blocks.block_state(x, y, z));
+                }
+            }
+        }
     }
+    states
+}
+
+fn section_layer(chunk: &Compound, y: i32, name: &str) -> Option<Vec<u8>> {
+    let Some(Nbt::List(List::Compound(sections))) = chunk.get("sections") else {
+        return None;
+    };
+    let section = sections
+        .iter()
+        .find(|section| matches!(section.get("Y"), Some(Nbt::Byte(at)) if i32::from(*at) == y))?;
+    match section.get(name) {
+        Some(Nbt::ByteArray(bytes)) => Some(bytes.iter().map(|&byte| byte as u8).collect()),
+        _ => None,
+    }
+}
+
+/// Whether changing the block at `changed` can change the light at `at`: within fifteen blocks around and above
+/// it, or anywhere below it, where its column's sky light falls.
+fn affected(at: (i32, i32, i32), changed: &[(i32, i32, i32)]) -> bool {
+    changed
+        .iter()
+        .any(|&(x, y, z)| (at.0 - x).abs() <= 15 && (at.2 - z).abs() <= 15 && at.1 <= y + 15)
+}
+
+/// Compares the light the workers saved with the light the server computed, value by value, away from the blocks
+/// that completing the chunks changed, and returns how many values were compared and skipped. The workers leave out
+/// sky that is all fifteen; the server leaves out sky layers that are all fifteen or all zero and block layers that
+/// are all zero.
+fn compare_light(
+    pos: (i32, i32),
+    saved: &Compound,
+    relit: &Compound,
+    changed: &[(i32, i32, i32)],
+    problems: &mut Vec<String>,
+) -> (usize, usize) {
+    let nibble = |layer: &[u8], index: usize| (layer[index / 2] >> (4 * (index % 2))) & 15;
+    let (mut compared, mut skipped) = (0, 0);
+    for y in -5..=20 {
+        for name in ["SkyLight", "BlockLight"] {
+            let ours = section_layer(saved, y, name).unwrap_or_else(|| {
+                assert_eq!(name, "SkyLight", "{pos:?} section {y} has no block light");
+                vec![0xff; 2048]
+            });
+            let theirs = section_layer(relit, y, name);
+            // A layer the server leaves out is uniform: the value the workers saved where nothing changed.
+            let mut omitted = None;
+            for index in 0..4096 {
+                let at = (
+                    pos.0 * 16 + (index as i32 & 15),
+                    y * 16 + (index as i32 >> 8),
+                    pos.1 * 16 + ((index as i32 >> 4) & 15),
+                );
+                if affected(at, changed) {
+                    skipped += 1;
+                    continue;
+                }
+                compared += 1;
+                let value = nibble(&ours, index);
+                let expected = match &theirs {
+                    Some(theirs) => nibble(theirs, index),
+                    None => *omitted.get_or_insert(if name == "SkyLight" && value == 15 {
+                        15
+                    } else {
+                        0
+                    }),
+                };
+                if value != expected && problems.len() < 40 {
+                    problems.push(format!(
+                        "{pos:?} {name} at {at:?}: {expected} in vanilla, {value} saved"
+                    ));
+                }
+            }
+        }
+    }
+    (compared, skipped)
 }

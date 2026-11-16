@@ -1,5 +1,6 @@
 //! Loading and saving overworld chunks without doing disk I/O on the logic thread.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,10 @@ use crate::light::{self, Light, Lighter};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
 const QUEUE_CAPACITY: usize = 64;
+
+/// The status of a chunk that ran FEATURES and has no light yet.
+const FEATURES: &str = "minecraft:features";
+
 /// Most workers that read and generate chunks, and as many that light them. More than this was not measured.
 const MAX_WORKERS: usize = 16;
 
@@ -360,6 +365,18 @@ struct Snapshot {
     pos: ChunkPos,
     revision: u64,
     chunk: Arc<Chunk>,
+    /// The light to save with a final chunk that ran FEATURES, once the workers have computed it.
+    light: Option<Arc<Light>>,
+}
+
+impl Snapshot {
+    /// The chunk as it is written: with its light and at vanilla's `light` status, once it has light.
+    fn saved(&self) -> Cow<'_, Chunk> {
+        match &self.light {
+            Some(light) => Cow::Owned(light::with_light(&self.chunk, light)),
+            None => Cow::Borrowed(&*self.chunk),
+        }
+    }
 }
 
 struct SaveJob {
@@ -484,10 +501,12 @@ impl World {
             }
         });
         let save = Arc::new(move |job: &SaveJob| {
+            let saved: Vec<_> = job.snapshots.iter().map(Snapshot::saved).collect();
             let chunks: Vec<_> = job
                 .snapshots
                 .iter()
-                .map(|snapshot| (snapshot.pos, &*snapshot.chunk))
+                .zip(&saved)
+                .map(|(snapshot, chunk)| (snapshot.pos, &**chunk))
                 .collect();
             storage.write(&chunks)
         });
@@ -596,6 +615,31 @@ impl World {
         }
     }
 
+    /// Whether the chunk is saved with its light once the workers have it: a chunk at `features` from a source
+    /// that resumes them, which hands out only final chunks. A world that does not decorate holds chunks at
+    /// `features` whose neighbors may decorate later, and chunks at `carvers` have not run FEATURES, so vanilla
+    /// must still reach `light` for them itself.
+    fn saves_light(&self, pos: ChunkPos) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|(source, _)| source.resumes(FEATURES))
+            && matches!(
+                self.chunks.get(&pos),
+                Some(ChunkState::Loaded(chunk))
+                    if chunk.rest.get("Status") == Some(&Nbt::from(FEATURES))
+            )
+    }
+
+    /// The light to save with the chunk, if it is saved with light and the workers have computed it.
+    fn saved_light(&self, pos: ChunkPos) -> Option<Arc<Light>> {
+        match self.light.get(&pos) {
+            Some(LightState::Ready(Some(light))) if self.saves_light(pos) => {
+                Some(Arc::clone(light))
+            }
+            _ => None,
+        }
+    }
+
     /// The chunks a chunk is lit from, clockwise from the northwest, or `None` while it has to wait for
     /// them. A generating world lights a chunk once its eight neighbors are loaded. A world that does not
     /// generate uses them if all eight are loaded, and none otherwise, once none is still being read.
@@ -636,23 +680,58 @@ impl World {
         }
     }
 
+    /// Keeps the light the workers computed for a chunk, unless the chunk changed or left since the request.
+    fn finish_light(&mut self, lit: light::Lit) {
+        // A chunk that changed or left since the request has no entry with this request's ID.
+        if !matches!(self.light.get(&lit.pos), Some(LightState::Computing(id)) if *id == lit.id) {
+            return;
+        }
+        if lit.light.is_none() {
+            error!(
+                "Cannot compute the light of chunk {}, {}; it is sent without light",
+                lit.pos.x, lit.pos.z
+            );
+        }
+        let saved = lit.light.is_some() && self.saves_light(lit.pos);
+        self.light.insert(lit.pos, LightState::Ready(lit.light));
+        // Saved again, now with its light.
+        if saved {
+            let changes = self.changes.entry(lit.pos).or_default();
+            changes.revision = changes
+                .revision
+                .checked_add(1)
+                .expect("chunk revision exhausted");
+        }
+    }
+
+    /// Waits until every loaded chunk saved with light whose neighbors are loaded has it, so that shutdown
+    /// saves it.
+    fn complete_light(&mut self) -> io::Result<()> {
+        loop {
+            self.update_light()?;
+            let pending = self.light.iter().any(|(&pos, state)| {
+                matches!(state, LightState::Computing(_)) && self.saves_light(pos)
+            }) || self
+                .unlit
+                .iter()
+                .any(|&pos| self.saves_light(pos) && self.light_neighbors(pos).is_some());
+            if !pending {
+                return Ok(());
+            }
+            let lit = self
+                .lighter
+                .completed
+                .recv()
+                .map_err(|_| io::Error::other("chunk light workers stopped"))?;
+            self.finish_light(lit);
+        }
+    }
+
     /// Takes the light the workers computed and gives them the chunks whose neighbors have arrived.
     fn update_light(&mut self) -> io::Result<()> {
         loop {
             match self.lighter.completed.try_recv() {
-                Ok(lit) => {
-                    // A chunk that changed or left since the request has no entry with this request's ID.
-                    if matches!(self.light.get(&lit.pos), Some(LightState::Computing(id)) if *id == lit.id)
-                    {
-                        if lit.light.is_none() {
-                            error!(
-                                "Cannot compute the light of chunk {}, {}; it is sent without light",
-                                lit.pos.x, lit.pos.z
-                            );
-                        }
-                        self.light.insert(lit.pos, LightState::Ready(lit.light));
-                    }
-                }
+                Ok(lit) => self.finish_light(lit),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     return Err(io::Error::other("chunk light workers stopped"));
@@ -726,8 +805,9 @@ impl World {
         self.queue_saves()
     }
 
-    /// Waits for the chunk workers' current requests and for all changed chunks to reach disk, then saves the
-    /// chunks the generator holds in memory. Intended for shutdown, not the tick loop.
+    /// Waits for the chunk workers' current requests, for the light of the chunks saved with it, and for all
+    /// changed chunks to reach disk, then saves the chunks the generator holds in memory. Intended for shutdown,
+    /// not the tick loop.
     pub fn flush(&mut self) -> io::Result<()> {
         let loading: HashSet<_> = self.in_flight.clone();
         while !self.in_flight.is_empty() {
@@ -738,6 +818,7 @@ impl World {
                 .map_err(|_| io::Error::other("chunk workers stopped"))?;
             self.finish_load(completion, &loading)?;
         }
+        self.complete_light()?;
         self.save_changes()?;
         if let Some((source, storage)) = &self.source {
             source.flush(storage)?;
@@ -785,6 +866,7 @@ impl World {
                         pos: *pos,
                         revision: self.changes[pos].revision,
                         chunk: Arc::clone(chunk),
+                        light: self.saved_light(*pos),
                     }
                 })
                 .collect();
@@ -1954,6 +2036,84 @@ mod tests {
             world.update([center]).unwrap();
             world.light(center).is_some()
         });
+    }
+
+    /// A source that decorates, so every chunk at `features` it hands out is final.
+    struct Decorating;
+
+    impl ChunkSource for Decorating {
+        fn resumes(&self, status: &str) -> bool {
+            status == FEATURES
+        }
+
+        fn generate(
+            &self,
+            _pos: ChunkPos,
+            _saved: Option<Compound>,
+            _storage: &ChunkStorage,
+        ) -> io::Result<Generated> {
+            Err(io::Error::other("the test loads every chunk"))
+        }
+
+        fn flush(&self, _storage: &ChunkStorage) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn final_chunks_that_ran_features_are_saved_with_their_light_at_shutdown() {
+        let center = ChunkPos { x: 0, z: 0 };
+        let wanted = center.view(1);
+        for decorates in [true, false] {
+            let saved = Arc::new(Mutex::new(HashMap::new()));
+            let save = {
+                let saved = Arc::clone(&saved);
+                Arc::new(move |job: &SaveJob| {
+                    for snapshot in &job.snapshots {
+                        let chunk = snapshot.saved().into_owned();
+                        saved.lock().unwrap().insert(snapshot.pos, chunk);
+                    }
+                    Ok(())
+                })
+            };
+            let load = Arc::new(|pos| {
+                let mut chunk = chunk(pos, DATA_VERSION);
+                chunk.rest.insert("Status", FEATURES);
+                Ok(Some((chunk, Vec::new(), false)))
+            });
+            let mut world = fake_world_with_save(2, load, save);
+            world.generates = true;
+            let source: Arc<dyn ChunkSource> = if decorates {
+                Arc::new(Decorating)
+            } else {
+                generator_source(Arc::new(|_, _: &ChunkReader<'_>| {
+                    Err(io::Error::other("the test loads every chunk"))
+                }))
+            };
+            let storage = Arc::new(ChunkStorage::new(PathBuf::from("test"), Vec::new()));
+            world.source = Some((source, storage));
+            load_chunks(&mut world, &wanted);
+            // Shutdown waits for the light of the chunk whose neighbors are loaded, then saves it.
+            world.flush().unwrap();
+            let saved = saved.lock().unwrap();
+            if !decorates {
+                // Chunks at `features` that the source did not hand out may still take their neighbors' writes.
+                assert!(saved.is_empty());
+                continue;
+            }
+            assert_eq!(saved.keys().copied().collect::<Vec<_>>(), vec![center]);
+            let Some(ChunkState::Loaded(chunk)) = world.chunk(center) else {
+                panic!("the center stays loaded");
+            };
+            let light = world.light(center).unwrap().unwrap();
+            assert_eq!(saved[&center], light::with_light(chunk, &light));
+            assert_eq!(
+                saved[&center].rest.get("Status"),
+                Some(&Nbt::from("minecraft:light"))
+            );
+            // The loaded chunk keeps its status and its light in memory, computed again if it changes.
+            assert!(world.needs_light(center));
+        }
     }
 
     #[test]

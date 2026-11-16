@@ -951,7 +951,8 @@ and the owner **accepts it once**:
   - When the store holds more than 2,048 proto-chunks, the least recently used are saved to their region files,
     with status `minecraft:features` once they have decorated and `minecraft:carvers` before, and read back when
     a decoration needs them. Shutdown waits for the workers' requests, saves the logic thread's chunks and then
-    every proto-chunk. A final chunk is saved at `features` without light, which is computed when it is sent.
+    every proto-chunk. A final chunk leaves the store at `features` without light, which the logic thread
+    computes before sending it and saves with it at `light`.
   - A saved chunk at `carvers` or `features`, written by Harpas or by vanilla, is resumed: its missing neighbors
     are generated and the chunks around it decorate, so a world generated before this setting existed gets its
     ores where players go. Earlier vanilla statuses have received no decoration writes and are generated again.
@@ -998,10 +999,16 @@ and the owner **accepts it once**:
     light layer of three chunks with Harpas's engine on the same blocks. Vanilla omits a sky layer when it is
     all fifteen and a block layer when it is all zero; the harness accepts a missing layer only when Harpas's
     layer is uniform.
-  - Chunks that ran FEATURES on the workers are lit the same way; their saved copy at `features` keeps no
-    light either.
-  - Light updates for live block changes (M4), which now light the whole chunk again, and saving light at
-    the `light` stage once features are ported remain to be done.
+  - Chunks that ran FEATURES on the workers are lit the same way. Once a chunk at `features` handed out by the
+    decorating source has its light, it is saved again with it, at vanilla's `light` status with `isLightOn`,
+    so vanilla keeps the light instead of lighting the chunk again and runs `spawn` for it. Its neighbors have
+    all decorated, so its blocks and theirs are final, as vanilla's `light` step requires. Like vanilla, the save
+    leaves out sky layers that are all fifteen and keeps every block layer, so the chunk is sent with the same
+    light after it is read back. Shutdown waits for the light of every such chunk whose neighbors are loaded.
+    Chunks at `carvers`, and chunks at `features` in a world that does not decorate, whose neighbors may still
+    decorate, are saved without light.
+  - Light updates for live block changes (M4), which now light the whole chunk again, remain to be done. A
+    chunk saved at `light` is read as saved; until then its light is not computed again after a change.
 - **Pregeneration:** a command to generate an area ahead of time, using the same pipeline
   ([qol.md](qol.md#world-pregeneration)).
 

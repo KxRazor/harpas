@@ -47,7 +47,7 @@ pub(crate) fn prepare(
     let templates = Arc::new(
         harpas_worldgen::StructureTemplates::from_zip_path(pack).map_err(io::Error::other)?,
     );
-    let (root, seed) = if let Some((root, source)) = saved {
+    let (root, seed, validated) = if let Some((root, source)) = saved {
         if source == harpas_anvil::Source::Backup {
             warn!(
                 "Using the backup world generation settings in {}",
@@ -62,7 +62,7 @@ pub(crate) fn prepare(
             );
             return Ok(None);
         }
-        (root, seed)
+        (root, seed, None)
     } else {
         if properties.string("initial-enabled-packs", "vanilla").trim() != "vanilla" {
             return Err(io::Error::new(
@@ -99,8 +99,9 @@ pub(crate) fn prepare(
                 i64::from_ne_bytes(bytes)
             }
         };
-        // Validate the complete generator before creating persistent world files.
-        harpas_engine::worldgen::overworld_generator(
+        // Validate the complete generator before creating persistent world files, and keep it for the seed it was
+        // built with.
+        let validated = harpas_engine::worldgen::overworld(
             proposed,
             Arc::clone(&data),
             Arc::clone(&templates),
@@ -109,7 +110,7 @@ pub(crate) fn prepare(
         )?;
         let (root, seed, _) =
             harpas_anvil::open_or_create_world_gen_settings(world, &template, proposed)?;
-        (root, seed)
+        (root, seed, Some((proposed, validated)))
     };
     if !normal_overworld(&root) {
         return Err(io::Error::new(
@@ -118,28 +119,26 @@ pub(crate) fn prepare(
         ));
     }
     let structures = structures_enabled(&root)?;
-    let generator = harpas_engine::worldgen::overworld_generator(
-        seed,
-        Arc::clone(&data),
-        Arc::clone(&templates),
-        structures,
-        harpas_java::biome_names(),
-    )?;
+    let overworld = match validated {
+        Some((proposed, overworld)) if proposed == seed => overworld,
+        _ => harpas_engine::worldgen::overworld(
+            seed,
+            Arc::clone(&data),
+            Arc::clone(&templates),
+            structures,
+            harpas_java::biome_names(),
+        )?,
+    };
+    let generator = overworld.generator;
     if level.is_none() {
         let spawn_y = spawn_height(Arc::clone(&generator))?;
         harpas_anvil::write_level(world, &new_level(properties, spawn_y))?;
     }
-    let source = if structures {
-        let starts = harpas_engine::worldgen::overworld_starts(
-            seed,
-            Arc::clone(&data),
-            Arc::clone(&templates),
-        )?;
-        harpas_engine::worldgen::decorated_with_structures(
+    let source = match overworld.starts {
+        Some(starts) => harpas_engine::worldgen::decorated_with_structures(
             generator, starts, seed, data, templates,
-        )?
-    } else {
-        harpas_engine::worldgen::decorated(generator, seed, &data, templates)?
+        )?,
+        None => harpas_engine::worldgen::decorated(generator, seed, &data, templates)?,
     };
     info!("Prepared Overworld terrain generation for seed {seed}");
     Ok(Some(source))

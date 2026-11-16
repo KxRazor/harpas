@@ -28,21 +28,40 @@ pub fn overworld_starts(
     data: Arc<WorldgenData>,
     templates: Arc<StructureTemplates>,
 ) -> io::Result<Arc<StartSource>> {
-    let generator = NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?;
-    let structures = structures::Structures::new(seed, &data, &generator, templates)?;
-    Ok(Arc::new(move |pos, read| {
-        structures.referenced(pos, &generator, &data, read)
-    }))
+    let generator =
+        Arc::new(NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?);
+    let structures = Arc::new(structures::Structures::new(
+        seed, &data, &generator, templates,
+    )?);
+    Ok(starts_source(generator, structures, data))
 }
 
-/// Compiles an Overworld generator whose biome IDs match the registry used to read and send chunks.
-pub fn overworld_generator(
+fn starts_source(
+    generator: Arc<NoiseBasedChunkGenerator>,
+    structures: Arc<structures::Structures>,
+    data: Arc<WorldgenData>,
+) -> Arc<StartSource> {
+    Arc::new(move |pos, read| structures.referenced(pos, &generator, &data, read))
+}
+
+/// The Overworld's generator of `carvers` chunks and, when it generates structures, where decoration finds their
+/// starts. Both share one noise generator and one structure state, whose ring positions take seconds to compute.
+pub struct Overworld {
+    /// Generates chunks through carvers, with their structure starts and references.
+    pub generator: Arc<ChunkGenerator>,
+    /// The structure starts whose pieces reach a chunk, when the world generates structures.
+    pub starts: Option<Arc<StartSource>>,
+}
+
+/// Compiles the Overworld's generator, whose biome IDs match the registry used to read and send chunks, and with
+/// `generate_structures` the structure starts its decoration places.
+pub fn overworld(
     seed: i64,
     data: Arc<WorldgenData>,
     templates: Arc<StructureTemplates>,
     generate_structures: bool,
     biomes: &[&str],
-) -> io::Result<Arc<ChunkGenerator>> {
+) -> io::Result<Overworld> {
     if data.biomes.len() != biomes.len()
         || !data
             .biomes
@@ -55,11 +74,20 @@ pub fn overworld_generator(
             "worldgen biome IDs do not match the server's biome registry",
         ));
     }
-    let generator = NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?;
+    let generator =
+        Arc::new(NoiseBasedChunkGenerator::overworld(seed, &data).map_err(io::Error::other)?);
     let structure_source = generate_structures
         .then(|| structures::Structures::new(seed, &data, &generator, Arc::clone(&templates)))
-        .transpose()?;
-    Ok(Arc::new(move |pos, read| {
+        .transpose()?
+        .map(Arc::new);
+    let starts = structure_source.as_ref().map(|structures| {
+        starts_source(
+            Arc::clone(&generator),
+            Arc::clone(structures),
+            Arc::clone(&data),
+        )
+    });
+    let chunks: Arc<ChunkGenerator> = Arc::new(move |pos, read| {
         let mut structures = if let Some(structures) = &structure_source {
             structures.for_chunk(pos, &generator, &data, read)?
         } else {
@@ -77,7 +105,22 @@ pub fn overworld_generator(
         let mut chunk = into_anvil(generated)?;
         chunk.rest.insert("structures", structures.into_nbt());
         Ok(chunk)
-    }))
+    });
+    Ok(Overworld {
+        generator: chunks,
+        starts,
+    })
+}
+
+/// Compiles an Overworld generator whose biome IDs match the registry used to read and send chunks.
+pub fn overworld_generator(
+    seed: i64,
+    data: Arc<WorldgenData>,
+    templates: Arc<StructureTemplates>,
+    generate_structures: bool,
+    biomes: &[&str],
+) -> io::Result<Arc<ChunkGenerator>> {
+    Ok(overworld(seed, data, templates, generate_structures, biomes)?.generator)
 }
 
 /// Converts a chunk that completed carvers into an Anvil proto-chunk that vanilla can resume generating.

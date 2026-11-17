@@ -1335,6 +1335,7 @@ fn invalid(context: &str, message: impl Into<String>) -> WorldgenDataError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::BlockGetter;
     use crate::feature::RegionFeatureWorld;
     use crate::generator::GeneratedChunk;
     use harpas_core::random::XoroshiroRandom;

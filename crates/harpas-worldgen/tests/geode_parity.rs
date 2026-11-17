@@ -1,6 +1,7 @@
 //! Geode blocks, live heightmaps, results and random consumption compared with vanilla's own feature.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;

@@ -1,14 +1,13 @@
 //! Compares the ore feature with vanilla's own OreFeature on the same decoration random source.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::collections::BTreeSet;
 use std::fs;
 
 use harpas_core::block::block_states;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
-use harpas_worldgen::{
-    ChunkFeatureWorld, CompiledOre, FeatureWorld, OreTarget, RuleTestRule, place_ore,
-};
+use harpas_worldgen::{ChunkFeatureWorld, CompiledOre, OreTarget, RuleTestRule, place_ore};
 use reference::Reference;
 
 const CASES: [(i64, i32, i32, u32, i32); 4] = [

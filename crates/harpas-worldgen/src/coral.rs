@@ -224,6 +224,7 @@ fn shuffle<T>(values: &mut [T], random: &mut impl RandomSource) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::BlockGetter;
     use crate::{GeneratedChunk, RegionFeatureWorld, WorldgenData};
     use harpas_core::random::XoroshiroRandom;
     use serde_json::json;

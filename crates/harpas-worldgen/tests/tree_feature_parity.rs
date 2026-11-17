@@ -5,6 +5,7 @@
 //! created there.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::collections::BTreeSet;
 use std::fs;
 

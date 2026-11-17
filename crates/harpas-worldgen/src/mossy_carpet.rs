@@ -9,7 +9,7 @@
 use harpas_core::block::block_states;
 use harpas_core::random::RandomSource;
 
-use crate::feature::FeatureWorld;
+use crate::feature::{BlockGetter, FeatureWorld};
 use crate::shape_update::{Direction, can_attach_to, property, with_property};
 
 const BLOCK: &str = "minecraft:pale_moss_carpet";
@@ -32,7 +32,7 @@ fn base(state: u32) -> bool {
 }
 
 /// `MossyCarpetBlock.canSurvive`: a carpet on any block that is not air; a topper on a carpet.
-pub(crate) fn can_survive(world: &impl FeatureWorld, [x, y, z]: [i32; 3], state: u32) -> bool {
+pub(crate) fn can_survive(world: &impl BlockGetter, [x, y, z]: [i32; 3], state: u32) -> bool {
     let below = world.block_state(x, y - 1, z);
     if base(state) {
         !block_states().is_air(below)
@@ -51,7 +51,7 @@ fn has_faces(state: u32) -> bool {
 
 /// `MossyCarpetBlock.getUpdatedState`.
 fn updated_state(
-    world: &impl FeatureWorld,
+    world: &impl BlockGetter,
     mut state: u32,
     position: [i32; 3],
     create_sides: bool,
@@ -85,7 +85,7 @@ fn updated_state(
 
 /// `MossyCarpetBlock.updateShape`: air once it cannot survive or has no faces left.
 pub(crate) fn update_shape(
-    world: &impl FeatureWorld,
+    world: &impl BlockGetter,
     state: u32,
     position: [i32; 3],
     air: u32,

@@ -17,7 +17,7 @@ use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
 
 use crate::data::{BlockStateDef, WorldgenData, WorldgenDataError};
-use crate::feature::FeatureWorld;
+use crate::feature::BlockGetter;
 use crate::placement::{Fluid, StateSet, fluid, fluid_mask, states_where};
 use crate::surface::resolve_block_state;
 
@@ -117,7 +117,7 @@ pub enum SurvivalRule {
 
 impl SurvivalRule {
     /// Whether `state`, a state of the rule's block, could stay at a position.
-    pub fn test(&self, world: &impl FeatureWorld, [x, y, z]: [i32; 3], state: u32) -> bool {
+    pub fn test(&self, world: &impl BlockGetter, [x, y, z]: [i32; 3], state: u32) -> bool {
         let in_mask = |mask: u8, fluid: Fluid| mask & (1 << fluid as u8) != 0;
         match self {
             Self::Always => true,
@@ -381,6 +381,7 @@ pub fn compile_survival(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::FeatureWorld;
     use crate::feature::RegionFeatureWorld;
     use crate::generator::GeneratedChunk;
 

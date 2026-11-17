@@ -254,6 +254,7 @@ impl FeatureCompiler<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::BlockGetter;
     use crate::{GeneratedChunk, RegionFeatureWorld, WorldgenData, place_feature};
     use harpas_core::random::XoroshiroRandom;
     use serde_json::json;

@@ -1,6 +1,7 @@
 //! Monster room blocks, live heightmaps, block entity NBT, results and random tails against vanilla.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;

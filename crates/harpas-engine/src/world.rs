@@ -20,6 +20,8 @@ use log::{error, warn};
 
 use crate::block::{self, BlockPos};
 use crate::light::{self, Light, Lighter};
+use crate::neighbor;
+use harpas_worldgen::shape_update::ShapeUpdates;
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
 const QUEUE_CAPACITY: usize = 64;
@@ -416,6 +418,11 @@ pub struct World {
     /// changed.
     block_changes: Vec<BlockPos>,
     changed_blocks: HashSet<BlockPos>,
+    /// The shape rules of the blocks, without which changes leave their neighbors as they are.
+    pub(crate) shape_updates: Option<Arc<ShapeUpdates>>,
+    pub(crate) updater: neighbor::Updater,
+    /// World events played by block changes, for the logic thread to send.
+    pub(crate) level_events: Vec<neighbor::LevelEvent>,
     /// The loaded chunks that need light and have not been given to the workers yet.
     unlit: HashSet<ChunkPos>,
     next_light_job: u64,
@@ -533,6 +540,9 @@ impl World {
             light: HashMap::new(),
             block_changes: Vec::new(),
             changed_blocks: HashSet::new(),
+            shape_updates: None,
+            updater: neighbor::Updater::default(),
+            level_events: Vec::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source,
@@ -589,15 +599,23 @@ impl World {
     }
 
     /// Sets the block state at `pos` in a loaded chunk, as vanilla's `LevelChunk.setBlockState`, and records
-    /// the change for the next "sending block changes" step. Returns the old state, or none when nothing
-    /// changed: the chunk is not loaded, the block is outside the world's height, or it already had `state`.
+    /// the change for the next "sending block changes" step, without updating the neighbors. Returns the old
+    /// state, or none when nothing changed: the chunk is not loaded, the block is outside the world's height, or
+    /// it already had `state`.
     pub fn set_block_state(&mut self, pos: BlockPos, state: u32) -> Option<u32> {
-        if self.block_state(pos)? == state {
-            return None;
-        }
-        let old = block::set(self.chunk_mut(pos.chunk())?, pos, state)?;
-        self.block_changed(pos);
-        Some(old)
+        let old = self.block_state(pos)?;
+        self.set_block(
+            pos,
+            state,
+            neighbor::UPDATE_CLIENTS | neighbor::UPDATE_KNOWN_SHAPE,
+            0,
+        )
+        .then_some(old)
+    }
+
+    /// Gives the world the shape rules of the blocks, so that a change updates the shapes of its neighbors.
+    pub fn set_shape_updates(&mut self, shapes: Arc<ShapeUpdates>) {
+        self.shape_updates = Some(shapes);
     }
 
     /// Records that the block at `pos` must be sent again to the players who have its chunk, as vanilla's
@@ -1292,6 +1310,7 @@ mod tests {
     use crate::block;
     use crate::player::{GameMode, Input, Movement, Output, Profile};
     use crate::{Event, Game, tick};
+    use harpas_worldgen::shape_update::ShapeUpdates;
 
     const BIOMES: &[&str] = &["minecraft:plains", "minecraft:forest"];
 
@@ -1386,6 +1405,9 @@ mod tests {
             light: HashMap::new(),
             block_changes: Vec::new(),
             changed_blocks: HashSet::new(),
+            shape_updates: None,
+            updater: neighbor::Updater::default(),
+            level_events: Vec::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source: None,
@@ -2762,7 +2784,7 @@ mod tests {
     fn incompatible_chunk_stops_the_running_logic_thread() {
         let folder = Folder::new();
         save(&folder, &[(ChunkPos { x: 0, z: 0 }, DATA_VERSION - 1)]);
-        let (handle, logic) = crate::start_with_world(&folder.0, BIOMES).unwrap();
+        let (handle, logic) = crate::start_with_world(&folder.0, BIOMES, None).unwrap();
         let session = handle.player_joined(1, profile(), 10, false).unwrap();
         wait_until(|| logic.is_finished());
         // The chunks around the incompatible one may be read, and sent, a tick before it.
@@ -3047,5 +3069,186 @@ mod tests {
         let mut reopened = World::open(&folder.0, BIOMES).unwrap();
         load_chunks(&mut reopened, &[pos]);
         assert_eq!(reopened.block_state(broken), Some(air));
+    }
+
+    /// The shape rules with the tags they read: those the tests use hold their blocks, the others are empty.
+    fn shape_updates() -> Arc<ShapeUpdates> {
+        use harpas_worldgen::data::{BlockTagDef, BlockTagEntry};
+        let tag = |blocks: &[&str]| BlockTagDef {
+            replace: false,
+            values: blocks
+                .iter()
+                .map(|id| BlockTagEntry {
+                    id: format!("minecraft:{id}"),
+                    required: true,
+                })
+                .collect(),
+        };
+        let mut data = harpas_worldgen::WorldgenData::default();
+        let blocks: [(&str, &[&str]); 25] = [
+            ("supports_vegetation", &["dirt", "grass_block"]),
+            ("supports_mangrove_propagule", &[]),
+            ("supports_hanging_mangrove_propagule", &[]),
+            ("supports_dry_vegetation", &[]),
+            ("cannot_support_seagrass", &[]),
+            ("overrides_mushroom_light_requirement", &[]),
+            ("cannot_support_snow_layer", &[]),
+            ("support_override_snow_layer", &[]),
+            ("supports_lily_pad", &[]),
+            ("supports_cocoa", &[]),
+            ("cannot_support_kelp", &[]),
+            ("supports_bamboo", &[]),
+            ("supports_azalea", &[]),
+            ("supports_big_dripleaf", &[]),
+            ("supports_small_dripleaf", &[]),
+            ("snow", &["snow", "snow_block"]),
+            ("leaves", &[]),
+            ("shulker_boxes", &[]),
+            ("fences", &[]),
+            ("wooden_fences", &[]),
+            ("walls", &[]),
+            ("fence_gates", &[]),
+            ("wall_post_override", &[]),
+            ("water", &[]),
+            ("lava", &[]),
+        ];
+        for (name, blocks) in blocks {
+            data.block_tags
+                .insert(format!("minecraft:{name}"), tag(blocks));
+        }
+        for name in ["supports_lily_pad", "water"] {
+            data.fluid_tags
+                .insert(format!("minecraft:{name}"), tag(&[]));
+        }
+        Arc::new(ShapeUpdates::new(&data).unwrap())
+    }
+
+    #[test]
+    fn breaking_a_block_breaks_what_it_held_and_updates_its_neighbors() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (breaker, from_breaker) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output: breaker,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.world
+            .as_mut()
+            .unwrap()
+            .set_shape_updates(shape_updates());
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].sent_chunks.contains(&pos)
+        });
+        game.players[0].player.position = crate::player::Position {
+            x: 7.5,
+            y: -48.0,
+            z: 7.5,
+            ..game.players[0].player.position
+        };
+        let states = block_states();
+        let state = |name: &str, properties: &[(&str, &str)]| {
+            states.state(name, properties.iter().copied()).unwrap().0
+        };
+        let air = state("minecraft:air", &[]);
+        let torch = state("minecraft:torch", &[]);
+        let lower = state("minecraft:oak_door", &[("half", "lower")]);
+        let upper = state("minecraft:oak_door", &[("half", "upper")]);
+        let grass = |snowy| state("minecraft:grass_block", &[("snowy", snowy)]);
+        let snow = state("minecraft:snow", &[]);
+        let at = |x, y, z| BlockPos { x, y, z };
+        let world = game.world.as_mut().unwrap();
+        world.set_block_state(at(5, -49, 7), torch);
+        world.set_block_state(at(9, -50, 7), lower);
+        world.set_block_state(at(9, -49, 7), upper);
+        world.set_block_state(at(7, -50, 9), grass("true"));
+        world.set_block_state(at(7, -49, 9), snow);
+        number += 1;
+        tick(&mut game, number);
+        from_breaker.try_iter().for_each(drop);
+        let mut dig = |game: &mut Game, position| {
+            game.pending.push(Event::Input {
+                entity_id: 1,
+                input: Input::Dig {
+                    action: block::DigAction::Start,
+                    position,
+                    sequence: 1,
+                },
+            });
+            number += 1;
+            tick(game, number);
+        };
+        let block = |game: &Game, pos| game.world.as_ref().unwrap().block_state(pos);
+        let events = |received: Vec<Output>| -> Vec<(BlockPos, u32)> {
+            received
+                .into_iter()
+                .filter_map(|output| match output {
+                    Output::WorldEvent {
+                        event: 2001,
+                        position,
+                        data,
+                    } => Some((position, data as u32)),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // A torch breaks with the block below it, and the breaker sees it break.
+        dig(&mut game, at(5, -50, 7));
+        assert_eq!(block(&game, at(5, -49, 7)), Some(air));
+        assert_eq!(
+            events(from_breaker.try_iter().collect()),
+            [(at(5, -49, 7), torch)]
+        );
+
+        // The lower half of a door breaks with the block below it, and the upper half with the lower one.
+        dig(&mut game, at(9, -51, 7));
+        assert_eq!(block(&game, at(9, -50, 7)), Some(air));
+        assert_eq!(block(&game, at(9, -49, 7)), Some(air));
+        assert_eq!(
+            events(from_breaker.try_iter().collect()),
+            [(at(9, -50, 7), lower), (at(9, -49, 7), upper)]
+        );
+
+        // A grass block is no longer snowy once the snow on it is gone.
+        dig(&mut game, at(7, -49, 9));
+        assert_eq!(block(&game, at(7, -50, 9)), Some(grass("false")));
+        // Every change reaches the player at the next "sending block changes", in the order it happened: the
+        // door's, sent while the snow broke, then the snow's.
+        number += 1;
+        tick(&mut game, number);
+        let changed: Vec<_> = from_breaker
+            .try_iter()
+            .filter_map(|output| match output {
+                Output::SectionBlocks(blocks) => Some(blocks.to_vec()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(
+            changed,
+            [
+                (at(9, -51, 7), air),
+                (at(9, -50, 7), air),
+                (at(9, -49, 7), air),
+                (at(7, -49, 9), air),
+                (at(7, -50, 9), grass("false")),
+            ]
+        );
     }
 }

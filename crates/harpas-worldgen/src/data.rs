@@ -1187,11 +1187,7 @@ impl WorldgenData {
         )?;
         let states = block_states();
         Ok((0..states.len())
-            .map(|id| {
-                states
-                    .properties(id)
-                    .is_some_and(|(name, _)| blocks.contains(name))
-            })
+            .map(|id| states.name(id).is_some_and(|name| blocks.contains(name)))
             .collect())
     }
 

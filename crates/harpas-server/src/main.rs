@@ -189,7 +189,18 @@ fn run() -> io::Result<()> {
     };
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
-    let generator = world_generation::prepare(&world_dir, &properties, &data_pack)?;
+    let worldgen_data = Arc::new(
+        harpas_worldgen::WorldgenData::from_zip_path(&data_pack).map_err(io::Error::other)?,
+    );
+    let generator = world_generation::prepare(&world_dir, &properties, &data_pack, &worldgen_data)?;
+    // The shape rules of the blocks read the vanilla data pack's block tags.
+    let shapes = match harpas_worldgen::shape_update::ShapeUpdates::new(&worldgen_data) {
+        Ok(shapes) => Some(Arc::new(shapes)),
+        Err(error) => {
+            warn!("Block changes will not update their neighbors' shapes: {error}");
+            None
+        }
+    };
     let mut server_info = server_info(&properties);
     server_info.tags = Arc::new(tags::load(Path::new(""), &data_pack)?);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
@@ -226,10 +237,13 @@ fn run() -> io::Result<()> {
         listener.set_nonblocking(true)?;
     }
     let (logic, logic_thread) = match generator {
-        Some(source) => {
-            harpas_engine::start_with_world_source(&world_dir, harpas_java::biome_names(), source)?
-        }
-        None => harpas_engine::start_with_world(&world_dir, harpas_java::biome_names())?,
+        Some(source) => harpas_engine::start_with_world_source(
+            &world_dir,
+            harpas_java::biome_names(),
+            source,
+            shapes,
+        )?,
+        None => harpas_engine::start_with_world(&world_dir, harpas_java::biome_names(), shapes)?,
     };
     let shutdown = Shutdown::new(logic.clone(), logic_thread);
     shutdown.handle_signals()?;
@@ -1282,7 +1296,7 @@ mod tests {
         };
         let key = Arc::new(ServerKey::generate());
         let (logic, logic_thread) =
-            harpas_engine::start_with_world(&folder.0, harpas_java::biome_names()).unwrap();
+            harpas_engine::start_with_world(&folder.0, harpas_java::biome_names(), None).unwrap();
         let mut client = TestClient::start("Steve", &info, &key, &logic);
         let (_, first) = client.join_with_chunks();
         let mut received = HashSet::new();

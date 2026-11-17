@@ -396,7 +396,9 @@ as shown by the parity report.
         entities, saving, block changes sent to the players who have the chunk, world events and
         acknowledgements.
   - [x] Breaking blocks in Survival, with each block's destroy speed and the destroy progress others see.
-  - [ ] Neighbor and shape updates.
+  - [x] Shape updates: the neighbors of a changed block take their new shapes in vanilla's order, and those
+        that can no longer stand break, with the rules ported for world generation.
+  - [ ] Neighbor updates (`neighborChanged`), with redstone.
   - [ ] Placing blocks, once items exist.
   - [ ] Scheduled and random ticks.
 - [ ] Light updates from block changes, queued and applied at defined points as vanilla's light engine applies

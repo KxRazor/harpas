@@ -1,6 +1,7 @@
 //! Lush cave clay pools and dripleaves: blocks, heightmaps, results, random tails, survival and shapes.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;

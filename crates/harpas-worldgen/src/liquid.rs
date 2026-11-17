@@ -345,6 +345,7 @@ impl FeatureCompiler<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::BlockGetter;
     use crate::feature::RegionFeatureWorld;
     use crate::generator::GeneratedChunk;
 

@@ -1,6 +1,7 @@
 //! Desert well placement, heightmaps, archaeology NBT and random tails compared with vanilla.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;

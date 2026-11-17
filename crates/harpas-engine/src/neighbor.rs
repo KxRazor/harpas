@@ -1,0 +1,249 @@
+//! Shape updates of the blocks next to a changed block, run in vanilla's order (`Level.setBlock`,
+//! `BlockStateBase.updateNeighbourShapes` and `CollectingNeighborUpdater`).
+//!
+//! When a block changes, each of its six neighbors is asked for its new shape (`updateShape`) against the new
+//! block, in the order west, east, north, south, down, up. A neighbor that changes updates its own neighbors in
+//! turn, depth first: the updates a change adds run before the next update of the change that caused it, as the
+//! collecting updater pushes them. A neighbor whose shape becomes air breaks (`Level.destroyBlock`): its
+//! particles and sound play, it leaves the fluid it held, and it updates its neighbors. The rules of each block
+//! are those `harpas-worldgen` ports for features and structures (`ShapeUpdates`).
+//!
+//! Not done yet: neighbor updates (`neighborChanged`, which redstone reacts to), the indirect shape updates of
+//! redstone wire, `onPlace` and `affectNeighborsAfterRemoval`, and drops. Vanilla loads a chunk that an update
+//! reaches; here a block next to a chunk that is not loaded keeps its shape, so that it is never broken for
+//! missing support the server has not read.
+
+use harpas_core::block::block_states;
+use harpas_worldgen::BlockGetter;
+use harpas_worldgen::shape_update::Direction;
+use log::error;
+
+use crate::block::{self, BlockPos};
+use crate::world::{ChunkState, World};
+
+/// `Block.UPDATE_NEIGHBORS`: run neighbor updates around the change.
+pub const UPDATE_NEIGHBORS: u32 = 1;
+/// `Block.UPDATE_CLIENTS`: send the change to the players who have the chunk.
+pub const UPDATE_CLIENTS: u32 = 2;
+/// `Block.UPDATE_KNOWN_SHAPE`: do not update the shapes of the neighbors.
+pub const UPDATE_KNOWN_SHAPE: u32 = 16;
+/// `Block.UPDATE_SUPPRESS_DROPS`: a block broken by the change drops nothing.
+pub const UPDATE_SUPPRESS_DROPS: u32 = 32;
+/// `Block.UPDATE_ALL`.
+pub const UPDATE_ALL: u32 = UPDATE_NEIGHBORS | UPDATE_CLIENTS;
+/// How deep a change's shape updates may go (`Block.UPDATE_LIMIT`).
+pub const UPDATE_LIMIT: u32 = 512;
+/// The most updates one change may chain (`max-chained-neighbor-updates`, 1,000,000 by default).
+const MAX_CHAINED_UPDATES: usize = 1_000_000;
+
+/// The order in which a block updates the shapes of its neighbors (`BlockBehaviour.UPDATE_SHAPE_ORDER`).
+const UPDATE_SHAPE_ORDER: [Direction; 6] = [
+    Direction::West,
+    Direction::East,
+    Direction::North,
+    Direction::South,
+    Direction::Down,
+    Direction::Up,
+];
+
+/// Vanilla's world event for a broken block, whose data is the block state (`LevelEvent.PARTICLES_DESTROY_BLOCK`).
+pub(crate) const BLOCK_DESTROYED: i32 = 2001;
+
+/// One queued shape update: the block at `pos` updates against its neighbor in `direction`, at
+/// `neighbor_pos`, which is now `neighbor_state` (`CollectingNeighborUpdater.ShapeUpdate`).
+#[derive(Debug, Clone, Copy)]
+struct ShapeUpdate {
+    direction: Direction,
+    neighbor_state: u32,
+    pos: BlockPos,
+    neighbor_pos: BlockPos,
+    flags: u32,
+    recursion: u32,
+}
+
+/// The queue of a running chain of updates (`CollectingNeighborUpdater`).
+#[derive(Debug, Default)]
+pub(crate) struct Updater {
+    stack: Vec<ShapeUpdate>,
+    added_this_layer: Vec<ShapeUpdate>,
+    count: usize,
+}
+
+/// A world event for every player within 64 blocks of the block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LevelEvent {
+    pub(crate) event: i32,
+    pub(crate) pos: BlockPos,
+    pub(crate) data: i32,
+}
+
+/// The blocks of a world as shape updates read them.
+struct Blocks<'a>(&'a World);
+
+impl BlockGetter for Blocks<'_> {
+    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
+        self.0
+            .block_state(BlockPos { x, y, z })
+            .unwrap_or_else(block::void_air)
+    }
+}
+
+fn step(pos: BlockPos, direction: Direction) -> BlockPos {
+    let [x, y, z] = direction.step([pos.x, pos.y, pos.z]);
+    BlockPos { x, y, z }
+}
+
+impl World {
+    /// Changes a block as vanilla's `Level.setBlock`: the change is sent to the players who have the chunk with
+    /// [`UPDATE_CLIENTS`], and unless `flags` has [`UPDATE_KNOWN_SHAPE`] the neighbors update their shapes,
+    /// down to `recursion` levels. Returns whether the block changed.
+    pub fn set_block(&mut self, pos: BlockPos, state: u32, flags: u32, recursion: u32) -> bool {
+        let Some(old) = self.block_state(pos) else {
+            return false;
+        };
+        if old == state {
+            return false;
+        }
+        let Some(chunk) = self.chunk_mut(pos.chunk()) else {
+            return false;
+        };
+        if block::set(chunk, pos, state).is_none() {
+            return false;
+        }
+        if flags & UPDATE_CLIENTS != 0 {
+            self.block_changed(pos);
+        }
+        if flags & UPDATE_KNOWN_SHAPE == 0 && recursion > 0 {
+            let flags = flags & !(UPDATE_NEIGHBORS | UPDATE_SUPPRESS_DROPS);
+            for direction in UPDATE_SHAPE_ORDER {
+                self.shape_update(ShapeUpdate {
+                    direction: direction.opposite(),
+                    neighbor_state: state,
+                    pos: step(pos, direction),
+                    neighbor_pos: pos,
+                    flags,
+                    recursion: recursion - 1,
+                });
+            }
+        }
+        true
+    }
+
+    /// Breaks a block as vanilla's `Level.destroyBlock`, without drops: its particles and sound play, and it
+    /// leaves the fluid it held. Returns whether a block was broken.
+    pub(crate) fn destroy_block(&mut self, pos: BlockPos, recursion: u32) -> bool {
+        let Some(state) = self.block_state(pos) else {
+            return false;
+        };
+        if block_states().is_air(state) {
+            return false;
+        }
+        let fire = matches!(
+            block_states().properties(state),
+            Some(("minecraft:fire" | "minecraft:soul_fire", _))
+        );
+        if !fire {
+            self.level_events.push(LevelEvent {
+                event: BLOCK_DESTROYED,
+                pos,
+                data: state as i32,
+            });
+        }
+        self.set_block(pos, block::removed(state), UPDATE_ALL, recursion)
+    }
+
+    /// Takes the world events played since the last call, in order.
+    pub(crate) fn take_level_events(&mut self) -> Vec<LevelEvent> {
+        std::mem::take(&mut self.level_events)
+    }
+
+    /// `CollectingNeighborUpdater.addAndRun` for a shape update.
+    fn shape_update(&mut self, update: ShapeUpdate) {
+        let running = self.updater.count > 0;
+        let too_deep = self.updater.count >= MAX_CHAINED_UPDATES;
+        self.updater.count += 1;
+        if !too_deep {
+            if running {
+                self.updater.added_this_layer.push(update);
+            } else {
+                self.updater.stack.push(update);
+            }
+        } else if self.updater.count - 1 == MAX_CHAINED_UPDATES {
+            let BlockPos { x, y, z } = update.pos;
+            error!(
+                "Too many chained neighbor updates. Skipping the rest. First skipped position: {x}, {y}, {z}"
+            );
+        }
+        if !running {
+            self.run_updates();
+        }
+    }
+
+    /// `CollectingNeighborUpdater.runUpdates`: the updates added by one update run before the next one queued
+    /// before them, the first added first.
+    fn run_updates(&mut self) {
+        while !self.updater.stack.is_empty() || !self.updater.added_this_layer.is_empty() {
+            let added = std::mem::take(&mut self.updater.added_this_layer);
+            self.updater.stack.extend(added.into_iter().rev());
+            // A shape update runs once and leaves the stack.
+            let Some(update) = self.updater.stack.pop() else {
+                break;
+            };
+            self.execute_shape_update(update);
+        }
+        self.updater.stack.clear();
+        self.updater.added_this_layer.clear();
+        self.updater.count = 0;
+    }
+
+    /// `NeighborUpdater.executeShapeUpdate` and `Block.updateOrDestroy`.
+    fn execute_shape_update(&mut self, update: ShapeUpdate) {
+        let Some(shapes) = self.shape_updates.clone() else {
+            return;
+        };
+        if !self.neighborhood_loaded(update.pos) {
+            return;
+        }
+        let Some(state) = self.block_state(update.pos) else {
+            return;
+        };
+        let BlockPos { x, y, z } = update.pos;
+        let new = shapes.update(
+            &Blocks(self),
+            state,
+            [x, y, z],
+            update.direction,
+            update.neighbor_state,
+        );
+        debug_assert_eq!(step(update.pos, update.direction), update.neighbor_pos);
+        if new == state {
+            return;
+        }
+        if block_states().is_air(new) {
+            self.destroy_block(update.pos, update.recursion);
+        } else {
+            self.set_block(
+                update.pos,
+                new,
+                update.flags & !UPDATE_SUPPRESS_DROPS,
+                update.recursion,
+            );
+        }
+    }
+
+    /// Whether the chunks a shape update of the block at `pos` reads, its own and those within a block of it,
+    /// are loaded, or known to be missing from a world that does not generate them.
+    fn neighborhood_loaded(&self, pos: BlockPos) -> bool {
+        let chunks = |n: i32| [(n - 1) >> 4, (n + 1) >> 4];
+        let [min_x, max_x] = chunks(pos.x);
+        let [min_z, max_z] = chunks(pos.z);
+        (min_x..=max_x).all(|x| {
+            (min_z..=max_z).all(|z| {
+                matches!(
+                    self.chunk(crate::world::ChunkPos { x, z }),
+                    Some(ChunkState::Loaded(_) | ChunkState::Missing)
+                )
+            })
+        })
+    }
+}

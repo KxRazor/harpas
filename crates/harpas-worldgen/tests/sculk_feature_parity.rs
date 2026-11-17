@@ -1,13 +1,14 @@
 //! Sculk patches and sculk veins compared block by block with vanilla's own features, in test caves.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::{
-    CompiledFeature, FeatureCompiler, FeatureWorld, GeneratedChunk, RegionFeatureWorld,
-    WorldgenData, place_feature,
+    CompiledFeature, FeatureCompiler, GeneratedChunk, RegionFeatureWorld, WorldgenData,
+    place_feature,
 };
 
 fn state(name: &str) -> u32 {

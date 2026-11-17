@@ -1,6 +1,7 @@
 //! Surface snow and ice, live heightmaps, random tails and all snow supports compared with vanilla.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;

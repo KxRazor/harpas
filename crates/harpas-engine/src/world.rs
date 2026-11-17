@@ -465,6 +465,7 @@ pub struct World {
     pub(crate) seed: i64,
     /// The crafting recipes, without which nothing is crafted.
     pub(crate) recipes: Option<Arc<crate::recipe::Recipes>>,
+    pub(crate) player_store: Option<crate::player_data::PlayerStore>,
     /// The world's named random sequences (`RandomSequences`), which loot tables draw from.
     pub(crate) random_sequences: HashMap<String, harpas_core::random::RandomSequence>,
     /// The loaded chunks that need light and have not been given to the workers yet.
@@ -602,6 +603,7 @@ impl World {
             loot: None,
             seed,
             recipes: None,
+            player_store: Some(crate::player_data::PlayerStore::start(world_dir, spawn)?),
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
@@ -1127,6 +1129,15 @@ impl World {
     /// changed chunks to reach disk, then saves the chunks the generator holds in memory. Intended for shutdown,
     /// not the tick loop.
     pub fn flush(&mut self) -> io::Result<()> {
+        let chunks = self.flush_chunks();
+        let players = self
+            .player_store
+            .as_mut()
+            .map_or(Ok(()), crate::player_data::PlayerStore::flush);
+        chunks.and(players)
+    }
+
+    fn flush_chunks(&mut self) -> io::Result<()> {
         let loading: HashSet<_> = self.in_flight.clone();
         while !self.in_flight.is_empty() {
             let completion = self
@@ -1651,6 +1662,7 @@ mod tests {
             loot: None,
             seed: 0,
             recipes: None,
+            player_store: None,
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
@@ -4186,13 +4198,16 @@ mod tests {
         };
         let mut number = 1;
         tick(&mut game, number);
+        // Chunk and player-data workers complete independently. Wait for both before seeding the inventory,
+        // or the pending player load can replace these test items before the drop inputs are processed.
         wait_until(|| {
             number += 1;
             tick(&mut game, number);
-            matches!(
-                game.world.as_ref().unwrap().chunk(pos),
-                Some(ChunkState::Loaded(_))
-            )
+            game.players[0].data_ready
+                && matches!(
+                    game.world.as_ref().unwrap().chunk(pos),
+                    Some(ChunkState::Loaded(_))
+                )
         });
         game.players[0].player.position = crate::player::Position {
             x: 8.5,
@@ -4486,6 +4501,10 @@ mod tests {
         second.uuid = 2;
         second.name = "Other".into();
         game.join(2, second, 2, 2, false, output);
+        wait_until(|| {
+            game.poll_player_data();
+            game.players[1].data_ready
+        });
         game.players[1].player.position = game.players[0].player.position;
         game.open_crafting_table(1, table);
         assert!(

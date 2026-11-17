@@ -491,6 +491,23 @@ impl Game {
         if state.player.profile.game_mode != player::GameMode::Creative {
             return;
         }
+        if !stack.is_empty()
+            && let Some(store) = self
+                .world
+                .as_ref()
+                .and_then(|world| world.player_store.as_ref())
+            && let Err(error) = store.codec.write(&stack)
+        {
+            log::warn!(
+                "Refusing an unsavable Creative item from {}: {error}",
+                state.player.profile.name
+            );
+            state.send(player::Output::Disconnect(
+                "Unsupported item data component",
+            ));
+            state.disconnecting = true;
+            return;
+        }
         if (1..=45).contains(&slot) {
             let stack = if stack.is_empty() {
                 ItemStack::empty()
@@ -507,7 +524,7 @@ impl Game {
     /// Sends each player the slots of its inventory that changed (`broadcastChanges`, in the player's tick).
     pub(crate) fn send_inventory_changes(&mut self) {
         for index in 0..self.players.len() {
-            if self.players[index].disconnecting {
+            if self.players[index].disconnecting || !self.players[index].data_ready {
                 continue;
             }
             self.validate_crafting_table(index);

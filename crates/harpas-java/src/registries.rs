@@ -27,6 +27,15 @@ pub fn biome_names() -> &'static [&'static str] {
         .entries
 }
 
+/// Entry names of a synchronized registry in the same numeric order sent during Configuration.
+/// Saved item components use this order when translating registry references to network values.
+pub fn registry_names(id: &str) -> Option<&'static [&'static str]> {
+    registries()
+        .iter()
+        .find(|registry| registry.id == id)
+        .map(|registry| registry.entries.as_slice())
+}
+
 /// The tags the client needs before it accepts the registries, by registry. `Tags` adds them empty when vanilla's
 /// data lacks them.
 pub(crate) fn required_tags() -> &'static [Registry] {

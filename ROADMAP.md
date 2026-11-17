@@ -417,6 +417,10 @@ as shown by the parity report.
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
   - [x] The item registry, item stacks, and the player's inventory menu in Creative, with its changes sent to
         the client.
+  - [x] Player inventory persistence: main inventory, hotbar, armor, offhand and selected slot loaded and
+        saved in vanilla player data on workers, on autosave, departure and shutdown; latest snapshots on
+        rapid reconnects, preserved unrelated NBT and backup recovery. The supported item components and
+        saved inventory/equipment format are compared with vanilla (`player_inventory_parity`).
   - [x] Block loot tables, evaluated as vanilla does for a broken block, drawing from the world's random
         sequences.
   - [x] Clicks in the inventory menu in Survival, every click type, and the 2x2 crafting grid with the shaped
@@ -433,7 +437,10 @@ as shown by the parity report.
         and Set Creative Mode Slot.
   - [x] Set Entity Metadata, with the serializers item entities use.
   - [x] Click Container, with stacks hashed as the client predicts them, and Set Cursor Item.
-  - [ ] The 110 data components' values, the other serializers, and the other 15 packets.
+  - [x] Saved-NBT/network conversion for 26 item component values, including damage, names, lore, custom
+        data, enchantments and stored enchantments, plus removed components; unported component values are
+        refused without overwriting the player's data.
+  - [ ] The remaining data component values, the other serializers, and the other 15 packets.
 - [ ] Entity physics and collisions, ported one to one.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,
         floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by

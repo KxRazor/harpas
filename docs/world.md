@@ -12,7 +12,8 @@ data checked against vanilla. Generated chunks receive sky and block light from 
 sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
 feature definitions are loaded from the datapack, and ores, simple vegetation and the first trees are placed and
 compared with vanilla, but generation through the complete feature stage, live block changes and saving other
-world and player data during play remain in progress.
+world and player data during play remain in progress. Player inventory loading and saving during play are
+implemented, as described under [Player inventories](#player-inventories).
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -135,6 +136,54 @@ block changes are part of gameplay work.
 - A world may be a download, so its files are read within limits that vanilla does not have: a chunk,
   `level.dat` or a player's data may inflate to at most 256 MiB and take at most 1 GiB of memory as NBT, and
   a `.mcc` file may hold at most 256 MiB. A file over a limit is reported as unreadable.
+
+### Player inventories
+
+The engine loads `players/data/<uuid>.dat` on a dedicated worker before sending the player's first inventory
+or accepting inventory changes, item use, breaking or pickups. A missing document starts a new inventory;
+an unreadable document or unsupported item refuses the connection and is never replaced with an empty
+inventory. The existing `_old` recovery applies to damaged or missing compressed files.
+
+The main inventory and hotbar use the `Inventory` list and its byte `Slot` numbers, 0 to 35. Armor and the
+offhand use the `equipment` compound [9], and `SelectedItemSlot` keeps the selected hotbar slot. Unrelated
+player fields, unmodeled slots and equipment, and unknown fields on supported item records are retained.
+This task does not apply saved position, game mode, health, experience or the other player state to gameplay;
+existing values in those fields stay intact.
+
+Autosave every 6,000 ticks, departure and shutdown take immutable inventory snapshots on the logic thread.
+The worker encodes NBT, compresses and writes them through the Anvil backup writer. Its job queue is bounded
+at 64; pending saves coalesce by UUID, and there is one outstanding write per UUID. A rapid reconnect uses
+the newest pending snapshot, including when its older save is still being written. New snapshots remain
+pending until their own write completes. Before the final shutdown snapshot, live menus are closed so their
+cursor and ingredients return to persistent inventory slots, dropping only overflow. A save error stops the
+server and is reported; shutdown drains the
+player saves even when the chunk flush fails. A saturated player-data queue refuses additional loads rather
+than blocking the logic thread.
+
+Saved NBT and network bytes have different component codecs. `harpas-engine::item_data` converts 26 values:
+custom data, maximum stack size, maximum damage, damage, unbreakable, custom name, minimum attack charge,
+item name, item model, lore, rarity, repair cost, glint override, intangible projectile, glider, tooltip style,
+dyed color, map color, map ID, potion duration scale, bucket entity data, ominous bottle amplifier, note block
+sound, enchantability, enchantments and stored enchantments. Component IDs come from the owner's generated
+built-in registry, and enchantment IDs use the synchronized registry sent to clients. Removed components are
+preserved as removed. These codecs preserve data; the gameplay effects of all these components are not yet
+ported.
+
+The remaining component values are explicit errors. An existing inventory containing one cannot be loaded;
+a Creative stack that cannot be saved is rejected before it changes the inventory. This prevents stripping
+components or overwriting the original document while their codecs are still unimplemented. Without the
+locally generated component registry, unmodified items still save and load, but component-bearing items
+require `harpas vanilla-data generate-registry` with Java 25 as described below.
+
+The cursor, crafting result and crafting input grids are transient menu slots and are not written as
+persistent slots. Ordinary departure drops the cursor and input items, as the menu removal rules do; shutdown
+first closes live menus as described above. Saving dropped item entities remains part of M4's entity
+persistence task.
+
+`player_inventory_parity` creates inventory/equipment NBT with vanilla's own codecs, compares the network
+bytes of the supported components, has Harpas write the document and reopens its inventory and equipment in
+vanilla. Lifecycle tests cover reconnects, restart with an online player, backup recovery, refused loads,
+non-blocking I/O, newer snapshots racing older saves, queue saturation and save errors.
 
 ---
 
@@ -1093,8 +1142,9 @@ World generation and saved worlds are checked against Mojang's server like every
    differences. `round_trip_parity` has vanilla generate the spawn area of a world and place blocks whose block
    entities hold data, then has the server load every chunk it saved, at every status, and write each one whole
    again; every chunk holds exactly what vanilla saved, compared as NBT, and vanilla reopens the world without
-   chunk errors. Harpas does not write `level.dat`, player data, entities or points of interest yet, so those
-   files stay as vanilla wrote them.
+   chunk errors. That harness leaves `level.dat`, player data, entities and points of interest untouched.
+   Inventory/equipment serialization and item components are compared separately by `player_inventory_parity`;
+   the engine now saves player inventories while preserving the rest of their documents.
 2. **Generation parity:** for a set of seeds, every generated block and biome matches vanilla.
 3. **Save stalls:** tick time during autosave, with many changed chunks, compared with a tick without saving.
 4. **Generation throughput:** chunks per second as worker threads are added.
@@ -1117,3 +1167,6 @@ World generation and saved worlds are checked against Mojang's server like every
    `level.dat_old`). https://minecraft.wiki/w/Java_Edition_level_format
 8. minecraft.wiki, "Data Generators" (server data generator and the registry report).
    https://minecraft.wiki/w/Minecraft_Wiki:Projects/wiki.vg_merge/Data_Generators
+
+9. Mojang, "Minecraft Java Edition 1.21.5" (player armor and offhand stored in the `equipment` field;
+   legacy inventory armor/offhand slot numbers remain readable). https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-5

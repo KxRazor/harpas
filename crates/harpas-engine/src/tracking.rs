@@ -128,6 +128,7 @@ impl Game {
         for index in 0..self.players.len() {
             let player = &self.players[index];
             if player.disconnecting
+                || !player.data_ready
                 || player.player.profile.game_mode == player::GameMode::Spectator
             {
                 continue;

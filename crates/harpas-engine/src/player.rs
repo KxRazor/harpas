@@ -349,6 +349,8 @@ pub enum Output {
         /// The stack the cursor carries.
         carried: ItemStack,
     },
+    /// Restore the selected hotbar slot after loading player data.
+    SelectedHotbarSlot(i32),
     /// The stack the player's cursor carries changed.
     SetCarried(ItemStack),
     /// One slot of a menu changed.
@@ -548,6 +550,8 @@ pub(crate) struct PlayerState {
     pub(crate) acknowledge_block_changes: Option<i32>,
     pub(crate) digging: Digging,
     pub(crate) inventory: Inventory,
+    pub(crate) data_ready: bool,
+    pub(crate) saved_inventory: Option<Arc<crate::player_data::PlayerInventory>>,
     pub(crate) crafting_table: Option<crate::crafting::CraftingTable>,
     pub(crate) next_container_id: i32,
     pub(crate) secondary_use: bool,
@@ -630,6 +634,8 @@ impl PlayerState {
             acknowledge_block_changes: None,
             digging: Digging::default(),
             inventory: Inventory::default(),
+            data_ready: true,
+            saved_inventory: None,
             crafting_table: None,
             next_container_id: 0,
             secondary_use: false,

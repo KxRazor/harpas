@@ -7,12 +7,14 @@ mod crafting;
 pub mod entity;
 pub(crate) mod fluid;
 pub mod inventory;
+pub mod item_data;
 pub mod light;
 pub mod loot;
 mod menu;
 pub mod neighbor;
 mod place;
 pub mod player;
+pub mod player_data;
 pub mod recipe;
 pub(crate) mod ticks;
 mod tracking;
@@ -204,6 +206,8 @@ pub struct GameData {
     pub loot: Option<Arc<loot::LootTables>>,
     /// The crafting recipes; without them, nothing is crafted.
     pub recipes: Option<Arc<recipe::Recipes>>,
+    /// Saved item component codecs, using the owner's generated component registry.
+    pub items: Option<Arc<item_data::ItemCodec>>,
 }
 
 /// Starts the logic thread with a generator for chunks missing from an existing or newly initialized world.
@@ -241,6 +245,11 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
         world.set_loot_tables(loot);
     }
     world.recipes = data.recipes;
+    if let Some(items) = data.items
+        && let Some(store) = &mut world.player_store
+    {
+        store.codec = items;
+    }
     Some(world)
 }
 
@@ -440,7 +449,7 @@ impl TickWork for Game {
             }
         }
         for player in &mut self.players {
-            if player.disconnecting || player.awaiting_chunk_batch {
+            if player.disconnecting || !player.data_ready || player.awaiting_chunk_batch {
                 continue;
             }
             player.chunk_credit =
@@ -501,6 +510,10 @@ impl TickWork for Game {
         if self.stopped {
             return;
         }
+        self.poll_player_data();
+        if self.stopped {
+            return;
+        }
         // A player whose connection fell too far behind leaves; its connection closes on its own.
         let overflowed: Vec<_> = self
             .players
@@ -558,6 +571,23 @@ impl TickWork for Game {
                     self.stopped = true;
                 }
                 Event::Input { entity_id, input } => {
+                    if self
+                        .players
+                        .iter()
+                        .any(|p| p.player.entity_id == entity_id && !p.data_ready)
+                        && matches!(
+                            &input,
+                            player::Input::SetCreativeSlot { .. }
+                                | player::Input::SelectHotbarSlot(_)
+                                | player::Input::UseItemOn { .. }
+                                | player::Input::ClickContainer { .. }
+                                | player::Input::CloseContainer(_)
+                                | player::Input::DropSelected { .. }
+                                | player::Input::Dig { .. }
+                        )
+                    {
+                        continue;
+                    }
                     match input {
                         player::Input::ChatSessionEnded => {
                             if let Some(state) = self
@@ -768,7 +798,9 @@ impl TickWork for Game {
             if let Some(sequence) = state.acknowledge_block_changes.take() {
                 state.send(player::Output::AcknowledgeBlockChanges(sequence));
             }
-            state.check_flight();
+            if state.data_ready {
+                state.check_flight();
+            }
             state.tick_chat();
         }
         if tracking_changed {
@@ -781,6 +813,7 @@ impl TickWork for Game {
     }
 
     fn autosave(&mut self) {
+        self.save_player_inventories();
         if let Some(Err(error)) = self.world.as_mut().map(world::World::autosave) {
             self.fail_world(error);
         }
@@ -836,8 +869,25 @@ impl Game {
             }
             existing.send(player::Output::AddPlayer(player.player.profile.clone()));
         }
-        let contents = place::initial_contents(&mut player.inventory);
-        player.send(contents);
+        let store = self
+            .world
+            .as_mut()
+            .and_then(|world| world.player_store.as_mut());
+        if let Some(store) = store {
+            player.data_ready = false;
+            match store.load(id, player.player.profile.uuid) {
+                Ok(Some(data)) => Self::restore_inventory(&mut player, data),
+                Ok(None) => {}
+                Err(error) => {
+                    log::error!("Cannot load player {}: {error}", player.player.profile.name);
+                    player.disconnecting = true;
+                    player.send(player::Output::Disconnect("Cannot load player data"));
+                }
+            }
+        } else {
+            let contents = place::initial_contents(&mut player.inventory);
+            player.send(contents);
+        }
         self.players.push(player);
     }
 
@@ -856,6 +906,12 @@ impl Game {
                 self.drop_item(index, stack);
             }
         }
+        // The inventory menu's cursor and grid are also transient on departure.
+        let drops = self.players[index].inventory.take_transient_items();
+        for stack in drops {
+            self.drop_item(index, stack);
+        }
+        self.save_player_inventory(index);
         let left = self.players.remove(index);
         for player in &mut self.players {
             if player.tracked.remove(&entity_id) {
@@ -987,7 +1043,7 @@ impl Game {
     fn tick_digging(&mut self) {
         let air = |state| harpas_core::block::block_states().is_air(state);
         for index in 0..self.players.len() {
-            if self.players[index].disconnecting {
+            if self.players[index].disconnecting || !self.players[index].data_ready {
                 continue;
             }
             let digging = &mut self.players[index].digging;
@@ -1241,6 +1297,19 @@ fn run(
             Instant::now(),
         ) {}
     }));
+    // Final snapshots precede the I/O flush, including when the server stopped after a tick panic.
+    while let Some(player) = game.players.last() {
+        let id = player.player.entity_id;
+        let index = game.players.len() - 1;
+        let menu = game.players[index].container_id();
+        // Close live menus before the final snapshot: their cursor and ingredients return to persistent
+        // slots, rather than becoming new item entities just as the server is shutting down.
+        game.close_container(index, menu);
+        if menu != 0 {
+            game.close_container(index, 0);
+        }
+        game.leave(id);
+    }
     if let Some(world) = &mut game.world {
         world.flush()?;
     }

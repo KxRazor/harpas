@@ -6,8 +6,9 @@
 //! Creative are taken as they are; a slot the server changes is sent at the player's next tick, each change
 //! counted in the menu's state ID.
 //!
-//! Not done yet: reading and saving the inventory with the player's data, which Harpas does not save yet, so an
-//! inventory starts empty; and the other persistent containers.
+//! Persistent slots and the selected hotbar slot are loaded and saved with the player's vanilla data on a
+//! worker (`crate::player_data`). The cursor and crafting grids are transient. Other persistent containers
+//! remain to be implemented.
 
 use std::sync::Arc;
 
@@ -30,6 +31,8 @@ pub struct ComponentPatch {
     pub added: Vec<(i32, Vec<u8>)>,
     /// Removed components, by type ID.
     pub removed: Vec<i32>,
+    /// Unknown saved item fields, encoded as a named NBT compound, retained when stacks move or split.
+    pub preserved: Vec<u8>,
 }
 
 /// A stack of items, or none.

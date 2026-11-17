@@ -193,6 +193,7 @@ fn engine_stack(stack: play::ItemStack) -> ItemStack {
         components: Arc::new(ComponentPatch {
             added: stack.components.added,
             removed: stack.components.removed,
+            ..ComponentPatch::default()
         }),
     }
 }
@@ -572,6 +573,7 @@ pub(crate) fn send(
                 carried: packet_stack(&carried),
             }
             .into(),
+            Output::SelectedHotbarSlot(slot) => clientbound::SetHeldItem { slot }.into(),
             Output::SetCarried(stack) => clientbound::SetCursorItem {
                 item: packet_stack(&stack),
             }

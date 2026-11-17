@@ -96,6 +96,15 @@ returns the cursor and ingredients to the inventory and drops what does not fit;
 items. The result slot is a preview, not an additional saved item. Recipe-book placement, special recipes,
 results with data components and the other containers remain to be implemented.
 
+Player inventories now load before their first inventory synchronization and before gameplay can change
+items. A dedicated worker reads and writes their vanilla player documents; the logic thread takes immutable
+inventory snapshots on autosave, departure and shutdown. A reconnect uses the latest pending snapshot, and
+one write per UUID is outstanding, so an older save cannot overwrite newer progress. Main inventory, hotbar,
+armor, offhand and selected slot persist; the rest of the player document is retained. The supported item
+component codecs are checked against vanilla, and unsupported values refuse loading or accepting the item
+instead of removing its components. Details and limits are in [world.md](world.md#player-inventories).
+
+
 ### 2. Parallel only where it cannot be observed
 
 Running regions of the world in parallel, as Folia does, scales further but changes behavior: its README

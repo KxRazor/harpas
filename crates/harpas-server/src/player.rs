@@ -75,6 +75,7 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                     stack: engine_stack(p.item.0),
                 },
                 Packet::SetHeldItem(p) => Input::SelectHotbarSlot(p.slot),
+                Packet::PlayerInput(p) => Input::SecondaryUse(p.inputs.sneak),
                 Packet::ClickContainer(p) => Input::ClickContainer {
                     container_id: p.container_id,
                     state_id: p.state_id,
@@ -546,12 +547,26 @@ pub(crate) fn send(
                 count,
             }
             .into(),
+            Output::OpenCraftingTable(container_id) => clientbound::OpenScreen {
+                container_id,
+                // `minecraft:crafting` in the vanilla 26.1 menu registry.
+                kind: 12,
+                title: Nbt::Compound(harpas_core::nbt::Compound::from_iter([(
+                    "translate".to_owned(),
+                    Nbt::from("container.crafting"),
+                )])),
+            }
+            .into(),
+            Output::CloseContainer(container_id) => {
+                clientbound::CloseContainer { container_id }.into()
+            }
             Output::InventoryContent {
+                container_id,
                 state_id,
                 slots,
                 carried,
             } => clientbound::SetContainerContent {
-                window_id: 0,
+                window_id: container_id,
                 state_id,
                 slots: slots.iter().map(packet_stack).collect(),
                 carried: packet_stack(&carried),
@@ -562,11 +577,12 @@ pub(crate) fn send(
             }
             .into(),
             Output::SetSlot {
+                container_id,
                 state_id,
                 slot,
                 stack,
             } => clientbound::SetContainerSlot {
-                window_id: 0,
+                window_id: container_id,
                 state_id,
                 slot,
                 item: packet_stack(&stack),

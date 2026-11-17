@@ -7,7 +7,7 @@
 //! counted in the menu's state ID.
 //!
 //! Not done yet: reading and saving the inventory with the player's data, which Harpas does not save yet, so an
-//! inventory starts empty; the other containers; and clicks in Survival.
+//! inventory starts empty; and the other persistent containers.
 
 use std::sync::Arc;
 
@@ -118,9 +118,12 @@ impl Remote {
     }
 }
 
-/// The slots of a player's inventory menu, and what the client was last told of them.
+/// A menu's slots and synchronization state, also used for the crafting table's inventory view.
 #[derive(Debug)]
 pub(crate) struct Inventory {
+    /// A table view uses its 3x3 grid followed by the player's main inventory and hotbar. The off hand is
+    /// retained at index 46 for number-key swaps, but is not a visible slot.
+    pub(crate) table: bool,
     pub(crate) slots: Vec<ItemStack>,
     /// What the client holds in each slot, as far as the server knows (`remoteSlots`).
     pub(crate) remote: Vec<Remote>,
@@ -139,6 +142,7 @@ pub(crate) struct Inventory {
 impl Default for Inventory {
     fn default() -> Self {
         Self {
+            table: false,
             slots: vec![ItemStack::empty(); SLOTS],
             remote: vec![Remote::Known(ItemStack::empty()); SLOTS],
             carried: ItemStack::empty(),
@@ -151,6 +155,23 @@ impl Default for Inventory {
 }
 
 impl Inventory {
+    pub(crate) fn grid(&self) -> std::ops::Range<usize> {
+        1..if self.table { 10 } else { 5 }
+    }
+
+    /// The index in this menu of a slot of `Inventory.items`.
+    pub(crate) fn storage_slot(&self, index: usize) -> usize {
+        if self.table {
+            match index {
+                0..=8 => 37 + index,
+                40 => 46,
+                _ => index + 1,
+            }
+        } else {
+            Self::menu_slot(index)
+        }
+    }
+
     /// The menu's state ID (`getStateId`).
     pub(crate) fn state_id(&self) -> i32 {
         self.state_id
@@ -203,7 +224,7 @@ impl Inventory {
         [self.selected, 40]
             .into_iter()
             .chain(0..36)
-            .map(Self::menu_slot)
+            .map(|index| self.storage_slot(index))
             .find(|&slot| room(slot))
     }
 
@@ -221,7 +242,7 @@ impl Inventory {
             count = stack.count;
             let slot = self.slot_with_room(stack).or_else(|| {
                 (0..36)
-                    .map(Self::menu_slot)
+                    .map(|index| self.storage_slot(index))
                     .find(|&slot| self.slots[slot].is_empty())
             });
             let Some(slot) = slot else { break };

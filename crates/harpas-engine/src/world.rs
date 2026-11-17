@@ -4198,13 +4198,16 @@ mod tests {
         };
         let mut number = 1;
         tick(&mut game, number);
+        // Chunk and player-data workers complete independently. Wait for both before seeding the inventory,
+        // or the pending player load can replace these test items before the drop inputs are processed.
         wait_until(|| {
             number += 1;
             tick(&mut game, number);
-            matches!(
-                game.world.as_ref().unwrap().chunk(pos),
-                Some(ChunkState::Loaded(_))
-            )
+            game.players[0].data_ready
+                && matches!(
+                    game.world.as_ref().unwrap().chunk(pos),
+                    Some(ChunkState::Loaded(_))
+                )
         });
         game.players[0].player.position = crate::player::Position {
             x: 8.5,

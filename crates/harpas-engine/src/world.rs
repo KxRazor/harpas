@@ -568,6 +568,26 @@ impl World {
         }
     }
 
+    /// Whether eyes at `eye` are under water, as vanilla's `Entity.updateFluidOnEyes`: the water of the block a
+    /// ninth of a block below them reaches above that point.
+    pub(crate) fn eye_in_water(&self, [x, y, z]: [f64; 3]) -> bool {
+        let y = y - f64::from(0.111_111_11_f32);
+        let pos = BlockPos {
+            x: x.floor() as i32,
+            y: y.floor() as i32,
+            z: z.floor() as i32,
+        };
+        let state = |pos| self.block_state(pos).unwrap_or_else(block::void_air);
+        block::water_height(
+            state(pos),
+            state(BlockPos {
+                y: pos.y + 1,
+                ..pos
+            }),
+        )
+        .is_some_and(|height| f64::from(pos.y) + f64::from(height) > y)
+    }
+
     /// Sets the block state at `pos` in a loaded chunk, as vanilla's `LevelChunk.setBlockState`, and records
     /// the change for the next "sending block changes" step. Returns the old state, or none when nothing
     /// changed: the chunk is not loaded, the block is outside the world's height, or it already had `state`.
@@ -2790,6 +2810,128 @@ mod tests {
     }
 
     #[test]
+    fn players_in_survival_break_blocks_as_fast_as_vanilla_while_others_see_the_cracks() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (miner, from_miner) = crate::player::output_channel();
+        let (watcher, from_watcher) = crate::player::output_channel();
+        let joined = |entity_id: i32, output| Event::Joined {
+            entity_id,
+            profile: Profile {
+                uuid: entity_id as u128,
+                game_mode: GameMode::Survival,
+                ..profile()
+            },
+            view_distance: 2,
+            initial_view_distance: 2,
+            allow_flight: false,
+            output,
+        };
+        let mut game = Game {
+            pending: vec![joined(1, miner), joined(2, watcher)],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            game.players.iter().all(|p| p.sent_chunks.contains(&pos))
+        });
+        for player in &mut game.players {
+            player.player.position = crate::player::Position {
+                x: 0.5,
+                y: -48.0,
+                z: 0.5,
+                on_ground: true,
+                ..player.player.position
+            };
+        }
+        let states = block_states();
+        let dirt = states.default_state("minecraft:dirt").unwrap();
+        let grass = states.default_state("minecraft:short_grass").unwrap();
+        let air = states.default_state("minecraft:air").unwrap();
+        let world = game.world.as_mut().unwrap();
+        let grass_at = BlockPos { x: 1, y: -49, z: 0 };
+        let early = BlockPos { x: 2, y: -49, z: 0 };
+        let in_time = BlockPos { x: 0, y: -49, z: 2 };
+        world.set_block_state(grass_at, grass);
+        world.set_block_state(early, dirt);
+        world.set_block_state(in_time, dirt);
+        let mut step = |game: &mut Game, inputs: &[(block::DigAction, BlockPos)]| {
+            for &(action, position) in inputs {
+                game.pending.push(Event::Input {
+                    entity_id: 1,
+                    input: Input::Dig {
+                        action,
+                        position,
+                        sequence: 1,
+                    },
+                });
+            }
+            number += 1;
+            tick(game, number);
+        };
+        step(&mut game, &[]);
+        from_miner.try_iter().for_each(drop);
+        from_watcher.try_iter().for_each(drop);
+        let block = |game: &Game, pos| game.world.as_ref().unwrap().block_state(pos);
+
+        // A block of hardness 0 breaks as soon as it is hit.
+        step(&mut game, &[(block::DigAction::Start, grass_at)]);
+        assert_eq!(block(&game, grass_at), Some(air));
+
+        // Dirt takes 15 ticks by hand: 1 / 0.5 / 30 of it each tick. A client that says it finished at once
+        // is too early, so the server breaks the block when its own progress gets there.
+        step(
+            &mut game,
+            &[
+                (block::DigAction::Start, early),
+                (block::DigAction::Finish, early),
+            ],
+        );
+        for _ in 0..13 {
+            step(&mut game, &[]);
+            assert_eq!(block(&game, early), Some(dirt));
+        }
+        step(&mut game, &[]);
+        assert_eq!(block(&game, early), Some(air));
+        let stages: Vec<_> = from_watcher
+            .try_iter()
+            .filter_map(|output| match output {
+                Output::BlockDestruction {
+                    entity_id: 1,
+                    position,
+                    stage,
+                } if position == early => Some(stage),
+                _ => None,
+            })
+            .collect();
+        // The tick it breaks reaches stage 10, which removes the cracks.
+        assert_eq!(stages, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        // Finishing once 70% of the block is broken breaks it at once: 10 ticks after the start, the server
+        // counts 11 ticks of progress, 11 / 15 of the block.
+        step(&mut game, &[(block::DigAction::Start, in_time)]);
+        for _ in 0..9 {
+            step(&mut game, &[]);
+            assert_eq!(block(&game, in_time), Some(dirt));
+        }
+        step(&mut game, &[(block::DigAction::Finish, in_time)]);
+        assert_eq!(block(&game, in_time), Some(air));
+        assert!(
+            from_miner
+                .try_iter()
+                .all(|output| !matches!(output, Output::BlockUpdate { .. }))
+        );
+    }
+
+    #[test]
     fn players_in_creative_break_blocks_that_others_see_and_the_world_saves() {
         let folder = Folder::new();
         let pos = ChunkPos { x: 0, z: 0 };
@@ -2866,11 +3008,18 @@ mod tests {
         assert_eq!(world.block_state(broken), Some(air));
         assert_eq!(world.block_state(far), Some(stone));
         assert_eq!(world.block_state(BlockPos { x: 0, ..broken }), Some(stone));
+        // Stone takes a player in Survival many ticks to break, so the other player sees it start to crack.
         assert_eq!(
             from_creative.try_iter().collect::<Vec<_>>(),
-            [Output::AcknowledgeBlockChanges(4)]
+            [
+                Output::BlockDestruction {
+                    entity_id: 2,
+                    position: BlockPos { x: 0, ..broken },
+                    stage: 0,
+                },
+                Output::AcknowledgeBlockChanges(4),
+            ]
         );
-        // Survival breaking waits for destroy speeds: the block is sent back.
         assert_eq!(
             from_survival.try_iter().collect::<Vec<_>>(),
             [
@@ -2878,10 +3027,6 @@ mod tests {
                     event: 2001,
                     position: broken,
                     data: stone as i32,
-                },
-                Output::BlockUpdate {
-                    position: BlockPos { x: 0, ..broken },
-                    state: stone,
                 },
                 Output::AcknowledgeBlockChanges(7),
             ]

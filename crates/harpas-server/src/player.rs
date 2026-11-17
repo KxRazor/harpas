@@ -349,6 +349,16 @@ pub(crate) fn send(
             Output::AcknowledgeBlockChanges(sequence) => {
                 clientbound::AcknowledgeBlockChange { sequence }.into()
             }
+            Output::BlockDestruction {
+                entity_id,
+                position,
+                stage,
+            } => clientbound::SetBlockDestroyStage {
+                entity_id,
+                position: block_pos(position),
+                destroy_stage: stage,
+            }
+            .into(),
             Output::WorldEvent {
                 event,
                 position,

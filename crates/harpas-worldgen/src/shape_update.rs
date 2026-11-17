@@ -19,7 +19,7 @@ use harpas_core::block_behavior::{Face, block_behavior};
 
 use crate::connection_shape::{Connecting, Connections};
 use crate::data::{WorldgenData, WorldgenDataError};
-use crate::feature::FeatureWorld;
+use crate::feature::{BlockGetter, FeatureWorld};
 use crate::placement::StateSet;
 use crate::survival::{SurvivalRule, compile_block_survival};
 
@@ -156,7 +156,7 @@ impl ShapeUpdates {
         let mut updates = Vec::new();
         let mut by_block: HashMap<String, Option<u16>> = HashMap::new();
         for id in 0..states.len() {
-            let Some((name, _)) = states.properties(id) else {
+            let Some(name) = states.name(id) else {
                 continue;
             };
             let kind = match by_block.get(name) {
@@ -231,7 +231,7 @@ impl ShapeUpdates {
     /// `neighbor`.
     pub fn update(
         &self,
-        world: &impl FeatureWorld,
+        world: &impl BlockGetter,
         state: u32,
         position: [i32; 3],
         direction: Direction,
@@ -380,7 +380,7 @@ impl ShapeUpdates {
 /// `VineBlock.getUpdatedState`: the top face keeps while the block above can be attached to, as
 /// `isAcceptableNeighbour` asks it with `DOWN`; each side face while the block on that side can be attached
 /// to, or the vine above has the same face.
-fn vine_state(world: &impl FeatureWorld, mut state: u32, position: [i32; 3]) -> u32 {
+fn vine_state(world: &impl BlockGetter, mut state: u32, position: [i32; 3]) -> u32 {
     let above = Direction::Up.step(position);
     let flag = |value: bool| if value { "true" } else { "false" };
     if property(state, "up") == Some("true") {
@@ -411,7 +411,7 @@ fn vine_state(world: &impl FeatureWorld, mut state: u32, position: [i32; 3]) -> 
 /// `MultifaceBlock.canAttachTo`: whether the block at `neighbor`, reached in `direction`, has a full support or
 /// collision face towards the opposite direction.
 pub(crate) fn can_attach_to(
-    world: &impl FeatureWorld,
+    world: &impl BlockGetter,
     neighbor: [i32; 3],
     direction: Direction,
 ) -> bool {

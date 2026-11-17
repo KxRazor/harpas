@@ -5,6 +5,7 @@ use std::fs;
 
 use harpas_core::block::block_states;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::BlockGetter;
 use harpas_worldgen::shape_update::{Direction, ShapeUpdates};
 use harpas_worldgen::{
     FeatureCompiler, FeatureWorld, GeneratedChunk, RegionFeatureWorld, WorldgenData,

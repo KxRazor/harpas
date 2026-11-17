@@ -5,7 +5,7 @@
 //! block that is replaced by another block. It is recorded for the tick's "sending block changes" step, which
 //! sends it to every player who has the chunk, as vanilla's `ChunkHolder.broadcastChanges`.
 //!
-//! Not done yet: neighbor and shape updates, and the light of the changed block
+//! Shape updates of the neighbors are in [`crate::neighbor`]. Not done yet: the light of the changed block
 //! ([ROADMAP.md](../../../ROADMAP.md), M4).
 
 use std::sync::OnceLock;

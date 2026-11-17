@@ -6,6 +6,7 @@
 //! region, as other features do. Terrain beyond the region reads as air and its heights as the world's bottom,
 //! as in a generation region whose farther chunks have not started their terrain yet.
 
+use crate::feature::BlockGetter;
 use harpas_core::nbt::Nbt;
 use harpas_core::random::{RandomSource, WorldgenRandom};
 

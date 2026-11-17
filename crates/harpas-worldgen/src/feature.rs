@@ -28,16 +28,21 @@ use crate::template::StructureTemplates;
 /// Number of vanilla generation steps (GenerationStep.Decoration).
 pub const STEP_COUNT: usize = 11;
 
+/// Reads the blocks of a world (`BlockGetter`), which is all shape updates and survival rules need, so the
+/// engine's live world can run them too.
+pub trait BlockGetter {
+    /// Block state at world coordinates.
+    fn block_state(&self, x: i32, y: i32, z: i32) -> u32;
+}
+
 /// The world a FEATURES pass reads and writes.
-pub trait FeatureWorld {
+pub trait FeatureWorld: BlockGetter {
     /// World seed, as set by [`FeatureWorld::start_region`]; zero before a region is started.
     fn seed(&self) -> i64;
     /// Lowest block Y.
     fn min_y(&self) -> i32;
     /// Number of block Y values.
     fn height(&self) -> i32;
-    /// Block state at world coordinates.
-    fn block_state(&self, x: i32, y: i32, z: i32) -> u32;
     /// Sets a block state; returns whether the position is inside the writable region.
     fn set_block_state(&mut self, x: i32, y: i32, z: i32, state: u32) -> bool;
     /// Biome ID at a block position.
@@ -104,6 +109,13 @@ impl<'a> ChunkFeatureWorld<'a> {
     }
 }
 
+impl BlockGetter for ChunkFeatureWorld<'_> {
+    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
+        self.local(x, y, z)
+            .map_or_else(air_state, |(lx, y, lz)| self.chunk.block_state(lx, y, lz))
+    }
+}
+
 impl FeatureWorld for ChunkFeatureWorld<'_> {
     fn seed(&self) -> i64 {
         self.seed
@@ -115,11 +127,6 @@ impl FeatureWorld for ChunkFeatureWorld<'_> {
 
     fn height(&self) -> i32 {
         self.chunk.height()
-    }
-
-    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
-        self.local(x, y, z)
-            .map_or_else(air_state, |(lx, y, lz)| self.chunk.block_state(lx, y, lz))
     }
 
     fn set_block_state(&mut self, x: i32, y: i32, z: i32, state: u32) -> bool {
@@ -289,6 +296,17 @@ impl RegionFeatureWorld {
     }
 }
 
+impl BlockGetter for RegionFeatureWorld {
+    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
+        let Some((key, lx, y, lz)) = self.local(x, y, z) else {
+            return air_state();
+        };
+        self.chunks
+            .get(&key)
+            .map_or_else(air_state, |chunk| chunk.block_state(lx, y, lz))
+    }
+}
+
 impl FeatureWorld for RegionFeatureWorld {
     fn seed(&self) -> i64 {
         self.seed
@@ -300,15 +318,6 @@ impl FeatureWorld for RegionFeatureWorld {
 
     fn height(&self) -> i32 {
         self.height
-    }
-
-    fn block_state(&self, x: i32, y: i32, z: i32) -> u32 {
-        let Some((key, lx, y, lz)) = self.local(x, y, z) else {
-            return air_state();
-        };
-        self.chunks
-            .get(&key)
-            .map_or_else(air_state, |chunk| chunk.block_state(lx, y, lz))
     }
 
     fn set_block_state(&mut self, x: i32, y: i32, z: i32, state: u32) -> bool {

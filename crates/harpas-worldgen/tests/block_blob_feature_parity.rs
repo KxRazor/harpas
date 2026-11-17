@@ -1,6 +1,7 @@
 //! Block blob blocks, results and random consumption on mixed ground, at chunk edges and world limits.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 
 use harpas_core::block::block_states;

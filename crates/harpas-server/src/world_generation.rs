@@ -18,6 +18,7 @@ pub(crate) fn prepare(
     world: &Path,
     properties: &Properties,
     pack: &Path,
+    data: &Arc<WorldgenData>,
 ) -> io::Result<Option<Arc<dyn ChunkSource>>> {
     let level = harpas_anvil::read_level(world)?;
     let saved = harpas_anvil::read_world_gen_settings(world)?;
@@ -43,7 +44,7 @@ pub(crate) fn prepare(
             "world has chunks and generation settings but no level.dat; refusing to recreate world metadata",
         ));
     }
-    let data = Arc::new(WorldgenData::from_zip_path(pack).map_err(io::Error::other)?);
+    let data = Arc::clone(data);
     let templates = Arc::new(
         harpas_worldgen::StructureTemplates::from_zip_path(pack).map_err(io::Error::other)?,
     );
@@ -411,7 +412,7 @@ mod tests {
         harpas_anvil::write_level(&folder.0, &level).unwrap();
         let props = Properties::parse("level-seed=123\n");
         assert!(
-            prepare(&folder.0, &props, Path::new("missing.zip"))
+            prepare(&folder.0, &props, Path::new("missing.zip"), &Arc::default())
                 .unwrap()
                 .is_none()
         );
@@ -442,7 +443,7 @@ mod tests {
         harpas_anvil::write_world_gen_settings(&folder.0, &root).unwrap();
         let props = Properties::parse("level-seed=99\n");
         assert!(
-            prepare(&folder.0, &props, Path::new("missing.zip"))
+            prepare(&folder.0, &props, Path::new("missing.zip"), &Arc::default())
                 .unwrap()
                 .is_none()
         );

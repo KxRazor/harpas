@@ -81,9 +81,9 @@ pub use density::{
     DensityOp, MarkerKind, NodeId, NoiseRouterDef, PositionalRandom, RarityValueMapper, UnaryOp,
 };
 pub use feature::{
-    ChunkFeatureWorld, CompiledOre, DecorationStructures, DecorationTerrain, FeatureIndex,
-    FeatureWorld, OreTarget, RegionFeatureWorld, RuleTestRule, STEP_COUNT, apply_biome_decoration,
-    apply_biome_decoration_with_structures, place_ore,
+    BlockGetter, ChunkFeatureWorld, CompiledOre, DecorationStructures, DecorationTerrain,
+    FeatureIndex, FeatureWorld, OreTarget, RegionFeatureWorld, RuleTestRule, STEP_COUNT,
+    apply_biome_decoration, apply_biome_decoration_with_structures, place_ore,
 };
 pub use generator::{GeneratedChunk, HeightmapType, Heightmaps, NoiseBasedChunkGenerator};
 pub use light::{ChunkLight, LIGHT_BYTES, LightSection, LightWorld, light_chunk};

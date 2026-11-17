@@ -1,12 +1,13 @@
 //! Compares the blocks of every placed feature Harpas places with vanilla's own `applyBiomeDecoration`.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::collections::BTreeSet;
 use std::fs;
 
 use harpas_core::block::block_states;
 use harpas_worldgen::{
-    FeatureIndex, FeatureWorld, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
+    FeatureIndex, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
     apply_biome_decoration,
 };
 use reference::Reference;

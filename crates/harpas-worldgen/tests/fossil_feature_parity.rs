@@ -1,14 +1,15 @@
 //! Fossils compared block by block with vanilla's own fossil features, in a decoration region of test terrain.
 mod reference;
 
+use harpas_worldgen::BlockGetter;
 use std::fs;
 use std::sync::Arc;
 
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::{
-    CompiledFeature, FeatureCompiler, FeatureWorld, GeneratedChunk, RegionFeatureWorld,
-    StructureTemplates, WorldgenData, place_feature,
+    CompiledFeature, FeatureCompiler, GeneratedChunk, RegionFeatureWorld, StructureTemplates,
+    WorldgenData, place_feature,
 };
 
 fn state(name: &str) -> u32 {

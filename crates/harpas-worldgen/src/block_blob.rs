@@ -51,6 +51,7 @@ pub fn place_block_blob<W: FeatureWorld, R: RandomSource>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::BlockGetter;
     use crate::{FeatureCompiler, GeneratedChunk, RegionFeatureWorld, WorldgenData, place_feature};
     use harpas_core::block::block_states;
     use harpas_core::random::XoroshiroRandom;

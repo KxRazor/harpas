@@ -338,6 +338,11 @@ impl BlockStates {
         Some((block.first + offset, ignored))
     }
 
+    /// The name of the block of state `id`, such as `minecraft:stone`, without reading its properties.
+    pub fn name(&self, id: u32) -> Option<&str> {
+        self.block(id).map(|block| block.name.as_str())
+    }
+
     /// The block name and property values of state `id`, properties in vanilla's order.
     pub fn properties(&self, id: u32) -> Option<(&str, Vec<(&str, &str)>)> {
         let block = &self.blocks[*self.owners.get(id as usize)? as usize];

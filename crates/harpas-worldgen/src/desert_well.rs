@@ -103,6 +103,7 @@ pub fn place_desert_well<W: FeatureWorld, R: RandomSource>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::BlockGetter;
     use crate::{FeatureCompiler, GeneratedChunk, RegionFeatureWorld, WorldgenData, place_feature};
     use harpas_core::nbt::Nbt;
     use harpas_core::random::XoroshiroRandom;

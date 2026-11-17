@@ -4,6 +4,7 @@
 
 pub mod block;
 pub mod light;
+pub mod neighbor;
 pub mod player;
 pub mod world;
 pub mod worldgen;
@@ -17,13 +18,12 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use harpas_worldgen::shape_update::ShapeUpdates;
+
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_LAG: Duration = Duration::from_secs(2);
 const AUTOSAVE_INTERVAL: u64 = 6_000;
 const CHUNKS_PER_BATCH: usize = 8;
-/// Vanilla's world event for a broken block (`LevelEvent.PARTICLES_DESTROY_BLOCK`), whose data is the block
-/// state.
-const BLOCK_DESTROYED: i32 = 2001;
 
 /// A handle for sending connection events to the logic thread.
 #[derive(Clone, Debug)]
@@ -167,11 +167,14 @@ pub fn start() -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
 }
 
 /// Starts the logic thread with an existing world's overworld and the server's ordered biome registry.
+///
+/// `shapes` are the shape rules of the blocks; without them, block changes leave their neighbors as they are.
 pub fn start_with_world(
     world_dir: &std::path::Path,
     biomes: &[&str],
+    shapes: Option<Arc<ShapeUpdates>>,
 ) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
-    start_game(Some(world::World::open(world_dir, biomes)?))
+    start_game(with_shapes(world::World::open(world_dir, biomes)?, shapes))
 }
 
 /// Starts the logic thread with a generator for chunks missing from an existing or newly initialized world.
@@ -188,15 +191,24 @@ pub fn start_with_world_generator(
 
 /// Starts the logic thread with a source for chunks missing from an existing or newly initialized world, or
 /// saved part way through generation. The source executes on chunk workers and the chunks it returns are
-/// persisted on unload or shutdown.
+/// persisted on unload or shutdown. `shapes` are as for [`start_with_world`].
 pub fn start_with_world_source(
     world_dir: &std::path::Path,
     biomes: &[&str],
     source: Arc<dyn world::ChunkSource>,
+    shapes: Option<Arc<ShapeUpdates>>,
 ) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
-    start_game(Some(world::World::open_with_source(
-        world_dir, biomes, source,
-    )?))
+    start_game(with_shapes(
+        world::World::open_with_source(world_dir, biomes, source)?,
+        shapes,
+    ))
+}
+
+fn with_shapes(mut world: world::World, shapes: Option<Arc<ShapeUpdates>>) -> Option<world::World> {
+    if let Some(shapes) = shapes {
+        world.set_shape_updates(shapes);
+    }
+    Some(world)
 }
 
 fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
@@ -936,13 +948,30 @@ impl Game {
                 && within(player, pos, 64.0)
             {
                 player.send(player::Output::WorldEvent {
-                    event: BLOCK_DESTROYED,
+                    event: neighbor::BLOCK_DESTROYED,
                     position: pos,
                     data: state as i32,
                 });
             }
         }
-        world.set_block_state(pos, block::removed(state));
+        world.set_block(
+            pos,
+            block::removed(state),
+            neighbor::UPDATE_ALL,
+            neighbor::UPDATE_LIMIT,
+        );
+        // The particles and sound of the blocks that broke with it, for every player nearby.
+        for event in world.take_level_events() {
+            for player in &self.players {
+                if !player.disconnecting && within(player, event.pos, 64.0) {
+                    player.send(player::Output::WorldEvent {
+                        event: event.event,
+                        position: event.pos,
+                        data: event.data,
+                    });
+                }
+            }
+        }
         true
     }
 

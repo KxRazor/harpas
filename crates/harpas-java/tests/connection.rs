@@ -332,8 +332,8 @@ fn offline_players_join_the_void_world() {
         Some(&play::clientbound::ChunkBatchFinished { batch_size: 25 }.into())
     );
 
-    // Play packets the schema does not have yet, such as Click Container (0x12), are ignored.
-    connection.receive(&[0x02, 0x12, 0x00], &info).unwrap();
+    // Play packets the schema does not have yet, such as Debug Subscription Request (0x17), are ignored.
+    connection.receive(&[0x02, 0x17, 0x00], &info).unwrap();
     assert_eq!(connection.state(), State::Play);
 }
 

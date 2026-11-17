@@ -9,7 +9,7 @@ use std::thread::Thread;
 use harpas_anvil::Chunk;
 
 use crate::block::{BlockPos, DigAction};
-use crate::inventory::{Inventory, ItemStack};
+use crate::inventory::{HashedStack, Inventory, ItemStack};
 use crate::light::Light;
 use crate::world::{ChunkPos, World};
 use harpas_core::block_behavior::Face;
@@ -163,6 +163,25 @@ pub enum Input {
         /// The client's sequence number for its prediction.
         sequence: i32,
     },
+    /// The player clicked a slot of an open container.
+    ClickContainer {
+        /// The container: 0 for the inventory.
+        container_id: i32,
+        /// The last state ID the client received.
+        state_id: i32,
+        /// The slot, -999 outside the window, -1 for none.
+        slot: i16,
+        /// The mouse button or hotbar key.
+        button: i8,
+        /// The click type, 0 to 6.
+        mode: i32,
+        /// The slots as the client predicted them.
+        changed: Vec<(i16, Option<HashedStack>)>,
+        /// The cursor's stack as the client predicted it.
+        carried: Option<HashedStack>,
+    },
+    /// The player closed a container screen.
+    CloseContainer(i32),
     /// The player dropped one item of the selected hotbar slot, or all of it.
     DropSelected {
         /// Whether the whole stack was dropped.
@@ -322,6 +341,8 @@ pub enum Output {
         /// The stack the cursor carries.
         carried: ItemStack,
     },
+    /// The stack the player's cursor carries changed.
+    SetCarried(ItemStack),
     /// One slot of the player's inventory changed.
     SetSlot {
         /// The inventory menu's count of changes.

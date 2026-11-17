@@ -498,18 +498,107 @@ impl Game {
 
     /// Sends each player the slots of its inventory that changed (`broadcastChanges`, in the player's tick).
     pub(crate) fn send_inventory_changes(&mut self) {
-        for state in &mut self.players {
-            if state.disconnecting {
-                continue;
+        for index in 0..self.players.len() {
+            self.broadcast_changes(index);
+        }
+    }
+
+    /// `AbstractContainerMenu.broadcastChanges` for one player: the slots and cursor the client was not told of.
+    fn broadcast_changes(&mut self, index: usize) {
+        let state = &mut self.players[index];
+        if state.disconnecting {
+            return;
+        }
+        for (slot, stack) in state.inventory.changes() {
+            let state_id = state.inventory.next_state_id();
+            state.send(player::Output::SetSlot {
+                state_id,
+                slot: slot as i16,
+                stack,
+            });
+        }
+        if let Some(carried) = state.inventory.carried_change() {
+            state.send(player::Output::SetCarried(carried));
+        }
+    }
+
+    /// `AbstractContainerMenu.broadcastFullState`: every slot and the cursor, as the client must start over.
+    fn broadcast_full_state(&mut self, index: usize) {
+        let state = &mut self.players[index];
+        let state_id = state.inventory.next_state_id();
+        let output = player::Output::InventoryContent {
+            state_id,
+            slots: state.inventory.slots.clone(),
+            carried: state.inventory.carried.clone(),
+        };
+        state.inventory.mark_all_sent();
+        state.send(output);
+    }
+
+    /// A click in a container (`handleContainerClick`). Only the inventory exists so far.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn click_container(
+        &mut self,
+        index: usize,
+        container_id: i32,
+        state_id: i32,
+        slot: i16,
+        button: i8,
+        mode: i32,
+        changed: Vec<(i16, Option<crate::inventory::HashedStack>)>,
+        carried: Option<crate::inventory::HashedStack>,
+    ) {
+        if container_id != 0 {
+            return;
+        }
+        let mode_now = self.players[index].player.profile.game_mode;
+        if mode_now == player::GameMode::Spectator {
+            self.broadcast_full_state(index);
+            return;
+        }
+        let valid = slot == -1 || slot == -999 || (0..inventory::SLOTS as i16).contains(&slot);
+        if !valid || !(0..=6).contains(&mode) {
+            return;
+        }
+        let recipes = self.world.as_ref().and_then(|w| w.recipes.clone());
+        let context = crate::menu::Context {
+            recipes: recipes.as_deref(),
+            creative: mode_now == player::GameMode::Creative,
+        };
+        let inventory = &mut self.players[index].inventory;
+        let mismatch = state_id != inventory.state_id();
+        let drops = inventory.click(slot, button, mode, &context);
+        // The client's prediction is what it holds now (`setRemoteSlotUnsafe`, `setRemoteCarried`).
+        for (slot, stack) in changed {
+            if let Some(slot) = usize::try_from(slot).ok().filter(|&s| s < inventory::SLOTS) {
+                inventory.remote[slot] = inventory::Remote::Hashed(stack);
             }
-            for (slot, stack) in state.inventory.changes() {
-                let state_id = state.inventory.next_state_id();
-                state.send(player::Output::SetSlot {
-                    state_id,
-                    slot: slot as i16,
-                    stack,
-                });
-            }
+        }
+        inventory.remote_carried = inventory::Remote::Hashed(carried);
+        for stack in drops {
+            self.drop_item(index, stack);
+        }
+        if mismatch {
+            self.broadcast_full_state(index);
+        } else {
+            self.broadcast_changes(index);
+        }
+    }
+
+    /// Closing a container screen (`handleContainerClose`): for the inventory, its cursor and crafting grid go
+    /// back into it.
+    pub(crate) fn close_container(&mut self, index: usize, container_id: i32) {
+        if container_id != 0 {
+            return;
+        }
+        let recipes = self.world.as_ref().and_then(|w| w.recipes.clone());
+        let context = crate::menu::Context {
+            recipes: recipes.as_deref(),
+            creative: self.players[index].player.profile.game_mode == player::GameMode::Creative,
+        };
+        let drops = self.players[index].inventory.close(&context);
+        for stack in drops {
+            self.drop_item(index, stack);
         }
     }
 }

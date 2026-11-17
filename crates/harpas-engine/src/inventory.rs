@@ -76,23 +76,74 @@ impl ItemStack {
     }
 }
 
+/// A stack as a client predicts it after a click: the item, the count, and each changed component as its type
+/// and a hash of its value (`HashedStack`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HashedStack {
+    /// The item's numeric ID.
+    pub item: u32,
+    /// How many.
+    pub count: i32,
+    /// Added or replaced components: type ID and value hash.
+    pub added: Vec<(i32, i32)>,
+    /// Removed components, by type ID.
+    pub removed: Vec<i32>,
+}
+
+/// What the server knows a client holds in a slot (`RemoteSlot`): a stack it was sent, or the hashed stack the
+/// client predicted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Remote {
+    Known(ItemStack),
+    Hashed(Option<HashedStack>),
+}
+
+impl Remote {
+    /// Whether the client holds `stack` (`RemoteSlot.matches`). Component hashes are not computed yet, so a
+    /// stack with changed components never matches a hashed one, and is sent again.
+    fn matches(&self, stack: &ItemStack) -> bool {
+        match self {
+            Self::Known(known) => known == stack,
+            Self::Hashed(None) => stack.is_empty(),
+            Self::Hashed(Some(hashed)) => {
+                !stack.is_empty()
+                    && hashed.item == stack.item
+                    && hashed.count == stack.count
+                    && hashed.added.is_empty()
+                    && hashed.removed.is_empty()
+                    && stack.components.added.is_empty()
+                    && stack.components.removed.is_empty()
+            }
+        }
+    }
+}
+
 /// The slots of a player's inventory menu, and what the client was last told of them.
 #[derive(Debug)]
 pub(crate) struct Inventory {
     pub(crate) slots: Vec<ItemStack>,
     /// What the client holds in each slot, as far as the server knows (`remoteSlots`).
-    remote: Vec<ItemStack>,
+    pub(crate) remote: Vec<Remote>,
+    /// The stack the cursor carries (`carried`).
+    pub(crate) carried: ItemStack,
+    /// What the client's cursor carries, as far as the server knows (`remoteCarried`).
+    pub(crate) remote_carried: Remote,
+    /// The drag in progress (`quickcraftStatus`, `quickcraftType` and `quickcraftSlots`).
+    pub(crate) quickcraft: crate::menu::QuickCraft,
     /// The hotbar slot in the main hand, 0 to 8 (`Inventory.selected`).
     pub(crate) selected: usize,
     /// The menu's count of changes sent (`stateId`), from 0 to 32,767.
-    state_id: i32,
+    pub(crate) state_id: i32,
 }
 
 impl Default for Inventory {
     fn default() -> Self {
         Self {
             slots: vec![ItemStack::empty(); SLOTS],
-            remote: vec![ItemStack::empty(); SLOTS],
+            remote: vec![Remote::Known(ItemStack::empty()); SLOTS],
+            carried: ItemStack::empty(),
+            remote_carried: Remote::Known(ItemStack::empty()),
+            quickcraft: crate::menu::QuickCraft::default(),
             selected: 0,
             state_id: 0,
         }
@@ -100,6 +151,11 @@ impl Default for Inventory {
 }
 
 impl Inventory {
+    /// The menu's state ID (`getStateId`).
+    pub(crate) fn state_id(&self) -> i32 {
+        self.state_id
+    }
+
     /// `incrementStateId`.
     pub(crate) fn next_state_id(&mut self) -> i32 {
         self.state_id = (self.state_id + 1) & 32_767;
@@ -118,13 +174,13 @@ impl Inventory {
     /// Puts a stack the client chose in a slot, which the client already shows (`setByPlayer` and
     /// `setRemoteSlot`).
     pub(crate) fn set_by_client(&mut self, slot: usize, stack: ItemStack) {
-        self.remote[slot] = stack.clone();
+        self.remote[slot] = Remote::Known(stack.clone());
         self.slots[slot] = stack;
     }
 
     /// The menu slot of an index of `Inventory.items`: the hotbar 0 to 8, then the main inventory 9 to 35, and
     /// the off hand at 40.
-    fn menu_slot(index: usize) -> usize {
+    pub(crate) fn menu_slot(index: usize) -> usize {
         match index {
             0..=8 => HOTBAR + index,
             40 => OFF_HAND,
@@ -134,7 +190,7 @@ impl Inventory {
 
     /// `Inventory.getSlotWithRemainingSpace`: the selected slot, then the off hand, then every slot from the
     /// hotbar on, the first that holds more of the same item and has room.
-    fn slot_with_room(&self, stack: &ItemStack) -> Option<usize> {
+    pub(crate) fn slot_with_room(&self, stack: &ItemStack) -> Option<usize> {
         let room = |slot: usize| {
             let held = &self.slots[slot];
             !held.is_empty()
@@ -192,12 +248,30 @@ impl Inventory {
         stack.count < before
     }
 
+    /// Whether the cursor's stack changed since the client was told of it, marking it as told
+    /// (`broadcastChanges`'s carried part).
+    pub(crate) fn carried_change(&mut self) -> Option<ItemStack> {
+        if self.remote_carried.matches(&self.carried) {
+            return None;
+        }
+        self.remote_carried = Remote::Known(self.carried.clone());
+        Some(self.carried.clone())
+    }
+
+    /// Marks every slot and the cursor as told, for a client sent the whole menu (`sendAllDataToRemote`).
+    pub(crate) fn mark_all_sent(&mut self) {
+        for slot in 0..SLOTS {
+            self.remote[slot] = Remote::Known(self.slots[slot].clone());
+        }
+        self.remote_carried = Remote::Known(self.carried.clone());
+    }
+
     /// The slots whose stacks the client has not been told of (`broadcastChanges`), each marked as told.
     pub(crate) fn changes(&mut self) -> Vec<(usize, ItemStack)> {
         let mut changed = Vec::new();
         for slot in 0..SLOTS {
-            if self.slots[slot] != self.remote[slot] {
-                self.remote[slot] = self.slots[slot].clone();
+            if !self.remote[slot].matches(&self.slots[slot]) {
+                self.remote[slot] = Remote::Known(self.slots[slot].clone());
                 changed.push((slot, self.slots[slot].clone()));
             }
         }

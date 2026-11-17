@@ -5,7 +5,7 @@ use std::io;
 use harpas_core::block_behavior::Face;
 use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
-use harpas_engine::inventory::{ComponentPatch, ItemStack};
+use harpas_engine::inventory::{ComponentPatch, HashedStack, ItemStack};
 use harpas_engine::player::{self, Input, Movement, Output, Position, Profile};
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
@@ -75,6 +75,20 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                     stack: engine_stack(p.item.0),
                 },
                 Packet::SetHeldItem(p) => Input::SelectHotbarSlot(p.slot),
+                Packet::ClickContainer(p) => Input::ClickContainer {
+                    container_id: p.container_id,
+                    state_id: p.state_id,
+                    slot: p.slot,
+                    button: p.button,
+                    mode: p.mode,
+                    changed: p
+                        .changed_slots
+                        .into_iter()
+                        .map(|changed| (changed.slot, changed.item.map(engine_hashed)))
+                        .collect(),
+                    carried: p.carried.map(engine_hashed),
+                },
+                Packet::CloseContainer(p) => Input::CloseContainer(p.container_id),
                 Packet::UseItemOn(p) => Input::UseItemOn {
                     off_hand: p.hand == play::Hand::OffHand,
                     position: BlockPos {
@@ -179,6 +193,16 @@ fn engine_stack(stack: play::ItemStack) -> ItemStack {
             added: stack.components.added,
             removed: stack.components.removed,
         }),
+    }
+}
+
+/// A predicted stack as the engine compares it.
+fn engine_hashed(stack: play::HashedStack) -> HashedStack {
+    HashedStack {
+        item: stack.item as u32,
+        count: stack.count,
+        added: stack.added,
+        removed: stack.removed,
     }
 }
 
@@ -531,6 +555,10 @@ pub(crate) fn send(
                 state_id,
                 slots: slots.iter().map(packet_stack).collect(),
                 carried: packet_stack(&carried),
+            }
+            .into(),
+            Output::SetCarried(stack) => clientbound::SetCursorItem {
+                item: packet_stack(&stack),
             }
             .into(),
             Output::SetSlot {

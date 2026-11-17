@@ -18,6 +18,7 @@ use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
+use crate::block::{self, BlockPos};
 use crate::light::{self, Light, Lighter};
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -99,6 +100,9 @@ fn air_states() -> [u32; 3] {
             .map(|name| block_states().default_state(name).expect("an air block"))
     })
 }
+
+/// The changed blocks of one chunk section, with their current states.
+pub(crate) type SectionChanges = Vec<(BlockPos, u32)>;
 
 /// The result of requesting an existing chunk.
 #[derive(Debug)]
@@ -408,6 +412,10 @@ pub struct World {
     unload_save_delay: Duration,
     /// The light of the loaded chunks that were generated without it.
     light: HashMap<ChunkPos, LightState>,
+    /// The blocks changed since the last "sending block changes" step, each once, in the order they first
+    /// changed.
+    block_changes: Vec<BlockPos>,
+    changed_blocks: HashSet<BlockPos>,
     /// The loaded chunks that need light and have not been given to the workers yet.
     unlit: HashSet<ChunkPos>,
     next_light_job: u64,
@@ -523,6 +531,8 @@ impl World {
             saving: HashSet::new(),
             unload_save_delay: UNLOAD_SAVE_DELAY,
             light: HashMap::new(),
+            block_changes: Vec::new(),
+            changed_blocks: HashSet::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source,
@@ -544,6 +554,64 @@ impl World {
     /// The current state of a chunk. A changed chunk stays resident until its pending save finishes.
     pub fn chunk(&self, pos: ChunkPos) -> Option<&ChunkState> {
         self.chunks.get(&pos)
+    }
+
+    /// The block state at `pos`, or none when its chunk is not loaded or the block is outside the world's
+    /// height. A loaded chunk without a section at that height is air there.
+    pub fn block_state(&self, pos: BlockPos) -> Option<u32> {
+        if !(block::MIN_Y..=block::MAX_Y).contains(&pos.y) {
+            return None;
+        }
+        match self.chunks.get(&pos.chunk())? {
+            ChunkState::Loaded(chunk) => Some(block::get(chunk, pos)),
+            _ => None,
+        }
+    }
+
+    /// Sets the block state at `pos` in a loaded chunk, as vanilla's `LevelChunk.setBlockState`, and records
+    /// the change for the next "sending block changes" step. Returns the old state, or none when nothing
+    /// changed: the chunk is not loaded, the block is outside the world's height, or it already had `state`.
+    pub fn set_block_state(&mut self, pos: BlockPos, state: u32) -> Option<u32> {
+        if self.block_state(pos)? == state {
+            return None;
+        }
+        let old = block::set(self.chunk_mut(pos.chunk())?, pos, state)?;
+        self.block_changed(pos);
+        Some(old)
+    }
+
+    /// Records that the block at `pos` must be sent again to the players who have its chunk, as vanilla's
+    /// `ChunkHolder.blockChanged`.
+    pub(crate) fn block_changed(&mut self, pos: BlockPos) {
+        if self.changed_blocks.insert(pos) {
+            self.block_changes.push(pos);
+        }
+    }
+
+    /// Takes the blocks changed since the last call, grouped by chunk in the order the chunks first changed and
+    /// by section from the bottom up, each with its current state. A chunk that left meanwhile is left out.
+    pub(crate) fn take_block_changes(&mut self) -> Vec<(ChunkPos, Vec<SectionChanges>)> {
+        self.changed_blocks.clear();
+        let mut index = HashMap::new();
+        let mut chunks: Vec<(ChunkPos, BTreeMap<i32, SectionChanges>)> = Vec::new();
+        for pos in std::mem::take(&mut self.block_changes) {
+            let Some(state) = self.block_state(pos) else {
+                continue;
+            };
+            let chunk = *index.entry(pos.chunk()).or_insert_with(|| {
+                chunks.push((pos.chunk(), BTreeMap::new()));
+                chunks.len() - 1
+            });
+            chunks[chunk]
+                .1
+                .entry(pos.y >> 4)
+                .or_default()
+                .push((pos, state));
+        }
+        chunks
+            .into_iter()
+            .map(|(chunk, sections)| (chunk, sections.into_values().collect()))
+            .collect()
     }
 
     /// Whether a player at `position` touches nothing but air, as vanilla's `noBlocksAround`: every block that
@@ -1201,6 +1269,7 @@ mod tests {
     use harpas_core::nbt::{Compound, Nbt};
 
     use super::*;
+    use crate::block;
     use crate::player::{GameMode, Input, Movement, Output, Profile};
     use crate::{Event, Game, tick};
 
@@ -1295,6 +1364,8 @@ mod tests {
             saving: HashSet::new(),
             unload_save_delay: Duration::ZERO,
             light: HashMap::new(),
+            block_changes: Vec::new(),
+            changed_blocks: HashSet::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source: None,
@@ -2716,5 +2787,120 @@ mod tests {
             Ok(()) => false,
         });
         assert!(message.unwrap().contains("--forceUpgrade"));
+    }
+
+    #[test]
+    fn players_in_creative_break_blocks_that_others_see_and_the_world_saves() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (creative, from_creative) = crate::player::output_channel();
+        let (survival, from_survival) = crate::player::output_channel();
+        let joined = |entity_id: i32, game_mode, output| Event::Joined {
+            entity_id,
+            profile: Profile {
+                uuid: entity_id as u128,
+                game_mode,
+                ..profile()
+            },
+            view_distance: 2,
+            initial_view_distance: 2,
+            allow_flight: false,
+            output,
+        };
+        let mut game = Game {
+            pending: vec![
+                joined(1, GameMode::Creative, creative),
+                joined(2, GameMode::Survival, survival),
+            ],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            game.players.iter().all(|p| p.sent_chunks.contains(&pos))
+        });
+        for player in &mut game.players {
+            player.player.position = crate::player::Position {
+                x: 0.5,
+                y: -48.0,
+                z: 0.5,
+                ..player.player.position
+            };
+        }
+        from_creative.try_iter().for_each(drop);
+        from_survival.try_iter().for_each(drop);
+
+        let stone = block_states().default_state("minecraft:stone").unwrap();
+        let air = block_states().default_state("minecraft:air").unwrap();
+        let dig = |game: &mut Game, entity_id, action, position, sequence| {
+            game.pending.push(Event::Input {
+                entity_id,
+                input: Input::Dig {
+                    action,
+                    position,
+                    sequence,
+                },
+            });
+        };
+        let broken = BlockPos { x: 1, y: -49, z: 0 };
+        let far = BlockPos { x: 9, y: -49, z: 0 };
+        dig(&mut game, 1, block::DigAction::Start, broken, 3);
+        dig(&mut game, 1, block::DigAction::Start, far, 4);
+        dig(
+            &mut game,
+            2,
+            block::DigAction::Start,
+            BlockPos { x: 0, ..broken },
+            7,
+        );
+        number += 1;
+        tick(&mut game, number);
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(world.block_state(broken), Some(air));
+        assert_eq!(world.block_state(far), Some(stone));
+        assert_eq!(world.block_state(BlockPos { x: 0, ..broken }), Some(stone));
+        assert_eq!(
+            from_creative.try_iter().collect::<Vec<_>>(),
+            [Output::AcknowledgeBlockChanges(4)]
+        );
+        // Survival breaking waits for destroy speeds: the block is sent back.
+        assert_eq!(
+            from_survival.try_iter().collect::<Vec<_>>(),
+            [
+                Output::WorldEvent {
+                    event: 2001,
+                    position: broken,
+                    data: stone as i32,
+                },
+                Output::BlockUpdate {
+                    position: BlockPos { x: 0, ..broken },
+                    state: stone,
+                },
+                Output::AcknowledgeBlockChanges(7),
+            ]
+        );
+        // The change reaches everyone who has the chunk at the next "sending block changes".
+        number += 1;
+        tick(&mut game, number);
+        for received in [&from_creative, &from_survival] {
+            assert_eq!(
+                received.try_iter().collect::<Vec<_>>(),
+                [Output::SectionBlocks(Arc::from([(broken, air)]))]
+            );
+        }
+
+        let mut world = game.world.take().unwrap();
+        world.flush().unwrap();
+        drop(world);
+        let mut reopened = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut reopened, &[pos]);
+        assert_eq!(reopened.block_state(broken), Some(air));
     }
 }

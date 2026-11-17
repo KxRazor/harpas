@@ -3,6 +3,7 @@
 use std::io;
 
 use harpas_engine::PlayerSession;
+use harpas_engine::block::{BlockPos, DigAction};
 use harpas_engine::player::{self, Input, Movement, Output, Position, Profile};
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
@@ -61,6 +62,24 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                     on_ground: p.flags.on_ground,
                 }),
                 Packet::PlayerAbilities(p) => Input::Flying(p.flags.flying),
+                Packet::PlayerAction(p) => {
+                    let action = match p.status {
+                        play::PlayerActionStatus::StartedDigging => DigAction::Start,
+                        play::PlayerActionStatus::CancelledDigging => DigAction::Abort,
+                        play::PlayerActionStatus::FinishedDigging => DigAction::Finish,
+                        // Dropping, using and swapping items come with items.
+                        _ => continue,
+                    };
+                    Input::Dig {
+                        action,
+                        position: BlockPos {
+                            x: p.position.x,
+                            y: p.position.y,
+                            z: p.position.z,
+                        },
+                        sequence: p.sequence,
+                    }
+                }
                 Packet::ClientInformation(p) => {
                     let distance = p.view_distance.clamp(2, 32) as u8;
                     Input::ViewDistance(distance)
@@ -103,6 +122,20 @@ fn mode_id(mode: player::GameMode) -> i32 {
 
 fn angle(degrees: f32) -> i8 {
     ((f64::from(degrees).rem_euclid(360.0) * 256.0 / 360.0).floor() as u8) as i8
+}
+
+fn block_pos(position: BlockPos) -> play::BlockPos {
+    play::BlockPos {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+    }
+}
+
+/// One block as Update Section Blocks packs it: the state above 12 bits of position in the section, X, then Z,
+/// then Y.
+fn section_block(position: BlockPos, state: u32) -> i32 {
+    ((state as i32) << 12) | (position.x & 15) << 8 | (position.z & 15) << 4 | (position.y & 15)
 }
 
 fn sync(position: Position, teleport_id: i32) -> clientbound::SynchronizePlayerPosition {
@@ -284,6 +317,49 @@ pub(crate) fn send(
                     .send_play_packet(clientbound::ChunkBatchFinished { batch_size: count }.into());
                 continue;
             }
+            Output::SectionBlocks(blocks) => match *blocks {
+                [(position, state)] => clientbound::BlockUpdate {
+                    position: block_pos(position),
+                    block_state: state as i32,
+                }
+                .into(),
+                _ => {
+                    let Some(&(first, _)) = blocks.first() else {
+                        continue;
+                    };
+                    clientbound::UpdateSectionBlocks {
+                        section: play::SectionPos {
+                            x: first.x >> 4,
+                            y: first.y >> 4,
+                            z: first.z >> 4,
+                        },
+                        blocks: blocks
+                            .iter()
+                            .map(|&(position, state)| section_block(position, state))
+                            .collect(),
+                    }
+                    .into()
+                }
+            },
+            Output::BlockUpdate { position, state } => clientbound::BlockUpdate {
+                position: block_pos(position),
+                block_state: state as i32,
+            }
+            .into(),
+            Output::AcknowledgeBlockChanges(sequence) => {
+                clientbound::AcknowledgeBlockChange { sequence }.into()
+            }
+            Output::WorldEvent {
+                event,
+                position,
+                data,
+            } => clientbound::WorldEvent {
+                event,
+                position: block_pos(position),
+                data,
+                disable_relative_volume: false,
+            }
+            .into(),
             Output::Teleport {
                 teleport_id,
                 position,
@@ -296,4 +372,22 @@ pub(crate) fn send(
         connection.send_play_packet(packet);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn section_blocks_pack_the_state_above_x_z_and_y() {
+        let position = BlockPos {
+            x: -1,
+            y: -49,
+            z: 18,
+        };
+        assert_eq!(
+            section_block(position, 1),
+            1 << 12 | 0xf << 8 | 2 << 4 | 0xf
+        );
+    }
 }

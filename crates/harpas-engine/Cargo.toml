@@ -11,8 +11,7 @@ harpas-anvil.workspace = true
 harpas-core.workspace = true
 harpas-worldgen.workspace = true
 log.workspace = true
-
-[dev-dependencies]
+serde_json.workspace = true
 zip.workspace = true
 
 [lints]

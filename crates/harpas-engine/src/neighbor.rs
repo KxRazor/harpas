@@ -175,9 +175,9 @@ impl World {
         true
     }
 
-    /// Breaks a block as vanilla's `Level.destroyBlock`, without drops: its particles and sound play, and it
-    /// leaves the fluid it held. Returns whether a block was broken.
-    pub(crate) fn destroy_block(&mut self, pos: BlockPos, recursion: u32) -> bool {
+    /// Breaks a block as vanilla's `Level.destroyBlock`: its particles and sound play, it drops its loot unless
+    /// `drop` is false, and it leaves the fluid it held. Returns whether a block was broken.
+    pub(crate) fn destroy_block(&mut self, pos: BlockPos, drop: bool, recursion: u32) -> bool {
         let Some(state) = self.block_state(pos) else {
             return false;
         };
@@ -194,6 +194,9 @@ impl World {
                 pos,
                 data: state as i32,
             });
+        }
+        if drop {
+            self.drop_resources(state, pos, &crate::inventory::ItemStack::empty());
         }
         self.set_block(pos, block::removed(state), UPDATE_ALL, recursion)
     }
@@ -295,7 +298,11 @@ impl World {
             return;
         }
         if block_states().is_air(new) {
-            self.destroy_block(update.pos, update.recursion);
+            self.destroy_block(
+                update.pos,
+                update.flags & UPDATE_SUPPRESS_DROPS == 0,
+                update.recursion,
+            );
         } else {
             self.set_block(
                 update.pos,

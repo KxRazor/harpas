@@ -39,6 +39,11 @@ pub(crate) struct ServerEntity {
 }
 
 impl ServerEntity {
+    /// The players who see the entity, by entity ID.
+    pub(crate) fn seen_by(&self) -> impl Iterator<Item = i32> + '_ {
+        self.seen_by.iter().copied()
+    }
+
     pub(crate) fn new(position: [f64; 3], velocity: [f64; 3], on_ground: bool) -> Self {
         Self {
             base: position,
@@ -111,6 +116,71 @@ impl Game {
         let left = held.clone();
         inventory.set_by_client(slot, left);
         self.drop_item(index, dropped);
+    }
+
+    /// Each player picks up the items it touches (`Player.aiStep`'s `touch` and `ItemEntity.playerTouch`): those
+    /// whose box meets the player's grown by a block sideways and half a block up and down, once their pickup
+    /// delay is over, as much as the inventory takes. The players who see the item are shown it go.
+    pub(crate) fn pick_up_items(&mut self) {
+        let Some(world) = &mut self.world else {
+            return;
+        };
+        for index in 0..self.players.len() {
+            let player = &self.players[index];
+            if player.disconnecting
+                || player.player.profile.game_mode == player::GameMode::Spectator
+            {
+                continue;
+            }
+            let p = player.player.position;
+            let reach = [
+                [p.x - 1.3, p.y - 0.5, p.z - 1.3],
+                [p.x + 1.3, p.y + 2.3, p.z + 1.3],
+            ];
+            let collector = player.player.entity_id;
+            let creative = player.player.profile.game_mode == player::GameMode::Creative;
+            let entities = &mut world.entities;
+            for handle in entities.order.clone() {
+                if !entities.contains(handle) {
+                    continue;
+                }
+                let i = entities.slot(handle);
+                let [x, y, z] = entities.position[i];
+                let item_box = [[x - 0.125, y, z - 0.125], [x + 0.125, y + 0.25, z + 0.125]];
+                if !(0..3).all(|a| item_box[0][a] < reach[1][a] && reach[0][a] < item_box[1][a]) {
+                    continue;
+                }
+                let Some(item) = entities.item(handle) else {
+                    continue;
+                };
+                if item.pickup_delay != 0 {
+                    continue;
+                }
+                let mut stack = item.stack.clone();
+                let count = stack.count;
+                if !self.players[index].inventory.add(&mut stack, creative) {
+                    continue;
+                }
+                // `take`, to everyone who sees the item.
+                let id = entities.network_id[i];
+                for viewer in entities.seen_by(handle) {
+                    if let Some(player) = self.players.iter().find(|p| p.player.entity_id == viewer)
+                    {
+                        player.send(player::Output::PickupItem {
+                            collected: id,
+                            collector,
+                            count,
+                        });
+                    }
+                }
+                if stack.is_empty() {
+                    entities.remove(handle);
+                    entities.removed.push(handle);
+                } else {
+                    entities.set_stack(handle, stack);
+                }
+            }
+        }
     }
 
     /// Updates which players see each item entity and sends them its changes (`ChunkMap.tick`).

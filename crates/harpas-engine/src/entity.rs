@@ -75,6 +75,8 @@ pub(crate) struct Entities {
     pub(crate) kind: Vec<Option<Kind>>,
     /// What the players who see the entity were last sent of it.
     pub(crate) server: Vec<crate::tracking::ServerEntity>,
+    /// Entities removed outside the entity tick, whose viewers are still to be told.
+    pub(crate) removed: Vec<EntityHandle>,
 }
 
 /// A box in world coordinates: its lower and upper corners.
@@ -140,6 +142,19 @@ impl Entities {
         self.generations[i] = self.generations[i].wrapping_add(1);
         self.free.push(handle.index);
         self.order.retain(|h| *h != handle);
+    }
+
+    /// The players who see an entity, by entity ID.
+    pub(crate) fn seen_by(&self, handle: EntityHandle) -> Vec<i32> {
+        self.server[handle.index as usize].seen_by().collect()
+    }
+
+    /// Replaces an item entity's stack, which its viewers are sent (`setItem`).
+    pub(crate) fn set_stack(&mut self, handle: EntityHandle, stack: ItemStack) {
+        if let Some(item) = self.item_mut(handle) {
+            item.stack = stack;
+            self.server[handle.index as usize].dirty = true;
+        }
     }
 
     pub(crate) fn contains(&self, handle: EntityHandle) -> bool {
@@ -732,7 +747,7 @@ impl World {
     /// Runs the tick of every entity whose chunk a player sees, in order, and removes the items that are gone
     /// (`entityTickList.forEach(tickNonPassenger)`). Returns the entities removed.
     pub(crate) fn tick_entities(&mut self) -> Vec<EntityHandle> {
-        let mut removed = Vec::new();
+        let mut removed = std::mem::take(&mut self.entities.removed);
         for handle in self.entities.order.clone() {
             if !self.entities.contains(handle) {
                 removed.push(handle);
@@ -751,6 +766,58 @@ impl World {
             }
         }
         removed
+    }
+
+    /// Drops what a broken block of `state` at `pos` leaves, broken with `tool` (`Block.dropResources`): its loot
+    /// table's stacks, each popped out of the block. A block without a table drops nothing.
+    pub(crate) fn drop_resources(&mut self, state: u32, pos: BlockPos, tool: &ItemStack) {
+        let Some(loot) = self.loot.clone() else {
+            return;
+        };
+        let Some(table) = block_states().name(state).and_then(|name| loot.block(name)) else {
+            return;
+        };
+        let stacks = match &table.random_sequence {
+            Some(name) => {
+                let seed = self.seed;
+                let sequence = self
+                    .random_sequences
+                    .entry(name.clone())
+                    .or_insert_with(|| harpas_core::random::RandomSequence::new(seed, Some(name)));
+                table.drops(state, tool, sequence.random())
+            }
+            None => table.drops(state, tool, &mut self.random),
+        };
+        for stack in stacks {
+            self.pop_resource(pos, stack);
+        }
+    }
+
+    /// `Block.popResource`: an item entity at a random point around the block's center, thrown a little up, picked
+    /// up after 10 ticks.
+    fn pop_resource(&mut self, pos: BlockPos, stack: ItemStack) {
+        if stack.is_empty() {
+            return;
+        }
+        let Some(id) = crate::next_entity_id() else {
+            return;
+        };
+        let random = &mut self.random;
+        let mut offset = || random.next_double() * 0.5 - 0.25;
+        let half = ITEM_SIZE / 2.0;
+        let position = [
+            f64::from(pos.x) + 0.5 + offset(),
+            f64::from(pos.y) + 0.5 + offset() - half,
+            f64::from(pos.z) + 0.5 + offset(),
+        ];
+        let velocity = [
+            self.random.next_double() * 0.2 - 0.1,
+            0.2,
+            self.random.next_double() * 0.2 - 0.1,
+        ];
+        let mut item = ItemEntity::new(stack);
+        item.pickup_delay = 10;
+        self.add_item(id, position, velocity, item);
     }
 
     /// Adds an item entity with a random UUID (`Mth.createInsecureUUID`).

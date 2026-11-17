@@ -403,6 +403,10 @@ as shown by the parity report.
   - [ ] Scheduled and random ticks.
 - [ ] Light updates from block changes, queued and applied at defined points as vanilla's light engine applies
       them, with their timing compared against vanilla ([docs/engine-core.md](docs/engine-core.md)).
+  - [x] Light chunks again on the workers when a block changes its light within 15 blocks of them, write the new
+        light into their sections, save it, and send it to the players at whose view's edge each chunk is. A
+        chunk saved before it is lit again is saved without `isLightOn`, so that vanilla lights it.
+  - [ ] Compare the timing of light updates against vanilla's light engine.
 - [ ] Redstone components and block events, with tick-by-tick parity harnesses.
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and

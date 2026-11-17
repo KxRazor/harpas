@@ -373,13 +373,21 @@ struct Snapshot {
     chunk: Arc<Chunk>,
     /// The light to save with a final chunk that ran FEATURES, once the workers have computed it.
     light: Option<Arc<Light>>,
+    /// Whether a lit chunk is waiting to be lit again, so that its saved light is out of date.
+    stale_light: bool,
 }
 
 impl Snapshot {
-    /// The chunk as it is written: with its light and at vanilla's `light` status, once it has light.
+    /// The chunk as it is written: with its light and at vanilla's `light` status, once it has light. A chunk
+    /// whose light is out of date is saved without `isLightOn`, so that vanilla lights it again when it loads it.
     fn saved(&self) -> Cow<'_, Chunk> {
         match &self.light {
             Some(light) => Cow::Owned(light::with_light(&self.chunk, light)),
+            None if self.stale_light => {
+                let mut chunk = (*self.chunk).clone();
+                chunk.rest.insert("isLightOn", Nbt::Byte(0));
+                Cow::Owned(chunk)
+            }
             None => Cow::Borrowed(&*self.chunk),
         }
     }
@@ -423,6 +431,8 @@ pub struct World {
     pub(crate) updater: neighbor::Updater,
     /// World events played by block changes, for the logic thread to send.
     pub(crate) level_events: Vec<neighbor::LevelEvent>,
+    /// The sections whose light changed when a lit chunk was lit again, for the logic thread to send.
+    light_updates: Vec<(ChunkPos, Arc<Light>)>,
     /// The loaded chunks that need light and have not been given to the workers yet.
     unlit: HashSet<ChunkPos>,
     next_light_job: u64,
@@ -543,6 +553,7 @@ impl World {
             shape_updates: None,
             updater: neighbor::Updater::default(),
             level_events: Vec::new(),
+            light_updates: Vec::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source,
@@ -751,6 +762,22 @@ impl World {
     /// generate uses them if all eight are loaded, and none otherwise, once none is still being read.
     fn light_neighbors(&self, pos: ChunkPos) -> Option<[Option<Arc<Chunk>>; 8]> {
         let mut neighbors: [Option<Arc<Chunk>>; 8] = std::array::from_fn(|_| None);
+        // A lit chunk is lit again only from its eight neighbors as they are, a missing one being air, so that
+        // a neighbor not loaded never counts as air.
+        if self.relights(pos) {
+            for (index, (dx, dz)) in crate::player::NEIGHBORS.iter().enumerate() {
+                let neighbor = ChunkPos {
+                    x: pos.x + dx,
+                    z: pos.z + dz,
+                };
+                match self.chunks.get(&neighbor) {
+                    Some(ChunkState::Loaded(chunk)) => neighbors[index] = Some(Arc::clone(chunk)),
+                    Some(ChunkState::Missing) => {}
+                    _ => return None,
+                }
+            }
+            return Some(neighbors);
+        }
         let mut complete = true;
         for (index, (dx, dz)) in crate::player::NEIGHBORS.iter().enumerate() {
             let neighbor = ChunkPos {
@@ -771,7 +798,8 @@ impl World {
         })
     }
 
-    /// Forgets the light computed from the chunk at `pos`, which changed: its own and its neighbors'.
+    /// Forgets the light computed from the chunk at `pos`, which changed: its own and its neighbors'. A lit
+    /// chunk being lit again is lit again from the changed chunk.
     fn invalidate_light(&mut self, pos: ChunkPos) {
         let around = crate::player::NEIGHBORS.iter().chain(&[(0, 0)]);
         for &(dx, dz) in around {
@@ -779,11 +807,63 @@ impl World {
                 x: pos.x + dx,
                 z: pos.z + dz,
             };
-            self.light.remove(&pos);
-            if self.needs_light(pos) {
+            let removed = self.light.remove(&pos);
+            let relighting =
+                matches!(removed, Some(LightState::Computing(_))) && self.relights(pos);
+            if self.needs_light(pos) || relighting {
                 self.unlit.insert(pos);
             }
         }
+    }
+
+    /// Whether the chunk is loaded and lit, with its light in its sections: at vanilla's `light`, `spawn` or
+    /// `full` status. Such a chunk is lit again when a block near it changes its light.
+    pub(crate) fn relights(&self, pos: ChunkPos) -> bool {
+        matches!(
+            self.chunks.get(&pos),
+            Some(ChunkState::Loaded(chunk))
+                if matches!(
+                    chunk.rest.get("Status"),
+                    Some(Nbt::String(status))
+                        if matches!(
+                            status.as_str(),
+                            "minecraft:light" | "minecraft:spawn" | "minecraft:full"
+                        )
+                )
+        )
+    }
+
+    /// Lights again the lit chunks whose light a change of the block at `pos` can reach: those within 15
+    /// blocks of it (`LightEngine.checkBlock`). They are saved again, with their new light or, until then,
+    /// without `isLightOn`.
+    pub(crate) fn relight_around(&mut self, pos: BlockPos) {
+        for x in (pos.x - 15) >> 4..=(pos.x + 15) >> 4 {
+            for z in (pos.z - 15) >> 4..=(pos.z + 15) >> 4 {
+                let chunk = ChunkPos { x, z };
+                if !self.relights(chunk) {
+                    continue;
+                }
+                self.light.remove(&chunk);
+                self.unlit.insert(chunk);
+                let changes = self.changes.entry(chunk).or_default();
+                changes.revision = changes
+                    .revision
+                    .checked_add(1)
+                    .expect("chunk revision exhausted");
+            }
+        }
+    }
+
+    /// Whether a lit chunk waits to be lit again.
+    fn light_pending(&self, pos: ChunkPos) -> bool {
+        self.relights(pos)
+            && (self.unlit.contains(&pos)
+                || matches!(self.light.get(&pos), Some(LightState::Computing(_))))
+    }
+
+    /// Takes the sections whose light changed since the last call, by chunk.
+    pub(crate) fn take_light_updates(&mut self) -> Vec<(ChunkPos, Arc<Light>)> {
+        std::mem::take(&mut self.light_updates)
     }
 
     /// Keeps the light the workers computed for a chunk, unless the chunk changed or left since the request.
@@ -792,11 +872,20 @@ impl World {
         if !matches!(self.light.get(&lit.pos), Some(LightState::Computing(id)) if *id == lit.id) {
             return;
         }
+        if self.relights(lit.pos) {
+            self.light.remove(&lit.pos);
+            self.finish_relight(lit);
+            return;
+        }
         if lit.light.is_none() {
             error!(
                 "Cannot compute the light of chunk {}, {}; it is sent without light",
                 lit.pos.x, lit.pos.z
             );
+        }
+        if let Some(light) = &lit.light {
+            // For the players who had the chunk before it changed.
+            self.light_updates.push((lit.pos, Arc::clone(light)));
         }
         let saved = lit.light.is_some() && self.saves_light(lit.pos);
         self.light.insert(lit.pos, LightState::Ready(lit.light));
@@ -810,17 +899,50 @@ impl World {
         }
     }
 
+    /// Writes the new light of a lit chunk into its sections, and keeps the sections that changed for the
+    /// players. A chunk whose light cannot be computed is saved without `isLightOn`.
+    fn finish_relight(&mut self, lit: light::Lit) {
+        let Some(ChunkState::Loaded(chunk)) = self.chunks.get_mut(&lit.pos) else {
+            return;
+        };
+        let chunk = Arc::make_mut(chunk);
+        match lit.light {
+            Some(light) => {
+                let changed = light::changed_sections(&light::saved_light(chunk, &light), &light);
+                light::write_light(chunk, &light);
+                if !changed.sections.is_empty() {
+                    self.light_updates.push((lit.pos, Arc::new(changed)));
+                }
+            }
+            None => {
+                error!(
+                    "Cannot compute the light of chunk {}, {}; vanilla will light it again",
+                    lit.pos.x, lit.pos.z
+                );
+                chunk.rest.insert("isLightOn", Nbt::Byte(0));
+            }
+        }
+        let changes = self.changes.entry(lit.pos).or_default();
+        changes.revision = changes
+            .revision
+            .checked_add(1)
+            .expect("chunk revision exhausted");
+    }
+
     /// Waits until every loaded chunk saved with light whose neighbors are loaded has it, so that shutdown
     /// saves it.
     fn complete_light(&mut self) -> io::Result<()> {
         loop {
             self.update_light()?;
-            let pending = self.light.iter().any(|(&pos, state)| {
-                matches!(state, LightState::Computing(_)) && self.saves_light(pos)
-            }) || self
-                .unlit
+            let saved = |pos| self.saves_light(pos) || self.relights(pos);
+            let pending = self
+                .light
                 .iter()
-                .any(|&pos| self.saves_light(pos) && self.light_neighbors(pos).is_some());
+                .any(|(&pos, state)| matches!(state, LightState::Computing(_)) && saved(pos))
+                || self
+                    .unlit
+                    .iter()
+                    .any(|&pos| saved(pos) && self.light_neighbors(pos).is_some());
             if !pending {
                 return Ok(());
             }
@@ -973,6 +1095,7 @@ impl World {
                         revision: self.changes[pos].revision,
                         chunk: Arc::clone(chunk),
                         light: self.saved_light(*pos),
+                        stale_light: self.light_pending(*pos),
                     }
                 })
                 .collect();
@@ -1076,6 +1199,16 @@ impl World {
         }
         if kept && self.needs_light(pos) {
             self.light.remove(&pos);
+            self.unlit.insert(pos);
+        }
+        // A lit chunk saved while its light was out of date is lit again, as vanilla would.
+        if kept
+            && self.relights(pos)
+            && matches!(
+                self.chunks.get(&pos),
+                Some(ChunkState::Loaded(chunk)) if chunk.rest.get("isLightOn") != Some(&Nbt::Byte(1))
+            )
+        {
             self.unlit.insert(pos);
         }
         Ok(())
@@ -1345,6 +1478,7 @@ mod tests {
         rest.insert("xPos", pos.x);
         rest.insert("zPos", pos.z);
         rest.insert("Status", "minecraft:full");
+        rest.insert("isLightOn", Nbt::Byte(1));
         let states = block_states();
         let blocks = PalettedContainer::filled(
             Strategy::block_states(states.global_bits()),
@@ -1408,6 +1542,7 @@ mod tests {
             shape_updates: None,
             updater: neighbor::Updater::default(),
             level_events: Vec::new(),
+            light_updates: Vec::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source: None,
@@ -2861,6 +2996,10 @@ mod tests {
         let mut number = 1;
         tick(&mut game, number);
         wait_until(|| {
+            // As the clients acknowledge each batch, so that a chunk read after the first batch is sent too.
+            for player in &mut game.players {
+                player.awaiting_chunk_batch = false;
+            }
             number += 1;
             tick(&mut game, number);
             game.players.iter().all(|p| p.sent_chunks.contains(&pos))
@@ -2986,6 +3125,10 @@ mod tests {
         let mut number = 1;
         tick(&mut game, number);
         wait_until(|| {
+            // As the clients acknowledge each batch, so that a chunk read after the first batch is sent too.
+            for player in &mut game.players {
+                player.awaiting_chunk_batch = false;
+            }
             number += 1;
             tick(&mut game, number);
             game.players.iter().all(|p| p.sent_chunks.contains(&pos))
@@ -3151,6 +3294,8 @@ mod tests {
         let mut number = 1;
         tick(&mut game, number);
         wait_until(|| {
+            // As the client acknowledges each batch, so that a chunk read after the first batch is sent too.
+            game.players[0].awaiting_chunk_batch = false;
             number += 1;
             tick(&mut game, number);
             game.players[0].sent_chunks.contains(&pos)
@@ -3250,5 +3395,133 @@ mod tests {
                 (at(7, -50, 9), grass("false")),
             ]
         );
+    }
+
+    /// The block light saved at a block of a loaded chunk, as vanilla's `DataLayer` packs it.
+    fn saved_block_light(world: &World, pos: BlockPos) -> u8 {
+        let Some(ChunkState::Loaded(chunk)) = world.chunk(pos.chunk()) else {
+            panic!("chunk not loaded")
+        };
+        let section = chunk
+            .sections
+            .iter()
+            .find(|section| i32::from(section.y) == pos.y >> 4)
+            .unwrap();
+        let Some(Nbt::ByteArray(bytes)) = section.rest.get("BlockLight") else {
+            return 0;
+        };
+        let index = ((pos.y & 15) << 8 | (pos.z & 15) << 4 | (pos.x & 15)) as usize;
+        (bytes[index >> 1] as u8 >> ((index & 1) * 4)) & 15
+    }
+
+    #[test]
+    fn a_block_that_gives_off_light_lights_its_chunk_again_and_the_light_is_saved() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            // As the client acknowledges each batch, so that a chunk read after the first batch is sent too.
+            game.players[0].awaiting_chunk_batch = false;
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].sent_chunks.contains(&pos)
+        });
+        received.try_iter().for_each(drop);
+        let states = block_states();
+        let glowstone = states.default_state("minecraft:glowstone").unwrap();
+        let stone = states.default_state("minecraft:stone").unwrap();
+        let lamp = BlockPos { x: 8, y: -56, z: 8 };
+        let beside = BlockPos { x: 9, ..lamp };
+        let world = game.world.as_mut().unwrap();
+        assert_eq!(saved_block_light(world, lamp), 0);
+        world.set_block_state(lamp, glowstone);
+        // Until it is lit again, the chunk is saved without `isLightOn`, so that vanilla would light it.
+        assert!(world.light_pending(pos));
+        let ChunkState::Loaded(chunk) = &world.chunks[&pos] else {
+            panic!("chunk not loaded")
+        };
+        let snapshot = Snapshot {
+            pos,
+            revision: 0,
+            chunk: Arc::clone(chunk),
+            light: None,
+            stale_light: true,
+        };
+        assert_eq!(snapshot.saved().rest.get("isLightOn"), Some(&Nbt::Byte(0)));
+        // A player who has the chunk at the edge of its view is sent the new light; one who has its
+        // neighbors too lights the block itself.
+        let sent = &mut game.players[0].sent_chunks;
+        sent.extend((-1..=1).flat_map(|x| (-1..=1).map(move |z| ChunkPos { x, z })));
+        assert!(!game.players[0].on_tracked_border(pos));
+        game.players[0].sent_chunks.retain(|sent| *sent == pos);
+        assert!(game.players[0].on_tracked_border(pos));
+        let mut updates = Vec::new();
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            updates.extend(received.try_iter().filter_map(|output| match output {
+                Output::LightUpdate { position, light } => Some((position, light)),
+                _ => None,
+            }));
+            !game.world.as_ref().unwrap().light_pending(pos)
+        });
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(saved_block_light(world, lamp), 15);
+        // Stone around it lets no light through.
+        assert_eq!(saved_block_light(world, beside), 0);
+        let [(position, light)] = &updates[..] else {
+            panic!("expected one light update, got {updates:?}")
+        };
+        assert_eq!(*position, pos);
+        // Only the sections that changed: the glowstone's, and the light section below the world, which the
+        // test chunk was saved without and is dark under the stone.
+        assert_eq!(
+            light.sections.iter().map(|s| s.y).collect::<Vec<_>>(),
+            [-5, -4]
+        );
+
+        // Breaking it, the light goes too.
+        game.world.as_mut().unwrap().set_block_state(lamp, stone);
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            !game.world.as_ref().unwrap().light_pending(pos)
+        });
+        game.world
+            .as_mut()
+            .unwrap()
+            .set_block_state(lamp, glowstone);
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            !game.world.as_ref().unwrap().light_pending(pos)
+        });
+
+        // The light is saved, with `isLightOn`, and read back.
+        let mut world = game.world.take().unwrap();
+        world.flush().unwrap();
+        drop(world);
+        let mut reopened = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut reopened, &[pos]);
+        assert_eq!(saved_block_light(&reopened, lamp), 15);
+        assert!(!reopened.light_pending(pos));
     }
 }

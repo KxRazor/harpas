@@ -320,6 +320,16 @@ fn empty_light() -> play::LightData {
 /// Packs computed light like vanilla: full sky layers are omitted, all-zero layers are marked empty, and the
 /// remaining arrays follow the mask bits in order.
 fn packet_light(light: &Light) -> play::LightData {
+    pack_light(light, true)
+}
+
+/// Packs the sections of an Update Light packet. Unlike a chunk's, a full sky layer is sent, since leaving it
+/// out would keep the client's old light for the section.
+pub(crate) fn update_light(light: &Light) -> play::LightData {
+    pack_light(light, false)
+}
+
+fn pack_light(light: &Light, omit_full_sky: bool) -> play::LightData {
     let mut result = empty_light();
     let mut sky = 0_u64;
     let mut block = 0_u64;
@@ -335,7 +345,7 @@ fn packet_light(light: &Light) -> play::LightData {
         }
         let bit = 1_u64 << offset;
         match &section.sky {
-            Layer::Uniform(15) => {}
+            Layer::Uniform(15) if omit_full_sky => {}
             Layer::Uniform(0) => empty_sky |= bit,
             layer => {
                 sky |= bit;
@@ -820,5 +830,24 @@ mod tests {
         };
         assert!(sent.get("shared_data").is_some());
         assert!(sent.get("server_data").is_none());
+    }
+
+    #[test]
+    fn light_updates_send_full_sky_layers_that_chunks_leave_out() {
+        use harpas_engine::light::{Layer, SectionLight};
+        let light = Light {
+            sections: vec![SectionLight {
+                y: 0,
+                sky: Layer::Uniform(15),
+                block: Layer::Uniform(0),
+            }],
+        };
+        // Section 0 is the fifth light section, after the one below the world.
+        let bit = 1 << 5;
+        assert!(packet_light(&light).sky_light_mask.is_empty());
+        let update = update_light(&light);
+        assert_eq!(update.sky_light_mask, vec![bit]);
+        assert_eq!(update.sky_light, vec![vec![0xff; LIGHT_BYTES]]);
+        assert_eq!(update.empty_block_light_mask, vec![bit]);
     }
 }

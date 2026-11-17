@@ -7,8 +7,8 @@ the tick. Modded mode uses Mojang's server instead and is covered in [mod-suppor
 Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
 overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
-Creative and, with an empty hand, in Survival, and the neighbors of a changed block update their shapes;
-placing, neighbor updates and ticks are to come), saving other world and player data,
+Creative and, with an empty hand, in Survival, the neighbors of a changed block update their shapes, and the
+chunks around it are lit again; placing, neighbor updates and ticks are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -98,7 +98,7 @@ Work that cannot change the result of the tick runs in parallel, off the logic t
 | Packet encoding, compression and encryption | Encodes state the tick has already produced |
 | Bedrock translation | Reads state after it is produced, like encoding |
 | Chunk loading, saving and generation | Generation is deterministic from the seed; chunks join the world at the point vanilla would load them |
-| Lighting | Results are applied at defined points, as vanilla's light engine applies queued updates *(saved light verified by `light_parity`; update timing still to verify)* |
+| Lighting | Results are applied at defined points, as vanilla's light engine applies queued updates: a chunk whose light a block change can reach is lit again on the workers and its new light applied in the dimension phase, before the tick's block and light changes are sent *(saved light verified by `light_parity`; update timing still to verify)* |
 | Entity tracking (which players see which entities) | Computes what to send, not what happens |
 | Precomputation on a snapshot (for example, path searches) | Only if the result is identical to computing it on the logic thread at that point *(verify per case)* |
 

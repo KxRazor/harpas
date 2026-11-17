@@ -239,6 +239,13 @@ pub enum Output {
     },
     /// Confirm the client's block change predictions up to this sequence number.
     AcknowledgeBlockChanges(i32),
+    /// New light for some sections of a chunk the player has; the sections left out keep theirs.
+    LightUpdate {
+        /// The chunk.
+        position: ChunkPos,
+        /// The sections whose light changed, with both their layers.
+        light: Arc<Light>,
+    },
     /// Show the cracks of a block another player is breaking.
     BlockDestruction {
         /// The player breaking it, which identifies the cracks.
@@ -615,6 +622,17 @@ impl PlayerState {
             speed /= 5.0;
         }
         speed
+    }
+
+    /// Whether the player has the chunk but not all eight chunks around it (`ChunkMap.isChunkOnTrackedBorder`).
+    pub(crate) fn on_tracked_border(&self, chunk: ChunkPos) -> bool {
+        self.sent_chunks.contains(&chunk)
+            && NEIGHBORS.iter().any(|(dx, dz)| {
+                !self.sent_chunks.contains(&ChunkPos {
+                    x: chunk.x + dx,
+                    z: chunk.z + dz,
+                })
+            })
     }
 
     /// Whether this player sees a player in `mode` at `position`.

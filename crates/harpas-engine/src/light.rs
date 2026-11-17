@@ -1,8 +1,11 @@
-//! The light of generated chunks, computed on worker threads.
+//! The light of chunks, computed on worker threads.
 //!
 //! A chunk generated through carvers or features arrives without light. Its light is computed once, from its
 //! blocks and its eight neighbors, as soon as they are loaded, and shared by every player it is sent to. A final
 //! chunk that ran FEATURES is then saved with it, at vanilla's `light` status.
+//!
+//! A lit chunk is lit again the same way when a block within 15 blocks of it changes its light, and the new light
+//! is written into its sections.
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -132,30 +135,36 @@ fn layer_bytes(layer: &Layer) -> Vec<i8> {
 const LAYER_BYTES: usize = 2048;
 
 /// `chunk` at vanilla's `light` status, with `light` in its sections, as vanilla saves a chunk it has lit.
+pub fn with_light(chunk: &Chunk, light: &Light) -> Chunk {
+    let mut lit = chunk.clone();
+    lit.rest.insert("Status", "minecraft:light");
+    write_light(&mut lit, light);
+    lit
+}
+
+/// Writes `light` into the sections of `chunk`, keeping its status.
 ///
 /// A sky layer that is all fifteen is left out, as vanilla leaves it out, and every block layer is written, so
 /// the chunk is sent with the same light whether it was computed or read back. `isLightOn` tells vanilla that
 /// the light is correct, so it keeps it instead of lighting the chunk again.
-pub fn with_light(chunk: &Chunk, light: &Light) -> Chunk {
-    let mut lit = chunk.clone();
-    lit.rest.insert("Status", "minecraft:light");
-    lit.rest.insert("isLightOn", Nbt::Byte(1));
+pub fn write_light(chunk: &mut Chunk, light: &Light) {
+    chunk.rest.insert("isLightOn", Nbt::Byte(1));
     for section in &light.sections {
         let Ok(y) = i8::try_from(section.y) else {
             continue;
         };
-        let index = match lit.sections.iter().position(|saved| saved.y == y) {
+        let index = match chunk.sections.iter().position(|saved| saved.y == y) {
             Some(index) => index,
             None => {
-                lit.sections.push(ChunkSection {
+                chunk.sections.push(ChunkSection {
                     y,
                     section: None,
                     rest: Compound::new(),
                 });
-                lit.sections.len() - 1
+                chunk.sections.len() - 1
             }
         };
-        let rest = &mut lit.sections[index].rest;
+        let rest = &mut chunk.sections[index].rest;
         if section.sky == Layer::Uniform(15) {
             rest.remove("SkyLight");
         } else {
@@ -163,8 +172,49 @@ pub fn with_light(chunk: &Chunk, light: &Light) -> Chunk {
         }
         rest.insert("BlockLight", Nbt::ByteArray(layer_bytes(&section.block)));
     }
-    lit.sections.sort_by_key(|section| section.y);
-    lit
+    chunk.sections.sort_by_key(|section| section.y);
+}
+
+/// The light saved in the sections of `chunk`, for the sections of `like`: a missing sky layer is all fifteen,
+/// as [`write_light`] leaves it out, and a missing block layer is all zero.
+pub fn saved_light(chunk: &Chunk, like: &Light) -> Light {
+    let layer =
+        |rest: Option<&Compound>, name: &str, missing: u8| match rest.and_then(|r| r.get(name)) {
+            Some(Nbt::ByteArray(bytes)) if bytes.len() == LAYER_BYTES => {
+                Layer::new(bytes.iter().map(|&byte| byte as u8).collect())
+            }
+            _ => Layer::Uniform(missing),
+        };
+    Light {
+        sections: like
+            .sections
+            .iter()
+            .map(|section| {
+                let rest = chunk
+                    .sections
+                    .iter()
+                    .find(|saved| i32::from(saved.y) == section.y)
+                    .map(|saved| &saved.rest);
+                SectionLight {
+                    y: section.y,
+                    sky: layer(rest, "SkyLight", 15),
+                    block: layer(rest, "BlockLight", 0),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The sections of `new` whose sky or block light differ from those of `old`, with both layers.
+pub fn changed_sections(old: &Light, new: &Light) -> Light {
+    Light {
+        sections: new
+            .sections
+            .iter()
+            .filter(|section| !old.sections.contains(section))
+            .cloned()
+            .collect(),
+    }
 }
 
 /// The nine chunks of a light volume in the order of [`Volume::sections`].

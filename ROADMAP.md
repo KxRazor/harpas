@@ -400,7 +400,9 @@ as shown by the parity report.
         that can no longer stand break, with the rules ported for world generation.
   - [x] Neighbor updates (`neighborChanged`) in vanilla's order, which liquids react to.
   - [ ] The other blocks that react to their neighbors, with redstone.
-  - [ ] Placing blocks, once items exist.
+  - [x] Placing blocks from the Creative inventory and the hotbar (`BlockItem.place`), for blocks without
+        properties, pillars, slabs, stairs, blocks that face the player and connecting blocks.
+  - [ ] The placements of the other blocks, and clicks on blocks that react to being used.
   - [x] Scheduled ticks in vanilla's order (`LevelTicks`), saved with their chunks, and the fluid ticks of
         water and lava flowing, falling into holes and hardening into obsidian, cobblestone, stone and basalt.
   - [ ] Scheduled block ticks, for the blocks that schedule them; until then their saved ticks are kept.
@@ -413,9 +415,14 @@ as shown by the parity report.
   - [ ] Compare the timing of light updates against vanilla's light engine.
 - [ ] Redstone components and block events, with tick-by-tick parity harnesses.
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
+  - [x] The item registry, item stacks, and the player's inventory menu in Creative, with its changes sent to
+        the client.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets
       ([docs/protocol-codecs.md](docs/protocol-codecs.md#hand-written-exceptions)).
+  - [x] Item stacks, with their component values kept as bytes, and Set Container Content, Set Container Slot
+        and Set Creative Mode Slot.
+  - [ ] The 110 data components' values, and the other 18 packets.
 - [ ] Entity physics and collisions, ported one to one.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.

@@ -9,8 +9,10 @@ use std::thread::Thread;
 use harpas_anvil::Chunk;
 
 use crate::block::{BlockPos, DigAction};
+use crate::inventory::{Inventory, ItemStack};
 use crate::light::Light;
 use crate::world::{ChunkPos, World};
+use harpas_core::block_behavior::Face;
 
 /// A signed profile property, such as a Java player's skin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +141,28 @@ pub enum Input {
     ViewDistance(u8),
     /// The client acknowledged the last chunk batch and reported its desired chunks per tick.
     ChunkBatchReceived(f32),
+    /// In Creative, the client put a stack in a slot of the inventory menu, or dropped it with a negative slot.
+    SetCreativeSlot {
+        /// The slot, from 1 to 45.
+        slot: i16,
+        /// The stack, or none.
+        stack: ItemStack,
+    },
+    /// The player selected a hotbar slot, 0 to 8.
+    SelectHotbarSlot(i16),
+    /// The player used the item in a hand on a block.
+    UseItemOn {
+        /// Whether the off hand's item was used.
+        off_hand: bool,
+        /// The block clicked.
+        position: BlockPos,
+        /// The face clicked.
+        face: Face,
+        /// Where on the block, each from 0 to 1.
+        cursor: [f32; 3],
+        /// The client's sequence number for its prediction.
+        sequence: i32,
+    },
     /// The player started, stopped or finished breaking a block. The client predicted the result and waits
     /// for `sequence` to be acknowledged.
     Dig {
@@ -228,6 +252,24 @@ pub enum Output {
     ViewDistance(u8),
     /// Send these ready chunks as one batch. At most one batch per player is in flight.
     ChunkBatch(Vec<VisibleChunk>),
+    /// Every slot of the player's inventory, as it joins.
+    InventoryContent {
+        /// The inventory menu's count of changes.
+        state_id: i32,
+        /// The 46 slots of the inventory menu.
+        slots: Vec<ItemStack>,
+        /// The stack the cursor carries.
+        carried: ItemStack,
+    },
+    /// One slot of the player's inventory changed.
+    SetSlot {
+        /// The inventory menu's count of changes.
+        state_id: i32,
+        /// The slot of the inventory menu.
+        slot: i16,
+        /// Its stack.
+        stack: ItemStack,
+    },
     /// Changed blocks of one chunk section the player has, with their current states.
     SectionBlocks(Arc<[(BlockPos, u32)]>),
     /// Send the current state of a block, overriding the client's prediction.
@@ -413,6 +455,7 @@ pub(crate) struct PlayerState {
     /// The highest block change sequence to acknowledge in this tick (`ackBlockChangesUpTo`).
     pub(crate) acknowledge_block_changes: Option<i32>,
     pub(crate) digging: Digging,
+    pub(crate) inventory: Inventory,
 }
 
 /// The block a player is breaking, with the fields of vanilla's `ServerPlayerGameMode`.
@@ -491,6 +534,7 @@ impl PlayerState {
             chat_spam: 0,
             acknowledge_block_changes: None,
             digging: Digging::default(),
+            inventory: Inventory::default(),
         }
     }
 

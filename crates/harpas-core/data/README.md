@@ -60,3 +60,15 @@ for b in json.load(open("blocks.json")):
             runs.append([v, 1])
     print(" ".join([b["name"]] + [str(v) if c == 1 else "%d*%d" % (v, c) for v, c in runs]))' > block-shapes-26.1.txt
 ```
+
+`items-26.1.txt` lists the items of Java 26.1 in the order of the `minecraft:item` registry, whose numeric IDs the
+protocol sends: each line is an item's name without the `minecraft:` namespace, then its default maximum stack
+size when it is not 64. It is built from `data/pc/26.1/items.json` of the same minecraft-data revision. To build
+it again:
+
+```sh
+curl -LO https://raw.githubusercontent.com/PrismarineJS/minecraft-data/bd8b5c6048e5af9694374b83f25f5b4aade619cc/data/pc/26.1/items.json
+python3 -c 'import json
+for i in json.load(open("items.json")):
+    print(i["name"] if i["stackSize"] == 64 else "%s %d" % (i["name"], i["stackSize"]))' > items-26.1.txt
+```

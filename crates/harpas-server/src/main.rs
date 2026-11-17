@@ -1214,12 +1214,21 @@ mod tests {
             }
         }
 
+        /// The next Play packet, leaving out the player's inventory, which the logic thread sends as the player
+        /// joins, before or after the connection's first chunks.
         fn next_play(&mut self) -> play::clientbound::Packet {
-            let packet = play::clientbound::Packet::decode(&self.next_frame()).unwrap();
-            if matches!(packet, play::clientbound::Packet::ChunkBatchFinished(_)) {
-                self.acknowledge_chunks();
+            loop {
+                let packet = play::clientbound::Packet::decode(&self.next_frame()).unwrap();
+                match packet {
+                    play::clientbound::Packet::ChunkBatchFinished(_) => self.acknowledge_chunks(),
+                    play::clientbound::Packet::SetContainerContent(p) => {
+                        assert_eq!((p.window_id, p.slots.len()), (0, 46));
+                        continue;
+                    }
+                    _ => {}
+                }
+                return packet;
             }
-            packet
         }
 
         fn acknowledge_chunks(&self) {

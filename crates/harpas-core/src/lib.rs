@@ -5,6 +5,7 @@
 pub mod block;
 pub mod block_behavior;
 pub mod chunk;
+pub mod item;
 pub mod math;
 pub mod nbt;
 pub mod noise;

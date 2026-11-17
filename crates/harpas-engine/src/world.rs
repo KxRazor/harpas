@@ -19,8 +19,11 @@ use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
 use crate::block::{self, BlockPos};
+use crate::fluid::FluidType;
 use crate::light::{self, Light, Lighter};
 use crate::neighbor;
+use crate::ticks::{self, LevelTicks};
+use harpas_core::random::LegacyRandom;
 use harpas_worldgen::shape_update::ShapeUpdates;
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -375,12 +378,26 @@ struct Snapshot {
     light: Option<Arc<Light>>,
     /// Whether a lit chunk is waiting to be lit again, so that its saved light is out of date.
     stale_light: bool,
+    /// The chunk's fluid ticks as it saves them, or none for a chunk without them.
+    fluid_ticks: Option<Nbt>,
 }
 
 impl Snapshot {
     /// The chunk as it is written: with its light and at vanilla's `light` status, once it has light. A chunk
     /// whose light is out of date is saved without `isLightOn`, so that vanilla lights it again when it loads it.
     fn saved(&self) -> Cow<'_, Chunk> {
+        let saved = self.saved_light();
+        match &self.fluid_ticks {
+            Some(ticks) => {
+                let mut chunk = saved.into_owned();
+                chunk.rest.insert("fluid_ticks", ticks.clone());
+                Cow::Owned(chunk)
+            }
+            None => saved,
+        }
+    }
+
+    fn saved_light(&self) -> Cow<'_, Chunk> {
         match &self.light {
             Some(light) => Cow::Owned(light::with_light(&self.chunk, light)),
             None if self.stale_light => {
@@ -433,6 +450,13 @@ pub struct World {
     pub(crate) level_events: Vec<neighbor::LevelEvent>,
     /// The sections whose light changed when a lit chunk was lit again, for the logic thread to send.
     light_updates: Vec<(ChunkPos, Arc<Light>)>,
+    /// The game time, read from `level.dat` (`Time`) and counted every tick.
+    pub(crate) game_time: i64,
+    /// The scheduled fluid ticks of the loaded chunks. Their block ticks stay saved as they were until blocks
+    /// that tick exist.
+    pub(crate) fluid_ticks: LevelTicks<FluidType>,
+    /// The level's random source, which lava's spread delay draws from.
+    pub(crate) random: LegacyRandom,
     /// The loaded chunks that need light and have not been given to the workers yet.
     unlit: HashSet<ChunkPos>,
     next_light_job: u64,
@@ -478,9 +502,15 @@ impl World {
         biomes: &[&str],
         generator: Option<Arc<dyn ChunkSource>>,
     ) -> io::Result<Self> {
-        let spawn = read_level(world_dir)?
-            .and_then(|(data, _)| overworld_spawn(&data))
+        let level = read_level(world_dir)?;
+        let spawn = level
+            .as_ref()
+            .and_then(|(data, _)| overworld_spawn(data))
             .unwrap_or([0, 65, 0]);
+        let game_time = match level.as_ref().and_then(|(data, _)| data.get("Time")) {
+            Some(Nbt::Long(time)) => *time,
+            _ => 0,
+        };
         if !biomes.contains(&"minecraft:plains") {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -554,6 +584,9 @@ impl World {
             updater: neighbor::Updater::default(),
             level_events: Vec::new(),
             light_updates: Vec::new(),
+            game_time,
+            fluid_ticks: LevelTicks::default(),
+            random: LegacyRandom::new(0),
             unlit: HashSet::new(),
             next_light_job: 0,
             source,
@@ -854,6 +887,42 @@ impl World {
         }
     }
 
+    /// Counts a game tick and runs the scheduled fluid ticks that are due in the chunks some player sees
+    /// (`ServerLevel.tickTime`, then `fluidTicks.tick`). Vanilla runs them in the chunks within the simulation
+    /// distance; until it exists, that is every chunk in a player's view.
+    pub(crate) fn tick_scheduled(&mut self) {
+        self.game_time += 1;
+        let wanted = &self.wanted_set;
+        let chunks = &self.chunks;
+        let due = self.fluid_ticks.collect(self.game_time, |pos| {
+            wanted.contains(&pos) && matches!(chunks.get(&pos), Some(ChunkState::Loaded(_)))
+        });
+        for tick in due {
+            self.mark_changed(tick.pos.chunk());
+            self.tick_fluid(tick.pos, tick.kind);
+        }
+    }
+
+    /// The fluid ticks to save with a chunk: its own, when it has some or was read with the list, so that a chunk
+    /// without them is saved as it was.
+    fn saved_fluid_ticks(&self, pos: ChunkPos, chunk: &Chunk) -> Option<Nbt> {
+        let ticks = self.fluid_ticks.pack(pos, self.game_time);
+        (!ticks.is_empty() || chunk.rest.get("fluid_ticks").is_some())
+            .then(|| ticks::write_saved(&ticks, |kind| kind.name()))
+    }
+
+    /// Marks a chunk as changed for the next save without editing it, as when its scheduled ticks change.
+    pub(crate) fn mark_changed(&mut self, pos: ChunkPos) {
+        if !matches!(self.chunks.get(&pos), Some(ChunkState::Loaded(_))) {
+            return;
+        }
+        let changes = self.changes.entry(pos).or_default();
+        changes.revision = changes
+            .revision
+            .checked_add(1)
+            .expect("chunk revision exhausted");
+    }
+
     /// Whether a lit chunk waits to be lit again.
     fn light_pending(&self, pos: ChunkPos) -> bool {
         self.relights(pos)
@@ -1096,6 +1165,7 @@ impl World {
                         chunk: Arc::clone(chunk),
                         light: self.saved_light(*pos),
                         stale_light: self.light_pending(*pos),
+                        fluid_ticks: self.saved_fluid_ticks(*pos, chunk),
                     }
                 })
                 .collect();
@@ -1201,6 +1271,12 @@ impl World {
             self.light.remove(&pos);
             self.unlit.insert(pos);
         }
+        if let Some(ChunkState::Loaded(chunk)) = self.chunks.get(&pos)
+            && !self.fluid_ticks.has_chunk(pos)
+        {
+            let saved = ticks::read_saved(chunk.rest.get("fluid_ticks"), FluidType::from_name);
+            self.fluid_ticks.add_chunk(pos, saved, self.game_time);
+        }
         // A lit chunk saved while its light was out of date is lit again, as vanilla would.
         if kept
             && self.relights(pos)
@@ -1263,6 +1339,9 @@ impl World {
             .retain(|pos, _| wanted_set.contains(pos) || self.changes.contains_key(pos));
         self.light.retain(|pos, _| self.chunks.contains_key(pos));
         self.unlit.retain(|pos| self.chunks.contains_key(pos));
+        let chunks = &self.chunks;
+        self.fluid_ticks
+            .retain_chunks(|pos| chunks.contains_key(&pos));
         // A region is saved once its first unwanted chunk has waited long enough, with every chunk that
         // left the views since.
         let now = Instant::now();
@@ -1441,6 +1520,7 @@ mod tests {
 
     use super::*;
     use crate::block;
+    use crate::neighbor;
     use crate::player::{GameMode, Input, Movement, Output, Profile};
     use crate::{Event, Game, tick};
     use harpas_worldgen::shape_update::ShapeUpdates;
@@ -1543,6 +1623,9 @@ mod tests {
             updater: neighbor::Updater::default(),
             level_events: Vec::new(),
             light_updates: Vec::new(),
+            game_time: 0,
+            fluid_ticks: LevelTicks::default(),
+            random: LegacyRandom::new(0),
             unlit: HashSet::new(),
             next_light_job: 0,
             source: None,
@@ -3464,6 +3547,7 @@ mod tests {
             chunk: Arc::clone(chunk),
             light: None,
             stale_light: true,
+            fluid_ticks: None,
         };
         assert_eq!(snapshot.saved().rest.get("isLightOn"), Some(&Nbt::Byte(0)));
         // A player who has the chunk at the edge of its view is sent the new light; one who has its
@@ -3523,5 +3607,186 @@ mod tests {
         load_chunks(&mut reopened, &[pos]);
         assert_eq!(saved_block_light(&reopened, lamp), 15);
         assert!(!reopened.light_pending(pos));
+    }
+
+    #[test]
+    fn water_spreads_falls_into_new_holes_and_hardens_lava() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].sent_chunks.contains(&pos)
+        });
+        game.players[0].player.position = crate::player::Position {
+            x: 7.5,
+            y: -48.0,
+            z: 7.5,
+            ..game.players[0].player.position
+        };
+        let states = block_states();
+        let state = |name: &str, properties: &[(&str, &str)]| {
+            states.state(name, properties.iter().copied()).unwrap().0
+        };
+        let air = state("minecraft:air", &[]);
+        let water = |level: &str| state("minecraft:water", &[("level", level)]);
+        let at = |x, y, z| BlockPos { x, y, z };
+        // A room from x and z 4 to 12, y -51 to -49, over a stone floor.
+        let world = game.world.as_mut().unwrap();
+        for x in 4..=12 {
+            for z in 4..=12 {
+                for y in -51..=-49 {
+                    world.set_block_state(at(x, y, z), air);
+                }
+            }
+        }
+        let mut run = |game: &mut Game, ticks: u32| {
+            for _ in 0..ticks {
+                number += 1;
+                tick(game, number);
+            }
+        };
+        let block = |game: &Game, pos| game.world.as_ref().unwrap().block_state(pos).unwrap();
+
+        // A source spreads one block every five ticks, a level lower each block, until the drop-off ends it.
+        let world = game.world.as_mut().unwrap();
+        world.set_block(
+            at(8, -51, 8),
+            water("0"),
+            neighbor::UPDATE_ALL,
+            neighbor::UPDATE_LIMIT,
+        );
+        run(&mut game, 4);
+        assert_eq!(block(&game, at(9, -51, 8)), air);
+        run(&mut game, 1);
+        for side in [at(9, -51, 8), at(7, -51, 8), at(8, -51, 9), at(8, -51, 7)] {
+            assert_eq!(block(&game, side), water("1"));
+        }
+        run(&mut game, 60);
+        assert_eq!(block(&game, at(12, -51, 8)), water("4"));
+        assert_eq!(block(&game, at(11, -51, 7)), water("4"));
+        // Seven blocks away is the last water; eight away is too far.
+        assert_eq!(block(&game, at(12, -51, 11)), water("7"));
+        assert_eq!(block(&game, at(12, -51, 12)), air);
+
+        // Water beside a new hole flows down into it.
+        let floor = at(11, -52, 8);
+        game.world.as_mut().unwrap().set_block(
+            floor,
+            air,
+            neighbor::UPDATE_ALL,
+            neighbor::UPDATE_LIMIT,
+        );
+        run(&mut game, 20);
+        assert_eq!(block(&game, floor), water("8"));
+
+        // A lava source placed among water hardens at once into obsidian, with a fizz.
+        received.try_iter().for_each(drop);
+        let lava = state("minecraft:lava", &[("level", "0")]);
+        let fizzes = |received: &crate::player::OutputReceiver| {
+            received
+                .try_iter()
+                .filter(|output| {
+                    matches!(
+                        output,
+                        Output::WorldEvent {
+                            event: crate::fluid::LAVA_FIZZ,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        let world = game.world.as_mut().unwrap();
+        world.set_block(
+            at(6, -51, 8),
+            lava,
+            neighbor::UPDATE_ALL,
+            neighbor::UPDATE_LIMIT,
+        );
+        assert_eq!(
+            block(&game, at(6, -51, 8)),
+            state("minecraft:obsidian", &[])
+        );
+        run(&mut game, 1);
+        assert_eq!(fizzes(&received), 1);
+
+        // Lava over the water touches none from the sides, so it waits for its tick, 30 later, and flows down
+        // into the water, which becomes stone.
+        let world = game.world.as_mut().unwrap();
+        world.set_block(
+            at(8, -50, 8),
+            lava,
+            neighbor::UPDATE_ALL,
+            neighbor::UPDATE_LIMIT,
+        );
+        run(&mut game, 29);
+        assert_eq!(block(&game, at(8, -51, 8)), water("0"));
+        run(&mut game, 1);
+        assert_eq!(block(&game, at(8, -51, 8)), state("minecraft:stone", &[]));
+        assert_eq!(fizzes(&received), 1);
+    }
+
+    #[test]
+    fn pending_fluid_ticks_are_saved_and_run_after_the_world_is_read_again() {
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let states = block_states();
+        let air = states.default_state("minecraft:air").unwrap();
+        let water = states.default_state("minecraft:water").unwrap();
+        let source = BlockPos { x: 8, y: -50, z: 8 };
+        let side = BlockPos { x: 9, ..source };
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        world.set_block_state(side, air);
+        world.set_block_state(BlockPos { y: -49, ..side }, air);
+        world.set_block_state(BlockPos { y: -49, ..source }, air);
+        world.set_block(source, water, neighbor::UPDATE_ALL, neighbor::UPDATE_LIMIT);
+        world.tick_scheduled();
+        world.flush().unwrap();
+        let saved = read_chunk(&folder.region_dir(), 0, 0).unwrap().unwrap();
+        let Some(Nbt::List(harpas_core::nbt::List::Compound(ticks))) = saved.get("fluid_ticks")
+        else {
+            panic!("no fluid ticks saved")
+        };
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].get("i"), Some(&Nbt::from("minecraft:water")));
+        // Five ticks after it was scheduled, one has passed.
+        assert_eq!(ticks[0].get("t"), Some(&Nbt::Int(4)));
+        drop(world);
+
+        let mut reopened = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut reopened, &[pos]);
+        // The four ticks it had left.
+        for _ in 0..3 {
+            reopened.tick_scheduled();
+        }
+        assert_eq!(reopened.block_state(side), Some(air));
+        reopened.tick_scheduled();
+        assert_eq!(
+            reopened.block_state(side),
+            Some(states.state("minecraft:water", [("level", "1")]).unwrap().0)
+        );
     }
 }

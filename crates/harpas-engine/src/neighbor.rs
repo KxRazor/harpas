@@ -1,17 +1,19 @@
-//! Shape updates of the blocks next to a changed block, run in vanilla's order (`Level.setBlock`,
-//! `BlockStateBase.updateNeighbourShapes` and `CollectingNeighborUpdater`).
+//! Neighbor and shape updates of the blocks next to a changed block, run in vanilla's order (`Level.setBlock`,
+//! `updateNeighborsAt`, `BlockStateBase.updateNeighbourShapes` and `CollectingNeighborUpdater`).
 //!
-//! When a block changes, each of its six neighbors is asked for its new shape (`updateShape`) against the new
-//! block, in the order west, east, north, south, down, up. A neighbor that changes updates its own neighbors in
-//! turn, depth first: the updates a change adds run before the next update of the change that caused it, as the
-//! collecting updater pushes them. A neighbor whose shape becomes air breaks (`Level.destroyBlock`): its
-//! particles and sound play, it leaves the fluid it held, and it updates its neighbors. The rules of each block
-//! are those `harpas-worldgen` ports for features and structures (`ShapeUpdates`).
+//! When a block changes with [`UPDATE_NEIGHBORS`], each of its six neighbors is told (`neighborChanged`), in the
+//! order west, east, down, up, north, south; only liquids react so far. Then, unless the shape is known, each
+//! neighbor is asked for its new shape (`updateShape`) against the new block, in the order west, east, north,
+//! south, down, up. Every update a change adds runs before the next update of the change that caused it, the
+//! first added first, as the collecting updater pushes them. A neighbor whose shape becomes air breaks
+//! (`Level.destroyBlock`): its particles and sound play, it leaves the fluid it held, and it updates its
+//! neighbors. The shape rules of each block are those `harpas-worldgen` ports for features and structures
+//! (`ShapeUpdates`); a liquid, or a block that holds water, also schedules its fluid's tick.
 //!
-//! Not done yet: neighbor updates (`neighborChanged`, which redstone reacts to), the indirect shape updates of
-//! redstone wire, `onPlace` and `affectNeighborsAfterRemoval`, and drops. Vanilla loads a chunk that an update
-//! reaches; here a block next to a chunk that is not loaded keeps its shape, so that it is never broken for
-//! missing support the server has not read.
+//! Not done yet: the blocks other than liquids that react to their neighbors, redstone among them, the indirect
+//! shape updates of redstone wire, `onPlace` for blocks other than liquids, `affectNeighborsAfterRemoval`, and
+//! drops. Vanilla loads a chunk that an update reaches; here a block next to a chunk that is not loaded keeps its
+//! shape, so that it is never broken for missing support the server has not read.
 
 use harpas_core::block::block_states;
 use harpas_worldgen::BlockGetter;
@@ -61,11 +63,36 @@ struct ShapeUpdate {
     recursion: u32,
 }
 
+/// The six neighbor updates around a changed block, one at a time (`CollectingNeighborUpdater.MultiNeighborUpdate`).
+#[derive(Debug, Clone, Copy)]
+struct NeighborUpdates {
+    source: BlockPos,
+    /// The next direction, in [`UPDATE_ORDER`].
+    next: usize,
+}
+
+/// One queued update (`CollectingNeighborUpdater.NeighborUpdates`).
+#[derive(Debug, Clone, Copy)]
+enum Entry {
+    Shape(ShapeUpdate),
+    Neighbors(NeighborUpdates),
+}
+
+/// The order of the neighbor updates around a block (`NeighborUpdater.UPDATE_ORDER`).
+const UPDATE_ORDER: [Direction; 6] = [
+    Direction::West,
+    Direction::East,
+    Direction::Down,
+    Direction::Up,
+    Direction::North,
+    Direction::South,
+];
+
 /// The queue of a running chain of updates (`CollectingNeighborUpdater`).
 #[derive(Debug, Default)]
 pub(crate) struct Updater {
-    stack: Vec<ShapeUpdate>,
-    added_this_layer: Vec<ShapeUpdate>,
+    stack: Vec<Entry>,
+    added_this_layer: Vec<Entry>,
     count: usize,
 }
 
@@ -113,20 +140,36 @@ impl World {
         if block::changes_light(old, state) {
             self.relight_around(pos);
         }
+        // `onPlace`, as the chunk sets the block.
+        self.liquid_changed(pos, state);
         if flags & UPDATE_CLIENTS != 0 {
             self.block_changed(pos);
+        }
+        if flags & UPDATE_NEIGHBORS != 0 {
+            // `updateNeighborsAt`.
+            self.add_and_run(
+                pos,
+                Entry::Neighbors(NeighborUpdates {
+                    source: pos,
+                    next: 0,
+                }),
+            );
         }
         if flags & UPDATE_KNOWN_SHAPE == 0 && recursion > 0 {
             let flags = flags & !(UPDATE_NEIGHBORS | UPDATE_SUPPRESS_DROPS);
             for direction in UPDATE_SHAPE_ORDER {
-                self.shape_update(ShapeUpdate {
-                    direction: direction.opposite(),
-                    neighbor_state: state,
-                    pos: step(pos, direction),
-                    neighbor_pos: pos,
-                    flags,
-                    recursion: recursion - 1,
-                });
+                let target = step(pos, direction);
+                self.add_and_run(
+                    target,
+                    Entry::Shape(ShapeUpdate {
+                        direction: direction.opposite(),
+                        neighbor_state: state,
+                        pos: target,
+                        neighbor_pos: pos,
+                        flags,
+                        recursion: recursion - 1,
+                    }),
+                );
             }
         }
         true
@@ -160,19 +203,19 @@ impl World {
         std::mem::take(&mut self.level_events)
     }
 
-    /// `CollectingNeighborUpdater.addAndRun` for a shape update.
-    fn shape_update(&mut self, update: ShapeUpdate) {
+    /// `CollectingNeighborUpdater.addAndRun`.
+    fn add_and_run(&mut self, pos: BlockPos, entry: Entry) {
         let running = self.updater.count > 0;
         let too_deep = self.updater.count >= MAX_CHAINED_UPDATES;
         self.updater.count += 1;
         if !too_deep {
             if running {
-                self.updater.added_this_layer.push(update);
+                self.updater.added_this_layer.push(entry);
             } else {
-                self.updater.stack.push(update);
+                self.updater.stack.push(entry);
             }
         } else if self.updater.count - 1 == MAX_CHAINED_UPDATES {
-            let BlockPos { x, y, z } = update.pos;
+            let BlockPos { x, y, z } = pos;
             error!(
                 "Too many chained neighbor updates. Skipping the rest. First skipped position: {x}, {y}, {z}"
             );
@@ -182,32 +225,61 @@ impl World {
         }
     }
 
-    /// `CollectingNeighborUpdater.runUpdates`: the updates added by one update run before the next one queued
-    /// before them, the first added first.
+    /// `CollectingNeighborUpdater.runUpdates`: the entry on top runs one update at a time until it has added
+    /// others, which run before its next one, the first added first.
     fn run_updates(&mut self) {
         while !self.updater.stack.is_empty() || !self.updater.added_this_layer.is_empty() {
             let added = std::mem::take(&mut self.updater.added_this_layer);
             self.updater.stack.extend(added.into_iter().rev());
-            // A shape update runs once and leaves the stack.
-            let Some(update) = self.updater.stack.pop() else {
-                break;
-            };
-            self.execute_shape_update(update);
+            while self.updater.added_this_layer.is_empty() {
+                let Some(top) = self.updater.stack.len().checked_sub(1) else {
+                    break;
+                };
+                let more = match self.updater.stack[top] {
+                    Entry::Shape(update) => {
+                        self.execute_shape_update(update);
+                        false
+                    }
+                    Entry::Neighbors(mut updates) => {
+                        let target = step(updates.source, UPDATE_ORDER[updates.next]);
+                        updates.next += 1;
+                        self.updater.stack[top] = Entry::Neighbors(updates);
+                        self.neighbor_changed(target);
+                        updates.next < UPDATE_ORDER.len()
+                    }
+                };
+                if !more {
+                    // Entries added meanwhile wait in the layer, so the top is still this entry.
+                    self.updater.stack.remove(top);
+                    break;
+                }
+            }
         }
         self.updater.stack.clear();
         self.updater.added_this_layer.clear();
         self.updater.count = 0;
     }
 
+    /// `NeighborUpdater.executeUpdate`: the block's `neighborChanged`, which only liquids react to so far.
+    fn neighbor_changed(&mut self, pos: BlockPos) {
+        if !self.neighborhood_loaded(pos) {
+            return;
+        }
+        if let Some(state) = self.block_state(pos) {
+            self.liquid_changed(pos, state);
+        }
+    }
+
     /// `NeighborUpdater.executeShapeUpdate` and `Block.updateOrDestroy`.
     fn execute_shape_update(&mut self, update: ShapeUpdate) {
-        let Some(shapes) = self.shape_updates.clone() else {
-            return;
-        };
         if !self.neighborhood_loaded(update.pos) {
             return;
         }
         let Some(state) = self.block_state(update.pos) else {
+            return;
+        };
+        self.fluid_shape_update(update.pos, state, update.neighbor_state);
+        let Some(shapes) = self.shape_updates.clone() else {
             return;
         };
         let BlockPos { x, y, z } = update.pos;

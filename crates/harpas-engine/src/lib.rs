@@ -3,9 +3,11 @@
 //! Design: `docs/engine-core.md`.
 
 pub mod block;
+pub(crate) mod fluid;
 pub mod light;
 pub mod neighbor;
 pub mod player;
+pub(crate) mod ticks;
 pub mod world;
 pub mod worldgen;
 
@@ -259,6 +261,21 @@ fn within(player: &player::PlayerState, pos: block::BlockPos, range: f64) -> boo
     dx * dx + dy * dy + dz * dz < range * range
 }
 
+/// Plays world events for every player within 64 blocks of each (`ServerLevel.levelEvent` with no source).
+fn send_level_events(players: &[player::PlayerState], events: &[neighbor::LevelEvent]) {
+    for event in events {
+        for player in players {
+            if !player.disconnecting && within(player, event.pos, 64.0) {
+                player.send(player::Output::WorldEvent {
+                    event: event.event,
+                    position: event.pos,
+                    data: event.data,
+                });
+            }
+        }
+    }
+}
+
 /// The next tick's target time. Short delays are caught up; a delay over two seconds resets the target.
 struct Schedule {
     next: Instant,
@@ -365,6 +382,10 @@ impl TickWork for Game {
             self.fail_world(error);
             return;
         }
+        // The game time advances and the scheduled fluid ticks run, before the tick's changes are sent.
+        world.tick_scheduled();
+        let events = world.take_level_events();
+        send_level_events(&self.players, &events);
         // Sending light changes, only to the players at whose view's edge each chunk is: the others light the
         // changed blocks themselves (`ChunkHolder.broadcastChanges`).
         for (chunk, light) in world.take_light_updates() {
@@ -973,17 +994,8 @@ impl Game {
             neighbor::UPDATE_LIMIT,
         );
         // The particles and sound of the blocks that broke with it, for every player nearby.
-        for event in world.take_level_events() {
-            for player in &self.players {
-                if !player.disconnecting && within(player, event.pos, 64.0) {
-                    player.send(player::Output::WorldEvent {
-                        event: event.event,
-                        position: event.pos,
-                        data: event.data,
-                    });
-                }
-            }
-        }
+        let events = world.take_level_events();
+        send_level_events(&self.players, &events);
         true
     }
 

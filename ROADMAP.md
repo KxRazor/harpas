@@ -398,9 +398,13 @@ as shown by the parity report.
   - [x] Breaking blocks in Survival, with each block's destroy speed and the destroy progress others see.
   - [x] Shape updates: the neighbors of a changed block take their new shapes in vanilla's order, and those
         that can no longer stand break, with the rules ported for world generation.
-  - [ ] Neighbor updates (`neighborChanged`), with redstone.
+  - [x] Neighbor updates (`neighborChanged`) in vanilla's order, which liquids react to.
+  - [ ] The other blocks that react to their neighbors, with redstone.
   - [ ] Placing blocks, once items exist.
-  - [ ] Scheduled and random ticks.
+  - [x] Scheduled ticks in vanilla's order (`LevelTicks`), saved with their chunks, and the fluid ticks of
+        water and lava flowing, falling into holes and hardening into obsidian, cobblestone, stone and basalt.
+  - [ ] Scheduled block ticks, for the blocks that schedule them; until then their saved ticks are kept.
+  - [ ] Random ticks.
 - [ ] Light updates from block changes, queued and applied at defined points as vanilla's light engine applies
       them, with their timing compared against vanilla ([docs/engine-core.md](docs/engine-core.md)).
   - [x] Light chunks again on the workers when a block changes its light within 15 blocks of them, write the new

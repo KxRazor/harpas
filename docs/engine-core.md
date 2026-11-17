@@ -7,8 +7,9 @@ the tick. Modded mode uses Mojang's server instead and is covered in [mod-suppor
 Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
 overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
-Creative and, with an empty hand, in Survival, the neighbors of a changed block update their shapes, and the
-chunks around it are lit again; placing, neighbor updates and ticks are to come), saving other world and player data,
+Creative and, with an empty hand, in Survival, the neighbors of a changed block are updated and update their
+shapes, the chunks around it are lit again, and water and lava flow on scheduled fluid ticks; placing, scheduled
+block ticks and random ticks are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -61,8 +62,10 @@ This order is observable (redstone timing, farms, entity interactions), so Harpa
 short delays and resets the target after a delay over two seconds. The tick has phases for functions,
 dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. The dimension
 phase applies completed chunk reads and saves, and schedules unloading; the autosave phase queues immutable
-chunk snapshots without waiting for disk. Connection and player work is implemented. The other phases remain
-placeholders.
+chunk snapshots without waiting for disk. Connection and player work is implemented. In the dimension phase,
+the game time advances and the scheduled fluid ticks due in the chunks of the players' views run, at most 65,536,
+in vanilla's order; scheduled block ticks, which no ported block uses yet, stay saved as they were. The other
+phases remain placeholders.
 
 Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting
 messages into edition-specific packets. The logic thread owns each player's profile and position and publishes

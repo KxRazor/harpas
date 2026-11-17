@@ -392,6 +392,13 @@ vanilla for the same seed.
 as shown by the parity report.
 
 - [ ] Block placement and breaking, block updates, scheduled and random ticks.
+  - [x] Breaking blocks in Creative: reach and height checks, the fluid left behind, heightmaps, block
+        entities, saving, block changes sent to the players who have the chunk, world events and
+        acknowledgements.
+  - [ ] Breaking blocks in Survival, with each block's destroy speed and the destroy progress others see.
+  - [ ] Neighbor and shape updates.
+  - [ ] Placing blocks, once items exist.
+  - [ ] Scheduled and random ticks.
 - [ ] Light updates from block changes, queued and applied at defined points as vanilla's light engine applies
       them, with their timing compared against vanilla ([docs/engine-core.md](docs/engine-core.md)).
 - [ ] Redstone components and block events, with tick-by-tick parity harnesses.

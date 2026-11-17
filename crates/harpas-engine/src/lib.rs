@@ -2,6 +2,7 @@
 //!
 //! Design: `docs/engine-core.md`.
 
+pub mod block;
 pub mod light;
 pub mod player;
 pub mod world;
@@ -20,6 +21,9 @@ const TICK_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_LAG: Duration = Duration::from_secs(2);
 const AUTOSAVE_INTERVAL: u64 = 6_000;
 const CHUNKS_PER_BATCH: usize = 8;
+/// Vanilla's world event for a broken block (`LevelEvent.PARTICLES_DESTROY_BLOCK`), whose data is the block
+/// state.
+const BLOCK_DESTROYED: i32 = 2001;
 
 /// A handle for sending connection events to the logic thread.
 #[derive(Clone, Debug)]
@@ -337,6 +341,17 @@ impl TickWork for Game {
             self.fail_world(error);
             return;
         }
+        // Sending block changes, to the players who have each chunk (`ChunkHolder.broadcastChanges`).
+        for (chunk, sections) in world.take_block_changes() {
+            for blocks in sections {
+                let blocks: Arc<[_]> = blocks.into();
+                for player in &self.players {
+                    if !player.disconnecting && player.sent_chunks.contains(&chunk) {
+                        player.send(player::Output::SectionBlocks(Arc::clone(&blocks)));
+                    }
+                }
+            }
+        }
         for player in &mut self.players {
             if player.disconnecting || player.awaiting_chunk_batch {
                 continue;
@@ -478,6 +493,20 @@ impl TickWork for Game {
                             }
                             continue;
                         }
+                        player::Input::Dig {
+                            action,
+                            position,
+                            sequence,
+                        } => {
+                            if let Some(index) = self
+                                .players
+                                .iter()
+                                .position(|p| p.player.entity_id == entity_id && !p.disconnecting)
+                            {
+                                self.dig(index, action, position, sequence);
+                            }
+                            continue;
+                        }
                         player::Input::ChatMessage(message) => {
                             if let Some(index) = self
                                 .players
@@ -506,7 +535,8 @@ impl TickWork for Game {
                         match input {
                             player::Input::ChatSession(_)
                             | player::Input::ChatSessionEnded
-                            | player::Input::ChatMessage(_) => {
+                            | player::Input::ChatMessage(_)
+                            | player::Input::Dig { .. } => {
                                 unreachable!()
                             }
                             player::Input::Movement(movement) => {
@@ -564,6 +594,10 @@ impl TickWork for Game {
             }
         }
         for state in &mut self.players {
+            // At the start of the connection's tick, after its packets, as vanilla.
+            if let Some(sequence) = state.acknowledge_block_changes.take() {
+                state.send(player::Output::AcknowledgeBlockChanges(sequence));
+            }
             state.check_flight();
             state.tick_chat();
         }
@@ -650,6 +684,102 @@ impl Game {
             }
             player.send(player::Output::RemovePlayer(left.player.profile.uuid));
         }
+    }
+
+    /// A player's Start, Abort or Finish of breaking a block, as vanilla's `handlePlayerAction` and
+    /// `ServerPlayerGameMode.handleBlockBreakAction`.
+    ///
+    /// A player in Creative breaks the block at once. Spawn protection does not apply while the server has no
+    /// operators, as in vanilla, and there are none until `ops.json` is read; the world border is not checked
+    /// until it exists. Breaking in Survival needs each block's destroy speed, which is not ported yet, so the
+    /// server sends the block back instead of letting the client's prediction stand.
+    fn dig(&mut self, index: usize, action: block::DigAction, pos: block::BlockPos, sequence: i32) {
+        let state = &self.players[index];
+        let range = state.block_interaction_range() + 1.0;
+        let mode = state.player.profile.game_mode;
+        if pos.distance_squared(state.eye_position()) >= range * range {
+            // Too far: vanilla sends nothing back but the acknowledgement.
+        } else if pos.y > block::MAX_Y {
+            self.send_block(index, pos);
+        } else {
+            match (action, mode) {
+                (block::DigAction::Start, player::GameMode::Creative) => {
+                    if !self.destroy_block(index, pos) {
+                        self.send_block(index, pos);
+                    }
+                }
+                // Adventure and Spectator may not break blocks without a tool that allows it.
+                (block::DigAction::Start, _) => self.send_block(index, pos),
+                (block::DigAction::Finish, player::GameMode::Survival) => {
+                    self.send_block(index, pos);
+                }
+                (block::DigAction::Finish | block::DigAction::Abort, _) => {}
+            }
+        }
+        let state = &mut self.players[index];
+        if sequence < 0 {
+            // Vanilla's `ackBlockChangesUpTo` throws, which disconnects the client.
+            state.disconnecting = true;
+            state.send(player::Output::Disconnect("Network Protocol Error"));
+            return;
+        }
+        state.acknowledge_block_changes = Some(
+            state
+                .acknowledge_block_changes
+                .map_or(sequence, |acknowledged| acknowledged.max(sequence)),
+        );
+    }
+
+    /// Sends a player the current state of a block, which overrides the client's prediction.
+    fn send_block(&self, index: usize, position: block::BlockPos) {
+        let air = harpas_core::block::block_states()
+            .default_state("minecraft:void_air")
+            .expect("a vanilla block");
+        let state = self
+            .world
+            .as_ref()
+            .and_then(|world| world.block_state(position))
+            .unwrap_or(air);
+        self.players[index].send(player::Output::BlockUpdate { position, state });
+    }
+
+    /// Breaks a block for a player in Creative, as vanilla's `ServerPlayerGameMode.destroyBlock`. Returns
+    /// whether the player's prediction stands.
+    fn destroy_block(&mut self, index: usize, pos: block::BlockPos) -> bool {
+        let Some(world) = &mut self.world else {
+            return true;
+        };
+        // Vanilla would load a chunk that is not loaded; a player cannot reach one.
+        let Some(state) = world.block_state(pos) else {
+            return true;
+        };
+        // Only operators may break these, and there are none yet.
+        if block::is_game_master_block(state) {
+            world.block_changed(pos);
+            return false;
+        }
+        // `playerWillDestroy`: the particles and sound of the broken block, for the other players nearby.
+        let breaker = self.players[index].player.entity_id;
+        for player in &self.players {
+            let p = &player.player.position;
+            let (dx, dy, dz) = (
+                f64::from(pos.x) - p.x,
+                f64::from(pos.y) - p.y,
+                f64::from(pos.z) - p.z,
+            );
+            if player.player.entity_id != breaker
+                && !player.disconnecting
+                && dx * dx + dy * dy + dz * dz < 64.0 * 64.0
+            {
+                player.send(player::Output::WorldEvent {
+                    event: BLOCK_DESTROYED,
+                    position: pos,
+                    data: state as i32,
+                });
+            }
+        }
+        world.set_block_state(pos, block::removed(state));
+        true
     }
 
     fn update_tracking(&mut self, moved: &HashSet<i32>) {

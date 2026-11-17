@@ -6,8 +6,9 @@ the tick. Modded mode uses Mojang's server instead and is covered in [mod-suppor
 
 Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
 overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
-and gradient/simplex noise samplers are implemented. World generation, live block changes, saving other world
-and player data, and the remaining entity logic are still in progress. Facts about vanilla cite their source in
+and gradient/simplex noise samplers are implemented. World generation, live block changes (players in Creative
+break blocks; Survival breaking, placing, block updates and ticks are to come), saving other world and player data,
+and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---

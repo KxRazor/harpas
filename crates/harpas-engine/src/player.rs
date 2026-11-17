@@ -8,6 +8,7 @@ use std::thread::Thread;
 
 use harpas_anvil::Chunk;
 
+use crate::block::{BlockPos, DigAction};
 use crate::light::Light;
 use crate::world::{ChunkPos, World};
 
@@ -138,6 +139,16 @@ pub enum Input {
     ViewDistance(u8),
     /// The client acknowledged the last chunk batch and reported its desired chunks per tick.
     ChunkBatchReceived(f32),
+    /// The player started, stopped or finished breaking a block. The client predicted the result and waits
+    /// for `sequence` to be acknowledged.
+    Dig {
+        /// What the player did.
+        action: DigAction,
+        /// The block.
+        position: BlockPos,
+        /// The client's sequence number for the prediction.
+        sequence: i32,
+    },
 }
 
 /// A chunk ready to send to a player; an absent chunk is the temporary void until generation exists.
@@ -217,6 +228,26 @@ pub enum Output {
     ViewDistance(u8),
     /// Send these ready chunks as one batch. At most one batch per player is in flight.
     ChunkBatch(Vec<VisibleChunk>),
+    /// Changed blocks of one chunk section the player has, with their current states.
+    SectionBlocks(Arc<[(BlockPos, u32)]>),
+    /// Send the current state of a block, overriding the client's prediction.
+    BlockUpdate {
+        /// The block.
+        position: BlockPos,
+        /// Its current state.
+        state: u32,
+    },
+    /// Confirm the client's block change predictions up to this sequence number.
+    AcknowledgeBlockChanges(i32),
+    /// Play a world event, such as the particles and sound of a broken block.
+    WorldEvent {
+        /// Vanilla's event type, such as 2001 for a broken block.
+        event: i32,
+        /// Where it happens.
+        position: BlockPos,
+        /// The event's data, such as the broken block's state.
+        data: i32,
+    },
     /// Correct the player's position and wait for the corresponding confirmation.
     Teleport {
         /// Teleport ID to be acknowledged by the client.
@@ -363,6 +394,8 @@ pub(crate) struct PlayerState {
     pub(crate) disconnecting: bool,
     /// Vanilla's chat spam counter: each message adds 20, and each tick takes one away.
     pub(crate) chat_spam: u32,
+    /// The highest block change sequence to acknowledge in this tick (`ackBlockChangesUpTo`).
+    pub(crate) acknowledge_block_changes: Option<i32>,
 }
 
 const CHAT_SPAM_PER_MESSAGE: u32 = 20;
@@ -404,6 +437,7 @@ impl PlayerState {
             tick_start: position,
             disconnecting: false,
             chat_spam: 0,
+            acknowledge_block_changes: None,
         }
     }
 
@@ -505,6 +539,22 @@ impl PlayerState {
     /// Lets the chat spam counter go down by one each tick.
     pub(crate) fn tick_chat(&mut self) {
         self.chat_spam = self.chat_spam.saturating_sub(1);
+    }
+
+    /// The position of the player's eyes: a standing player's, until sneaking and swimming poses exist.
+    pub(crate) fn eye_position(&self) -> [f64; 3] {
+        let position = &self.player.position;
+        [position.x, position.y + 1.62, position.z]
+    }
+
+    /// How far the player reaches blocks: the `block_interaction_range` attribute, which is 4.5 and has 0.5
+    /// more in Creative.
+    pub(crate) fn block_interaction_range(&self) -> f64 {
+        if self.player.profile.game_mode == GameMode::Creative {
+            5.0
+        } else {
+            4.5
+        }
     }
 
     /// Whether this player sees a player in `mode` at `position`.

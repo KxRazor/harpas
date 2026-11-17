@@ -201,3 +201,188 @@ impl Decode for PlayerInfoUpdates {
         Ok(Self { actions, entries })
     }
 }
+
+/// The changes to an item's default data components (`DataComponentPatch`): components added or replaced, each
+/// with its type's numeric ID and its value as encoded, and components removed.
+///
+/// Component values are kept as their bytes, so a stack is sent back as it was received; decoding them waits
+/// for each component's codec.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComponentPatch {
+    /// Added or replaced components: the type's ID in `minecraft:data_component_type`, and the encoded value.
+    pub added: Vec<(i32, Vec<u8>)>,
+    /// Removed components, by type ID.
+    pub removed: Vec<i32>,
+}
+
+impl ComponentPatch {
+    /// Writes the patch; `delimited` prefixes each value with its length, as `DELIMITED_STREAM_CODEC` does.
+    fn write(&self, buf: &mut Vec<u8>, delimited: bool) {
+        let len = |n: usize| i32::try_from(n).expect("component count fits in a VarInt");
+        codec::write_varint(buf, len(self.added.len()));
+        codec::write_varint(buf, len(self.removed.len()));
+        for (kind, value) in &self.added {
+            codec::write_varint(buf, *kind);
+            if delimited {
+                codec::write_bytes(buf, value);
+            } else {
+                buf.extend_from_slice(value);
+            }
+        }
+        for kind in &self.removed {
+            codec::write_varint(buf, *kind);
+        }
+    }
+
+    /// Reads a patch. Without the delimited form, only a patch that adds nothing can be read.
+    fn read(input: &mut &[u8], delimited: bool) -> Result<Self, DecodeError> {
+        let count = |input: &mut &[u8]| {
+            let count = codec::read_varint(input)?;
+            let count = usize::try_from(count).map_err(|_| DecodeError::NegativeLength(count))?;
+            // Every entry takes at least one byte.
+            if count > input.len() {
+                return Err(DecodeError::UnexpectedEnd);
+            }
+            Ok(count)
+        };
+        let added = count(input)?;
+        let removed = count(input)?;
+        if added > 0 && !delimited {
+            return Err(DecodeError::UndelimitedComponents);
+        }
+        let mut patch = Self::default();
+        for _ in 0..added {
+            let kind = codec::read_varint(input)?;
+            patch
+                .added
+                .push((kind, codec::read_bytes(input, usize::MAX)?));
+        }
+        for _ in 0..removed {
+            patch.removed.push(codec::read_varint(input)?);
+        }
+        Ok(patch)
+    }
+}
+
+/// An item stack, or none (`ItemStack.OPTIONAL_STREAM_CODEC`): a count, then for a count above zero the item's
+/// numeric ID in `minecraft:item` and the changes to its data components.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemStack {
+    /// How many; zero or less is no stack.
+    pub count: i32,
+    /// The item's ID in `minecraft:item`.
+    pub item: i32,
+    /// The changes to the item's default components.
+    pub components: ComponentPatch,
+}
+
+impl ItemStack {
+    /// Whether this is no stack (`ItemStack.isEmpty`, as the codec sees it).
+    pub fn is_empty(&self) -> bool {
+        self.count <= 0
+    }
+
+    fn write(&self, buf: &mut Vec<u8>, delimited: bool) {
+        if self.is_empty() {
+            codec::write_varint(buf, 0);
+            return;
+        }
+        codec::write_varint(buf, self.count);
+        codec::write_varint(buf, self.item);
+        self.components.write(buf, delimited);
+    }
+
+    fn read(input: &mut &[u8], delimited: bool) -> Result<Self, DecodeError> {
+        let count = codec::read_varint(input)?;
+        if count <= 0 {
+            return Ok(Self::default());
+        }
+        let item = codec::read_varint(input)?;
+        if item < 0 {
+            return Err(DecodeError::InvalidRegistryId(item));
+        }
+        Ok(Self {
+            count,
+            item,
+            components: ComponentPatch::read(input, delimited)?,
+        })
+    }
+}
+
+impl Encode for ItemStack {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        self.write(buf, false);
+    }
+}
+
+impl Decode for ItemStack {
+    fn decode(input: &mut &[u8]) -> Result<Self, DecodeError> {
+        Self::read(input, false)
+    }
+}
+
+/// An item stack as a client sends it in Creative (`ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC`): each added
+/// component's value is prefixed with its length, so it can be read without the component's codec.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UntrustedItemStack(pub ItemStack);
+
+impl Encode for UntrustedItemStack {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        self.0.write(buf, true);
+    }
+}
+
+impl Decode for UntrustedItemStack {
+    fn decode(input: &mut &[u8]) -> Result<Self, DecodeError> {
+        ItemStack::read(input, true).map(Self)
+    }
+}
+
+#[cfg(test)]
+mod item_tests {
+    use super::*;
+
+    #[test]
+    fn stacks_keep_their_component_values_from_client_to_client() {
+        let stack = ItemStack {
+            count: 3,
+            item: 1,
+            components: ComponentPatch {
+                added: vec![(5, vec![0x02, 0x07])],
+                removed: vec![9],
+            },
+        };
+        let mut untrusted = Vec::new();
+        UntrustedItemStack(stack.clone()).encode(&mut untrusted);
+        assert_eq!(untrusted, [3, 1, 1, 1, 5, 2, 0x02, 0x07, 9]);
+        assert_eq!(
+            UntrustedItemStack::decode(&mut &untrusted[..]),
+            Ok(UntrustedItemStack(stack.clone()))
+        );
+        // Sent to a client, the value follows its type without a length.
+        let mut sent = Vec::new();
+        stack.encode(&mut sent);
+        assert_eq!(sent, [3, 1, 1, 1, 5, 0x02, 0x07, 9]);
+        assert_eq!(
+            ItemStack::decode(&mut &sent[..]),
+            Err(DecodeError::UndelimitedComponents)
+        );
+    }
+
+    #[test]
+    fn an_empty_stack_is_a_zero_count() {
+        let mut buf = Vec::new();
+        ItemStack::default().encode(&mut buf);
+        assert_eq!(buf, [0]);
+        assert_eq!(ItemStack::decode(&mut &[0][..]), Ok(ItemStack::default()));
+        let plain = [64, 1, 0, 0];
+        assert_eq!(
+            ItemStack::decode(&mut &plain[..]),
+            Ok(ItemStack {
+                count: 64,
+                item: 1,
+                components: ComponentPatch::default(),
+            })
+        );
+    }
+}

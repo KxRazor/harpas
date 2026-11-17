@@ -58,6 +58,9 @@ pub enum DecodeError {
     Nbt(NbtError),
     /// A registry holder had a negative ID.
     InvalidRegistryId(i32),
+    /// An item stack changed data components whose values are not decoded yet; only the delimited form a
+    /// client sends can be read.
+    UndelimitedComponents,
 }
 
 impl fmt::Display for DecodeError {
@@ -78,6 +81,9 @@ impl fmt::Display for DecodeError {
             DecodeError::TrailingBytes(len) => write!(f, "{len} bytes left after the packet"),
             DecodeError::Nbt(e) => e.fmt(f),
             DecodeError::InvalidRegistryId(id) => write!(f, "invalid registry ID {id}"),
+            DecodeError::UndelimitedComponents => {
+                f.write_str("item stack data components cannot be decoded yet")
+            }
         }
     }
 }

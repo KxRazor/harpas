@@ -4,8 +4,10 @@
 
 pub mod block;
 pub(crate) mod fluid;
+pub mod inventory;
 pub mod light;
 pub mod neighbor;
+mod place;
 pub mod player;
 pub(crate) mod ticks;
 pub mod world;
@@ -457,6 +459,7 @@ impl TickWork for Game {
         }
         // Players tick with the entities, after the block changes are sent (`ServerPlayer.tick`).
         self.tick_digging();
+        self.send_inventory_changes();
     }
 
     fn connections(&mut self) {
@@ -566,6 +569,37 @@ impl TickWork for Game {
                             }
                             continue;
                         }
+                        player::Input::SetCreativeSlot { slot, stack } => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.set_creative_slot(index, slot, stack);
+                            }
+                            continue;
+                        }
+                        player::Input::SelectHotbarSlot(slot) => {
+                            if let Some(index) = self.active(entity_id) {
+                                if (0..9).contains(&slot) {
+                                    self.players[index].inventory.selected = slot as usize;
+                                } else {
+                                    log::warn!(
+                                        "{} tried to set an invalid carried item",
+                                        self.players[index].player.profile.name
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+                        player::Input::UseItemOn {
+                            off_hand,
+                            position,
+                            face,
+                            cursor,
+                            sequence,
+                        } => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.use_item_on(index, off_hand, position, face, cursor, sequence);
+                            }
+                            continue;
+                        }
                         player::Input::ChatMessage(message) => {
                             if let Some(index) = self
                                 .players
@@ -595,7 +629,10 @@ impl TickWork for Game {
                             player::Input::ChatSession(_)
                             | player::Input::ChatSessionEnded
                             | player::Input::ChatMessage(_)
-                            | player::Input::Dig { .. } => {
+                            | player::Input::Dig { .. }
+                            | player::Input::SetCreativeSlot { .. }
+                            | player::Input::SelectHotbarSlot(_)
+                            | player::Input::UseItemOn { .. } => {
                                 unreachable!()
                             }
                             player::Input::Movement(movement) => {
@@ -725,6 +762,8 @@ impl Game {
             }
             existing.send(player::Output::AddPlayer(player.player.profile.clone()));
         }
+        let contents = place::initial_contents(&mut player.inventory);
+        player.send(contents);
         self.players.push(player);
     }
 
@@ -743,6 +782,13 @@ impl Game {
             }
             player.send(player::Output::RemovePlayer(left.player.profile.uuid));
         }
+    }
+
+    /// The index of a player who is not leaving.
+    fn active(&self, entity_id: i32) -> Option<usize> {
+        self.players
+            .iter()
+            .position(|p| p.player.entity_id == entity_id && !p.disconnecting)
     }
 
     /// A player's Start, Abort or Finish of breaking a block, as vanilla's `handlePlayerAction` and
@@ -1408,8 +1454,16 @@ mod tests {
         let steve = join(&mut game, 1, "Steve", 10);
         let alex = join(&mut game, 2, "Alex", 10);
         tick(&mut game, 1);
-        let steve_join: Vec<_> = steve.try_iter().collect();
-        let alex_join: Vec<_> = alex.try_iter().collect();
+        // Each is sent its inventory once, after the players already there, as vanilla's `initInventoryMenu`.
+        let joined = |received: &player::OutputReceiver| -> Vec<_> {
+            let (inventory, others): (Vec<_>, Vec<_>) = received
+                .try_iter()
+                .partition(|output| matches!(output, Output::InventoryContent { .. }));
+            assert_eq!(inventory.len(), 1);
+            others
+        };
+        let steve_join = joined(&steve);
+        let alex_join = joined(&alex);
         assert!(
             matches!(&steve_join[..], [Output::AddPlayer(p), Output::Spawn(e)] if p.name == "Alex" && e.entity_id == 2)
         );
@@ -1472,6 +1526,11 @@ mod tests {
         let mut game = game();
         let output = join(&mut game, 1, "Steve", 10);
         tick(&mut game, 1);
+        // A player who joins is sent its inventory.
+        assert!(matches!(
+            output.try_recv(),
+            Ok(Output::InventoryContent { state_id: 1, .. })
+        ));
         input(&mut game, 1, movement(1.5, 0.0));
         tick(&mut game, 2);
         assert!(
@@ -1516,6 +1575,10 @@ mod tests {
         input(&mut game, 1, movement(5.5, 0.0));
         input(&mut game, 1, movement(11.0, 0.0));
         tick(&mut game, 2);
+        assert!(matches!(
+            output.try_recv(),
+            Ok(Output::InventoryContent { .. })
+        ));
         assert!(matches!(output.try_recv(), Ok(Output::OwnPosition(p)) if p.x == 5.5));
         assert!(
             matches!(output.try_recv(), Ok(Output::Teleport { position, .. }) if position.x == 5.5)
@@ -1682,6 +1745,10 @@ mod tests {
             for number in 1..=81 {
                 tick(&mut game, number);
             }
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(Output::InventoryContent { .. })
+            ));
             if allow_flight {
                 assert!(receiver.try_recv().is_err());
             } else {
@@ -1698,6 +1765,7 @@ mod tests {
         let mut game = game();
         let old = join(&mut game, 1, "Steve", 10);
         tick(&mut game, 1);
+        old.try_iter().for_each(drop);
         let (output, new) = player::output_channel();
         game.pending.push(Event::Joined {
             entity_id: 2,
@@ -1715,6 +1783,10 @@ mod tests {
         game.pending.push(Event::Left(1));
         tick(&mut game, 3);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            new.try_recv(),
+            Ok(Output::InventoryContent { .. })
+        ));
         assert!(new.try_recv().is_err());
     }
 
@@ -1787,9 +1859,16 @@ mod tests {
         handle.shutdown("Server closed").unwrap();
         let started = Instant::now();
         // Each park is far longer than the test may take, so it ends only when the logic thread unparks.
-        while session.try_recv() != Some(Output::Disconnect("Server closed")) {
-            assert!(started.elapsed() < Duration::from_secs(10));
-            thread::park_timeout(Duration::from_secs(60));
+        // The messages already queued, such as the player's inventory, are taken before parking again.
+        loop {
+            match session.try_recv() {
+                Some(Output::Disconnect("Server closed")) => break,
+                Some(_) => {}
+                None => {
+                    assert!(started.elapsed() < Duration::from_secs(10));
+                    thread::park_timeout(Duration::from_secs(60));
+                }
+            }
         }
         logic.join().unwrap().unwrap();
     }

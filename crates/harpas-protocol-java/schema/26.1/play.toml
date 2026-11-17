@@ -1,8 +1,8 @@
 # Play state: the game itself.
 #
-# Partial: every packet except the 21 that carry item stacks and their data components, entity metadata,
+# Partial: every packet except 18 that carry item stacks and their data components, entity metadata,
 # particles, the command tree or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
-# M4) and are pending. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
+# M4) and are pending; the inventory packets carry item stacks whose component values are kept as bytes. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
 # are 1/256 of a turn. Text components are network NBT.
 
 partial = true
@@ -179,6 +179,18 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x12
+name = "SetContainerContent"
+mcdata = "window_items"
+doc = "Replaces every slot of a container, and the stack the cursor carries."
+fields = [
+    { name = "window_id", type = "varint", doc = "0 for the player's inventory." },
+    { name = "state_id", type = "varint", doc = "The server's count of changes to the container." },
+    { name = "slots", type = "array(ItemStack)" },
+    { name = "carried", type = "ItemStack" },
+]
+
+[[clientbound]]
 id = 0x13
 name = "SetContainerProperty"
 mcdata = "craft_progress_bar"
@@ -187,6 +199,18 @@ fields = [
     { name = "container_id", type = "varint" },
     { name = "property", type = "i16" },
     { name = "value", type = "i16" },
+]
+
+[[clientbound]]
+id = 0x14
+name = "SetContainerSlot"
+mcdata = "set_slot"
+doc = "Changes one slot of a container."
+fields = [
+    { name = "window_id", type = "varint", doc = "0 for the player's inventory." },
+    { name = "state_id", type = "varint", doc = "The server's count of changes to the container." },
+    { name = "slot", type = "i16" },
+    { name = "item", type = "ItemStack" },
 ]
 
 [[clientbound]]
@@ -1855,6 +1879,16 @@ fields = [
 ]
 
 [[serverbound]]
+id = 0x38
+name = "SetCreativeModeSlot"
+mcdata = "set_creative_slot"
+doc = "Put a stack in a slot of the inventory, or dropped it with a negative slot, in Creative."
+fields = [
+    { name = "slot", type = "i16" },
+    { name = "item", type = "UntrustedItemStack" },
+]
+
+[[serverbound]]
 id = 0x39
 name = "SetGameRule"
 mcdata = "set_game_rule"
@@ -2153,6 +2187,12 @@ fields = [
     { name = "x", bits = 4 },
     { name = "z", bits = 4 },
 ]
+
+[externs.ItemStack]
+reason = "Each added data component's value has its own codec, of 110 components not decoded yet; the values are kept as bytes."
+
+[externs.UntrustedItemStack]
+reason = "An item stack whose added component values are each prefixed with their length."
 
 [externs.PlayerInfoUpdates]
 reason = "The actions are a bit set, and each entry has the fields of the actions that are set."

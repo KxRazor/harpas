@@ -8,8 +8,8 @@ Status: in progress. The logic thread, tick skeleton, players, chunk sections, l
 overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
 Creative and, with an empty hand, in Survival, the neighbors of a changed block are updated and update their
-shapes, the chunks around it are lit again, and water and lava flow on scheduled fluid ticks; placing, scheduled
-block ticks and random ticks are to come), saving other world and player data,
+shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, and players place
+blocks from the Creative inventory; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 

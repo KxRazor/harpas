@@ -3789,4 +3789,240 @@ mod tests {
             Some(states.state("minecraft:water", [("level", "1")]).unwrap().0)
         );
     }
+
+    #[test]
+    fn players_place_blocks_from_their_creative_inventory_as_vanilla_places_them() {
+        use crate::inventory::ItemStack;
+        use harpas_core::block_behavior::Face;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.world
+            .as_mut()
+            .unwrap()
+            .set_shape_updates(shape_updates());
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].sent_chunks.contains(&pos)
+        });
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::ConfirmTeleport(1),
+        });
+        number += 1;
+        tick(&mut game, number);
+        let states = block_states();
+        let state = |name: &str, properties: &[(&str, &str)]| {
+            states.state(name, properties.iter().copied()).unwrap().0
+        };
+        let at = |x, y, z| BlockPos { x, y, z };
+        // A room from x and z 4 to 12, y -51 to -49, over a stone floor, with the player in its middle, looking
+        // south.
+        let world = game.world.as_mut().unwrap();
+        for x in 4..=12 {
+            for z in 4..=12 {
+                for y in -51..=-49 {
+                    world.set_block_state(at(x, y, z), state("minecraft:air", &[]));
+                }
+            }
+        }
+        game.players[0].player.position = crate::player::Position {
+            x: 8.5,
+            y: -51.0,
+            z: 8.5,
+            yaw: 0.0,
+            ..game.players[0].player.position
+        };
+        received.try_iter().for_each(drop);
+        let stack = |name: &str, count| ItemStack {
+            item: items().id(name).unwrap(),
+            count,
+            components: Arc::default(),
+        };
+        let mut sequence = 0;
+        let mut place =
+            |game: &mut Game, item: &str, hit: BlockPos, face: Face, cursor: [f32; 3]| {
+                sequence += 1;
+                game.pending.push(Event::Input {
+                    entity_id: 1,
+                    input: Input::SetCreativeSlot {
+                        slot: 36,
+                        stack: stack(item, 64),
+                    },
+                });
+                game.pending.push(Event::Input {
+                    entity_id: 1,
+                    input: Input::UseItemOn {
+                        off_hand: false,
+                        position: hit,
+                        face,
+                        cursor,
+                        sequence,
+                    },
+                });
+                number += 1;
+                tick(game, number);
+            };
+        let block = |game: &Game, pos| game.world.as_ref().unwrap().block_state(pos).unwrap();
+        let top = [0.5, 1.0, 0.5];
+
+        // A block without properties, on the floor; the clicked block and the one beside the face are sent back.
+        place(
+            &mut game,
+            "minecraft:oak_planks",
+            at(5, -52, 7),
+            Face::Up,
+            top,
+        );
+        assert_eq!(
+            block(&game, at(5, -51, 7)),
+            state("minecraft:oak_planks", &[])
+        );
+        let sent: Vec<_> = received.try_iter().collect();
+        assert!(sent.contains(&Output::BlockUpdate {
+            position: at(5, -51, 7),
+            state: state("minecraft:oak_planks", &[]),
+        }));
+        assert!(sent.contains(&Output::AcknowledgeBlockChanges(1)));
+        // A log placed against the side of a block lies along that side's axis.
+        place(
+            &mut game,
+            "minecraft:oak_log",
+            at(5, -51, 7),
+            Face::East,
+            [1.0, 0.5, 0.5],
+        );
+        assert_eq!(
+            block(&game, at(6, -51, 7)),
+            state("minecraft:oak_log", &[("axis", "x")])
+        );
+        // Stairs face the way the player looks, upside down when placed against the top half of a side.
+        place(
+            &mut game,
+            "minecraft:oak_stairs",
+            at(5, -52, 10),
+            Face::Up,
+            top,
+        );
+        assert_eq!(
+            block(&game, at(5, -51, 10)),
+            state(
+                "minecraft:oak_stairs",
+                &[("facing", "south"), ("half", "bottom")]
+            )
+        );
+        place(
+            &mut game,
+            "minecraft:oak_stairs",
+            at(5, -51, 10),
+            Face::East,
+            [1.0, 0.75, 0.5],
+        );
+        assert_eq!(
+            block(&game, at(6, -51, 10)),
+            state(
+                "minecraft:oak_stairs",
+                &[("facing", "south"), ("half", "top")]
+            )
+        );
+        // A slab on the floor is a bottom slab; another on its top makes it double.
+        place(
+            &mut game,
+            "minecraft:stone_slab",
+            at(10, -52, 10),
+            Face::Up,
+            top,
+        );
+        assert_eq!(
+            block(&game, at(10, -51, 10)),
+            state("minecraft:stone_slab", &[("type", "bottom")])
+        );
+        place(
+            &mut game,
+            "minecraft:stone_slab",
+            at(10, -51, 10),
+            Face::Up,
+            [0.5, 0.5, 0.5],
+        );
+        assert_eq!(
+            block(&game, at(10, -51, 10)),
+            state("minecraft:stone_slab", &[("type", "double")])
+        );
+        // Not where the player stands, nor a block whose placement is not ported.
+        place(&mut game, "minecraft:stone", at(8, -52, 8), Face::Up, top);
+        assert_eq!(block(&game, at(8, -51, 8)), state("minecraft:air", &[]));
+        place(
+            &mut game,
+            "minecraft:oak_door",
+            at(11, -52, 6),
+            Face::Up,
+            top,
+        );
+        assert_eq!(block(&game, at(11, -51, 6)), state("minecraft:air", &[]));
+
+        // In Survival the stack goes down by one, and the client is told at the player's next tick.
+        game.players[0].player.profile.game_mode = GameMode::Survival;
+        game.players[0]
+            .inventory
+            .set_by_client(36, stack("minecraft:stone", 2));
+        received.try_iter().for_each(drop);
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::UseItemOn {
+                off_hand: false,
+                position: at(5, -52, 5),
+                face: Face::Up,
+                cursor: top,
+                sequence: 9,
+            },
+        });
+        number += 1;
+        tick(&mut game, number);
+        number += 1;
+        tick(&mut game, number);
+        assert_eq!(block(&game, at(5, -51, 5)), state("minecraft:stone", &[]));
+        assert!(received.try_iter().any(|output| matches!(
+            output,
+            Output::SetSlot { slot: 36, stack, .. } if stack.count == 1
+        )));
+
+        // A stack larger than its item holds cannot come from a vanilla client.
+        game.players[0].player.profile.game_mode = GameMode::Creative;
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::SetCreativeSlot {
+                slot: 36,
+                stack: stack("minecraft:diamond_sword", 2),
+            },
+        });
+        number += 1;
+        tick(&mut game, number);
+        assert!(
+            received
+                .try_iter()
+                .any(|output| output == Output::Disconnect("Network Protocol Error"))
+        );
+    }
 }

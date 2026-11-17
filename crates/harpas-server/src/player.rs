@@ -2,12 +2,15 @@
 
 use std::io;
 
+use harpas_core::block_behavior::Face;
 use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
+use harpas_engine::inventory::{ComponentPatch, ItemStack};
 use harpas_engine::player::{self, Input, Movement, Output, Position, Profile};
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
+use std::sync::Arc;
 
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
 const PLAYER_ENTITY_TYPE: i32 = 155;
@@ -62,6 +65,29 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                     on_ground: p.flags.on_ground,
                 }),
                 Packet::PlayerAbilities(p) => Input::Flying(p.flags.flying),
+                Packet::SetCreativeModeSlot(p) => Input::SetCreativeSlot {
+                    slot: p.slot,
+                    stack: engine_stack(p.item.0),
+                },
+                Packet::SetHeldItem(p) => Input::SelectHotbarSlot(p.slot),
+                Packet::UseItemOn(p) => Input::UseItemOn {
+                    off_hand: p.hand == play::Hand::OffHand,
+                    position: BlockPos {
+                        x: p.position.x,
+                        y: p.position.y,
+                        z: p.position.z,
+                    },
+                    face: match p.face {
+                        play::BlockFace::Bottom => Face::Down,
+                        play::BlockFace::Top => Face::Up,
+                        play::BlockFace::North => Face::North,
+                        play::BlockFace::South => Face::South,
+                        play::BlockFace::West => Face::West,
+                        play::BlockFace::East => Face::East,
+                    },
+                    cursor: [p.cursor_x, p.cursor_y, p.cursor_z],
+                    sequence: p.sequence,
+                },
                 Packet::PlayerAction(p) => {
                     let action = match p.status {
                         play::PlayerActionStatus::StartedDigging => DigAction::Start,
@@ -122,6 +148,36 @@ fn mode_id(mode: player::GameMode) -> i32 {
 
 fn angle(degrees: f32) -> i8 {
     ((f64::from(degrees).rem_euclid(360.0) * 256.0 / 360.0).floor() as u8) as i8
+}
+
+/// A stack as the engine keeps it. A negative item ID cannot be decoded, so it is never seen here.
+fn engine_stack(stack: play::ItemStack) -> ItemStack {
+    if stack.is_empty() {
+        return ItemStack::empty();
+    }
+    ItemStack {
+        item: stack.item as u32,
+        count: stack.count,
+        components: Arc::new(ComponentPatch {
+            added: stack.components.added,
+            removed: stack.components.removed,
+        }),
+    }
+}
+
+/// A stack as it is sent to a Java client.
+fn packet_stack(stack: &ItemStack) -> play::ItemStack {
+    if stack.is_empty() {
+        return play::ItemStack::default();
+    }
+    play::ItemStack {
+        count: stack.count,
+        item: stack.item as i32,
+        components: play::ComponentPatch {
+            added: stack.components.added.clone(),
+            removed: stack.components.removed.clone(),
+        },
+    }
 }
 
 fn block_pos(position: BlockPos) -> play::BlockPos {
@@ -349,6 +405,28 @@ pub(crate) fn send(
             Output::AcknowledgeBlockChanges(sequence) => {
                 clientbound::AcknowledgeBlockChange { sequence }.into()
             }
+            Output::InventoryContent {
+                state_id,
+                slots,
+                carried,
+            } => clientbound::SetContainerContent {
+                window_id: 0,
+                state_id,
+                slots: slots.iter().map(packet_stack).collect(),
+                carried: packet_stack(&carried),
+            }
+            .into(),
+            Output::SetSlot {
+                state_id,
+                slot,
+                stack,
+            } => clientbound::SetContainerSlot {
+                window_id: 0,
+                state_id,
+                slot,
+                item: packet_stack(&stack),
+            }
+            .into(),
             Output::LightUpdate { position, light } => clientbound::UpdateLight {
                 chunk_x: position.x,
                 chunk_z: position.z,

@@ -349,6 +349,12 @@ pub(crate) fn send(
             Output::AcknowledgeBlockChanges(sequence) => {
                 clientbound::AcknowledgeBlockChange { sequence }.into()
             }
+            Output::LightUpdate { position, light } => clientbound::UpdateLight {
+                chunk_x: position.x,
+                chunk_z: position.z,
+                light: crate::chunks::update_light(&light),
+            }
+            .into(),
             Output::BlockDestruction {
                 entity_id,
                 position,

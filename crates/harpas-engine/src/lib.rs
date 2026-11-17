@@ -365,6 +365,18 @@ impl TickWork for Game {
             self.fail_world(error);
             return;
         }
+        // Sending light changes, only to the players at whose view's edge each chunk is: the others light the
+        // changed blocks themselves (`ChunkHolder.broadcastChanges`).
+        for (chunk, light) in world.take_light_updates() {
+            for player in &self.players {
+                if !player.disconnecting && player.on_tracked_border(chunk) {
+                    player.send(player::Output::LightUpdate {
+                        position: chunk,
+                        light: Arc::clone(&light),
+                    });
+                }
+            }
+        }
         // Sending block changes, to the players who have each chunk (`ChunkHolder.broadcastChanges`).
         for (chunk, sections) in world.take_block_changes() {
             for blocks in sections {

@@ -110,6 +110,9 @@ impl World {
         if block::set(chunk, pos, state).is_none() {
             return false;
         }
+        if block::changes_light(old, state) {
+            self.relight_around(pos);
+        }
         if flags & UPDATE_CLIENTS != 0 {
             self.block_changed(pos);
         }

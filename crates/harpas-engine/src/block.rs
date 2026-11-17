@@ -5,8 +5,8 @@
 //! block that is replaced by another block. It is recorded for the tick's "sending block changes" step, which
 //! sends it to every player who has the chunk, as vanilla's `ChunkHolder.broadcastChanges`.
 //!
-//! Shape updates of the neighbors are in [`crate::neighbor`]. Not done yet: the light of the changed block
-//! ([ROADMAP.md](../../../ROADMAP.md), M4).
+//! Shape updates of the neighbors are in [`crate::neighbor`], and the light around a change is computed again
+//! as [`crate::light`] describes.
 
 use std::sync::OnceLock;
 
@@ -141,6 +141,18 @@ pub(crate) fn water_height(state: u32, above: u32) -> Option<f32> {
         8
     };
     Some(amount as f32 / 9.0)
+}
+
+/// Whether replacing `old` with `new` can change the light around it (`LightEngine.hasDifferentLightProperties`):
+/// they differ in how much light they let through or give off, or either occludes light with its shape.
+pub(crate) fn changes_light(old: u32, new: u32) -> bool {
+    let states = block_states();
+    let behavior = block_behavior();
+    old != new
+        && (states.light_dampening(old) != states.light_dampening(new)
+            || states.light_emission(old) != states.light_emission(new)
+            || behavior.uses_light_shape(old)
+            || behavior.uses_light_shape(new))
 }
 
 /// Whether the block is a `GameMasterBlock`, which only an operator in Creative may break: command, structure,

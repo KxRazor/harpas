@@ -337,6 +337,14 @@ impl BlockBehavior {
         }
     }
 
+    /// Whether the state occludes light with its shape (`useShapeForLightOcclusion`, for a state that can
+    /// occlude), as slabs and stairs do.
+    pub fn uses_light_shape(&self, id: u32) -> bool {
+        self.light_shapes
+            .get(id as usize)
+            .is_some_and(|&index| index != NO_LIGHT_SHAPE)
+    }
+
     /// Whether light cannot pass from a block of state `from` to the block beside it towards `face`, of state `to`
     /// (`LightEngine.shapeOccludes`): the face of `from` and the opposite face of `to` cover the whole face between
     /// them together. Only blocks that use their shape for light occlusion, such as slabs and stairs, have faces.

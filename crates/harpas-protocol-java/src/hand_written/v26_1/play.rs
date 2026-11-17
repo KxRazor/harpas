@@ -338,6 +338,91 @@ impl Decode for UntrustedItemStack {
     }
 }
 
+/// One value of an entity's tracked data, of the serializers ported so far (`EntityDataSerializers`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetadataValue {
+    /// Serializer 0.
+    Byte(i8),
+    /// Serializer 1, a VarInt.
+    Int(i32),
+    /// Serializer 3.
+    Float(f32),
+    /// Serializer 7.
+    ItemStack(ItemStack),
+    /// Serializer 8.
+    Boolean(bool),
+}
+
+impl MetadataValue {
+    fn serializer(&self) -> i32 {
+        match self {
+            Self::Byte(_) => 0,
+            Self::Int(_) => 1,
+            Self::Float(_) => 3,
+            Self::ItemStack(_) => 7,
+            Self::Boolean(_) => 8,
+        }
+    }
+}
+
+/// Tracked data values of an entity, each with its index in the entity's data, ending with index 255.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EntityMetadata {
+    /// The values, by index.
+    pub entries: Vec<(u8, MetadataValue)>,
+}
+
+/// The index that ends the list.
+const METADATA_END: u8 = 255;
+
+impl Encode for EntityMetadata {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        for (index, value) in &self.entries {
+            codec::write_u8(buf, *index);
+            codec::write_varint(buf, value.serializer());
+            match value {
+                MetadataValue::Byte(n) => codec::write_u8(buf, *n as u8),
+                MetadataValue::Int(n) => codec::write_varint(buf, *n),
+                MetadataValue::Float(n) => buf.extend_from_slice(&n.to_be_bytes()),
+                MetadataValue::ItemStack(stack) => stack.encode(buf),
+                MetadataValue::Boolean(b) => codec::write_bool(buf, *b),
+            }
+        }
+        codec::write_u8(buf, METADATA_END);
+    }
+}
+
+impl Decode for EntityMetadata {
+    fn decode(input: &mut &[u8]) -> Result<Self, DecodeError> {
+        let mut entries = Vec::new();
+        loop {
+            let index = codec::read_u8(input)?;
+            if index == METADATA_END {
+                return Ok(Self { entries });
+            }
+            let value = match codec::read_varint(input)? {
+                0 => MetadataValue::Byte(codec::read_u8(input)? as i8),
+                1 => MetadataValue::Int(codec::read_varint(input)?),
+                3 => {
+                    let bytes = input.get(..4).ok_or(DecodeError::UnexpectedEnd)?;
+                    let value = f32::from_be_bytes(bytes.try_into().expect("four bytes"));
+                    *input = &input[4..];
+                    MetadataValue::Float(value)
+                }
+                7 => MetadataValue::ItemStack(ItemStack::decode(input)?),
+                8 => MetadataValue::Boolean(codec::read_bool(input)?),
+                other => {
+                    return Err(DecodeError::UnknownEnumValue {
+                        name: "EntityDataSerializer",
+                        value: i64::from(other),
+                    });
+                }
+            };
+            entries.push((index, value));
+        }
+    }
+}
+
 #[cfg(test)]
 mod item_tests {
     use super::*;
@@ -367,6 +452,24 @@ mod item_tests {
             ItemStack::decode(&mut &sent[..]),
             Err(DecodeError::UndelimitedComponents)
         );
+    }
+
+    #[test]
+    fn metadata_lists_end_with_index_255() {
+        let metadata = EntityMetadata {
+            entries: vec![(
+                8,
+                MetadataValue::ItemStack(ItemStack {
+                    count: 2,
+                    item: 1,
+                    components: ComponentPatch::default(),
+                }),
+            )],
+        };
+        let mut buf = Vec::new();
+        metadata.encode(&mut buf);
+        assert_eq!(buf, [8, 7, 2, 1, 0, 0, 255]);
+        assert_eq!(EntityMetadata::decode(&mut &buf[..]), Ok(metadata));
     }
 
     #[test]

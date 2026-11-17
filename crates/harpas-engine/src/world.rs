@@ -430,7 +430,7 @@ pub struct World {
     chunks: HashMap<ChunkPos, ChunkState>,
     /// The chunks to keep loaded, most wanted first and each once, as [`World::want`] left them.
     wanted: Vec<ChunkPos>,
-    wanted_set: HashSet<ChunkPos>,
+    pub(crate) wanted_set: HashSet<ChunkPos>,
     in_flight: HashSet<ChunkPos>,
     changes: HashMap<ChunkPos, Changes>,
     /// The regions with a save queued or being written. A region has one save at a time, so the changes
@@ -457,6 +457,8 @@ pub struct World {
     pub(crate) fluid_ticks: LevelTicks<FluidType>,
     /// The level's random source, which lava's spread delay draws from.
     pub(crate) random: LegacyRandom,
+    /// The entities other than players.
+    pub(crate) entities: crate::entity::Entities,
     /// The loaded chunks that need light and have not been given to the workers yet.
     unlit: HashSet<ChunkPos>,
     next_light_job: u64,
@@ -587,6 +589,7 @@ impl World {
             game_time,
             fluid_ticks: LevelTicks::default(),
             random: LegacyRandom::new(0),
+            entities: crate::entity::Entities::default(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source,
@@ -1626,6 +1629,7 @@ mod tests {
             game_time: 0,
             fluid_ticks: LevelTicks::default(),
             random: LegacyRandom::new(0),
+            entities: crate::entity::Entities::default(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source: None,
@@ -4024,5 +4028,193 @@ mod tests {
                 .try_iter()
                 .any(|output| output == Output::Disconnect("Network Protocol Error"))
         );
+    }
+
+    #[test]
+    fn dropped_items_fall_land_merge_and_despawn_while_players_see_them() {
+        use crate::entity::ItemEntity;
+        use crate::inventory::ItemStack;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].sent_chunks.contains(&pos)
+        });
+        game.players[0].player.position = crate::player::Position {
+            x: 8.5,
+            y: -49.0,
+            z: 8.5,
+            ..game.players[0].player.position
+        };
+        received.try_iter().for_each(drop);
+        let stone = |count| ItemStack {
+            item: items().id("minecraft:stone").unwrap(),
+            count,
+            components: Arc::default(),
+        };
+        let mut run = |game: &mut Game, ticks: u32| {
+            for _ in 0..ticks {
+                number += 1;
+                tick(game, number);
+            }
+        };
+
+        // An item let go two blocks above the stone floor, whose top is at y -48, falls onto it and stays.
+        let world = game.world.as_mut().unwrap();
+        let first = world.add_item(1000, [8.5, -46.0, 8.5], [0.0; 3], ItemEntity::new(stone(3)));
+        run(&mut game, 1);
+        let spawned: Vec<_> = received
+            .try_iter()
+            .filter(|output| matches!(output, Output::SpawnItem { .. }))
+            .collect();
+        assert!(matches!(
+            &spawned[..],
+            [Output::SpawnItem { entity_id: 1000, stack, .. }] if stack.count == 3
+        ));
+        run(&mut game, 40);
+        let world = game.world.as_ref().unwrap();
+        let i = world.entities.slot(first);
+        assert_eq!(world.entities.position[i][1], -48.0);
+        assert!(world.entities.on_ground[i]);
+        // Its viewer was sent where it went, by moves or a full position.
+        assert!(received.try_iter().any(|output| matches!(
+            output,
+            Output::EntitySync {
+                entity_id: 1000,
+                on_ground: true,
+                ..
+            } | Output::EntityMove {
+                entity_id: 1000,
+                ..
+            }
+        )));
+
+        // Another stack of the same item next to it merges into the larger one, and the viewer is told.
+        let world = game.world.as_mut().unwrap();
+        let second = world.add_item(1001, [8.7, -48.0, 8.5], [0.0; 3], ItemEntity::new(stone(2)));
+        run(&mut game, 41);
+        let world = game.world.as_ref().unwrap();
+        assert!(!world.entities.contains(second));
+        assert_eq!(world.entities.item(first).unwrap().stack.count, 5);
+        let sent: Vec<_> = received.try_iter().collect();
+        assert!(sent.contains(&Output::RemoveEntity(1001)));
+        assert!(sent.iter().any(|output| matches!(
+            output,
+            Output::ItemChanged { entity_id: 1000, stack } if stack.count == 5
+        )));
+
+        // After 6,000 ticks on the ground it is gone.
+        run(&mut game, 6000);
+        assert!(!game.world.as_ref().unwrap().entities.contains(first));
+        assert!(
+            received
+                .try_iter()
+                .any(|output| output == Output::RemoveEntity(1000))
+        );
+    }
+
+    #[test]
+    fn players_drop_items_where_they_look() {
+        use crate::inventory::ItemStack;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, _received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            matches!(
+                game.world.as_ref().unwrap().chunk(pos),
+                Some(ChunkState::Loaded(_))
+            )
+        });
+        game.players[0].player.position = crate::player::Position {
+            x: 8.5,
+            y: -49.0,
+            z: 8.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..game.players[0].player.position
+        };
+        let stone = items().id("minecraft:stone").unwrap();
+        game.players[0].inventory.set_by_client(
+            36,
+            ItemStack {
+                item: stone,
+                count: 10,
+                components: Arc::default(),
+            },
+        );
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::DropSelected { all: false },
+        });
+        game.pending.push(Event::Input {
+            entity_id: 1,
+            input: Input::DropSelected { all: true },
+        });
+        number += 1;
+        tick(&mut game, number);
+        assert!(game.players[0].inventory.slots[36].is_empty());
+        let world = game.world.as_ref().unwrap();
+        let counts: Vec<_> = world
+            .entities
+            .order
+            .iter()
+            .map(|&handle| world.entities.item(handle).unwrap().stack.count)
+            .collect();
+        assert_eq!(counts, [1, 9]);
+        for &handle in &world.entities.order {
+            let i = world.entities.slot(handle);
+            // From 0.3 below the eyes, towards the south the player faces, and picked up after 40 ticks.
+            assert_eq!(
+                world.entities.position[i][1],
+                -49.0 + 1.62 - f64::from(0.3_f32)
+            );
+            assert!(world.entities.velocity[i][2] > 0.2);
+            assert_eq!(world.entities.item(handle).unwrap().pickup_delay, 40);
+        }
     }
 }

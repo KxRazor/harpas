@@ -163,6 +163,11 @@ pub enum Input {
         /// The client's sequence number for its prediction.
         sequence: i32,
     },
+    /// The player dropped one item of the selected hotbar slot, or all of it.
+    DropSelected {
+        /// Whether the whole stack was dropped.
+        all: bool,
+    },
     /// The player started, stopped or finished breaking a block. The client predicted the result and waits
     /// for `sequence` to be acknowledged.
     Dig {
@@ -252,6 +257,53 @@ pub enum Output {
     ViewDistance(u8),
     /// Send these ready chunks as one batch. At most one batch per player is in flight.
     ChunkBatch(Vec<VisibleChunk>),
+    /// Start seeing an item entity.
+    SpawnItem {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// The entity's UUID.
+        uuid: u128,
+        /// Its position, as last sent to the players who see it.
+        position: [f64; 3],
+        /// Its velocity, in blocks per tick, as last sent.
+        velocity: [f64; 3],
+        /// The stack it holds.
+        stack: ItemStack,
+    },
+    /// An entity's full position, velocity and ground state.
+    EntitySync {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Its position.
+        position: [f64; 3],
+        /// Its velocity, in blocks per tick.
+        velocity: [f64; 3],
+        /// Whether it is on the ground.
+        on_ground: bool,
+    },
+    /// An entity moved from the position last sent, in 1/4096 of a block.
+    EntityMove {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// The move on each axis.
+        delta: [i16; 3],
+        /// Whether it is on the ground.
+        on_ground: bool,
+    },
+    /// An entity's velocity changed.
+    EntityVelocity {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Its velocity, in blocks per tick.
+        velocity: [f64; 3],
+    },
+    /// The stack an item entity holds changed.
+    ItemChanged {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// The new stack.
+        stack: ItemStack,
+    },
     /// Every slot of the player's inventory, as it joins.
     InventoryContent {
         /// The inventory menu's count of changes.

@@ -3,6 +3,7 @@
 //! Design: `docs/engine-core.md`.
 
 pub mod block;
+pub mod entity;
 pub(crate) mod fluid;
 pub mod inventory;
 pub mod light;
@@ -10,6 +11,7 @@ pub mod neighbor;
 mod place;
 pub mod player;
 pub(crate) mod ticks;
+mod tracking;
 pub mod world;
 pub mod worldgen;
 
@@ -34,8 +36,18 @@ const CHUNKS_PER_BATCH: usize = 8;
 pub struct Handle {
     events: Sender<Event>,
     online_players: Arc<AtomicU32>,
-    next_entity_id: Arc<AtomicI32>,
     has_world: bool,
+}
+
+/// The runtime entity IDs of this server process, players' and other entities' alike, as vanilla's
+/// `Entity.ENTITY_COUNTER`; they are never reused.
+static ENTITY_COUNTER: AtomicI32 = AtomicI32::new(1);
+
+/// Reserves a runtime entity ID, or none once they ran out.
+pub(crate) fn next_entity_id() -> Option<i32> {
+    ENTITY_COUNTER
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .ok()
 }
 
 impl Handle {
@@ -46,9 +58,7 @@ impl Handle {
 
     /// Reserves a runtime entity ID; IDs are never reused during this server process.
     pub fn next_entity_id(&self) -> Option<i32> {
-        self.next_entity_id
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .ok()
+        next_entity_id()
     }
 
     /// Registers a connection in Play. Dropping the returned session queues its departure.
@@ -221,7 +231,6 @@ fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<io:
     let handle = Handle {
         events: sender,
         online_players: Arc::clone(&online_players),
-        next_entity_id: Arc::new(AtomicI32::new(1)),
         has_world: world.is_some(),
     };
     let thread = thread::Builder::new()
@@ -457,7 +466,13 @@ impl TickWork for Game {
                 player.send(player::Output::ChunkBatch(batch));
             }
         }
-        // Players tick with the entities, after the block changes are sent (`ServerPlayer.tick`).
+        // The entities tick, after the block changes are sent, and their viewers are sent their changes.
+        let removed = self
+            .world
+            .as_mut()
+            .map_or_else(Vec::new, world::World::tick_entities);
+        self.track_entities(&removed);
+        // Players tick with the entities (`ServerPlayer.tick`).
         self.tick_digging();
         self.send_inventory_changes();
     }
@@ -588,6 +603,12 @@ impl TickWork for Game {
                             }
                             continue;
                         }
+                        player::Input::DropSelected { all } => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.drop_selected(index, all);
+                            }
+                            continue;
+                        }
                         player::Input::UseItemOn {
                             off_hand,
                             position,
@@ -632,7 +653,8 @@ impl TickWork for Game {
                             | player::Input::Dig { .. }
                             | player::Input::SetCreativeSlot { .. }
                             | player::Input::SelectHotbarSlot(_)
-                            | player::Input::UseItemOn { .. } => {
+                            | player::Input::UseItemOn { .. }
+                            | player::Input::DropSelected { .. } => {
                                 unreachable!()
                             }
                             player::Input::Movement(movement) => {

@@ -8,8 +8,8 @@ Status: in progress. The logic thread, tick skeleton, players, chunk sections, l
 overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
 Creative and, with an empty hand, in Survival, the neighbors of a changed block are updated and update their
-shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, and players place
-blocks from the Creative inventory; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
+shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, players place
+blocks from the Creative inventory, and dropped items move as vanilla's item entities; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -158,6 +158,11 @@ Harpas uses its own storage:
   so there is no copy.
 - **Parallel passes over the hot arrays** for unobservable work: entity tracking, packet encoding, Bedrock
   translation.
+
+**Implemented:** item entities live in this storage (`harpas-engine`'s `entity` module): generational slots, the
+hot data in arrays by slot, and the tick order in which entities were added. Players are not in it yet, so the
+entity tick runs the items first and then the players' part; tracking is computed on the logic thread until the
+parallel passes exist. Entities are not saved yet.
 
 ### 6. Chunks
 

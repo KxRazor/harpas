@@ -60,7 +60,7 @@ impl ItemStack {
     }
 
     /// The most items this stack can hold: its item's default, unless its components may change it, up to 99.
-    fn max_stack_size(&self) -> Option<i32> {
+    pub(crate) fn max_stack_size(&self) -> Option<i32> {
         let default = i32::from(items().max_stack_size(self.item)?);
         Some(if self.components.added.is_empty() {
             default

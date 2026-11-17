@@ -422,8 +422,13 @@ as shown by the parity report.
       ([docs/protocol-codecs.md](docs/protocol-codecs.md#hand-written-exceptions)).
   - [x] Item stacks, with their component values kept as bytes, and Set Container Content, Set Container Slot
         and Set Creative Mode Slot.
-  - [ ] The 110 data components' values, and the other 18 packets.
+  - [x] Set Entity Metadata, with the serializers item entities use.
+  - [ ] The 110 data components' values, the other serializers, and the other 17 packets.
 - [ ] Entity physics and collisions, ported one to one.
+  - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,
+        floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by
+        players.
+  - [ ] Item pickup, block drops from loot tables, and saving entities.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).

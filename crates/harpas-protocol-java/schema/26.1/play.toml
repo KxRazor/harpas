@@ -1,6 +1,6 @@
 # Play state: the game itself.
 #
-# Partial: every packet except 18 that carry item stacks and their data components, entity metadata,
+# Partial: every packet except 17 that carry item stacks and their data components, entity metadata,
 # particles, the command tree or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
 # M4) and are pending; the inventory packets carry item stacks whose component values are kept as bytes. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
 # are 1/256 of a turn. Text components are network NBT.
@@ -947,6 +947,16 @@ doc = "Shows an objective in a display slot."
 fields = [
     { name = "slot", type = "varint" },
     { name = "objective", type = "string(32767)", doc = "Empty to clear the slot." },
+]
+
+[[clientbound]]
+id = 0x63
+name = "SetEntityMetadata"
+mcdata = "entity_metadata"
+doc = "Changes values of an entity's tracked data."
+fields = [
+    { name = "entity_id", type = "varint" },
+    { name = "metadata", type = "EntityMetadata" },
 ]
 
 [[clientbound]]
@@ -2193,6 +2203,9 @@ reason = "Each added data component's value has its own codec, of 110 components
 
 [externs.UntrustedItemStack]
 reason = "An item stack whose added component values are each prefixed with their length."
+
+[externs.EntityMetadata]
+reason = "Each entry's value has the wire type its serializer ID names, and the list ends with an index of 255."
 
 [externs.PlayerInfoUpdates]
 reason = "The actions are a bit set, and each entry has the fields of the actions that are set."

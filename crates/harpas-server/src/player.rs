@@ -14,6 +14,11 @@ use std::sync::Arc;
 
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
 const PLAYER_ENTITY_TYPE: i32 = 155;
+/// `minecraft:item` in minecraft-data's Java 26.1 entity type registry.
+const ITEM_ENTITY_TYPE: i32 = 71;
+/// The index of an item entity's stack in its tracked data (`ItemEntity.DATA_ITEM`), after the eight of every
+/// entity.
+const ITEM_DATA_INDEX: u8 = 8;
 
 pub(crate) fn profile(player: &harpas_java::Player, mode: play::GameMode) -> Profile {
     Profile {
@@ -93,7 +98,19 @@ pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> i
                         play::PlayerActionStatus::StartedDigging => DigAction::Start,
                         play::PlayerActionStatus::CancelledDigging => DigAction::Abort,
                         play::PlayerActionStatus::FinishedDigging => DigAction::Finish,
-                        // Dropping, using and swapping items come with items.
+                        play::PlayerActionStatus::DropItemStack => {
+                            session
+                                .send(Input::DropSelected { all: true })
+                                .map_err(io::Error::other)?;
+                            continue;
+                        }
+                        play::PlayerActionStatus::DropItem => {
+                            session
+                                .send(Input::DropSelected { all: false })
+                                .map_err(io::Error::other)?;
+                            continue;
+                        }
+                        // Using and swapping items come later.
                         _ => continue,
                     };
                     Input::Dig {
@@ -178,6 +195,19 @@ fn packet_stack(stack: &ItemStack) -> play::ItemStack {
             removed: stack.components.removed.clone(),
         },
     }
+}
+
+fn item_metadata(stack: &ItemStack) -> play::EntityMetadata {
+    play::EntityMetadata {
+        entries: vec![(
+            ITEM_DATA_INDEX,
+            play::MetadataValue::ItemStack(packet_stack(stack)),
+        )],
+    }
+}
+
+fn velocity([x, y, z]: [f64; 3]) -> LpVec3 {
+    LpVec3 { x, y, z }
 }
 
 fn block_pos(position: BlockPos) -> play::BlockPos {
@@ -405,6 +435,83 @@ pub(crate) fn send(
             Output::AcknowledgeBlockChanges(sequence) => {
                 clientbound::AcknowledgeBlockChange { sequence }.into()
             }
+            Output::SpawnItem {
+                entity_id,
+                uuid,
+                position,
+                velocity: motion,
+                stack,
+            } => {
+                // An entity's spawn and its data, applied together (`sendPairingData` in a bundle).
+                connection.send_play_packet(clientbound::BundleDelimiter.into());
+                connection.send_play_packet(
+                    clientbound::SpawnEntity {
+                        entity_id,
+                        uuid,
+                        entity_type: ITEM_ENTITY_TYPE,
+                        x: position[0],
+                        y: position[1],
+                        z: position[2],
+                        velocity: velocity(motion),
+                        pitch: 0,
+                        yaw: 0,
+                        head_yaw: 0,
+                        data: 0,
+                    }
+                    .into(),
+                );
+                connection.send_play_packet(
+                    clientbound::SetEntityMetadata {
+                        entity_id,
+                        metadata: item_metadata(&stack),
+                    }
+                    .into(),
+                );
+                clientbound::BundleDelimiter.into()
+            }
+            Output::EntitySync {
+                entity_id,
+                position,
+                velocity: motion,
+                on_ground,
+            } => clientbound::EntityPositionSync {
+                entity_id,
+                x: position[0],
+                y: position[1],
+                z: position[2],
+                velocity_x: motion[0],
+                velocity_y: motion[1],
+                velocity_z: motion[2],
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground,
+            }
+            .into(),
+            Output::EntityMove {
+                entity_id,
+                delta,
+                on_ground,
+            } => clientbound::UpdateEntityPosition {
+                entity_id,
+                delta_x: delta[0],
+                delta_y: delta[1],
+                delta_z: delta[2],
+                on_ground,
+            }
+            .into(),
+            Output::EntityVelocity {
+                entity_id,
+                velocity: motion,
+            } => clientbound::SetEntityVelocity {
+                entity_id,
+                velocity: velocity(motion),
+            }
+            .into(),
+            Output::ItemChanged { entity_id, stack } => clientbound::SetEntityMetadata {
+                entity_id,
+                metadata: item_metadata(&stack),
+            }
+            .into(),
             Output::InventoryContent {
                 state_id,
                 slots,

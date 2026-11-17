@@ -22,6 +22,10 @@ struct Block {
     emission: u8,
     /// The block's default light dampening.
     filter: u8,
+    /// How long the block takes to break (`destroyTime`, the hardness); -1 for a block that cannot be broken.
+    hardness: f32,
+    /// Whether the block drops nothing unless broken with the right tool (`requiresCorrectToolForDrops`).
+    requires_tool: bool,
 }
 
 impl Block {
@@ -62,6 +66,8 @@ impl BlockStates {
             let mut default = 0;
             let mut emission = 0;
             let mut filter = 0;
+            let mut hardness = 0.0;
+            let mut requires_tool = false;
             let mut properties = Vec::new();
             for field in fields {
                 let (key, value) = field.split_once('=').expect("a key and a value");
@@ -69,6 +75,8 @@ impl BlockStates {
                     "default" => default = value.parse().expect("a default state offset"),
                     "emit" => emission = value.parse().expect("a light emission"),
                     "filter" => filter = value.parse().expect("a light dampening"),
+                    "hardness" => hardness = value.parse().expect("a hardness"),
+                    "tool" => requires_tool = value.parse().expect("whether a tool is required"),
                     _ => properties.push((key, value.split(',').collect())),
                 }
             }
@@ -80,6 +88,8 @@ impl BlockStates {
                 properties,
                 emission,
                 filter,
+                hardness,
+                requires_tool,
             };
             owners.extend(std::iter::repeat_n(
                 blocks.len() as u16,
@@ -115,6 +125,22 @@ impl BlockStates {
     /// Whether there are no block states; never true for a real version.
     pub fn is_empty(&self) -> bool {
         self.owners.is_empty()
+    }
+
+    /// The block's hardness (`getDestroySpeed`): how long it takes to break, 0 for a block that breaks at once
+    /// and -1 for one that cannot be broken, such as bedrock.
+    pub fn hardness(&self, id: u32) -> f32 {
+        self.block(id).map_or(0.0, |block| block.hardness)
+    }
+
+    /// Whether the block drops nothing unless broken with the right tool (`requiresCorrectToolForDrops`),
+    /// which also makes it break more slowly without one.
+    pub fn requires_correct_tool(&self, id: u32) -> bool {
+        self.block(id).is_some_and(|block| block.requires_tool)
+    }
+
+    fn block(&self, id: u32) -> Option<&Block> {
+        Some(&self.blocks[*self.owners.get(id as usize)? as usize])
     }
 
     /// The light this block state emits, from 0 to 15.
@@ -340,6 +366,27 @@ impl BlockStates {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocks_have_vanillas_hardness_and_tool_requirement() {
+        let states = block_states();
+        let block = |name| states.default_state(name).unwrap();
+        let hardness = |name| states.hardness(block(name));
+        assert_eq!(hardness("minecraft:stone"), 1.5);
+        assert_eq!(hardness("minecraft:obsidian"), 50.0);
+        assert_eq!(hardness("minecraft:bedrock"), -1.0);
+        assert_eq!(hardness("minecraft:short_grass"), 0.0);
+        assert!(states.requires_correct_tool(block("minecraft:stone")));
+        assert!(states.requires_correct_tool(block("minecraft:cobweb")));
+        assert!(!states.requires_correct_tool(block("minecraft:dirt")));
+        assert!(!states.requires_correct_tool(block("minecraft:oak_log")));
+        // Every state of a block shares its values.
+        let lit = states
+            .state("minecraft:furnace", [("lit", "true")])
+            .unwrap()
+            .0;
+        assert_eq!(states.hardness(lit), 3.5);
+    }
 
     #[test]
     fn the_registry_has_every_26_1_state() {

@@ -239,6 +239,15 @@ pub enum Output {
     },
     /// Confirm the client's block change predictions up to this sequence number.
     AcknowledgeBlockChanges(i32),
+    /// Show the cracks of a block another player is breaking.
+    BlockDestruction {
+        /// The player breaking it, which identifies the cracks.
+        entity_id: i32,
+        /// The block.
+        position: BlockPos,
+        /// 0 to 9; any other value removes the cracks.
+        stage: i8,
+    },
     /// Play a world event, such as the particles and sound of a broken block.
     WorldEvent {
         /// Vanilla's event type, such as 2001 for a broken block.
@@ -396,6 +405,42 @@ pub(crate) struct PlayerState {
     pub(crate) chat_spam: u32,
     /// The highest block change sequence to acknowledge in this tick (`ackBlockChangesUpTo`).
     pub(crate) acknowledge_block_changes: Option<i32>,
+    pub(crate) digging: Digging,
+}
+
+/// The block a player is breaking, with the fields of vanilla's `ServerPlayerGameMode`.
+#[derive(Debug)]
+pub(crate) struct Digging {
+    /// The player's ticks (`gameTicks`).
+    pub(crate) game_ticks: i32,
+    /// The tick the player started breaking the block (`destroyProgressStart`).
+    pub(crate) destroy_progress_start: i32,
+    pub(crate) is_destroying: bool,
+    /// The block last started, kept after it stops being broken.
+    pub(crate) destroy_pos: BlockPos,
+    /// Whether the client finished breaking a block before the server's progress reached it, so that the
+    /// server breaks it once its own progress does.
+    pub(crate) has_delayed_destroy: bool,
+    pub(crate) delayed_destroy_pos: BlockPos,
+    pub(crate) delayed_tick_start: i32,
+    /// The stage of cracks last shown to the other players.
+    pub(crate) last_sent_state: i32,
+}
+
+impl Default for Digging {
+    fn default() -> Self {
+        let origin = BlockPos { x: 0, y: 0, z: 0 };
+        Self {
+            game_ticks: 0,
+            destroy_progress_start: 0,
+            is_destroying: false,
+            destroy_pos: origin,
+            has_delayed_destroy: false,
+            delayed_destroy_pos: origin,
+            delayed_tick_start: 0,
+            last_sent_state: -1,
+        }
+    }
 }
 
 const CHAT_SPAM_PER_MESSAGE: u32 = 20;
@@ -438,6 +483,7 @@ impl PlayerState {
             disconnecting: false,
             chat_spam: 0,
             acknowledge_block_changes: None,
+            digging: Digging::default(),
         }
     }
 
@@ -555,6 +601,20 @@ impl PlayerState {
         } else {
             4.5
         }
+    }
+
+    /// How fast the player breaks blocks with an empty hand, as vanilla's `Player.getDestroySpeed` without
+    /// tools, effects or enchantments, which come with items: the `block_break_speed` attribute (1), times the
+    /// `submerged_mining_speed` attribute (0.2) with the eyes in water, divided by 5 off the ground.
+    pub(crate) fn destroy_speed(&self, eye_in_water: bool) -> f32 {
+        let mut speed = 1.0_f32;
+        if eye_in_water {
+            speed *= 0.2;
+        }
+        if !self.player.position.on_ground {
+            speed /= 5.0;
+        }
+        speed
     }
 
     /// Whether this player sees a player in `mode` at `position`.

@@ -235,6 +235,18 @@ enum Event {
     Panic,
 }
 
+/// Whether `player` is closer than `range` to the corner of the block at `pos`, as vanilla measures who hears
+/// and sees what happens to a block.
+fn within(player: &player::PlayerState, pos: block::BlockPos, range: f64) -> bool {
+    let p = &player.player.position;
+    let (dx, dy, dz) = (
+        f64::from(pos.x) - p.x,
+        f64::from(pos.y) - p.y,
+        f64::from(pos.z) - p.z,
+    );
+    dx * dx + dy * dy + dz * dz < range * range
+}
+
 /// The next tick's target time. Short delays are caught up; a delay over two seconds resets the target.
 struct Schedule {
     next: Instant,
@@ -398,6 +410,8 @@ impl TickWork for Game {
                 player.send(player::Output::ChunkBatch(batch));
             }
         }
+        // Players tick with the entities, after the block changes are sent (`ServerPlayer.tick`).
+        self.tick_digging();
     }
 
     fn connections(&mut self) {
@@ -689,10 +703,10 @@ impl Game {
     /// A player's Start, Abort or Finish of breaking a block, as vanilla's `handlePlayerAction` and
     /// `ServerPlayerGameMode.handleBlockBreakAction`.
     ///
-    /// A player in Creative breaks the block at once. Spawn protection does not apply while the server has no
+    /// A player in Creative breaks the block at once; one in Survival breaks it once its destroy progress is
+    /// far enough, as [`Game::tick_digging`] follows it. Spawn protection does not apply while the server has no
     /// operators, as in vanilla, and there are none until `ops.json` is read; the world border is not checked
-    /// until it exists. Breaking in Survival needs each block's destroy speed, which is not ported yet, so the
-    /// server sends the block back instead of letting the client's prediction stand.
+    /// until it exists. Hitting a block (`BlockState.attack`, such as a note block playing) is not ported yet.
     fn dig(&mut self, index: usize, action: block::DigAction, pos: block::BlockPos, sequence: i32) {
         let state = &self.players[index];
         let range = state.block_interaction_range() + 1.0;
@@ -702,18 +716,10 @@ impl Game {
         } else if pos.y > block::MAX_Y {
             self.send_block(index, pos);
         } else {
-            match (action, mode) {
-                (block::DigAction::Start, player::GameMode::Creative) => {
-                    if !self.destroy_block(index, pos) {
-                        self.send_block(index, pos);
-                    }
-                }
-                // Adventure and Spectator may not break blocks without a tool that allows it.
-                (block::DigAction::Start, _) => self.send_block(index, pos),
-                (block::DigAction::Finish, player::GameMode::Survival) => {
-                    self.send_block(index, pos);
-                }
-                (block::DigAction::Finish | block::DigAction::Abort, _) => {}
+            match action {
+                block::DigAction::Start => self.start_digging(index, mode, pos),
+                block::DigAction::Finish => self.finish_digging(index, pos),
+                block::DigAction::Abort => self.abort_digging(index, pos),
             }
         }
         let state = &mut self.players[index];
@@ -730,21 +736,185 @@ impl Game {
         );
     }
 
-    /// Sends a player the current state of a block, which overrides the client's prediction.
-    fn send_block(&self, index: usize, position: block::BlockPos) {
-        let air = harpas_core::block::block_states()
-            .default_state("minecraft:void_air")
-            .expect("a vanilla block");
-        let state = self
+    fn start_digging(&mut self, index: usize, mode: player::GameMode, pos: block::BlockPos) {
+        if mode == player::GameMode::Creative {
+            self.destroy_and_acknowledge(index, pos);
+            return;
+        }
+        // Adventure and Spectator may not break blocks without a tool that allows it.
+        if mode != player::GameMode::Survival {
+            self.send_block(index, pos);
+            return;
+        }
+        let state = self.block_at(pos);
+        let air = harpas_core::block::block_states().is_air(state);
+        let progress = if air {
+            1.0
+        } else {
+            self.destroy_progress(index, state)
+        };
+        let digging = &mut self.players[index].digging;
+        digging.destroy_progress_start = digging.game_ticks;
+        if !air && progress >= 1.0 {
+            self.destroy_and_acknowledge(index, pos);
+            return;
+        }
+        if digging.is_destroying {
+            let previous = digging.destroy_pos;
+            self.send_block(index, previous);
+        }
+        let digging = &mut self.players[index].digging;
+        digging.is_destroying = true;
+        digging.destroy_pos = pos;
+        let stage = (progress * 10.0) as i32;
+        digging.last_sent_state = stage;
+        self.destroy_block_progress(index, pos, stage);
+    }
+
+    fn finish_digging(&mut self, index: usize, pos: block::BlockPos) {
+        let digging = &self.players[index].digging;
+        if pos != digging.destroy_pos {
+            return;
+        }
+        let ticks = digging
+            .game_ticks
+            .wrapping_sub(digging.destroy_progress_start);
+        let state = self.block_at(pos);
+        if harpas_core::block::block_states().is_air(state) {
+            return;
+        }
+        let progress = self.destroy_progress(index, state) * (ticks.wrapping_add(1)) as f32;
+        let digging = &mut self.players[index].digging;
+        if progress >= 0.7 {
+            digging.is_destroying = false;
+            self.destroy_block_progress(index, pos, -1);
+            self.destroy_and_acknowledge(index, pos);
+            return;
+        }
+        if !digging.has_delayed_destroy {
+            digging.is_destroying = false;
+            digging.has_delayed_destroy = true;
+            digging.delayed_destroy_pos = pos;
+            digging.delayed_tick_start = digging.destroy_progress_start;
+        }
+    }
+
+    fn abort_digging(&mut self, index: usize, pos: block::BlockPos) {
+        let digging = &mut self.players[index].digging;
+        digging.is_destroying = false;
+        let destroy_pos = digging.destroy_pos;
+        if destroy_pos != pos {
+            log::warn!("Mismatch in destroy block pos: {destroy_pos:?} {pos:?}");
+            self.destroy_block_progress(index, destroy_pos, -1);
+        }
+        self.destroy_block_progress(index, pos, -1);
+    }
+
+    /// Each player's part of `ServerPlayerGameMode.tick`: counts the player's ticks, and follows the block it is
+    /// breaking, or the one it finished too early, until it breaks.
+    fn tick_digging(&mut self) {
+        let air = |state| harpas_core::block::block_states().is_air(state);
+        for index in 0..self.players.len() {
+            if self.players[index].disconnecting {
+                continue;
+            }
+            let digging = &mut self.players[index].digging;
+            digging.game_ticks = digging.game_ticks.wrapping_add(1);
+            if digging.has_delayed_destroy {
+                let pos = digging.delayed_destroy_pos;
+                let start = digging.delayed_tick_start;
+                let state = self.block_at(pos);
+                if air(state) {
+                    self.players[index].digging.has_delayed_destroy = false;
+                } else if self.increment_destroy_progress(index, state, pos, start) >= 1.0 {
+                    self.players[index].digging.has_delayed_destroy = false;
+                    self.destroy_block(index, pos);
+                }
+            } else if digging.is_destroying {
+                let pos = digging.destroy_pos;
+                let start = digging.destroy_progress_start;
+                let state = self.block_at(pos);
+                if air(state) {
+                    self.destroy_block_progress(index, pos, -1);
+                    let digging = &mut self.players[index].digging;
+                    digging.last_sent_state = -1;
+                    digging.is_destroying = false;
+                } else {
+                    self.increment_destroy_progress(index, state, pos, start);
+                }
+            }
+        }
+    }
+
+    fn increment_destroy_progress(
+        &mut self,
+        index: usize,
+        state: u32,
+        pos: block::BlockPos,
+        start: i32,
+    ) -> f32 {
+        let ticks = self.players[index].digging.game_ticks.wrapping_sub(start);
+        let progress = self.destroy_progress(index, state) * (ticks.wrapping_add(1)) as f32;
+        let stage = (progress * 10.0) as i32;
+        if stage != self.players[index].digging.last_sent_state {
+            self.destroy_block_progress(index, pos, stage);
+            self.players[index].digging.last_sent_state = stage;
+        }
+        progress
+    }
+
+    /// How much of `state` the player breaks each tick (`BlockState.getDestroyProgress`).
+    fn destroy_progress(&self, index: usize, state: u32) -> f32 {
+        let player = &self.players[index];
+        let eye_in_water = self
             .world
             .as_ref()
-            .and_then(|world| world.block_state(position))
-            .unwrap_or(air);
+            .is_some_and(|world| world.eye_in_water(player.eye_position()));
+        block::destroy_progress(state, player.destroy_speed(eye_in_water))
+    }
+
+    /// Shows the other players within 32 blocks the cracks of a block a player is breaking, or removes them for
+    /// any `stage` outside 0 to 9 (`ServerLevel.destroyBlockProgress`).
+    fn destroy_block_progress(&self, index: usize, position: block::BlockPos, stage: i32) {
+        let breaker = self.players[index].player.entity_id;
+        for player in &self.players {
+            if player.player.entity_id != breaker
+                && !player.disconnecting
+                && within(player, position, 32.0)
+            {
+                player.send(player::Output::BlockDestruction {
+                    entity_id: breaker,
+                    position,
+                    // Sent as a byte, as vanilla writes it.
+                    stage: stage as i8,
+                });
+            }
+        }
+    }
+
+    /// The block state at `pos`: void air outside the world's height, and where no chunk is loaded.
+    fn block_at(&self, pos: block::BlockPos) -> u32 {
+        self.world
+            .as_ref()
+            .and_then(|world| world.block_state(pos))
+            .unwrap_or_else(block::void_air)
+    }
+
+    /// Sends a player the current state of a block, which overrides the client's prediction.
+    fn send_block(&self, index: usize, position: block::BlockPos) {
+        let state = self.block_at(position);
         self.players[index].send(player::Output::BlockUpdate { position, state });
     }
 
-    /// Breaks a block for a player in Creative, as vanilla's `ServerPlayerGameMode.destroyBlock`. Returns
-    /// whether the player's prediction stands.
+    fn destroy_and_acknowledge(&mut self, index: usize, pos: block::BlockPos) {
+        if !self.destroy_block(index, pos) {
+            self.send_block(index, pos);
+        }
+    }
+
+    /// Breaks a block for a player, as vanilla's `ServerPlayerGameMode.destroyBlock`. Returns whether the
+    /// player's prediction stands. A block broken in Survival drops nothing and costs no hunger until items and
+    /// hunger exist.
     fn destroy_block(&mut self, index: usize, pos: block::BlockPos) -> bool {
         let Some(world) = &mut self.world else {
             return true;
@@ -761,15 +931,9 @@ impl Game {
         // `playerWillDestroy`: the particles and sound of the broken block, for the other players nearby.
         let breaker = self.players[index].player.entity_id;
         for player in &self.players {
-            let p = &player.player.position;
-            let (dx, dy, dz) = (
-                f64::from(pos.x) - p.x,
-                f64::from(pos.y) - p.y,
-                f64::from(pos.z) - p.z,
-            );
             if player.player.entity_id != breaker
                 && !player.disconnecting
-                && dx * dx + dy * dy + dz * dz < 64.0 * 64.0
+                && within(player, pos, 64.0)
             {
                 player.send(player::Output::WorldEvent {
                     event: BLOCK_DESTROYED,

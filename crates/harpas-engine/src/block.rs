@@ -89,6 +89,60 @@ pub(crate) fn removed(state: u32) -> u32 {
     }
 }
 
+/// The state of `void_air`, which vanilla reads outside the world's height.
+pub(crate) fn void_air() -> u32 {
+    static STATE: OnceLock<u32> = OnceLock::new();
+    *STATE.get_or_init(|| {
+        block_states()
+            .default_state("minecraft:void_air")
+            .expect("a vanilla block")
+    })
+}
+
+/// How much of `state` a player whose destroy speed is `speed` breaks each tick, 1 being the whole block
+/// (`BlockBehaviour.getDestroyProgress`): the speed divided by the block's hardness, and by 30, or by 100 for a
+/// block that needs a tool the player does not hold. A block of hardness -1 never breaks, and one of hardness 0
+/// breaks at once. A player holds nothing until items exist.
+pub(crate) fn destroy_progress(state: u32, speed: f32) -> f32 {
+    let states = block_states();
+    let hardness = states.hardness(state);
+    if hardness == -1.0 {
+        return 0.0;
+    }
+    let divisor = if states.requires_correct_tool(state) {
+        100.0
+    } else {
+        30.0
+    };
+    speed / hardness / divisor
+}
+
+/// The height of the water at a block, from its bottom (`FluidState.getHeight`), or none for a block without
+/// water. Water under more water fills its block; otherwise it is as high as its amount, out of 9.
+pub(crate) fn water_height(state: u32, above: u32) -> Option<f32> {
+    let is_water = |state| matches!(fluid(state), Fluid::Water | Fluid::FlowingWater);
+    if !is_water(state) {
+        return None;
+    }
+    if is_water(above) {
+        return Some(1.0);
+    }
+    // A source holds 8; a flowing level of 1 to 7 holds 8 less that; falling water, 8 and above, holds 8.
+    let (name, properties) = block_states().properties(state)?;
+    let level = properties
+        .iter()
+        .find(|(key, _)| *key == "level")
+        .and_then(|(_, value)| value.parse::<i32>().ok())
+        .filter(|_| name == "minecraft:water")
+        .unwrap_or(0);
+    let amount = if (1..8).contains(&level) {
+        8 - level
+    } else {
+        8
+    };
+    Some(amount as f32 / 9.0)
+}
+
 /// Whether the block is a `GameMasterBlock`, which only an operator in Creative may break: command, structure,
 /// jigsaw and test blocks.
 pub(crate) fn is_game_master_block(state: u32) -> bool {
@@ -368,6 +422,40 @@ mod tests {
         assert_eq!(removed(waterlogged), state("minecraft:water"));
         assert!(is_game_master_block(state("minecraft:command_block")));
         assert!(!is_game_master_block(state("minecraft:barrier")));
+    }
+
+    #[test]
+    fn destroy_progress_follows_hardness_and_the_tool_a_block_needs() {
+        assert_eq!(
+            destroy_progress(state("minecraft:dirt"), 1.0),
+            1.0 / 0.5 / 30.0
+        );
+        assert_eq!(
+            destroy_progress(state("minecraft:stone"), 1.0),
+            1.0 / 1.5 / 100.0
+        );
+        assert_eq!(destroy_progress(state("minecraft:bedrock"), 1.0), 0.0);
+        assert!(destroy_progress(state("minecraft:short_grass"), 0.2) >= 1.0);
+    }
+
+    #[test]
+    fn water_is_as_high_as_its_amount_unless_more_water_is_above() {
+        let water = |level: &str| {
+            block_states()
+                .state("minecraft:water", [("level", level)])
+                .unwrap()
+                .0
+        };
+        let air = state("minecraft:air");
+        assert_eq!(water_height(water("0"), air), Some(8.0 / 9.0));
+        assert_eq!(water_height(water("3"), air), Some(5.0 / 9.0));
+        assert_eq!(water_height(water("8"), air), Some(8.0 / 9.0));
+        assert_eq!(water_height(water("3"), water("0")), Some(1.0));
+        assert_eq!(
+            water_height(state("minecraft:seagrass"), air),
+            Some(8.0 / 9.0)
+        );
+        assert_eq!(water_height(state("minecraft:stone"), air), None);
     }
 
     #[test]

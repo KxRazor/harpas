@@ -395,7 +395,7 @@ as shown by the parity report.
   - [x] Breaking blocks in Creative: reach and height checks, the fluid left behind, heightmaps, block
         entities, saving, block changes sent to the players who have the chunk, world events and
         acknowledgements.
-  - [ ] Breaking blocks in Survival, with each block's destroy speed and the destroy progress others see.
+  - [x] Breaking blocks in Survival, with each block's destroy speed and the destroy progress others see.
   - [ ] Neighbor and shape updates.
   - [ ] Placing blocks, once items exist.
   - [ ] Scheduled and random ticks.

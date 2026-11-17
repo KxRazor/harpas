@@ -471,8 +471,8 @@ impl Game {
     }
 
     /// A stack the client puts in a slot in Creative (`handleSetCreativeModeSlot`). A stack the client may not
-    /// send disconnects it, as a stack vanilla cannot read; a negative slot drops the stack, which needs item
-    /// entities, not ported yet.
+    /// send disconnects it, as a stack vanilla cannot read; a negative slot drops the stack. Vanilla's limit on
+    /// how fast a player drops stacks is not ported yet.
     pub(crate) fn set_creative_slot(&mut self, index: usize, slot: i16, stack: ItemStack) {
         let state = &mut self.players[index];
         if !stack.is_valid() {
@@ -490,6 +490,9 @@ impl Game {
                 stack
             };
             state.inventory.set_by_client(slot as usize, stack);
+        } else if slot < 0 {
+            // Dropped out of the Creative inventory.
+            self.drop_item(index, stack);
         }
     }
 

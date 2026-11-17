@@ -59,7 +59,7 @@ impl FluidType {
         .find(|kind| kind.name() == name)
     }
 
-    fn is_water(self) -> bool {
+    pub(crate) fn is_water(self) -> bool {
         matches!(self, Self::Water | Self::FlowingWater)
     }
 
@@ -185,6 +185,11 @@ impl FluidState {
 
     pub(crate) fn kind(self) -> Option<FluidType> {
         self.kind
+    }
+
+    /// The amount, from 1 to 8, or 0 for no fluid.
+    pub(crate) fn amount(self) -> i32 {
+        self.amount
     }
 
     fn is_empty(self) -> bool {

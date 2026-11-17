@@ -421,7 +421,10 @@ as shown by the parity report.
         sequences.
   - [x] Clicks in the inventory menu in Survival, every click type, and the 2x2 crafting grid with the shaped
         and shapeless recipes of the vanilla data pack.
-  - [ ] The crafting table and the other containers, the other recipe types, and smelting.
+  - [x] Crafting tables: opening the 3x3 menu, shaped and shapeless recipes, clicks and shift-crafting,
+        synchronized inventory slots, and returning ingredients when the menu closes or the table is no
+        longer reachable; native recipe and shift-click comparisons (`crafting_table_parity`).
+  - [ ] The other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets

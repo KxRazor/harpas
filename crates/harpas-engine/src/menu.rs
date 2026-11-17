@@ -1,5 +1,5 @@
 //! Clicks in the player's inventory menu, as vanilla's `AbstractContainerMenu.doClick` and `InventoryMenu` handle
-//! them, and its 2x2 crafting grid.
+//! them, and the 2x2 inventory and 3x3 table crafting grids.
 //!
 //! Every click type is ported: picking up and putting down stacks or one item (`PICKUP`), moving a stack to the
 //! other part of the inventory (`QUICK_MOVE`, `InventoryMenu.quickMoveStack`), swapping with a hotbar slot or the
@@ -17,8 +17,6 @@ use crate::recipe::{Recipes, remainder};
 
 /// The result slot of the inventory menu.
 const RESULT: usize = 0;
-/// The crafting grid's slots, row by row.
-const GRID: std::ops::Range<usize> = 1..5;
 /// The armor slots, from the head down.
 const ARMOR: std::ops::Range<usize> = 5..9;
 /// A click outside the window.
@@ -82,14 +80,18 @@ impl Inventory {
     fn may_place(&self, slot: usize, stack: &ItemStack) -> bool {
         match slot {
             RESULT => false,
-            s if ARMOR.contains(&s) => armor_slot(stack) == Some(s),
+            s if !self.table && ARMOR.contains(&s) => armor_slot(stack) == Some(s),
             _ => true,
         }
     }
 
     /// `Slot.getMaxStackSize(stack)`: one in an armor slot, otherwise as many as the stack holds.
     fn slot_max(&self, slot: usize, stack: &ItemStack) -> i32 {
-        let limit = if ARMOR.contains(&slot) { 1 } else { 99 };
+        let limit = if !self.table && ARMOR.contains(&slot) {
+            1
+        } else {
+            99
+        };
         limit.min(max_stack(stack))
     }
 
@@ -157,7 +159,7 @@ impl Inventory {
         }
         let taken = with_count(&held, n);
         self.set(slot, with_count(&held, held.count - n));
-        if GRID.contains(&slot) {
+        if self.grid().contains(&slot) {
             self.update_result(context);
         }
         Some(taken)
@@ -178,16 +180,16 @@ impl Inventory {
 
     /// Crafts the result of the grid again (`slotChangedCraftingGrid`).
     pub(crate) fn update_result(&mut self, context: &Context<'_>) {
-        let grid: Vec<&ItemStack> = GRID.map(|slot| &self.slots[slot]).collect();
-        self.slots[RESULT] = context
-            .recipes
-            .map_or_else(ItemStack::empty, |recipes| recipes.craft(2, &grid));
+        let grid: Vec<&ItemStack> = self.grid().map(|slot| &self.slots[slot]).collect();
+        self.slots[RESULT] = context.recipes.map_or_else(ItemStack::empty, |recipes| {
+            recipes.craft(if self.table { 3 } else { 2 }, &grid)
+        });
     }
 
     /// `ResultSlot.onTake`: one item of each slot of the grid goes, and an item's remainder takes its place, or
     /// goes to the inventory, or is dropped.
     fn take_result(&mut self, context: &Context<'_>, drops: &mut Vec<ItemStack>) {
-        for slot in GRID {
+        for slot in self.grid() {
             let used = self.slots[slot].clone();
             if used.is_empty() {
                 continue;
@@ -277,16 +279,25 @@ impl Inventory {
         }
         let original = stack.clone();
         let armor = armor_slot(&original);
-        let moved = match index {
-            RESULT => self.move_stack_to(&mut stack, 9, 45, true),
-            1..=8 => self.move_stack_to(&mut stack, 9, 45, false),
-            _ if armor.is_some_and(|a| self.slots[a].is_empty()) => {
-                let a = armor.expect("an armor slot");
-                self.move_stack_to(&mut stack, a, a + 1, false)
+        let moved = if self.table {
+            match index {
+                RESULT => self.move_stack_to(&mut stack, 10, 46, true),
+                1..=9 => self.move_stack_to(&mut stack, 10, 46, false),
+                10..=36 => self.move_stack_to(&mut stack, 37, 46, false),
+                _ => self.move_stack_to(&mut stack, 10, 37, false),
             }
-            9..=35 => self.move_stack_to(&mut stack, 36, 45, false),
-            36..=44 => self.move_stack_to(&mut stack, 9, 36, false),
-            _ => self.move_stack_to(&mut stack, 9, 45, false),
+        } else {
+            match index {
+                RESULT => self.move_stack_to(&mut stack, 9, 45, true),
+                1..=8 => self.move_stack_to(&mut stack, 9, 45, false),
+                _ if armor.is_some_and(|a| self.slots[a].is_empty()) => {
+                    let a = armor.expect("an armor slot");
+                    self.move_stack_to(&mut stack, a, a + 1, false)
+                }
+                9..=35 => self.move_stack_to(&mut stack, 36, 45, false),
+                36..=44 => self.move_stack_to(&mut stack, 9, 36, false),
+                _ => self.move_stack_to(&mut stack, 9, 45, false),
+            }
         };
         if !moved {
             return ItemStack::empty();
@@ -297,7 +308,7 @@ impl Inventory {
         } else {
             stack.clone()
         };
-        if GRID.contains(&index) {
+        if self.grid().contains(&index) {
             self.update_result(context);
         }
         if stack.count == original.count {
@@ -378,7 +389,7 @@ impl Inventory {
             // SWAP with a hotbar slot or the off hand.
             2 if (0..9).contains(&button) || button == 40 => {
                 let Some(index) = index else { return drops };
-                let other = Inventory::menu_slot(button as usize);
+                let other = self.storage_slot(button as usize);
                 let theirs = self.slots[other].clone();
                 let ours = self.slots[index].clone();
                 if theirs.is_empty() && ours.is_empty() {
@@ -418,7 +429,7 @@ impl Inventory {
                         self.set(index, theirs);
                     }
                 }
-                if GRID.contains(&index) {
+                if self.grid().contains(&index) {
                     self.update_result(context);
                 }
             }
@@ -524,7 +535,7 @@ impl Inventory {
                 self.carried.count += taken.count;
             }
         }
-        if GRID.contains(&index) {
+        if self.grid().contains(&index) {
             self.update_result(context);
         }
     }
@@ -596,7 +607,7 @@ impl Inventory {
                     }
                 }
                 self.carried = with_count(&source, remaining);
-                if slots.iter().any(|s| GRID.contains(s)) {
+                if slots.iter().any(|s| self.grid().contains(s)) {
                     self.update_result(context);
                 }
             }
@@ -610,15 +621,7 @@ impl Inventory {
     /// inventory, and what does not fit is dropped. Returns the stacks dropped.
     pub(crate) fn close(&mut self, context: &Context<'_>) -> Vec<ItemStack> {
         let mut drops = Vec::new();
-        let mut back = vec![std::mem::take(&mut self.carried)];
-        for slot in GRID {
-            back.push(std::mem::take(&mut self.slots[slot]));
-        }
-        self.slots[RESULT] = ItemStack::empty();
-        for mut stack in back {
-            if stack.is_empty() {
-                continue;
-            }
+        for mut stack in self.take_transient_items() {
             // `placeItemBackInInventory`.
             self.add(&mut stack, false);
             if !stack.is_empty() {
@@ -627,6 +630,19 @@ impl Inventory {
         }
         self.update_result(context);
         drops
+    }
+
+    /// The cursor and input grid on removal. A disconnected player drops these instead of returning them to
+    /// its inventory (`clearContainer`); the result is a preview and is never an additional item.
+    pub(crate) fn take_transient_items(&mut self) -> Vec<ItemStack> {
+        let mut back = vec![std::mem::take(&mut self.carried)];
+        for slot in self.grid() {
+            back.push(std::mem::take(&mut self.slots[slot]));
+        }
+        self.slots[RESULT] = ItemStack::empty();
+        self.reset_quick_craft();
+        back.retain(|stack| !stack.is_empty());
+        back
     }
 }
 
@@ -756,5 +772,124 @@ mod tests {
         assert!(inventory.close(&context).is_empty());
         assert!(inventory.slots[2].is_empty() && inventory.slots[0].is_empty());
         assert!((9..45).any(|s| inventory.slots[s].name() == Some("minecraft:oak_log")));
+    }
+
+    fn table() -> Inventory {
+        Inventory {
+            table: true,
+            slots: vec![ItemStack::empty(); 47],
+            remote: vec![crate::inventory::Remote::Known(ItemStack::empty()); 47],
+            ..Inventory::default()
+        }
+    }
+
+    #[test]
+    fn table_recipes_use_all_nine_slots_and_shift_craft_into_the_hotbar() {
+        let recipes = [json!({"type": "minecraft:crafting_shaped",
+            "pattern": ["PPP", " S ", " S "],
+            "key": {"P": "minecraft:oak_planks", "S": "minecraft:stick"},
+            "result": {"id": "minecraft:wooden_pickaxe"}})];
+        let recipes = Recipes::from_json(&HashMap::new(), recipes.iter());
+        let context = Context {
+            recipes: Some(&recipes),
+            creative: false,
+        };
+        let mut menu = table();
+        for slot in [1, 2, 3] {
+            menu.slots[slot] = stack("minecraft:oak_planks", 2);
+        }
+        for slot in [5, 8] {
+            menu.slots[slot] = stack("minecraft:stick", 2);
+        }
+        menu.update_result(&context);
+        assert_eq!(held(&menu, 0), (Some("minecraft:wooden_pickaxe"), 1));
+        assert!(menu.click(0, 0, 1, &context).is_empty());
+        assert!(menu.slots[..10].iter().all(ItemStack::is_empty));
+        assert_eq!(held(&menu, 45), (Some("minecraft:wooden_pickaxe"), 1));
+        assert_eq!(held(&menu, 44), (Some("minecraft:wooden_pickaxe"), 1));
+        // The table has no armor slots: shift-clicking a helmet moves it to the main inventory.
+        menu.slots[37] = stack("minecraft:iron_helmet", 1);
+        menu.click(37, 0, 1, &context);
+        assert_eq!(held(&menu, 10), (Some("minecraft:iron_helmet"), 1));
+        assert!(menu.slots[37].is_empty());
+    }
+
+    #[test]
+    fn table_clicks_map_hotbar_and_offhand_and_do_not_expose_the_hidden_slot() {
+        let context = Context {
+            recipes: None,
+            creative: false,
+        };
+        let mut menu = table();
+        menu.slots[37] = stack("minecraft:stone", 10);
+        menu.click(9, 0, 2, &context);
+        assert_eq!(held(&menu, 9), (Some("minecraft:stone"), 10));
+        assert!(menu.slots[37].is_empty());
+        menu.slots[46] = stack("minecraft:dirt", 4);
+        menu.click(9, 40, 2, &context);
+        assert_eq!(held(&menu, 46), (Some("minecraft:stone"), 10));
+        assert_eq!(held(&menu, 9), (Some("minecraft:dirt"), 4));
+        menu.click(46, 0, 0, &context);
+        assert!(menu.carried.is_empty());
+        menu.click(9, 0, 0, &context);
+        menu.click(0, 0, 0, &context);
+        assert!(menu.slots[0].is_empty());
+        assert_eq!(menu.carried.count, 4);
+        // Main inventory and hotbar use the table's boundaries.
+        menu.carried = ItemStack::empty();
+        menu.slots[36] = stack("minecraft:oak_log", 2);
+        menu.click(36, 0, 1, &context);
+        assert_eq!(held(&menu, 37), (Some("minecraft:oak_log"), 2));
+    }
+
+    #[test]
+    fn table_crafting_returns_buckets_and_close_drops_only_what_does_not_fit() {
+        let recipes = [json!({"type": "minecraft:crafting_shaped",
+            "pattern": ["MMM", "SES", "WWW"],
+            "key": {"M": "minecraft:milk_bucket", "S": "minecraft:sugar",
+                    "E": "minecraft:egg", "W": "minecraft:wheat"},
+            "result": {"id": "minecraft:cake"}})];
+        let recipes = Recipes::from_json(&HashMap::new(), recipes.iter());
+        let context = Context {
+            recipes: Some(&recipes),
+            creative: false,
+        };
+        let mut menu = table();
+        for slot in [1, 2, 3] {
+            menu.slots[slot] = stack("minecraft:milk_bucket", 1);
+        }
+        for slot in [4, 6] {
+            menu.slots[slot] = stack("minecraft:sugar", 1);
+        }
+        menu.slots[5] = stack("minecraft:egg", 1);
+        for slot in [7, 8, 9] {
+            menu.slots[slot] = stack("minecraft:wheat", 1);
+        }
+        menu.update_result(&context);
+        assert!(menu.click(0, 0, 0, &context).is_empty());
+        assert_eq!(menu.carried.name(), Some("minecraft:cake"));
+        for slot in [1, 2, 3] {
+            assert_eq!(held(&menu, slot), (Some("minecraft:bucket"), 1));
+        }
+        // A full inventory drops the cursor and the remaining ingredients, never the displayed result.
+        for slot in &mut menu.slots[10..46] {
+            *slot = stack("minecraft:stone", 64);
+        }
+        let drops = menu.close(&context);
+        assert_eq!(
+            drops
+                .iter()
+                .map(|s| (s.name(), s.count))
+                .collect::<Vec<_>>(),
+            [
+                (Some("minecraft:cake"), 1),
+                (Some("minecraft:bucket"), 1),
+                (Some("minecraft:bucket"), 1),
+                (Some("minecraft:bucket"), 1)
+            ]
+        );
+        assert!(menu.slots[..10].iter().all(ItemStack::is_empty));
+        assert!(menu.carried.is_empty());
+        assert!(menu.close(&context).is_empty());
     }
 }

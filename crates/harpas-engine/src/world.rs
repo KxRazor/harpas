@@ -4376,4 +4376,225 @@ mod tests {
             Output::SetSlot { slot: 36, stack, .. } if stack.item == items().id("minecraft:dandelion").unwrap()
         )));
     }
+
+    #[test]
+    fn crafting_tables_have_independent_menus_and_return_items_when_they_close() {
+        use crate::inventory::ItemStack;
+        use harpas_core::block_behavior::Face;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let chunk_pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(chunk_pos, DATA_VERSION)]);
+        let (output, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: profile(),
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        tick(&mut game, 1);
+        wait_until(|| {
+            tick(&mut game, 2);
+            game.players[0].sent_chunks.contains(&chunk_pos)
+        });
+        let table = BlockPos { x: 8, y: -51, z: 9 };
+        let crafting = block_states()
+            .default_state("minecraft:crafting_table")
+            .unwrap();
+        let stone = block_states().default_state("minecraft:stone").unwrap();
+        game.world
+            .as_mut()
+            .unwrap()
+            .set_block_state(table, crafting);
+        game.players[0].awaiting_teleport = None;
+        game.players[0].player.position = crate::player::Position {
+            x: 8.5,
+            y: -51.0,
+            z: 8.5,
+            ..Default::default()
+        };
+        game.players[0].player.profile.game_mode = GameMode::Survival;
+        received.try_iter().for_each(drop);
+        game.use_item_on(0, false, table, Face::Up, [0.5; 3], 1);
+        assert_eq!(received.try_recv(), Ok(Output::OpenCraftingTable(1)));
+        assert!(
+            matches!(received.try_recv(), Ok(Output::InventoryContent { container_id: 1, ref slots, .. }) if slots.len() == 46)
+        );
+        let stack = |name: &str, count| ItemStack {
+            item: items().id(name).unwrap(),
+            count,
+            components: Default::default(),
+        };
+        // Correct predictions send nothing; a stale state resends this table, and a wrong prediction is
+        // corrected with the table's window ID rather than the inventory's ID.
+        game.players[0].inventory.slots[36] = stack("minecraft:stone", 8);
+        game.send_inventory_changes();
+        received.try_iter().for_each(drop);
+        let menu_state = game.players[0]
+            .crafting_table
+            .as_ref()
+            .unwrap()
+            .contents
+            .state_id();
+        let predicted = Some(crate::inventory::HashedStack {
+            item: items().id("minecraft:stone").unwrap(),
+            count: 8,
+            ..Default::default()
+        });
+        game.click_container(0, 1, menu_state, 37, 0, 0, vec![(37, None)], predicted);
+        assert!(received.try_recv().is_err());
+        assert_eq!(game.players[0].inventory.carried.count, 8);
+        game.click_container(0, 1, -1, 37, 0, 0, Vec::new(), None);
+        assert!(matches!(
+            received.try_recv(),
+            Ok(Output::InventoryContent {
+                container_id: 1,
+                ..
+            })
+        ));
+        let menu_state = game.players[0]
+            .crafting_table
+            .as_ref()
+            .unwrap()
+            .contents
+            .state_id();
+        game.click_container(0, 1, menu_state, 37, 0, 0, vec![(37, None)], None);
+        assert_eq!(
+            received.try_recv(),
+            Ok(Output::SetCarried(stack("minecraft:stone", 8)))
+        );
+        game.click_container(0, 1, menu_state, 37, 0, 0, Vec::new(), None);
+        received.try_iter().for_each(drop);
+        game.players[0].inventory.slots[36] = ItemStack::empty();
+        game.players[0].with_menu(|menu| {
+            menu.slots[9] = stack("minecraft:oak_log", 3);
+            menu.carried = stack("minecraft:cobblestone", 5);
+        });
+        // A second viewer has a separate grid, even at the same table.
+        let (output, other) = crate::player::output_channel();
+        let mut second = profile();
+        second.uuid = 2;
+        second.name = "Other".into();
+        game.join(2, second, 2, 2, false, output);
+        game.players[1].player.position = game.players[0].player.position;
+        game.open_crafting_table(1, table);
+        assert!(
+            game.players[1]
+                .crafting_table
+                .as_ref()
+                .unwrap()
+                .contents
+                .slots[..10]
+                .iter()
+                .all(ItemStack::is_empty)
+        );
+        // Stale window IDs cannot close or modify the active menu.
+        game.close_container(0, 0);
+        game.click_container(0, 0, -1, 9, 0, 0, Vec::new(), None);
+        assert_eq!(
+            game.players[0]
+                .crafting_table
+                .as_ref()
+                .unwrap()
+                .contents
+                .slots[9]
+                .count,
+            3
+        );
+        // A pickup updates the inventory while the menu is open, and the table sees it in its own layout.
+        game.players[0].inventory.slots[36] = stack("minecraft:wheat", 2);
+        game.send_inventory_changes();
+        assert!(received.try_iter().any(|o| matches!(o, Output::SetSlot { container_id: 1, slot: 37, stack, .. } if stack.count == 2)));
+        // Exactly eight blocks from the table's center remains valid, an extra fraction closes it.
+        game.players[0].player.position = crate::player::Position {
+            x: 16.5,
+            y: -50.5,
+            z: 9.5,
+            ..Default::default()
+        };
+        game.send_inventory_changes();
+        assert!(game.players[0].crafting_table.is_some());
+        game.players[0].player.position.x += 0.001;
+        game.send_inventory_changes();
+        assert!(game.players[0].crafting_table.is_none());
+        assert!(received.try_iter().any(|o| o == Output::CloseContainer(1)));
+        let count = |inventory: &crate::inventory::Inventory, name: &str| {
+            inventory.slots[9..45]
+                .iter()
+                .filter(|s| s.name() == Some(name))
+                .map(|s| s.count)
+                .sum::<i32>()
+        };
+        assert_eq!(count(&game.players[0].inventory, "minecraft:oak_log"), 3);
+        assert_eq!(
+            count(&game.players[0].inventory, "minecraft:cobblestone"),
+            5
+        );
+        game.close_container(0, 1);
+        assert_eq!(count(&game.players[0].inventory, "minecraft:oak_log"), 3);
+        // Replacing a table also invalidates menus; returned ingredients are not left in the block.
+        game.players[1].with_menu(|menu| menu.slots[8] = stack("minecraft:diamond", 2));
+        game.world.as_mut().unwrap().set_block_state(table, stone);
+        game.send_inventory_changes();
+        assert!(game.players[1].crafting_table.is_none());
+        assert!(other.try_iter().any(|o| o == Output::CloseContainer(1)));
+        assert_eq!(count(&game.players[1].inventory, "minecraft:diamond"), 2);
+        // Opening another table closes the previous grid, increments the ID and rejects old clicks.
+        game.world
+            .as_mut()
+            .unwrap()
+            .set_block_state(table, crafting);
+        game.players[0].player.position = game.players[1].player.position;
+        game.open_crafting_table(0, table);
+        assert_eq!(game.players[0].container_id(), 2);
+        game.players[0].with_menu(|menu| menu.slots[7] = stack("minecraft:iron_ingot", 4));
+        game.open_crafting_table(0, table);
+        assert_eq!(game.players[0].container_id(), 3);
+        assert_eq!(count(&game.players[0].inventory, "minecraft:iron_ingot"), 4);
+        game.close_container(0, 2);
+        assert_eq!(game.players[0].container_id(), 3);
+        // Secondary use with an item places against the table; bare hands still open it. Spectators do not.
+        game.close_container(0, 3);
+        game.players[0].secondary_use = true;
+        game.players[0].inventory.slots[36] = stack("minecraft:stone", 1);
+        game.use_item_on(0, false, table, Face::Up, [0.5; 3], 2);
+        assert!(game.players[0].crafting_table.is_none());
+        game.players[0].inventory.slots[36] = ItemStack::empty();
+        game.use_item_on(0, false, table, Face::Up, [0.5; 3], 3);
+        assert_eq!(game.players[0].container_id(), 4);
+        game.close_container(0, 4);
+        game.players[0].player.profile.game_mode = GameMode::Spectator;
+        game.use_item_on(0, false, table, Face::Up, [0.5; 3], 4);
+        assert!(game.players[0].crafting_table.is_none());
+        // Disconnecting drops the transient grid and cursor instead of leaving them in a discarded menu.
+        game.players[0].player.profile.game_mode = GameMode::Survival;
+        game.open_crafting_table(0, table);
+        game.players[0].with_menu(|menu| {
+            menu.slots[9] = stack("minecraft:emerald", 3);
+            menu.carried = stack("minecraft:apple", 1);
+        });
+        game.leave(1);
+        let world = game.world.as_ref().unwrap();
+        let dropped: Vec<_> = world
+            .entities
+            .order
+            .iter()
+            .filter_map(|&h| world.entities.item(h))
+            .map(|i| (i.stack.name(), i.stack.count))
+            .collect();
+        assert_eq!(
+            dropped,
+            [(Some("minecraft:apple"), 1), (Some("minecraft:emerald"), 3)]
+        );
+    }
 }

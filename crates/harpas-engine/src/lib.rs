@@ -3,6 +3,7 @@
 //! Design: `docs/engine-core.md`.
 
 pub mod block;
+mod crafting;
 pub mod entity;
 pub(crate) mod fluid;
 pub mod inventory;
@@ -707,6 +708,7 @@ impl TickWork for Game {
                             | player::Input::CloseContainer(_) => {
                                 unreachable!()
                             }
+                            player::Input::SecondaryUse(held) => state.secondary_use = held,
                             player::Input::Movement(movement) => {
                                 if state.accepts(movement, self.world.as_ref()) {
                                     let center = world::ChunkPos::at(
@@ -847,6 +849,13 @@ impl Game {
         else {
             return;
         };
+        if self.players[index].crafting_table.is_some() {
+            let drops = self.players[index].with_menu(inventory::Inventory::take_transient_items);
+            self.players[index].crafting_table = None;
+            for stack in drops {
+                self.drop_item(index, stack);
+            }
+        }
         let left = self.players.remove(index);
         for player in &mut self.players {
             if player.tracked.remove(&entity_id) {

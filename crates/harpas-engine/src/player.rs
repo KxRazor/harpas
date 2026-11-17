@@ -150,6 +150,8 @@ pub enum Input {
     },
     /// The player selected a hotbar slot, 0 to 8.
     SelectHotbarSlot(i16),
+    /// Whether the player is holding the secondary-use (sneak) input.
+    SecondaryUse(bool),
     /// The player used the item in a hand on a block.
     UseItemOn {
         /// Whether the off hand's item was used.
@@ -332,22 +334,30 @@ pub enum Output {
         /// How many it held.
         count: i32,
     },
-    /// Every slot of the player's inventory, as it joins.
+    /// Open a crafting table screen.
+    OpenCraftingTable(i32),
+    /// Close the active container screen.
+    CloseContainer(i32),
+    /// Every slot of a menu, on opening or when the client's state is stale.
     InventoryContent {
-        /// The inventory menu's count of changes.
+        /// The menu: 0 for the player's inventory.
+        container_id: i32,
+        /// The menu's count of changes.
         state_id: i32,
-        /// The 46 slots of the inventory menu.
+        /// The menu's slots.
         slots: Vec<ItemStack>,
         /// The stack the cursor carries.
         carried: ItemStack,
     },
     /// The stack the player's cursor carries changed.
     SetCarried(ItemStack),
-    /// One slot of the player's inventory changed.
+    /// One slot of a menu changed.
     SetSlot {
-        /// The inventory menu's count of changes.
+        /// The menu: 0 for the player's inventory.
+        container_id: i32,
+        /// The menu's count of changes.
         state_id: i32,
-        /// The slot of the inventory menu.
+        /// The slot within that menu.
         slot: i16,
         /// Its stack.
         stack: ItemStack,
@@ -538,6 +548,9 @@ pub(crate) struct PlayerState {
     pub(crate) acknowledge_block_changes: Option<i32>,
     pub(crate) digging: Digging,
     pub(crate) inventory: Inventory,
+    pub(crate) crafting_table: Option<crate::crafting::CraftingTable>,
+    pub(crate) next_container_id: i32,
+    pub(crate) secondary_use: bool,
 }
 
 /// The block a player is breaking, with the fields of vanilla's `ServerPlayerGameMode`.
@@ -617,6 +630,9 @@ impl PlayerState {
             acknowledge_block_changes: None,
             digging: Digging::default(),
             inventory: Inventory::default(),
+            crafting_table: None,
+            next_container_id: 0,
+            secondary_use: false,
         }
     }
 

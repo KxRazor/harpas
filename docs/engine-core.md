@@ -9,8 +9,9 @@ overworld chunks, asynchronous chunk saving, and vanilla's deterministic random 
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
 Creative and, with an empty hand, in Survival, the neighbors of a changed block are updated and update their
 shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, players place
-blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their loot, players pick items up, and they move items in their inventory and craft in its
-grid; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
+blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their
+loot, players pick items up, and they move items in their inventory and craft in its 2x2 grid or at a crafting
+table's 3x3 grid; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -86,6 +87,14 @@ collision, vehicle and elytra movement, velocity effects and their flight exempt
 gameplay work. The logic thread publishes chat sessions before messages and gives late joiners the current
 sessions; verification and each recipient's acknowledgement window stay on the connection thread
 ([java-connection.md](java-connection.md#chat-signing)).
+
+The inventory and crafting table menus share click rules and the data pack's shaped and shapeless recipes.
+Each opened table has its own grid, window ID and synchronization state; its main inventory and hotbar slots
+are a view of the player's inventory, so pickups and item use continue to change the same items. The menu
+closes when its table is gone or more than eight blocks from the player's feet to the table's center. Closing
+returns the cursor and ingredients to the inventory and drops what does not fit; departure drops the transient
+items. The result slot is a preview, not an additional saved item. Recipe-book placement, special recipes,
+results with data components and the other containers remain to be implemented.
 
 ### 2. Parallel only where it cannot be observed
 

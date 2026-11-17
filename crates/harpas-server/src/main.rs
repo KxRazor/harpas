@@ -208,7 +208,18 @@ fn run() -> io::Result<()> {
             None
         }
     };
-    let game_data = harpas_engine::GameData { shapes, loot };
+    let recipes = match harpas_engine::recipe::Recipes::from_zip_path(&data_pack) {
+        Ok(recipes) => Some(Arc::new(recipes)),
+        Err(error) => {
+            warn!("Nothing can be crafted: {error}");
+            None
+        }
+    };
+    let game_data = harpas_engine::GameData {
+        shapes,
+        loot,
+        recipes,
+    };
     let mut server_info = server_info(&properties);
     server_info.tags = Arc::new(tags::load(Path::new(""), &data_pack)?);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?

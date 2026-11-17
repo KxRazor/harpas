@@ -1,6 +1,6 @@
 # Play state: the game itself.
 #
-# Partial: every packet except 17 that carry item stacks and their data components, entity metadata,
+# Partial: every packet except 15 that carry item stacks and their data components, entity metadata,
 # particles, the command tree or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
 # M4) and are pending; the inventory packets carry item stacks whose component values are kept as bytes. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
 # are 1/256 of a turn. Text components are network NBT.
@@ -929,6 +929,15 @@ fields = [
 ]
 
 [[clientbound]]
+id = 0x60
+name = "SetCursorItem"
+mcdata = "set_cursor_item"
+doc = "Sets the stack the cursor carries."
+fields = [
+    { name = "item", type = "ItemStack" },
+]
+
+[[clientbound]]
 id = 0x61
 name = "SetDefaultSpawnPosition"
 mcdata = "spawn_position"
@@ -1519,6 +1528,21 @@ doc = "Clicked a button in a container, such as an enchantment."
 fields = [
     { name = "container_id", type = "varint" },
     { name = "button", type = "varint" },
+]
+
+[[serverbound]]
+id = 0x12
+name = "ClickContainer"
+mcdata = "window_click"
+doc = "Clicked a slot of an open container, with the slots and cursor stack the client predicted."
+fields = [
+    { name = "container_id", type = "varint" },
+    { name = "state_id", type = "varint", doc = "The last state ID the client received." },
+    { name = "slot", type = "i16", doc = "-999 outside the window, -1 for none." },
+    { name = "button", type = "i8" },
+    { name = "mode", type = "varint", doc = "The click type: pickup, quick move, swap, clone, throw, quick craft or pickup all." },
+    { name = "changed_slots", type = "array(ChangedSlot)" },
+    { name = "carried", type = "option(HashedStack)" },
 ]
 
 [[serverbound]]
@@ -2204,6 +2228,9 @@ reason = "Each added data component's value has its own codec, of 110 components
 [externs.UntrustedItemStack]
 reason = "An item stack whose added component values are each prefixed with their length."
 
+[externs.HashedStack]
+reason = "Each added data component is sent as its type and a hash of its value, of 110 component types."
+
 [externs.EntityMetadata]
 reason = "Each entry's value has the wire type its serializer ID names, and the list ends with an index of 255."
 
@@ -2295,6 +2322,13 @@ doc = "A chunk column's position."
 fields = [
     { name = "z", type = "i32" },
     { name = "x", type = "i32" },
+]
+
+[structs.ChangedSlot]
+doc = "A slot as the client predicted it after a click."
+fields = [
+    { name = "slot", type = "i16" },
+    { name = "item", type = "option(HashedStack)", doc = "None for an empty slot." },
 ]
 
 [structs.ChunkBiomeData]

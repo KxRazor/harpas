@@ -419,6 +419,9 @@ as shown by the parity report.
         the client.
   - [x] Block loot tables, evaluated as vanilla does for a broken block, drawing from the world's random
         sequences.
+  - [x] Clicks in the inventory menu in Survival, every click type, and the 2x2 crafting grid with the shaped
+        and shapeless recipes of the vanilla data pack.
+  - [ ] The crafting table and the other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets
@@ -426,7 +429,8 @@ as shown by the parity report.
   - [x] Item stacks, with their component values kept as bytes, and Set Container Content, Set Container Slot
         and Set Creative Mode Slot.
   - [x] Set Entity Metadata, with the serializers item entities use.
-  - [ ] The 110 data components' values, the other serializers, and the other 17 packets.
+  - [x] Click Container, with stacks hashed as the client predicts them, and Set Cursor Item.
+  - [ ] The 110 data components' values, the other serializers, and the other 15 packets.
 - [ ] Entity physics and collisions, ported one to one.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,
         floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by

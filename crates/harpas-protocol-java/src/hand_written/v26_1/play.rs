@@ -338,6 +338,59 @@ impl Decode for UntrustedItemStack {
     }
 }
 
+/// An item stack as a client predicts it after a click (`HashedStack`): the item, the count, and each changed
+/// data component as its type and a hash of its value, so that it can be compared without the values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HashedStack {
+    /// The item's ID in `minecraft:item`.
+    pub item: i32,
+    /// How many.
+    pub count: i32,
+    /// Added or replaced components: the type's ID and the hash of the value.
+    pub added: Vec<(i32, i32)>,
+    /// Removed components, by type ID.
+    pub removed: Vec<i32>,
+}
+
+impl Encode for HashedStack {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        codec::write_varint(buf, self.item);
+        codec::write_varint(buf, self.count);
+        codec::write_array(buf, &self.added, |buf, (kind, hash)| {
+            codec::write_varint(buf, *kind);
+            buf.extend_from_slice(&hash.to_be_bytes());
+        });
+        codec::write_array(buf, &self.removed, |buf, kind| {
+            codec::write_varint(buf, *kind)
+        });
+    }
+}
+
+impl Decode for HashedStack {
+    fn decode(input: &mut &[u8]) -> Result<Self, DecodeError> {
+        let item = codec::read_varint(input)?;
+        if item < 0 {
+            return Err(DecodeError::InvalidRegistryId(item));
+        }
+        let count = codec::read_varint(input)?;
+        // A vanilla client sends at most 256 changed components (`HashedPatchMap`).
+        let added = codec::read_array(input, 256, |input| {
+            let kind = codec::read_varint(input)?;
+            let bytes = input.get(..4).ok_or(DecodeError::UnexpectedEnd)?;
+            let hash = i32::from_be_bytes(bytes.try_into().expect("four bytes"));
+            *input = &input[4..];
+            Ok((kind, hash))
+        })?;
+        let removed = codec::read_array(input, 256, codec::read_varint)?;
+        Ok(Self {
+            item,
+            count,
+            added,
+            removed,
+        })
+    }
+}
+
 /// One value of an entity's tracked data, of the serializers ported so far (`EntityDataSerializers`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetadataValue {
@@ -452,6 +505,20 @@ mod item_tests {
             ItemStack::decode(&mut &sent[..]),
             Err(DecodeError::UndelimitedComponents)
         );
+    }
+
+    #[test]
+    fn hashed_stacks_carry_component_hashes() {
+        let stack = HashedStack {
+            item: 1,
+            count: 3,
+            added: vec![(9, -2)],
+            removed: vec![4],
+        };
+        let mut buf = Vec::new();
+        stack.encode(&mut buf);
+        assert_eq!(buf, [1, 3, 1, 9, 0xff, 0xff, 0xff, 0xfe, 1, 4]);
+        assert_eq!(HashedStack::decode(&mut &buf[..]), Ok(stack));
     }
 
     #[test]

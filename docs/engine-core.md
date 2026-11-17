@@ -9,7 +9,8 @@ overworld chunks, asynchronous chunk saving, and vanilla's deterministic random 
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
 Creative and, with an empty hand, in Survival, the neighbors of a changed block are updated and update their
 shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, players place
-blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their loot, and players pick items up; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
+blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their loot, players pick items up, and they move items in their inventory and craft in its
+grid; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 

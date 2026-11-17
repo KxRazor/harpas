@@ -8,9 +8,11 @@ pub(crate) mod fluid;
 pub mod inventory;
 pub mod light;
 pub mod loot;
+mod menu;
 pub mod neighbor;
 mod place;
 pub mod player;
+pub mod recipe;
 pub(crate) mod ticks;
 mod tracking;
 pub mod world;
@@ -199,6 +201,8 @@ pub struct GameData {
     pub shapes: Option<Arc<ShapeUpdates>>,
     /// The block loot tables; without them, broken blocks drop nothing.
     pub loot: Option<Arc<loot::LootTables>>,
+    /// The crafting recipes; without them, nothing is crafted.
+    pub recipes: Option<Arc<recipe::Recipes>>,
 }
 
 /// Starts the logic thread with a generator for chunks missing from an existing or newly initialized world.
@@ -235,6 +239,7 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
     if let Some(loot) = data.loot {
         world.set_loot_tables(loot);
     }
+    world.recipes = data.recipes;
     Some(world)
 }
 
@@ -617,6 +622,35 @@ impl TickWork for Game {
                             }
                             continue;
                         }
+                        player::Input::ClickContainer {
+                            container_id,
+                            state_id,
+                            slot,
+                            button,
+                            mode,
+                            changed,
+                            carried,
+                        } => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.click_container(
+                                    index,
+                                    container_id,
+                                    state_id,
+                                    slot,
+                                    button,
+                                    mode,
+                                    changed,
+                                    carried,
+                                );
+                            }
+                            continue;
+                        }
+                        player::Input::CloseContainer(container_id) => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.close_container(index, container_id);
+                            }
+                            continue;
+                        }
                         player::Input::DropSelected { all } => {
                             if let Some(index) = self.active(entity_id) {
                                 self.drop_selected(index, all);
@@ -668,7 +702,9 @@ impl TickWork for Game {
                             | player::Input::SetCreativeSlot { .. }
                             | player::Input::SelectHotbarSlot(_)
                             | player::Input::UseItemOn { .. }
-                            | player::Input::DropSelected { .. } => {
+                            | player::Input::DropSelected { .. }
+                            | player::Input::ClickContainer { .. }
+                            | player::Input::CloseContainer(_) => {
                                 unreachable!()
                             }
                             player::Input::Movement(movement) => {
@@ -1888,6 +1924,65 @@ mod tests {
         let mut outputs = std::iter::from_fn(|| session.try_recv());
         assert!(outputs.any(|output| output == Output::Disconnect("Server closed")));
         assert!(handle.shutdown("Server closed").is_err());
+    }
+
+    #[test]
+    fn clicks_send_only_what_the_client_did_not_predict() {
+        use crate::inventory::{HashedStack, ItemStack};
+        use harpas_core::item::items;
+
+        let mut game = game();
+        let output = join(&mut game, 1, "Steve", 10);
+        tick(&mut game, 1);
+        output.try_iter().for_each(drop);
+        game.players[0].player.profile.game_mode = GameMode::Survival;
+        let stone = items().id("minecraft:stone").unwrap();
+        game.players[0].inventory.set_by_client(
+            9,
+            ItemStack {
+                item: stone,
+                count: 8,
+                components: Default::default(),
+            },
+        );
+        let hashed = |count| {
+            Some(HashedStack {
+                item: stone,
+                count,
+                added: Vec::new(),
+                removed: Vec::new(),
+            })
+        };
+        let click = |game: &mut Game, state_id, carried| {
+            game.pending.push(Event::Input {
+                entity_id: 1,
+                input: Input::ClickContainer {
+                    container_id: 0,
+                    state_id,
+                    slot: 9,
+                    button: 0,
+                    mode: 0,
+                    changed: vec![(9, None)],
+                    carried,
+                },
+            });
+        };
+        // The client predicted the pickup: nothing to send.
+        click(&mut game, 1, hashed(8));
+        tick(&mut game, 2);
+        assert!(output.try_recv().is_err());
+        assert_eq!(game.players[0].inventory.carried.count, 8);
+        // A stale state ID gets the whole inventory.
+        click(&mut game, 0, None);
+        tick(&mut game, 3);
+        assert!(matches!(
+            output.try_recv(),
+            Ok(Output::InventoryContent { state_id: 2, .. })
+        ));
+        // A wrong prediction is corrected.
+        click(&mut game, 2, hashed(3));
+        tick(&mut game, 4);
+        assert!(matches!(output.try_recv(), Ok(Output::SetCarried(stack)) if stack.count == 8));
     }
 
     #[test]

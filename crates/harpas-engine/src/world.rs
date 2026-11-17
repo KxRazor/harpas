@@ -463,6 +463,8 @@ pub struct World {
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
     pub(crate) seed: i64,
+    /// The crafting recipes, without which nothing is crafted.
+    pub(crate) recipes: Option<Arc<crate::recipe::Recipes>>,
     /// The world's named random sequences (`RandomSequences`), which loot tables draw from.
     pub(crate) random_sequences: HashMap<String, harpas_core::random::RandomSequence>,
     /// The loaded chunks that need light and have not been given to the workers yet.
@@ -599,6 +601,7 @@ impl World {
             entities: crate::entity::Entities::default(),
             loot: None,
             seed,
+            recipes: None,
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
@@ -1647,6 +1650,7 @@ mod tests {
             entities: crate::entity::Entities::default(),
             loot: None,
             seed: 0,
+            recipes: None,
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
             next_light_job: 0,

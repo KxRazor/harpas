@@ -512,6 +512,16 @@ pub(crate) fn send(
                 metadata: item_metadata(&stack),
             }
             .into(),
+            Output::PickupItem {
+                collected,
+                collector,
+                count,
+            } => clientbound::PickupItem {
+                collected,
+                collector,
+                count,
+            }
+            .into(),
             Output::InventoryContent {
                 state_id,
                 slots,

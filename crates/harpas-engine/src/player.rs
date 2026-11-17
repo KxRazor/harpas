@@ -304,6 +304,15 @@ pub enum Output {
         /// The new stack.
         stack: ItemStack,
     },
+    /// An entity picked up an item entity, which the client animates.
+    PickupItem {
+        /// The item entity's runtime ID.
+        collected: i32,
+        /// The runtime ID of the entity that picked it up.
+        collector: i32,
+        /// How many it held.
+        count: i32,
+    },
     /// Every slot of the player's inventory, as it joins.
     InventoryContent {
         /// The inventory menu's count of changes.

@@ -122,6 +122,76 @@ impl Inventory {
         self.slots[slot] = stack;
     }
 
+    /// The menu slot of an index of `Inventory.items`: the hotbar 0 to 8, then the main inventory 9 to 35, and
+    /// the off hand at 40.
+    fn menu_slot(index: usize) -> usize {
+        match index {
+            0..=8 => HOTBAR + index,
+            40 => OFF_HAND,
+            _ => index,
+        }
+    }
+
+    /// `Inventory.getSlotWithRemainingSpace`: the selected slot, then the off hand, then every slot from the
+    /// hotbar on, the first that holds more of the same item and has room.
+    fn slot_with_room(&self, stack: &ItemStack) -> Option<usize> {
+        let room = |slot: usize| {
+            let held = &self.slots[slot];
+            !held.is_empty()
+                && held.item == stack.item
+                && held.components == stack.components
+                && held
+                    .max_stack_size()
+                    .is_some_and(|max| max > 1 && held.count < max)
+        };
+        [self.selected, 40]
+            .into_iter()
+            .chain(0..36)
+            .map(Self::menu_slot)
+            .find(|&slot| room(slot))
+    }
+
+    /// Adds as much of a stack as fits (`Inventory.add`), taking it out of `stack`: into stacks of the same item
+    /// first, then the first empty slot from the hotbar on. In Creative a stack that does not fit at all is
+    /// taken anyway. Returns whether any was taken.
+    pub(crate) fn add(&mut self, stack: &mut ItemStack, creative: bool) -> bool {
+        if stack.is_empty() {
+            return false;
+        }
+        let before = stack.count;
+        // The count before the last attempt (`i` in vanilla's loop).
+        let mut count;
+        loop {
+            count = stack.count;
+            let slot = self.slot_with_room(stack).or_else(|| {
+                (0..36)
+                    .map(Self::menu_slot)
+                    .find(|&slot| self.slots[slot].is_empty())
+            });
+            let Some(slot) = slot else { break };
+            if self.slots[slot].is_empty() {
+                self.slots[slot] = ItemStack {
+                    count: 0,
+                    ..stack.clone()
+                };
+            }
+            let held = &mut self.slots[slot];
+            let room = held.max_stack_size().unwrap_or(64).min(MAX_STACK_SIZE) - held.count;
+            let moved = room.min(stack.count);
+            held.count += moved;
+            stack.count -= moved;
+            if stack.count == 0 || stack.count == count {
+                break;
+            }
+        }
+        // In Creative, whatever is left once nothing more fits is taken too.
+        if stack.count == count && creative {
+            stack.count = 0;
+            return true;
+        }
+        stack.count < before
+    }
+
     /// The slots whose stacks the client has not been told of (`broadcastChanges`), each marked as told.
     pub(crate) fn changes(&mut self) -> Vec<(usize, ItemStack)> {
         let mut changed = Vec::new();
@@ -159,6 +229,30 @@ mod tests {
             components: Arc::default(),
         };
         assert!(!unknown.is_valid());
+    }
+
+    #[test]
+    fn picked_up_stacks_fill_the_selected_slot_then_the_first_empty_one() {
+        let mut inventory = Inventory {
+            selected: 2,
+            ..Inventory::default()
+        };
+        inventory.set_by_client(HOTBAR + 2, stack("minecraft:stone", 60));
+        let mut picked = stack("minecraft:stone", 10);
+        assert!(inventory.add(&mut picked, false));
+        assert_eq!(picked.count, 0);
+        assert_eq!(inventory.slots[HOTBAR + 2].count, 64);
+        assert_eq!(inventory.slots[HOTBAR].count, 6);
+        // A full inventory takes nothing in Survival, and destroys the stack in Creative.
+        let mut full = Inventory::default();
+        for slot in &mut full.slots[9..=44] {
+            *slot = stack("minecraft:dirt", 64);
+        }
+        let mut more = stack("minecraft:stone", 1);
+        assert!(!full.add(&mut more, false));
+        assert_eq!(more.count, 1);
+        assert!(full.add(&mut more, true));
+        assert_eq!(more.count, 0);
     }
 
     #[test]

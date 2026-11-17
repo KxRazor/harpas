@@ -201,6 +201,14 @@ fn run() -> io::Result<()> {
             None
         }
     };
+    let loot = match harpas_engine::loot::LootTables::from_zip_path(&data_pack) {
+        Ok(loot) => Some(Arc::new(loot)),
+        Err(error) => {
+            warn!("Broken blocks will drop nothing: {error}");
+            None
+        }
+    };
+    let game_data = harpas_engine::GameData { shapes, loot };
     let mut server_info = server_info(&properties);
     server_info.tags = Arc::new(tags::load(Path::new(""), &data_pack)?);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
@@ -241,9 +249,9 @@ fn run() -> io::Result<()> {
             &world_dir,
             harpas_java::biome_names(),
             source,
-            shapes,
+            game_data,
         )?,
-        None => harpas_engine::start_with_world(&world_dir, harpas_java::biome_names(), shapes)?,
+        None => harpas_engine::start_with_world(&world_dir, harpas_java::biome_names(), game_data)?,
     };
     let shutdown = Shutdown::new(logic.clone(), logic_thread);
     shutdown.handle_signals()?;
@@ -1304,8 +1312,12 @@ mod tests {
             ..ServerInfo::default()
         };
         let key = Arc::new(ServerKey::generate());
-        let (logic, logic_thread) =
-            harpas_engine::start_with_world(&folder.0, harpas_java::biome_names(), None).unwrap();
+        let (logic, logic_thread) = harpas_engine::start_with_world(
+            &folder.0,
+            harpas_java::biome_names(),
+            harpas_engine::GameData::default(),
+        )
+        .unwrap();
         let mut client = TestClient::start("Steve", &info, &key, &logic);
         let (_, first) = client.join_with_chunks();
         let mut received = HashSet::new();

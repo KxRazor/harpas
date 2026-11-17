@@ -459,6 +459,12 @@ pub struct World {
     pub(crate) random: LegacyRandom,
     /// The entities other than players.
     pub(crate) entities: crate::entity::Entities,
+    /// The block loot tables, without which broken blocks drop nothing.
+    pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
+    /// The world seed, read from the world's generation settings, which seeds the random sequences.
+    pub(crate) seed: i64,
+    /// The world's named random sequences (`RandomSequences`), which loot tables draw from.
+    pub(crate) random_sequences: HashMap<String, harpas_core::random::RandomSequence>,
     /// The loaded chunks that need light and have not been given to the workers yet.
     unlit: HashSet<ChunkPos>,
     next_light_job: u64,
@@ -509,6 +515,7 @@ impl World {
             .as_ref()
             .and_then(|(data, _)| overworld_spawn(data))
             .unwrap_or([0, 65, 0]);
+        let seed = harpas_anvil::read_world_seed(world_dir)?.map_or(0, |(seed, _)| seed);
         let game_time = match level.as_ref().and_then(|(data, _)| data.get("Time")) {
             Some(Nbt::Long(time)) => *time,
             _ => 0,
@@ -590,6 +597,9 @@ impl World {
             fluid_ticks: LevelTicks::default(),
             random: LegacyRandom::new(0),
             entities: crate::entity::Entities::default(),
+            loot: None,
+            seed,
+            random_sequences: HashMap::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source,
@@ -658,6 +668,11 @@ impl World {
             0,
         )
         .then_some(old)
+    }
+
+    /// Gives the world the block loot tables, so that broken blocks drop items.
+    pub fn set_loot_tables(&mut self, loot: Arc<crate::loot::LootTables>) {
+        self.loot = Some(loot);
     }
 
     /// Gives the world the shape rules of the blocks, so that a change updates the shapes of its neighbors.
@@ -1630,6 +1645,9 @@ mod tests {
             fluid_ticks: LevelTicks::default(),
             random: LegacyRandom::new(0),
             entities: crate::entity::Entities::default(),
+            loot: None,
+            seed: 0,
+            random_sequences: HashMap::new(),
             unlit: HashSet::new(),
             next_light_job: 0,
             source: None,
@@ -3006,7 +3024,8 @@ mod tests {
     fn incompatible_chunk_stops_the_running_logic_thread() {
         let folder = Folder::new();
         save(&folder, &[(ChunkPos { x: 0, z: 0 }, DATA_VERSION - 1)]);
-        let (handle, logic) = crate::start_with_world(&folder.0, BIOMES, None).unwrap();
+        let (handle, logic) =
+            crate::start_with_world(&folder.0, BIOMES, crate::GameData::default()).unwrap();
         let session = handle.player_joined(1, profile(), 10, false).unwrap();
         wait_until(|| logic.is_finished());
         // The chunks around the incompatible one may be read, and sent, a tick before it.
@@ -4063,8 +4082,9 @@ mod tests {
             tick(&mut game, number);
             game.players[0].sent_chunks.contains(&pos)
         });
+        // Far enough not to pick the items up, near enough to see them.
         game.players[0].player.position = crate::player::Position {
-            x: 8.5,
+            x: 24.5,
             y: -49.0,
             z: 8.5,
             ..game.players[0].player.position
@@ -4216,5 +4236,140 @@ mod tests {
             assert!(world.entities.velocity[i][2] > 0.2);
             assert_eq!(world.entities.item(handle).unwrap().pickup_delay, 40);
         }
+    }
+
+    #[test]
+    fn broken_blocks_drop_their_loot_and_players_pick_it_up() {
+        use harpas_core::item::items;
+        use serde_json::json;
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let (output, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: vec![Event::Joined {
+                entity_id: 1,
+                profile: Profile {
+                    game_mode: GameMode::Survival,
+                    ..profile()
+                },
+                view_distance: 2,
+                initial_view_distance: 2,
+                allow_flight: false,
+                output,
+            }],
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let mut loot = crate::loot::LootTables::default();
+        let drops_itself = |name: &str| {
+            json!({"pools": [{"rolls": 1.0, "bonus_rolls": 0.0, "conditions": [{"condition": "minecraft:survives_explosion"}],
+                "entries": [{"type": "minecraft:item", "name": name}]}], "random_sequence": format!("{name}_blocks")})
+        };
+        loot.insert("minecraft:dandelion", &drops_itself("minecraft:dandelion"));
+        loot.insert("minecraft:torch", &drops_itself("minecraft:torch"));
+        let world = game.world.as_mut().unwrap();
+        world.set_shape_updates(shape_updates());
+        world.set_loot_tables(Arc::new(loot));
+        let mut number = 1;
+        tick(&mut game, number);
+        wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].sent_chunks.contains(&pos)
+        });
+        game.players[0].player.position = crate::player::Position {
+            x: 8.5,
+            y: -50.0,
+            z: 8.5,
+            on_ground: true,
+            ..game.players[0].player.position
+        };
+        let states = block_states();
+        let state = |name: &str| states.default_state(name).unwrap();
+        let flower = BlockPos { x: 7, y: -49, z: 8 };
+        let glass = BlockPos { x: 9, y: -50, z: 8 };
+        let torch = BlockPos { x: 9, y: -49, z: 8 };
+        let world = game.world.as_mut().unwrap();
+        world.set_block_state(flower, state("minecraft:dandelion"));
+        world.set_block_state(glass, state("minecraft:glass"));
+        world.set_block_state(torch, state("minecraft:torch"));
+        // One tick, with a dig if any.
+        let mut step = |game: &mut Game, dig: Option<(block::DigAction, BlockPos)>| {
+            if let Some((action, position)) = dig {
+                game.pending.push(Event::Input {
+                    entity_id: 1,
+                    input: Input::Dig {
+                        action,
+                        position,
+                        sequence: 1,
+                    },
+                });
+            }
+            number += 1;
+            tick(game, number);
+        };
+        let dropped = |game: &Game| -> Vec<&'static str> {
+            let world = game.world.as_ref().unwrap();
+            world
+                .entities
+                .order
+                .iter()
+                .map(|&h| world.entities.item(h).unwrap().stack.name().unwrap())
+                .collect()
+        };
+        // A flower breaks at once and drops itself.
+        step(&mut game, Some((block::DigAction::Start, flower)));
+        assert_eq!(dropped(&game), ["minecraft:dandelion"]);
+        // Glass, which needs silk touch, drops nothing, but the torch on it breaks with it and drops itself.
+        step(&mut game, Some((block::DigAction::Start, glass)));
+        for _ in 0..8 {
+            step(&mut game, None);
+        }
+        step(&mut game, Some((block::DigAction::Finish, glass)));
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(world.block_state(glass), Some(state("minecraft:air")));
+        assert_eq!(world.block_state(torch), Some(state("minecraft:air")));
+        assert_eq!(dropped(&game).last(), Some(&"minecraft:torch"));
+
+        // Once their pickup delay is over, the player standing by picks them up, and is told.
+        for _ in 0..20 {
+            step(&mut game, None);
+        }
+        assert!(game.world.as_ref().unwrap().entities.order.is_empty());
+        let inventory = &game.players[0].inventory;
+        let held: Vec<_> = (36..45)
+            .filter(|&slot| !inventory.slots[slot].is_empty())
+            .map(|slot| {
+                (
+                    inventory.slots[slot].name().unwrap(),
+                    inventory.slots[slot].count,
+                )
+            })
+            .collect();
+        assert_eq!(held, [("minecraft:dandelion", 1), ("minecraft:torch", 1)]);
+        let sent: Vec<_> = received.try_iter().collect();
+        assert_eq!(
+            sent.iter()
+                .filter(|o| matches!(
+                    o,
+                    Output::PickupItem {
+                        collector: 1,
+                        count: 1,
+                        ..
+                    }
+                ))
+                .count(),
+            2
+        );
+        assert!(sent.iter().any(|o| matches!(
+            o,
+            Output::SetSlot { slot: 36, stack, .. } if stack.item == items().id("minecraft:dandelion").unwrap()
+        )));
     }
 }

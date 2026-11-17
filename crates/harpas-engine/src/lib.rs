@@ -7,6 +7,7 @@ pub mod entity;
 pub(crate) mod fluid;
 pub mod inventory;
 pub mod light;
+pub mod loot;
 pub mod neighbor;
 mod place;
 pub mod player;
@@ -182,13 +183,22 @@ pub fn start() -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
 
 /// Starts the logic thread with an existing world's overworld and the server's ordered biome registry.
 ///
-/// `shapes` are the shape rules of the blocks; without them, block changes leave their neighbors as they are.
+/// `data` holds the game's rules read from the vanilla data pack.
 pub fn start_with_world(
     world_dir: &std::path::Path,
     biomes: &[&str],
-    shapes: Option<Arc<ShapeUpdates>>,
+    data: GameData,
 ) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
-    start_game(with_shapes(world::World::open(world_dir, biomes)?, shapes))
+    start_game(with_data(world::World::open(world_dir, biomes)?, data))
+}
+
+/// The game's rules read from the vanilla data pack. A world without them still runs, without what they drive.
+#[derive(Debug, Clone, Default)]
+pub struct GameData {
+    /// The blocks' shape rules; without them, block changes leave their neighbors as they are.
+    pub shapes: Option<Arc<ShapeUpdates>>,
+    /// The block loot tables; without them, broken blocks drop nothing.
+    pub loot: Option<Arc<loot::LootTables>>,
 }
 
 /// Starts the logic thread with a generator for chunks missing from an existing or newly initialized world.
@@ -205,22 +215,25 @@ pub fn start_with_world_generator(
 
 /// Starts the logic thread with a source for chunks missing from an existing or newly initialized world, or
 /// saved part way through generation. The source executes on chunk workers and the chunks it returns are
-/// persisted on unload or shutdown. `shapes` are as for [`start_with_world`].
+/// persisted on unload or shutdown. `data` is as for [`start_with_world`].
 pub fn start_with_world_source(
     world_dir: &std::path::Path,
     biomes: &[&str],
     source: Arc<dyn world::ChunkSource>,
-    shapes: Option<Arc<ShapeUpdates>>,
+    data: GameData,
 ) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
-    start_game(with_shapes(
+    start_game(with_data(
         world::World::open_with_source(world_dir, biomes, source)?,
-        shapes,
+        data,
     ))
 }
 
-fn with_shapes(mut world: world::World, shapes: Option<Arc<ShapeUpdates>>) -> Option<world::World> {
-    if let Some(shapes) = shapes {
+fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
+    if let Some(shapes) = data.shapes {
         world.set_shape_updates(shapes);
+    }
+    if let Some(loot) = data.loot {
+        world.set_loot_tables(loot);
     }
     Some(world)
 }
@@ -472,8 +485,9 @@ impl TickWork for Game {
             .as_mut()
             .map_or_else(Vec::new, world::World::tick_entities);
         self.track_entities(&removed);
-        // Players tick with the entities (`ServerPlayer.tick`).
+        // Players tick with the entities (`ServerPlayer.tick`), and pick up the items they touch (`aiStep`).
         self.tick_digging();
+        self.pick_up_items();
         self.send_inventory_changes();
     }
 
@@ -1061,6 +1075,16 @@ impl Game {
             neighbor::UPDATE_ALL,
             neighbor::UPDATE_LIMIT,
         );
+        // A player in Survival who may harvest the block gets its drops (`playerDestroy`); in Creative, none.
+        let mode = self.players[index].player.profile.game_mode;
+        let tool = {
+            let inventory = &self.players[index].inventory;
+            inventory.slots[inventory.hand_slot(false)].clone()
+        };
+        let harvests = !harpas_core::block::block_states().requires_correct_tool(state);
+        if mode != player::GameMode::Creative && harvests {
+            world.drop_resources(state, pos, &tool);
+        }
         // The particles and sound of the blocks that broke with it, for every player nearby.
         let events = world.take_level_events();
         send_level_events(&self.players, &events);

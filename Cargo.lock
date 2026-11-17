@@ -838,6 +838,7 @@ dependencies = [
  "harpas-core",
  "harpas-worldgen",
  "log",
+ "serde_json",
  "zip",
 ]
 

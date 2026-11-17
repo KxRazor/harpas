@@ -417,6 +417,9 @@ as shown by the parity report.
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
   - [x] The item registry, item stacks, and the player's inventory menu in Creative, with its changes sent to
         the client.
+  - [x] Block loot tables, evaluated as vanilla does for a broken block, drawing from the world's random
+        sequences.
+  - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets
       ([docs/protocol-codecs.md](docs/protocol-codecs.md#hand-written-exceptions)).
@@ -428,7 +431,8 @@ as shown by the parity report.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,
         floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by
         players.
-  - [ ] Item pickup, block drops from loot tables, and saving entities.
+  - [x] Block drops from the vanilla block loot tables, and players picking items up.
+  - [ ] Saving entities, and the other entity types.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).

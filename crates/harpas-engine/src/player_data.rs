@@ -210,7 +210,7 @@ impl PlayerStore {
                 let read = harpas_anvil::read_player(&read_world, uuid)?;
                 if let Some((root, source)) = read {
                     if source == harpas_anvil::Source::Backup {
-                        log::warn!("Loaded player {uuid:032x} from its backup");
+                        log::warn!("Loaded player data from its backup");
                     }
                     Ok(root)
                 } else {
@@ -339,7 +339,7 @@ impl PlayerStore {
             Completed::Saved { uuid, data, result } => {
                 self.writing.remove(&uuid);
                 result.map_err(|error| {
-                    io::Error::new(error.kind(), format!("saving player {uuid:032x}: {error}"))
+                    io::Error::new(error.kind(), format!("saving player data: {error}"))
                 })?;
                 if self
                     .pending
@@ -657,7 +657,11 @@ mod tests {
             store.load(7, 999).unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
-        assert!(store.flush().unwrap_err().to_string().contains("disk full"));
+        let error = store.flush().unwrap_err().to_string();
+        assert!(error.contains("disk full"));
+        for uuid in 0..CAPACITY as u128 {
+            assert!(!error.contains(&format!("{uuid:032x}")));
+        }
         assert!(
             !store.pending.is_empty(),
             "failed writes retain their latest snapshot"

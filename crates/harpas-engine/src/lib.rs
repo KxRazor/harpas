@@ -5,6 +5,7 @@
 pub mod block;
 mod crafting;
 pub mod entity;
+pub mod entity_data;
 pub(crate) mod fluid;
 pub mod inventory;
 pub mod item_data;
@@ -245,10 +246,8 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
         world.set_loot_tables(loot);
     }
     world.recipes = data.recipes;
-    if let Some(items) = data.items
-        && let Some(store) = &mut world.player_store
-    {
-        store.codec = items;
+    if let Some(items) = data.items {
+        world.set_item_codec(items);
     }
     Some(world)
 }

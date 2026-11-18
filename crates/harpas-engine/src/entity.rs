@@ -7,12 +7,15 @@
 //! floating in water and lava, burning in lava, being pushed out of a block they are stuck in, merging with the
 //! stacks around them, the pickup delay and despawning after 6,000 ticks.
 //!
-//! Not done yet: players in the same list, saving entities, the push of flowing water, the blocks that slow
-//! entities inside them (cobwebs, berry bushes, powder snow), beds' bounce, fire-resistant items, and picking
-//! items up.
+//! Item entities are saved by the world with their current chunk. Players in the same list, the push of
+//! flowing water, blocks that slow entities inside them, beds' bounce and fire-resistant items follow later.
+
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
+use harpas_core::nbt::Compound;
 use harpas_core::random::RandomSource;
 
 use crate::block::{self, BlockPos};
@@ -42,13 +45,22 @@ pub(crate) struct ItemEntity {
     pub(crate) stack: ItemStack,
     pub(crate) age: i32,
     pub(crate) pickup_delay: i32,
-    health: f32,
+    pub(crate) health: f32,
+    /// Unrelated saved entity fields, kept with the item when it crosses chunks.
+    pub(crate) rest: Arc<Compound>,
 }
 
 /// The type-specific part of an entity.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Kind {
     Item(ItemEntity),
+}
+
+/// A removal keeps its network identity and viewers even after its storage slot is reused.
+#[derive(Debug)]
+pub(crate) struct RemovedEntity {
+    pub(crate) network_id: i32,
+    pub(crate) viewers: Vec<i32>,
 }
 
 /// The entities of a world.
@@ -76,7 +88,8 @@ pub(crate) struct Entities {
     /// What the players who see the entity were last sent of it.
     pub(crate) server: Vec<crate::tracking::ServerEntity>,
     /// Entities removed outside the entity tick, whose viewers are still to be told.
-    pub(crate) removed: Vec<EntityHandle>,
+    pub(crate) removed: Vec<RemovedEntity>,
+    pub(crate) changed_chunks: HashSet<ChunkPos>,
 }
 
 /// A box in world coordinates: its lower and upper corners.
@@ -138,10 +151,20 @@ impl Entities {
             return;
         }
         let i = handle.index as usize;
+        self.mark_changed(handle.index);
+        self.removed.push(RemovedEntity {
+            network_id: self.network_id[i],
+            viewers: self.server[i].seen_by().collect(),
+        });
         self.kind[i] = None;
         self.generations[i] = self.generations[i].wrapping_add(1);
         self.free.push(handle.index);
         self.order.retain(|h| *h != handle);
+    }
+
+    fn mark_changed(&mut self, index: u32) {
+        let [x, _, z] = self.position[index as usize];
+        self.changed_chunks.insert(ChunkPos::at(x, z));
     }
 
     /// The players who see an entity, by entity ID.
@@ -154,6 +177,7 @@ impl Entities {
         if let Some(item) = self.item_mut(handle) {
             item.stack = stack;
             self.server[handle.index as usize].dirty = true;
+            self.mark_changed(handle.index);
         }
     }
 
@@ -194,6 +218,7 @@ impl ItemEntity {
             age: 0,
             pickup_delay: 0,
             health: 5.0,
+            rest: Arc::default(),
         }
     }
 
@@ -734,6 +759,7 @@ impl World {
         into_item.age = into_item.age.min(from_item.age);
         let into_slot = self.entities.slot(into);
         self.entities.server[into_slot].dirty = true;
+        self.entities.mark_changed(into_slot as u32);
         let left = from_item.stack.count - moved;
         if left <= 0 {
             self.entities.remove(from);
@@ -741,16 +767,15 @@ impl World {
             self.entities.item_mut(from).expect("an item").stack.count = left;
             let from_slot = self.entities.slot(from);
             self.entities.server[from_slot].dirty = true;
+            self.entities.mark_changed(from_slot as u32);
         }
     }
 
     /// Runs the tick of every entity whose chunk a player sees, in order, and removes the items that are gone
     /// (`entityTickList.forEach(tickNonPassenger)`). Returns the entities removed.
-    pub(crate) fn tick_entities(&mut self) -> Vec<EntityHandle> {
-        let mut removed = std::mem::take(&mut self.entities.removed);
+    pub(crate) fn tick_entities(&mut self) -> Vec<RemovedEntity> {
         for handle in self.entities.order.clone() {
             if !self.entities.contains(handle) {
-                removed.push(handle);
                 continue;
             }
             let [x, _, z] = self.entities.position[self.entities.slot(handle)];
@@ -760,12 +785,18 @@ impl World {
             };
             let ticking = self.wanted_set.contains(&chunk)
                 && matches!(self.chunk(chunk), Some(ChunkState::Loaded(_)));
-            if ticking && !self.tick_item(handle) {
-                self.entities.remove(handle);
-                removed.push(handle);
+            if ticking {
+                self.entities.changed_chunks.insert(chunk);
+                let i = self.entities.slot(handle);
+                if !self.tick_item(handle) {
+                    self.entities.remove(handle);
+                } else if self.entities.contains(handle) {
+                    let [x, _, z] = self.entities.position[i];
+                    self.entities.changed_chunks.insert(ChunkPos::at(x, z));
+                }
             }
         }
-        removed
+        std::mem::take(&mut self.entities.removed)
     }
 
     /// Drops what a broken block of `state` at `pos` leaves, broken with `tool` (`Block.dropResources`): its loot
@@ -828,10 +859,13 @@ impl World {
         velocity: [f64; 3],
         item: ItemEntity,
     ) -> EntityHandle {
-        let high = (self.random.next_long() & -61441) | 16384;
-        let low = (self.random.next_long() & 0x3FFF_FFFF_FFFF_FFFF) | i64::MIN;
+        let high = (self.item_uuids.next_long() & -61441) | 16384;
+        let low = (self.item_uuids.next_long() & 0x3FFF_FFFF_FFFF_FFFF) | i64::MIN;
         let uuid = (u128::from(high as u64) << 64) | u128::from(low as u64);
-        self.entities
-            .add(network_id, uuid, position, velocity, Kind::Item(item))
+        let handle = self
+            .entities
+            .add(network_id, uuid, position, velocity, Kind::Item(item));
+        self.entities.mark_changed(handle.index);
+        handle
     }
 }

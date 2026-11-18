@@ -19,11 +19,13 @@ use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
 use crate::block::{self, BlockPos};
+use crate::entity_data::{EntityChunk, SavedItem};
 use crate::fluid::FluidType;
+use crate::item_data::ItemCodec;
 use crate::light::{self, Light, Lighter};
 use crate::neighbor;
 use crate::ticks::{self, LevelTicks};
-use harpas_core::random::LegacyRandom;
+use harpas_core::random::{LegacyRandom, Seed128, XoroshiroRandom};
 use harpas_worldgen::shape_update::ShapeUpdates;
 
 /// Keep disk requests bounded even when players move faster than the disk can respond.
@@ -271,7 +273,8 @@ fn status(chunk: &Compound) -> Option<&str> {
     }
 }
 
-type Loaded = io::Result<Option<(Chunk, Vec<String>, bool)>>;
+type Terrain = (Chunk, Vec<String>, bool);
+type Loaded = io::Result<(Option<Terrain>, Option<EntityChunk>)>;
 type Load = dyn Fn(ChunkPos) -> Loaded + Send + Sync;
 
 struct Completion {
@@ -356,10 +359,30 @@ impl GenerationSafety {
 struct Changes {
     revision: u64,
     saved: u64,
+    terrain_revision: u64,
+    entity_revision: u64,
     in_flight: bool,
     requested: bool,
     /// When the chunk left every view with unsaved changes.
     unwanted_since: Option<Instant>,
+}
+
+impl Changes {
+    fn next_revision(&mut self) -> u64 {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("chunk revision exhausted");
+        self.revision
+    }
+
+    fn terrain_changed(&mut self) {
+        self.terrain_revision = self.next_revision();
+    }
+
+    fn entities_changed(&mut self) {
+        self.entity_revision = self.next_revision();
+    }
 }
 
 /// Where the light of a chunk generated without it stands.
@@ -373,45 +396,47 @@ enum LightState {
 struct Snapshot {
     pos: ChunkPos,
     revision: u64,
-    chunk: Arc<Chunk>,
+    chunk: Option<Arc<Chunk>>,
     /// The light to save with a final chunk that ran FEATURES, once the workers have computed it.
     light: Option<Arc<Light>>,
     /// Whether a lit chunk is waiting to be lit again, so that its saved light is out of date.
     stale_light: bool,
     /// The chunk's fluid ticks as it saves them, or none for a chunk without them.
     fluid_ticks: Option<Nbt>,
+    entities: Option<EntityChunk>,
 }
 
 impl Snapshot {
     /// The chunk as it is written: with its light and at vanilla's `light` status, once it has light. A chunk
     /// whose light is out of date is saved without `isLightOn`, so that vanilla lights it again when it loads it.
-    fn saved(&self) -> Cow<'_, Chunk> {
-        let saved = self.saved_light();
-        match &self.fluid_ticks {
+    fn saved(&self) -> Option<Cow<'_, Chunk>> {
+        let saved = self.saved_light(self.chunk.as_deref()?);
+        Some(match &self.fluid_ticks {
             Some(ticks) => {
                 let mut chunk = saved.into_owned();
                 chunk.rest.insert("fluid_ticks", ticks.clone());
                 Cow::Owned(chunk)
             }
             None => saved,
-        }
+        })
     }
 
-    fn saved_light(&self) -> Cow<'_, Chunk> {
+    fn saved_light<'a>(&self, chunk: &'a Chunk) -> Cow<'a, Chunk> {
         match &self.light {
-            Some(light) => Cow::Owned(light::with_light(&self.chunk, light)),
+            Some(light) => Cow::Owned(light::with_light(chunk, light)),
             None if self.stale_light => {
-                let mut chunk = (*self.chunk).clone();
+                let mut chunk = chunk.clone();
                 chunk.rest.insert("isLightOn", Nbt::Byte(0));
                 Cow::Owned(chunk)
             }
-            None => Cow::Borrowed(&*self.chunk),
+            None => Cow::Borrowed(chunk),
         }
     }
 }
 
 struct SaveJob {
     snapshots: Vec<Snapshot>,
+    item_codec: Arc<ItemCodec>,
 }
 
 struct Saved {
@@ -457,8 +482,11 @@ pub struct World {
     pub(crate) fluid_ticks: LevelTicks<FluidType>,
     /// The level's random source, which lava's spread delay draws from.
     pub(crate) random: LegacyRandom,
+    pub(crate) item_uuids: XoroshiroRandom,
     /// The entities other than players.
     pub(crate) entities: crate::entity::Entities,
+    entity_data: HashMap<ChunkPos, EntityChunk>,
+    item_codec: Arc<RwLock<Arc<ItemCodec>>>,
     /// The block loot tables, without which broken blocks drop nothing.
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
@@ -542,6 +570,17 @@ impl World {
             region_dir.clone(),
             biomes.iter().map(|name| (*name).to_owned()).collect(),
         ));
+        let mut uuid_seed = [0; 16];
+        getrandom::fill(&mut uuid_seed).map_err(io::Error::other)?;
+        let item_uuids = XoroshiroRandom::from_seed_128(Seed128::new(
+            u64::from_le_bytes(uuid_seed[..8].try_into().unwrap()),
+            u64::from_le_bytes(uuid_seed[8..].try_into().unwrap()),
+        ));
+        let entity_dir = dimension_dir(world_dir, "minecraft:overworld").join("entities");
+        recover(&entity_dir)?;
+        let load_entity_dir = entity_dir.clone();
+        let item_codec = Arc::new(RwLock::new(Arc::new(ItemCodec::default())));
+        let load_codec = Arc::clone(&item_codec);
         let load_storage = Arc::clone(&storage);
         let generates = generator.is_some();
         let source = generator
@@ -550,7 +589,7 @@ impl World {
         let load = Arc::new(move |pos: ChunkPos| {
             let storage = &*load_storage;
             let nbt = storage.read_unchecked(pos)?;
-            match (nbt, generator.as_ref()) {
+            let loaded = match (nbt, generator.as_ref()) {
                 (None, Some(source)) => {
                     storage.check_generation(pos)?;
                     let generated = source.generate(pos, None, storage)?;
@@ -565,7 +604,18 @@ impl World {
                 }
                 (Some(nbt), _) => Chunk::read(nbt, &storage.biome_names())
                     .map(|(chunk, warnings)| Some((chunk, warnings, false))),
-            }
+            }?;
+            let codec = load_codec.read().unwrap_or_else(|e| e.into_inner()).clone();
+            let (x, z) = region_of(pos.x, pos.z);
+            let _guard = storage
+                .locks
+                .for_region(x, z)
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let entities = read_chunk(&load_entity_dir, pos.x, pos.z)?
+                .map(|root| EntityChunk::read(root, pos, &codec))
+                .transpose()?;
+            Ok((loaded, entities))
         });
         let save = Arc::new(move |job: &SaveJob| {
             let saved: Vec<_> = job.snapshots.iter().map(Snapshot::saved).collect();
@@ -573,9 +623,33 @@ impl World {
                 .snapshots
                 .iter()
                 .zip(&saved)
-                .map(|(snapshot, chunk)| (snapshot.pos, &**chunk))
+                .filter_map(|(snapshot, chunk)| Some((snapshot.pos, chunk.as_deref()?)))
                 .collect();
-            storage.write(&chunks)
+            let entities: Vec<_> = job
+                .snapshots
+                .iter()
+                .filter_map(|s| {
+                    s.entities.as_ref().map(|entities| {
+                        entities
+                            .to_nbt(s.pos, &job.item_codec)
+                            .map(|root| ((s.pos.x, s.pos.z), root))
+                    })
+                })
+                .collect::<io::Result<_>>()?;
+            if !chunks.is_empty() {
+                storage.write(&chunks)?;
+            }
+            if let Some((pos, _)) = entities.first() {
+                let (x, z) = region_of(pos.0, pos.1);
+                let entities: Vec<_> = entities.iter().map(|(pos, root)| (*pos, root)).collect();
+                let _guard = storage
+                    .locks
+                    .for_region(x, z)
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
+                write_chunks(&entity_dir, x, z, &entities)?;
+            }
+            Ok(())
         });
         let workers = worker_count(thread::available_parallelism().map_or(1, usize::from));
         Ok(Self {
@@ -599,7 +673,10 @@ impl World {
             game_time,
             fluid_ticks: LevelTicks::default(),
             random: LegacyRandom::new(0),
+            item_uuids,
             entities: crate::entity::Entities::default(),
+            entity_data: HashMap::new(),
+            item_codec,
             loot: None,
             seed,
             recipes: None,
@@ -612,6 +689,107 @@ impl World {
             saver: Saver::start(save)?,
             lighter: Lighter::start(workers, QUEUE_CAPACITY)?,
         })
+    }
+
+    /// Configures saved item components before requesting chunks or loading player data.
+    pub fn set_item_codec(&mut self, codec: Arc<ItemCodec>) {
+        *self.item_codec.write().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&codec);
+        if let Some(store) = &mut self.player_store {
+            store.codec = codec;
+        }
+    }
+
+    /// Incorporates entity mutations before snapshots or eviction. The entity and terrain revisions share
+    /// the existing saver, so a chunk cannot reload an older entity snapshot while a write is outstanding.
+    fn sync_entity_changes(&mut self) -> io::Result<()> {
+        let chunks = &self.chunks;
+        let mut failed = None;
+        self.entities
+            .changed_chunks
+            .retain(|pos| match chunks.get(pos) {
+                Some(ChunkState::Loaded(_) | ChunkState::Missing) => {
+                    self.entity_data.entry(*pos).or_default();
+                    self.changes.entry(*pos).or_default().entities_changed();
+                    false
+                }
+                Some(ChunkState::Failed(error)) => {
+                    failed = Some(io::Error::new(
+                        error.kind(),
+                        format!("Cannot save items at {}, {}: {error}", pos.x, pos.z),
+                    ));
+                    true
+                }
+                Some(ChunkState::Loading) | None => true,
+            });
+        failed.map_or(Ok(()), Err)
+    }
+
+    fn snapshot_entities(
+        &self,
+        positions: impl Iterator<Item = ChunkPos>,
+    ) -> HashMap<ChunkPos, EntityChunk> {
+        let mut saved: HashMap<_, _> = positions
+            .map(|pos| (pos, self.entity_data[&pos].clone()))
+            .collect();
+        if saved.is_empty() {
+            return saved;
+        }
+        for &handle in &self.entities.order {
+            let i = self.entities.slot(handle);
+            let position = self.entities.position[i];
+            let Some(chunk) = saved.get_mut(&ChunkPos::at(position[0], position[2])) else {
+                continue;
+            };
+            let item = self.entities.item(handle).expect("an item");
+            chunk.items.push(SavedItem {
+                uuid: self.entities.uuid[i],
+                position,
+                velocity: self.entities.velocity[i],
+                on_ground: self.entities.on_ground[i],
+                stack: item.stack.clone(),
+                age: item.age,
+                pickup_delay: item.pickup_delay,
+                health: item.health,
+                rest: Arc::clone(&item.rest),
+            });
+        }
+        saved
+    }
+
+    fn load_entities(&mut self, pos: ChunkPos, mut saved: EntityChunk) -> io::Result<()> {
+        if saved.items.iter().any(|item| {
+            self.entities
+                .order
+                .iter()
+                .any(|&h| self.entities.uuid[self.entities.slot(h)] == item.uuid)
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate loaded entity UUID",
+            ));
+        }
+        for item in std::mem::take(&mut saved.items) {
+            let id =
+                crate::next_entity_id().ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
+            let on_ground = item.on_ground;
+            let handle = self.entities.add(
+                id,
+                item.uuid,
+                item.position,
+                item.velocity,
+                crate::entity::Kind::Item(crate::entity::ItemEntity {
+                    stack: item.stack,
+                    age: item.age,
+                    pickup_delay: item.pickup_delay,
+                    health: item.health,
+                    rest: item.rest,
+                }),
+            );
+            let i = self.entities.slot(handle);
+            self.entities.on_ground[i] = on_ground;
+        }
+        self.entity_data.insert(pos, saved);
+        Ok(())
     }
 
     pub(crate) fn spawn_position(&self) -> crate::player::Position {
@@ -902,10 +1080,7 @@ impl World {
                 self.light.remove(&chunk);
                 self.unlit.insert(chunk);
                 let changes = self.changes.entry(chunk).or_default();
-                changes.revision = changes
-                    .revision
-                    .checked_add(1)
-                    .expect("chunk revision exhausted");
+                changes.terrain_changed();
             }
         }
     }
@@ -940,10 +1115,7 @@ impl World {
             return;
         }
         let changes = self.changes.entry(pos).or_default();
-        changes.revision = changes
-            .revision
-            .checked_add(1)
-            .expect("chunk revision exhausted");
+        changes.terrain_changed();
     }
 
     /// Whether a lit chunk waits to be lit again.
@@ -984,10 +1156,7 @@ impl World {
         // Saved again, now with its light.
         if saved {
             let changes = self.changes.entry(lit.pos).or_default();
-            changes.revision = changes
-                .revision
-                .checked_add(1)
-                .expect("chunk revision exhausted");
+            changes.terrain_changed();
         }
     }
 
@@ -1015,10 +1184,7 @@ impl World {
             }
         }
         let changes = self.changes.entry(lit.pos).or_default();
-        changes.revision = changes
-            .revision
-            .checked_add(1)
-            .expect("chunk revision exhausted");
+        changes.terrain_changed();
     }
 
     /// Waits until every loaded chunk saved with light whose neighbors are loaded has it, so that shutdown
@@ -1105,10 +1271,7 @@ impl World {
             return None;
         };
         let changes = self.changes.entry(pos).or_default();
-        changes.revision = changes
-            .revision
-            .checked_add(1)
-            .expect("chunk revision exhausted");
+        changes.terrain_changed();
         self.invalidate_light(pos);
         let Some(ChunkState::Loaded(chunk)) = self.chunks.get_mut(&pos) else {
             unreachable!("the chunk was loaded above");
@@ -1119,6 +1282,7 @@ impl World {
     /// Requests an asynchronous save of all changed chunks without waiting for disk. If the bounded queue is
     /// full, later updates take the remaining snapshots as space becomes available.
     pub fn autosave(&mut self) -> io::Result<()> {
+        self.sync_entity_changes()?;
         for changes in self.changes.values_mut() {
             changes.requested = true;
         }
@@ -1138,13 +1302,19 @@ impl World {
     }
 
     fn flush_chunks(&mut self) -> io::Result<()> {
-        let loading: HashSet<_> = self.in_flight.clone();
-        while !self.in_flight.is_empty() {
+        loop {
+            self.sync_entity_changes()?;
+            let pending: Vec<_> = self.entities.changed_chunks.iter().copied().collect();
+            self.queue_loads(pending)?;
+            if self.in_flight.is_empty() {
+                break;
+            }
             let completion = self
                 .loader
                 .completed
                 .recv()
                 .map_err(|_| io::Error::other("chunk workers stopped"))?;
+            let loading = HashSet::from([completion.pos]);
             self.finish_load(completion, &loading)?;
         }
         self.complete_light()?;
@@ -1181,27 +1351,42 @@ impl World {
                     .push(pos);
             }
         }
+        regions.retain(|region, _| !self.saving.contains(region));
+        let mut entity_snapshots =
+            self.snapshot_entities(regions.values().flatten().copied().filter(|pos| {
+                let changes = &self.changes[pos];
+                changes.entity_revision > changes.saved
+            }));
         for (region, positions) in regions {
-            if self.saving.contains(&region) {
-                continue;
-            }
             let snapshots = positions
                 .iter()
                 .map(|pos| {
-                    let ChunkState::Loaded(chunk) = &self.chunks[pos] else {
-                        unreachable!("changed chunks remain loaded until saved");
-                    };
+                    let changes = &self.changes[pos];
+                    let chunk = (changes.terrain_revision > changes.saved).then(|| {
+                        let Some(ChunkState::Loaded(chunk)) = self.chunks.get(pos) else {
+                            unreachable!("changed terrain remains loaded until saved");
+                        };
+                        chunk
+                    });
                     Snapshot {
                         pos: *pos,
-                        revision: self.changes[pos].revision,
-                        chunk: Arc::clone(chunk),
-                        light: self.saved_light(*pos),
-                        stale_light: self.light_pending(*pos),
-                        fluid_ticks: self.saved_fluid_ticks(*pos, chunk),
+                        revision: changes.revision,
+                        chunk: chunk.cloned(),
+                        light: chunk.and_then(|_| self.saved_light(*pos)),
+                        stale_light: chunk.is_some() && self.light_pending(*pos),
+                        fluid_ticks: chunk.and_then(|chunk| self.saved_fluid_ticks(*pos, chunk)),
+                        entities: entity_snapshots.remove(pos),
                     }
                 })
                 .collect();
-            let job = SaveJob { snapshots };
+            let job = SaveJob {
+                snapshots,
+                item_codec: self
+                    .item_codec
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            };
             match self
                 .saver
                 .requests
@@ -1266,15 +1451,20 @@ impl World {
             self.region_dir.display()
         );
         let mut generated = false;
+        let mut entities = None;
         let state = match completion.result {
-            Ok(Some((chunk, warnings, is_generated))) => {
+            Ok((Some((chunk, warnings, is_generated)), loaded_entities)) => {
+                entities = loaded_entities;
                 generated = is_generated;
                 for warning in warnings {
                     warn!("{prefix}: {warning}");
                 }
                 ChunkState::Loaded(Arc::new(chunk))
             }
-            Ok(None) => ChunkState::Missing,
+            Ok((None, loaded_entities)) => {
+                entities = loaded_entities;
+                ChunkState::Missing
+            }
             Err(error) => {
                 if error
                     .get_ref()
@@ -1286,18 +1476,23 @@ impl World {
                 ChunkState::Failed(error)
             }
         };
-        let kept = generated || wanted.contains(&pos);
+        let kept =
+            generated || wanted.contains(&pos) || self.entities.changed_chunks.contains(&pos);
         if generated {
             self.changes.insert(
                 pos,
                 Changes {
                     revision: 1,
+                    terrain_revision: 1,
                     ..Changes::default()
                 },
             );
             self.chunks.insert(pos, state);
-        } else if wanted.contains(&pos) {
+        } else if kept {
             self.chunks.insert(pos, state);
+        }
+        if kept && let Some(entities) = entities {
+            self.load_entities(pos, entities)?;
         }
         if kept && self.needs_light(pos) {
             self.light.remove(&pos);
@@ -1358,6 +1553,7 @@ impl World {
         wanted: &[ChunkPos],
         wanted_set: &HashSet<ChunkPos>,
     ) -> io::Result<()> {
+        self.sync_entity_changes()?;
         loop {
             match self.saver.completed.try_recv() {
                 Ok(completion) => self.finish_save(completion)?,
@@ -1367,8 +1563,22 @@ impl World {
                 }
             }
         }
-        self.chunks
-            .retain(|pos, _| wanted_set.contains(pos) || self.changes.contains_key(pos));
+        self.chunks.retain(|pos, _| {
+            wanted_set.contains(pos)
+                || self.changes.contains_key(pos)
+                || self.entities.changed_chunks.contains(pos)
+        });
+        // Only evict entities after their complete snapshot reached disk.
+        for handle in self.entities.order.clone() {
+            let [x, _, z] = self.entities.position[self.entities.slot(handle)];
+            let pos = ChunkPos::at(x, z);
+            if !self.chunks.contains_key(&pos) && !self.entities.changed_chunks.contains(&pos) {
+                self.entities.remove(handle);
+                self.entities.changed_chunks.remove(&pos);
+            }
+        }
+        self.entity_data
+            .retain(|pos, _| self.chunks.contains_key(pos));
         self.light.retain(|pos, _| self.chunks.contains_key(pos));
         self.unlit.retain(|pos| self.chunks.contains_key(pos));
         let chunks = &self.chunks;
@@ -1403,11 +1613,18 @@ impl World {
             }
         }
         self.update_light()?;
+        // Keep drops made before the player's chunk arrives, and items crossing a view boundary, until
+        // their destination entity region has been read and merged with the new items.
+        let pending: Vec<_> = self.entities.changed_chunks.iter().copied().collect();
         for &pos in wanted {
             self.chunks.entry(pos).or_insert(ChunkState::Loading);
         }
-        for &pos in wanted {
-            let state = &self.chunks[&pos];
+        self.queue_loads(pending.into_iter().chain(wanted.iter().copied()))
+    }
+
+    fn queue_loads(&mut self, positions: impl IntoIterator<Item = ChunkPos>) -> io::Result<()> {
+        for pos in positions {
+            let state = self.chunks.entry(pos).or_insert(ChunkState::Loading);
             if !matches!(state, ChunkState::Loading) || self.in_flight.contains(&pos) {
                 continue;
             }
@@ -1658,7 +1875,10 @@ mod tests {
             game_time: 0,
             fluid_ticks: LevelTicks::default(),
             random: LegacyRandom::new(0),
+            item_uuids: XoroshiroRandom::new(0),
             entities: crate::entity::Entities::default(),
+            entity_data: HashMap::new(),
+            item_codec: Arc::new(RwLock::new(Arc::default())),
             loot: None,
             seed: 0,
             recipes: None,
@@ -2053,7 +2273,7 @@ mod tests {
                 let _ = signal
                     .wait_timeout_while(guard, Duration::from_secs(3), |open| !*open)
                     .unwrap();
-                Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), true)))
+                Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), true)), None))
             })
         };
         let saved = Arc::new(Mutex::new(Vec::new()));
@@ -2155,7 +2375,7 @@ mod tests {
                 let _ = signal
                     .wait_timeout_while(guard, Duration::from_secs(3), |open| !*open)
                     .unwrap();
-                Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false)))
+                Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None))
             })
         };
         let mut world = fake_world(2, load);
@@ -2208,7 +2428,7 @@ mod tests {
                 let _ = signal
                     .wait_timeout_while(guard, Duration::from_secs(3), |open| !*open)
                     .unwrap();
-                Ok(None)
+                Ok((None, None))
             })
         };
         let mut world = fake_world(1, load);
@@ -2243,7 +2463,7 @@ mod tests {
             let calls = Arc::clone(&calls);
             Arc::new(move |pos| {
                 calls.fetch_add(1, Ordering::Relaxed);
-                Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false)))
+                Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None))
             })
         };
         let save = {
@@ -2251,7 +2471,13 @@ mod tests {
             let writes = Arc::clone(&writes);
             Arc::new(move |job: &SaveJob| {
                 assert_eq!(thread::current().name(), Some("harpas-chunk-save"));
-                let marker = job.snapshots[0].chunk.rest.get("Marker").cloned();
+                let marker = job.snapshots[0]
+                    .chunk
+                    .as_ref()
+                    .unwrap()
+                    .rest
+                    .get("Marker")
+                    .cloned();
                 started.send(()).unwrap();
                 let (lock, signal) = &*gate;
                 let guard = lock.lock().unwrap();
@@ -2298,7 +2524,7 @@ mod tests {
     fn chunks_leaving_the_views_are_saved_together_and_a_region_has_one_save_at_a_time() {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let jobs = Arc::new(Mutex::new(Vec::new()));
-        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
+        let load = Arc::new(|pos| Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None)));
         let save = {
             let gate = Arc::clone(&gate);
             let jobs = Arc::clone(&jobs);
@@ -2363,7 +2589,7 @@ mod tests {
         let load = Arc::new(|pos| {
             let mut chunk = chunk(pos, DATA_VERSION);
             chunk.rest.insert("Status", "minecraft:features");
-            Ok(Some((chunk, Vec::new(), false)))
+            Ok((Some((chunk, Vec::new(), false)), None))
         });
         let mut world = fake_world(2, load);
         world.generates = true;
@@ -2439,7 +2665,7 @@ mod tests {
                 let saved = Arc::clone(&saved);
                 Arc::new(move |job: &SaveJob| {
                     for snapshot in &job.snapshots {
-                        let chunk = snapshot.saved().into_owned();
+                        let chunk = snapshot.saved().unwrap().into_owned();
                         saved.lock().unwrap().insert(snapshot.pos, chunk);
                     }
                     Ok(())
@@ -2448,7 +2674,7 @@ mod tests {
             let load = Arc::new(|pos| {
                 let mut chunk = chunk(pos, DATA_VERSION);
                 chunk.rest.insert("Status", FEATURES);
-                Ok(Some((chunk, Vec::new(), false)))
+                Ok((Some((chunk, Vec::new(), false)), None))
             });
             let mut world = fake_world_with_save(2, load, save);
             world.generates = true;
@@ -2490,7 +2716,7 @@ mod tests {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let (started, received) = mpsc::channel();
         let writes = Arc::new(Mutex::new(HashSet::new()));
-        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
+        let load = Arc::new(|pos| Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None)));
         let save = {
             let gate = Arc::clone(&gate);
             let writes = Arc::clone(&writes);
@@ -2532,7 +2758,7 @@ mod tests {
     #[test]
     fn a_failed_save_keeps_the_chunk_dirty_for_a_retry() {
         let attempts = Arc::new(AtomicUsize::new(0));
-        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
+        let load = Arc::new(|pos| Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None)));
         let save = {
             let attempts = Arc::clone(&attempts);
             Arc::new(move |_: &SaveJob| {
@@ -3023,7 +3249,7 @@ mod tests {
                 Ok(())
             })
         };
-        let load = Arc::new(|pos| Ok(Some((chunk(pos, DATA_VERSION), Vec::new(), false))));
+        let load = Arc::new(|pos| Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None)));
         let mut world = fake_world_with_save(1, load, save);
         let pos = ChunkPos { x: 0, z: 0 };
         load_chunks(&mut world, &[pos]);
@@ -3583,12 +3809,16 @@ mod tests {
         let snapshot = Snapshot {
             pos,
             revision: 0,
-            chunk: Arc::clone(chunk),
+            chunk: Some(Arc::clone(chunk)),
             light: None,
             stale_light: true,
             fluid_ticks: None,
+            entities: None,
         };
-        assert_eq!(snapshot.saved().rest.get("isLightOn"), Some(&Nbt::Byte(0)));
+        assert_eq!(
+            snapshot.saved().unwrap().rest.get("isLightOn"),
+            Some(&Nbt::Byte(0))
+        );
         // A player who has the chunk at the edge of its view is sent the new light; one who has its
         // neighbors too lights the block itself.
         let sent = &mut game.players[0].sent_chunks;
@@ -4615,5 +4845,303 @@ mod tests {
             dropped,
             [(Some("minecraft:apple"), 1), (Some("minecraft:emerald"), 3)]
         );
+    }
+    fn item_stack(count: i32) -> crate::inventory::ItemStack {
+        crate::inventory::ItemStack {
+            item: harpas_core::item::items().id("minecraft:stone").unwrap(),
+            count,
+            components: Arc::default(),
+        }
+    }
+
+    fn entity_document(folder: &Folder, pos: ChunkPos) -> EntityChunk {
+        let dir = dimension_dir(&folder.0, "minecraft:overworld").join("entities");
+        EntityChunk::read(
+            read_chunk(&dir, pos.x, pos.z).unwrap().unwrap(),
+            pos,
+            &ItemCodec::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn item_entities_survive_shutdown_unload_and_reload_with_their_state() {
+        use crate::entity::ItemEntity;
+        let folder = Folder::new();
+        let pos = ChunkPos { x: -1, z: -1 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        world.unload_save_delay = Duration::ZERO;
+        load_chunks(&mut world, &[pos]);
+        let mut item = ItemEntity::new(item_stack(7));
+        item.age = 1234;
+        item.pickup_delay = 32767;
+        item.health = 2.0;
+        Arc::make_mut(&mut item.rest).insert("future_field", "retained");
+        let handle = world.add_item(6000, [-0.5, 70.25, -15.5], [0.125, -0.25, 0.5], item);
+        let i = world.entities.slot(handle);
+        world.entities.on_ground[i] = true;
+        let uuid = world.entities.uuid[i];
+        world.autosave().unwrap();
+        wait_until(|| {
+            world.advance().unwrap();
+            world.changes.is_empty()
+        });
+        let saved = entity_document(&folder, pos);
+        let item = &saved.items[0];
+        assert_eq!(
+            (item.uuid, item.age, item.pickup_delay, item.health),
+            (uuid, 1234, 32767, 2.0)
+        );
+        assert_eq!(item.position, [-0.5, 70.25, -15.5]);
+        assert_eq!(item.velocity, [0.125, -0.25, 0.5]);
+        assert!(item.on_ground);
+        assert_eq!(item.stack.count, 7);
+        assert_eq!(item.rest.get("future_field"), Some(&Nbt::from("retained")));
+        world.update([]).unwrap();
+        assert!(world.entities.order.is_empty());
+        assert!(world.chunk(pos).is_none());
+        load_chunks(&mut world, &[pos]);
+        let h = world.entities.order[0];
+        let i = world.entities.slot(h);
+        assert_eq!(world.entities.uuid[i], uuid);
+        assert_ne!(world.entities.network_id[i], 6000);
+        assert_eq!(world.entities.item(h).unwrap().age, 1234);
+        assert!(world.entities.on_ground[i]);
+        // The first drop after restarting the world must not reuse the saved entity's UUID.
+        drop(world);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        let restored = world.entities.order[0];
+        let new = world.add_item(
+            6001,
+            [-8.0, 80.0, -8.0],
+            [0.0; 3],
+            ItemEntity::new(item_stack(3)),
+        );
+        assert_ne!(world.entities.uuid[world.entities.slot(new)], uuid);
+        // Clearing the last items must replace the old document, even without block edits.
+        world.entities.remove(restored);
+        world.entities.remove(new);
+        world.flush().unwrap();
+        assert!(entity_document(&folder, pos).items.is_empty());
+        drop(world);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        assert!(world.entities.order.is_empty());
+        let h = world.add_item(
+            6001,
+            [-8.0, 80.0, -8.0],
+            [0.0; 3],
+            ItemEntity::new(item_stack(3)),
+        );
+        let uuid = world.entities.uuid[world.entities.slot(h)];
+        world.flush().unwrap();
+        drop(world);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        assert_eq!(world.entities.order.len(), 1);
+        assert_eq!(
+            world.entities.uuid[world.entities.slot(world.entities.order[0])],
+            uuid
+        );
+    }
+
+    #[test]
+    fn shutdown_saves_drops_made_before_the_destination_chunk_is_loaded() {
+        use crate::entity::ItemEntity;
+        let folder = Folder::new();
+        let pos = ChunkPos { x: -1, z: 0 };
+        let drop_at = |world: &mut World, id, count| {
+            world.add_item(
+                id,
+                [-1.25, 80.0, 0.5],
+                [0.0; 3],
+                ItemEntity::new(item_stack(count)),
+            );
+        };
+        // There may be no terrain chunk, but the entity region can already contain other items.
+        for count in [2, 3] {
+            let mut world = World::open(&folder.0, BIOMES).unwrap();
+            assert!(world.chunk(pos).is_none());
+            drop_at(&mut world, 6000 + count, count);
+            world.update([]).unwrap();
+            world.flush().unwrap();
+        }
+        let doc = entity_document(&folder, pos);
+        let mut counts: Vec<_> = doc.items.iter().map(|item| item.stack.count).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, [2, 3]);
+        assert!(
+            read_chunk(&folder.region_dir(), pos.x, pos.z)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn moving_items_change_both_entity_chunks_and_do_not_duplicate_on_reload() {
+        use crate::entity::ItemEntity;
+        let folder = Folder::new();
+        let from = ChunkPos { x: -1, z: 0 };
+        let into = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(from, DATA_VERSION), (into, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[from, into]);
+        let mut item = ItemEntity::new(item_stack(4));
+        item.pickup_delay = 200;
+        let h = world.add_item(7000, [-0.05, 70.0, 8.0], [0.2, 0.0, 0.0], item);
+        world.flush().unwrap();
+        assert_eq!(entity_document(&folder, from).items.len(), 1);
+        world.tick_entities();
+        assert!(world.entities.position[world.entities.slot(h)][0] > 0.0);
+        world.flush().unwrap();
+        assert!(entity_document(&folder, from).items.is_empty());
+        assert_eq!(entity_document(&folder, into).items.len(), 1);
+        world.unload_save_delay = Duration::ZERO;
+        world.update([]).unwrap();
+        assert!(world.entities.order.is_empty());
+        load_chunks(&mut world, &[into, from]);
+        assert_eq!(world.entities.order.len(), 1);
+        assert_eq!(
+            world
+                .entities
+                .item(world.entities.order[0])
+                .unwrap()
+                .stack
+                .count,
+            4
+        );
+        // A subsequent crossing back through negative coordinates clears the other document too.
+        let i = world.entities.slot(world.entities.order[0]);
+        world.entities.velocity[i][0] = -0.3;
+        world.tick_entities();
+        world.flush().unwrap();
+        assert_eq!(entity_document(&folder, from).items.len(), 1);
+        assert!(entity_document(&folder, into).items.is_empty());
+    }
+
+    #[test]
+    fn entity_snapshots_remain_immutable_and_unload_waits_for_newer_changes() {
+        use crate::entity::ItemEntity;
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, received) = mpsc::channel();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let save = {
+            let gate = Arc::clone(&gate);
+            let writes = Arc::clone(&writes);
+            Arc::new(move |job: &SaveJob| {
+                assert!(job.snapshots[0].chunk.is_none());
+                let snapshot = job.snapshots[0].entities.as_ref().unwrap();
+                started.send(()).unwrap();
+                let (lock, signal) = &*gate;
+                let guard = lock.lock().unwrap();
+                let _ = signal
+                    .wait_timeout_while(guard, Duration::from_secs(5), |open| !*open)
+                    .unwrap();
+                writes.lock().unwrap().push(
+                    snapshot
+                        .items
+                        .iter()
+                        .map(|i| i.stack.count)
+                        .collect::<Vec<_>>(),
+                );
+                Ok(())
+            })
+        };
+        let load = Arc::new(|pos| Ok((Some((chunk(pos, DATA_VERSION), Vec::new(), false)), None)));
+        let mut world = fake_world_with_save(1, load, save);
+        let pos = ChunkPos { x: 0, z: 0 };
+        load_chunks(&mut world, &[pos]);
+        let h = world.add_item(
+            8000,
+            [8.0, 80.0, 8.0],
+            [0.0; 3],
+            ItemEntity::new(item_stack(5)),
+        );
+        world.autosave().unwrap();
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+        world.entities.set_stack(h, item_stack(2));
+        world.update([]).unwrap();
+        world.update([pos]).unwrap();
+        assert!(world.entities.contains(h));
+        assert!(matches!(world.chunk(pos), Some(ChunkState::Loaded(_))));
+        world.entities.remove(h);
+        world.update([]).unwrap();
+        let (lock, signal) = &*gate;
+        *lock.lock().unwrap() = true;
+        signal.notify_all();
+        wait_until(|| {
+            world.update([]).unwrap();
+            world.chunk(pos).is_none()
+        });
+        assert_eq!(*writes.lock().unwrap(), vec![vec![5], Vec::new()]);
+    }
+
+    #[test]
+    fn opaque_entities_and_items_with_unsupported_components_are_preserved() {
+        use crate::entity::ItemEntity;
+        use harpas_core::nbt::List;
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        world.add_item(
+            9000,
+            [8.0, 80.0, 8.0],
+            [0.0; 3],
+            ItemEntity::new(item_stack(1)),
+        );
+        world.flush().unwrap();
+        drop(world);
+        let dir = dimension_dir(&folder.0, "minecraft:overworld").join("entities");
+        let mut root = read_chunk(&dir, 0, 0).unwrap().unwrap();
+        let mut pig = Compound::new();
+        pig.insert("id", "minecraft:pig");
+        pig.insert("future_pig_field", 42);
+        if let Some(Nbt::List(List::Compound(entities))) = root.remove("Entities") {
+            let mut entries = entities;
+            entries.push(pig.clone());
+            root.insert("Entities", Nbt::List(List::Compound(entries)));
+        }
+        root.insert("DataVersion", 4790);
+        root.insert("future_chunk_field", "kept");
+        write_chunks(&dir, 0, 0, &[((0, 0), &root)]).unwrap();
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        world.entities.remove(world.entities.order[0]);
+        world.flush().unwrap();
+        drop(world);
+        let saved = read_chunk(&dir, 0, 0).unwrap().unwrap();
+        assert_eq!(
+            saved.get("Entities"),
+            Some(&Nbt::List(List::Compound(vec![pig])))
+        );
+        assert_eq!(saved.get("DataVersion"), Some(&Nbt::Int(4790)));
+        assert_eq!(saved.get("future_chunk_field"), Some(&Nbt::from("kept")));
+        // Put back an item with an unsupported component; it cannot be silently loaded and stripped.
+        if let Some(Nbt::List(List::Compound(mut entries))) = root.remove("Entities") {
+            if let Some(Nbt::Compound(mut item)) = entries[0].remove("Item") {
+                let mut components = Compound::new();
+                components.insert("minecraft:unknown_future_component", Nbt::Int(5));
+                item.insert("components", Nbt::Compound(components));
+                entries[0].insert("Item", Nbt::Compound(item));
+            }
+            root.insert("Entities", Nbt::List(List::Compound(entries)));
+        }
+        write_chunks(&dir, 0, 0, &[((0, 0), &root)]).unwrap();
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        assert!(world.entities.order.is_empty());
+        let new = world.add_item(
+            9001,
+            [8.0, 80.0, 8.0],
+            [0.0; 3],
+            ItemEntity::new(item_stack(2)),
+        );
+        world.entities.remove(new);
+        world.flush().unwrap();
+        assert_eq!(read_chunk(&dir, 0, 0).unwrap().unwrap(), root);
     }
 }

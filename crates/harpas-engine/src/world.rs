@@ -11,8 +11,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use harpas_anvil::{
-    Chunk, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk, read_level,
-    recover, region_of, write_chunks,
+    Chunk, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk,
+    read_entity_chunk, read_level, recover, region_of, write_chunks,
 };
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, Nbt};
@@ -612,7 +612,10 @@ impl World {
                 .for_region(x, z)
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
-            let entities = read_chunk(&load_entity_dir, pos.x, pos.z)?
+            let entities = read_entity_chunk(&load_entity_dir, pos.x, pos.z)
+                .map_err(|error| {
+                    io::Error::new(error.kind(), format!("entity region {x}, {z}: {error}"))
+                })?
                 .map(|root| EntityChunk::read(root, pos, &codec))
                 .transpose()?;
             Ok((loaded, entities))
@@ -4870,6 +4873,9 @@ mod tests {
         let folder = Folder::new();
         let pos = ChunkPos { x: -1, z: -1 };
         save(&folder, &[(pos, DATA_VERSION)]);
+        let entities = dimension_dir(&folder.0, "minecraft:overworld").join("entities");
+        fs::create_dir_all(&entities).unwrap();
+        fs::write(entities.join("r.-1.-1.mca"), []).unwrap();
         let mut world = World::open(&folder.0, BIOMES).unwrap();
         world.unload_save_delay = Duration::ZERO;
         load_chunks(&mut world, &[pos]);

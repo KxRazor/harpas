@@ -10,9 +10,8 @@
 //! The placements ported so far are those of blocks without properties, of pillars (their axis follows the
 //! clicked face), slabs (a second slab of the same kind makes a double slab), stairs, blocks that face the
 //! player (furnaces, carved pumpkins, glazed terracotta, looms and stonecutters), and fences, walls, panes and
-//! bars, which connect to their neighbors. Other block items place nothing yet. Not done yet either: clicking a
-//! block other than a crafting table that reacts to being used, such as a door or a chest, the sound
-//! of a placed block, and the message at the top of the world.
+//! bars, which connect to their neighbors, and simple chests. Crafting tables and simple chests open a menu
+//! when used. Other interactive blocks, placement sounds and the message at the top of the world remain.
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
@@ -21,8 +20,9 @@ use harpas_worldgen::BlockGetter;
 use harpas_worldgen::shape_update::Direction;
 
 use crate::block::{self, BlockPos};
+use crate::chest::{self, CHEST};
 use crate::fluid::{FluidState, FluidType};
-use crate::inventory::{self, ItemStack};
+use crate::inventory::{self, CHEST_SLOTS, ItemStack};
 use crate::{Game, neighbor, player};
 
 /// What a click with an item did (`InteractionResult`): only a placement consumes it.
@@ -250,20 +250,26 @@ impl Game {
         cursor: [f32; 3],
     ) -> Placed {
         let mode = self.players[index].player.profile.game_mode;
+        let clicked = self.block_at(hit);
         if mode == player::GameMode::Spectator {
+            if chest::is_single(clicked) {
+                self.open_chest(index, hit);
+            }
             return Placed::No;
         }
-        let clicked = self.block_at(hit);
         let player = &self.players[index];
         let has_item = !player.inventory.slots[player.inventory.hand_slot(false)].is_empty()
             || !player.inventory.slots[player.inventory.hand_slot(true)].is_empty();
         let secondary = player.secondary_use && has_item;
-        if !secondary && block_states().name(clicked) == Some("minecraft:crafting_table") {
-            self.open_crafting_table(index, hit);
-            return Placed::No;
-        }
-        if reacts_to_use(clicked) && !secondary {
-            return Placed::No;
+        if !secondary {
+            match block_states().name(clicked) {
+                Some("minecraft:crafting_table") => self.open_crafting_table(index, hit),
+                Some(CHEST) => self.open_chest(index, hit),
+                _ => {}
+            }
+            if reacts_to_use(clicked) {
+                return Placed::No;
+            }
         }
         let slot = self.players[index].inventory.hand_slot(off_hand);
         let stack = self.players[index].inventory.slots[slot].clone();
@@ -329,6 +335,9 @@ impl Game {
             // It cannot survive there.
             return Placed::No;
         };
+        if block_states().name(state) == Some(CHEST) && !chest::is_single(state) {
+            return Placed::No;
+        }
         if !self.unobstructed(state, pos) {
             return Placed::No;
         }
@@ -390,6 +399,23 @@ impl Game {
                     ("half", half()),
                     ("waterlogged", water()),
                 ],
+            ));
+        }
+        if name == CHEST {
+            let facing = context.facing.opposite();
+            let sides = match facing {
+                Direction::North | Direction::South => [Direction::West, Direction::East],
+                _ => [Direction::North, Direction::South],
+            };
+            if sides.into_iter().any(|side| {
+                let neighbor = self.block_at(step(context.pos, side));
+                chest::is_single(neighbor) && property(neighbor, "facing") == Some(facing.name())
+            }) {
+                return None;
+            }
+            return Some(with(
+                block,
+                &[("facing", facing.name()), ("waterlogged", water())],
             ));
         }
         let faces_player = matches!(
@@ -527,7 +553,7 @@ impl Game {
             if self.players[index].disconnecting || !self.players[index].data_ready {
                 continue;
             }
-            self.validate_crafting_table(index);
+            self.validate_block_menu(index);
             self.broadcast_changes(index);
         }
     }
@@ -558,7 +584,7 @@ impl Game {
             state.send(output);
         }
         if container_id != 0 {
-            // Slots absent from the table (armor, off hand and the inventory's 2x2 grid).
+            // Slots absent from the block menu (armor, off hand and the inventory's 2x2 grid).
             for (slot, stack) in state.inventory.changes() {
                 let state_id = state.inventory.next_state_id();
                 state.send(player::Output::SetSlot {
@@ -581,7 +607,7 @@ impl Game {
             player::Output::InventoryContent {
                 container_id,
                 state_id,
-                slots: menu.slots[..inventory::SLOTS].to_vec(),
+                slots: menu.slots[..menu.kind.visible_slots()].to_vec(),
                 carried: menu.carried.clone(),
             }
         });
@@ -601,7 +627,7 @@ impl Game {
         changed: Vec<(i16, Option<crate::inventory::HashedStack>)>,
         carried: Option<crate::inventory::HashedStack>,
     ) {
-        self.validate_crafting_table(index);
+        self.validate_block_menu(index);
         if container_id != self.players[index].container_id() {
             return;
         }
@@ -610,27 +636,66 @@ impl Game {
             self.broadcast_full_state(index);
             return;
         }
-        let valid = slot == -1 || slot == -999 || (0..inventory::SLOTS as i16).contains(&slot);
+        let state = &self.players[index];
+        let visible_slots = state
+            .block_menu
+            .as_ref()
+            .map_or(inventory::SLOTS, |menu| menu.contents.kind.visible_slots());
+        let valid = slot == -1 || slot == -999 || (0..visible_slots as i16).contains(&slot);
         if !valid || !(0..=6).contains(&mode) {
             return;
         }
+        let chest = if let Some(position) = state.chest_position() {
+            let world = self.world.as_ref().expect("an open chest is in the world");
+            let Ok(items) = world.chest_items(position) else {
+                self.close_block_menu(index);
+                return;
+            };
+            self.synchronize_chest(position, &items);
+            Some((position, items))
+        } else {
+            None
+        };
         let recipes = self.world.as_ref().and_then(|w| w.recipes.clone());
         let context = crate::menu::Context {
             recipes: recipes.as_deref(),
             creative: mode_now == player::GameMode::Creative,
         };
-        let (mismatch, drops) = self.players[index].with_menu(|inventory| {
+        let state = &mut self.players[index];
+        let before = chest.as_ref().map(|_| {
+            let menu = state.block_menu.as_ref().expect("chest viewer has a menu");
+            (state.inventory.clone(), menu.contents.clone())
+        });
+        let (mismatch, drops) = state.with_menu(|inventory| {
             let mismatch = state_id != inventory.state_id();
             let drops = inventory.click(slot, button, mode, &context);
             // The client's prediction is what it holds now (`setRemoteSlotUnsafe`, `setRemoteCarried`).
             for (slot, stack) in changed {
-                if let Some(slot) = usize::try_from(slot).ok().filter(|&s| s < inventory::SLOTS) {
+                if let Some(slot) = usize::try_from(slot).ok().filter(|&s| s < visible_slots) {
                     inventory.remote[slot] = inventory::Remote::Hashed(stack);
                 }
             }
             inventory.remote_carried = inventory::Remote::Hashed(carried);
             (mismatch, drops)
         });
+        if let Some((position, items)) = chest {
+            let menu = state.block_menu.as_mut().expect("chest viewer has a menu");
+            let updated = &menu.contents.slots[..CHEST_SLOTS];
+            if updated != items {
+                let world = self.world.as_mut().expect("an open chest is in the world");
+                if let Err(error) = world.save_chest(position, updated) {
+                    log::warn!("Cannot update chest at {position:?}: {error}");
+                    let (inventory, contents) =
+                        before.expect("chest clicks have a rollback snapshot");
+                    state.inventory = inventory;
+                    menu.contents = contents;
+                    self.broadcast_full_state(index);
+                    return;
+                }
+                let updated = updated.to_vec();
+                self.synchronize_chest(position, &updated);
+            }
+        }
         for stack in drops {
             self.drop_item(index, stack);
         }
@@ -653,7 +718,7 @@ impl Game {
             creative: self.players[index].player.profile.game_mode == player::GameMode::Creative,
         };
         let drops = self.players[index].with_menu(|menu| menu.close(&context));
-        self.players[index].crafting_table = None;
+        self.players[index].block_menu = None;
         for stack in drops {
             self.drop_item(index, stack);
         }

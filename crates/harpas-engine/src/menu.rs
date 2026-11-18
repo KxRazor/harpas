@@ -1,5 +1,5 @@
 //! Clicks in the player's inventory menu, as vanilla's `AbstractContainerMenu.doClick` and `InventoryMenu` handle
-//! them, and the 2x2 inventory and 3x3 table crafting grids.
+//! them, including the crafting grids and simple chest menus.
 //!
 //! Every click type is ported: picking up and putting down stacks or one item (`PICKUP`), moving a stack to the
 //! other part of the inventory (`QUICK_MOVE`, `InventoryMenu.quickMoveStack`), swapping with a hotbar slot or the
@@ -8,11 +8,11 @@
 //! time, and the result slot only gives. The result of the crafting grid is crafted again whenever the grid
 //! changes, and taking it uses one item of each slot of the grid, leaving the remainders of buckets and bottles.
 //!
-//! Not done yet: other containers, bundles, and the limit on how fast a player throws items.
+//! Bundles and the limit on how fast a player throws items remain to be implemented.
 
 use std::sync::Arc;
 
-use crate::inventory::{Inventory, ItemStack, SLOTS};
+use crate::inventory::{Inventory, ItemStack, MenuKind};
 use crate::recipe::{Recipes, remainder};
 
 /// The result slot of the inventory menu.
@@ -76,18 +76,24 @@ fn with_count(stack: &ItemStack, count: i32) -> ItemStack {
 }
 
 impl Inventory {
+    fn is_result(&self, slot: usize) -> bool {
+        self.kind != MenuKind::Chest && slot == RESULT
+    }
+
     /// `Slot.mayPlace`.
     fn may_place(&self, slot: usize, stack: &ItemStack) -> bool {
         match slot {
-            RESULT => false,
-            s if !self.table && ARMOR.contains(&s) => armor_slot(stack) == Some(s),
+            s if self.is_result(s) => false,
+            s if self.kind == MenuKind::Player && ARMOR.contains(&s) => {
+                armor_slot(stack) == Some(s)
+            }
             _ => true,
         }
     }
 
     /// `Slot.getMaxStackSize(stack)`: one in an armor slot, otherwise as many as the stack holds.
     fn slot_max(&self, slot: usize, stack: &ItemStack) -> i32 {
-        let limit = if !self.table && ARMOR.contains(&slot) {
+        let limit = if self.kind == MenuKind::Player && ARMOR.contains(&slot) {
             1
         } else {
             99
@@ -145,7 +151,7 @@ impl Inventory {
         if held.is_empty() {
             return None;
         }
-        if slot == RESULT {
+        if self.is_result(slot) {
             if decrement < held.count {
                 return None;
             }
@@ -180,10 +186,19 @@ impl Inventory {
 
     /// Crafts the result of the grid again (`slotChangedCraftingGrid`).
     pub(crate) fn update_result(&mut self, context: &Context<'_>) {
-        let grid: Vec<&ItemStack> = self.grid().map(|slot| &self.slots[slot]).collect();
-        self.slots[RESULT] = context.recipes.map_or_else(ItemStack::empty, |recipes| {
-            recipes.craft(if self.table { 3 } else { 2 }, &grid)
-        });
+        if self.is_result(RESULT) {
+            let grid: Vec<&ItemStack> = self.grid().map(|slot| &self.slots[slot]).collect();
+            self.slots[RESULT] = context.recipes.map_or_else(ItemStack::empty, |recipes| {
+                recipes.craft(
+                    if self.kind == MenuKind::CraftingTable {
+                        3
+                    } else {
+                        2
+                    },
+                    &grid,
+                )
+            });
+        }
     }
 
     /// `ResultSlot.onTake`: one item of each slot of the grid goes, and an item's remainder takes its place, or
@@ -279,15 +294,22 @@ impl Inventory {
         }
         let original = stack.clone();
         let armor = armor_slot(&original);
-        let moved = if self.table {
-            match index {
+        let moved = match self.kind {
+            MenuKind::Chest => {
+                let player = self.kind.player_slots();
+                if index < player.start {
+                    self.move_stack_to(&mut stack, player.start, player.end, true)
+                } else {
+                    self.move_stack_to(&mut stack, 0, player.start, false)
+                }
+            }
+            MenuKind::CraftingTable => match index {
                 RESULT => self.move_stack_to(&mut stack, 10, 46, true),
                 1..=9 => self.move_stack_to(&mut stack, 10, 46, false),
                 10..=36 => self.move_stack_to(&mut stack, 37, 46, false),
                 _ => self.move_stack_to(&mut stack, 10, 37, false),
-            }
-        } else {
-            match index {
+            },
+            MenuKind::Player => match index {
                 RESULT => self.move_stack_to(&mut stack, 9, 45, true),
                 1..=8 => self.move_stack_to(&mut stack, 9, 45, false),
                 _ if armor.is_some_and(|a| self.slots[a].is_empty()) => {
@@ -297,7 +319,7 @@ impl Inventory {
                 9..=35 => self.move_stack_to(&mut stack, 36, 45, false),
                 36..=44 => self.move_stack_to(&mut stack, 9, 36, false),
                 _ => self.move_stack_to(&mut stack, 9, 45, false),
-            }
+            },
         };
         if !moved {
             return ItemStack::empty();
@@ -314,7 +336,7 @@ impl Inventory {
         if stack.count == original.count {
             return ItemStack::empty();
         }
-        if index == RESULT {
+        if self.is_result(index) {
             // `onTake`, then what did not fit is dropped.
             self.slots[RESULT] = ItemStack::empty();
             self.take_result(context, drops);
@@ -348,7 +370,8 @@ impl Inventory {
         context: &Context<'_>,
     ) -> Vec<ItemStack> {
         let mut drops = Vec::new();
-        let index = usize::try_from(slot).ok().filter(|&s| s < SLOTS);
+        let slots = self.kind.visible_slots();
+        let index = usize::try_from(slot).ok().filter(|&s| s < slots);
         let button = i32::from(button);
         if mode == 5 {
             self.quick_craft(index, button, context, &mut drops);
@@ -396,7 +419,7 @@ impl Inventory {
                     return drops;
                 }
                 if theirs.is_empty() {
-                    if index == RESULT {
+                    if self.is_result(index) {
                         self.slots[RESULT] = ItemStack::empty();
                         self.set(other, ours);
                         self.take_result(context, &mut drops);
@@ -470,16 +493,16 @@ impl Inventory {
                 let (start, step): (i64, i64) = if button == 0 {
                     (0, 1)
                 } else {
-                    (SLOTS as i64 - 1, -1)
+                    (slots as i64 - 1, -1)
                 };
                 for pass in 0..2 {
                     let mut i = start;
-                    while (0..SLOTS as i64).contains(&i)
+                    while (0..slots as i64).contains(&i)
                         && self.carried.count < max_stack(&self.carried)
                     {
                         let s = i as usize;
                         let held = self.slots[s].clone();
-                        if s != RESULT
+                        if !self.is_result(s)
                             && !held.is_empty()
                             && self.can_quick_replace(s, &self.carried.clone(), true)
                             && (pass != 0 || held.count != max_stack(&held))
@@ -568,7 +591,7 @@ impl Inventory {
         } else if self.quickcraft.status == 1 {
             let Some(slot) = index else { return };
             let carried = self.carried.clone();
-            if slot != RESULT
+            if !self.is_result(slot)
                 && self.can_quick_replace(slot, &carried, true)
                 && self.may_place(slot, &carried)
                 && (self.quickcraft.kind == 2
@@ -639,7 +662,9 @@ impl Inventory {
         for slot in self.grid() {
             back.push(std::mem::take(&mut self.slots[slot]));
         }
-        self.slots[RESULT] = ItemStack::empty();
+        if self.is_result(RESULT) {
+            self.slots[RESULT] = ItemStack::empty();
+        }
         self.reset_quick_craft();
         back.retain(|stack| !stack.is_empty());
         back
@@ -776,7 +801,7 @@ mod tests {
 
     fn table() -> Inventory {
         Inventory {
-            table: true,
+            kind: MenuKind::CraftingTable,
             slots: vec![ItemStack::empty(); 47],
             remote: vec![crate::inventory::Remote::Known(ItemStack::empty()); 47],
             ..Inventory::default()

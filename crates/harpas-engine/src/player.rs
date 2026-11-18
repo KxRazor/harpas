@@ -336,6 +336,13 @@ pub enum Output {
     },
     /// Open a crafting table screen.
     OpenCraftingTable(i32),
+    /// Open the three-row screen for an ordinary chest.
+    OpenChest {
+        /// The player's active menu ID.
+        container_id: i32,
+        /// The chest's custom text component, if it has one.
+        title: Option<harpas_core::nbt::Nbt>,
+    },
     /// Close the active container screen.
     CloseContainer(i32),
     /// Every slot of a menu, on opening or when the client's state is stale.
@@ -552,7 +559,7 @@ pub(crate) struct PlayerState {
     pub(crate) inventory: Inventory,
     pub(crate) data_ready: bool,
     pub(crate) saved_inventory: Option<Arc<crate::player_data::PlayerInventory>>,
-    pub(crate) crafting_table: Option<crate::crafting::CraftingTable>,
+    pub(crate) block_menu: Option<crate::block_menu::BlockMenu>,
     pub(crate) next_container_id: i32,
     pub(crate) secondary_use: bool,
 }
@@ -636,7 +643,7 @@ impl PlayerState {
             inventory: Inventory::default(),
             data_ready: true,
             saved_inventory: None,
-            crafting_table: None,
+            block_menu: None,
             next_container_id: 0,
             secondary_use: false,
         }

@@ -7,8 +7,7 @@
 //! counted in the menu's state ID.
 //!
 //! Persistent slots and the selected hotbar slot are loaded and saved with the player's vanilla data on a
-//! worker (`crate::player_data`). The cursor and crafting grids are transient. Other persistent containers
-//! remain to be implemented.
+//! worker (`crate::player_data`). The cursor and crafting grids are transient.
 
 use std::sync::Arc;
 
@@ -20,6 +19,7 @@ pub const SLOTS: usize = 46;
 pub const HOTBAR: usize = 36;
 /// The off hand's slot of the inventory menu.
 pub const OFF_HAND: usize = 45;
+pub(crate) const CHEST_SLOTS: usize = 27;
 /// The most items a stack can hold with its components (`ItemStack.MAX_STACK_SIZE`).
 const MAX_STACK_SIZE: i32 = 99;
 
@@ -121,12 +121,33 @@ impl Remote {
     }
 }
 
-/// A menu's slots and synchronization state, also used for the crafting table's inventory view.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum MenuKind {
+    #[default]
+    Player,
+    CraftingTable,
+    Chest,
+}
+
+impl MenuKind {
+    pub(crate) fn player_slots(self) -> std::ops::Range<usize> {
+        let first = match self {
+            Self::Player => 9,
+            Self::CraftingTable => 10,
+            Self::Chest => CHEST_SLOTS,
+        };
+        first..first + 36
+    }
+
+    pub(crate) fn visible_slots(self) -> usize {
+        self.player_slots().end + usize::from(self == Self::Player)
+    }
+}
+
+/// A menu's slots and synchronization state. Block menus keep an extra, invisible slot for offhand swaps.
+#[derive(Debug, Clone)]
 pub(crate) struct Inventory {
-    /// A table view uses its 3x3 grid followed by the player's main inventory and hotbar. The off hand is
-    /// retained at index 46 for number-key swaps, but is not a visible slot.
-    pub(crate) table: bool,
+    pub(crate) kind: MenuKind,
     pub(crate) slots: Vec<ItemStack>,
     /// What the client holds in each slot, as far as the server knows (`remoteSlots`).
     pub(crate) remote: Vec<Remote>,
@@ -145,7 +166,7 @@ pub(crate) struct Inventory {
 impl Default for Inventory {
     fn default() -> Self {
         Self {
-            table: false,
+            kind: MenuKind::Player,
             slots: vec![ItemStack::empty(); SLOTS],
             remote: vec![Remote::Known(ItemStack::empty()); SLOTS],
             carried: ItemStack::empty(),
@@ -159,16 +180,21 @@ impl Default for Inventory {
 
 impl Inventory {
     pub(crate) fn grid(&self) -> std::ops::Range<usize> {
-        1..if self.table { 10 } else { 5 }
+        1..match self.kind {
+            MenuKind::Player => 5,
+            MenuKind::CraftingTable => 10,
+            MenuKind::Chest => 1,
+        }
     }
 
     /// The index in this menu of a slot of `Inventory.items`.
     pub(crate) fn storage_slot(&self, index: usize) -> usize {
-        if self.table {
+        if self.kind != MenuKind::Player {
+            let player = self.kind.player_slots();
             match index {
-                0..=8 => 37 + index,
-                40 => 46,
-                _ => index + 1,
+                0..=8 => player.end - 9 + index,
+                40 => player.end,
+                _ => player.start + index - 9,
             }
         } else {
             Self::menu_slot(index)
@@ -284,7 +310,7 @@ impl Inventory {
 
     /// Marks every slot and the cursor as told, for a client sent the whole menu (`sendAllDataToRemote`).
     pub(crate) fn mark_all_sent(&mut self) {
-        for slot in 0..SLOTS {
+        for slot in 0..self.kind.visible_slots() {
             self.remote[slot] = Remote::Known(self.slots[slot].clone());
         }
         self.remote_carried = Remote::Known(self.carried.clone());
@@ -293,7 +319,7 @@ impl Inventory {
     /// The slots whose stacks the client has not been told of (`broadcastChanges`), each marked as told.
     pub(crate) fn changes(&mut self) -> Vec<(usize, ItemStack)> {
         let mut changed = Vec::new();
-        for slot in 0..SLOTS {
+        for slot in 0..self.kind.visible_slots() {
             if !self.remote[slot].matches(&self.slots[slot]) {
                 self.remote[slot] = Remote::Known(self.slots[slot].clone());
                 changed.push((slot, self.slots[slot].clone()));

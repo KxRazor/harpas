@@ -46,6 +46,21 @@ pub fn region_of(chunk_x: i32, chunk_z: i32) -> (i32, i32) {
 /// whose last save was interrupted after its commit is an error until [`Region::open`] or
 /// [`recover`](crate::recover) completes that save, so the chunk is never read half old and half new.
 pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Compound>> {
+    read_entry(dir, chunk_x, chunk_z, false)
+}
+
+/// Reads one entity chunk from `dir`. Vanilla can leave a zero-byte entity region when there are no
+/// entities to save in it. A nonempty region still needs a complete header.
+pub fn read_entity_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Compound>> {
+    read_entry(dir, chunk_x, chunk_z, true)
+}
+
+fn read_entry(
+    dir: &Path,
+    chunk_x: i32,
+    chunk_z: i32,
+    allow_empty_file: bool,
+) -> io::Result<Option<Compound>> {
     let (region_x, region_z) = region_of(chunk_x, chunk_z);
     if journal::pending(dir, region_x, region_z)? {
         return Err(invalid(format!(
@@ -59,6 +74,9 @@ pub fn read_chunk(dir: &Path, chunk_x: i32, chunk_z: i32) -> io::Result<Option<C
         Err(error) => return Err(error),
     };
     let file_len = file.metadata()?.len();
+    if allow_empty_file && file_len == 0 {
+        return Ok(None);
+    }
     if file_len < (2 * SECTOR) as u64 {
         return Err(invalid("incomplete region header"));
     }
@@ -688,7 +706,25 @@ mod tests {
             read_chunk(&folder.0, 0, 0).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+        assert_eq!(
+            read_entity_chunk(&folder.0, 0, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         assert_eq!(fs::read(path).unwrap(), damaged);
+    }
+
+    #[test]
+    fn a_zero_byte_entity_region_can_be_read_and_initialized() {
+        let folder = Folder::new();
+        fs::write(folder.0.join("r.-1.0.mca"), []).unwrap();
+        assert_eq!(read_entity_chunk(&folder.0, -1, 0).unwrap(), None);
+        assert_eq!(
+            read_chunk(&folder.0, -1, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let entry = chunk(-1, 0);
+        write_chunks(&folder.0, -1, 0, &[((-1, 0), &entry)]).unwrap();
+        assert_eq!(read_entity_chunk(&folder.0, -1, 0).unwrap(), Some(entry));
     }
 
     #[test]

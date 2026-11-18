@@ -449,7 +449,10 @@ as shown by the parity report.
         floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by
         players.
   - [x] Block drops from the vanilla block loot tables, and players picking items up.
-  - [ ] Saving entities, and the other entity types.
+  - [x] Item entity persistence: stacks and supported components, UUIDs, movement, age and pickup delay
+        survive autosave, chunk unload and shutdown in vanilla entity regions. Other saved entities keep
+        their NBT. The format round trip is compared with vanilla (`item_entity_parity`).
+  - [ ] The other entity types and their persistence.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).

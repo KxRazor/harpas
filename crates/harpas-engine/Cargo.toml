@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+getrandom.workspace = true
 harpas-anvil.workspace = true
 harpas-core.workspace = true
 harpas-worldgen.workspace = true

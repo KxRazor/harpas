@@ -12,8 +12,8 @@ data checked against vanilla. Generated chunks receive sky and block light from 
 sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
 feature definitions are loaded from the datapack, and ores, simple vegetation and the first trees are placed and
 compared with vanilla, but generation through the complete feature stage, live block changes and saving other
-world and player data during play remain in progress. Player inventory loading and saving during play are
-implemented, as described under [Player inventories](#player-inventories).
+world and player data during play remain in progress. Player inventory and dropped item persistence are
+implemented, as described under [Player inventories](#player-inventories) and [Dropped items](#dropped-items).
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -177,13 +177,30 @@ require `harpas vanilla-data generate-registry` with Java 25 as described below.
 
 The cursor, crafting result and crafting input grids are transient menu slots and are not written as
 persistent slots. Ordinary departure drops the cursor and input items, as the menu removal rules do; shutdown
-first closes live menus as described above. Saving dropped item entities remains part of M4's entity
-persistence task.
+first closes live menus as described above.
 
 `player_inventory_parity` creates inventory/equipment NBT with vanilla's own codecs, compares the network
 bytes of the supported components, has Harpas write the document and reopens its inventory and equipment in
 vanilla. Lifecycle tests cover reconnects, restart with an online player, backup recovery, refused loads,
 non-blocking I/O, newer snapshots racing older saves, queue saturation and save errors.
+
+### Dropped items
+
+The Overworld uses the `entities/` region files for item entities. Workers read entity data with the chunk
+and save immutable snapshots on autosave, unload and shutdown. Each snapshot includes the stack and supported
+components, UUID, position, velocity, whether the item is on the ground, health, age and pickup delay.
+A loaded item receives a new runtime network ID. New items use UUIDs generated from a fresh seed when the world
+opens. Removing or moving an item also updates its former chunk, so it stays gone when that chunk reloads.
+
+Items in chunks outside the simulation set pause. A drop made before its chunk arrives waits for the saved
+entities to load before it can be saved. The logic thread keeps the chunk in memory while its saves are
+outstanding. Terrain and entity revisions share the worker queue but are saved only when their respective
+data changes. Entity regions use the same journal recovery as terrain regions. A move across region files
+can span two transactions if the process is interrupted.
+
+Entities of other types and items with unported components stay inactive and keep their original NBT. The
+engine preserves unrelated fields on active items and entity chunks. `item_entity_parity` uses the vanilla
+26.1 server to write the first region, then reads the updated Harpas region back through vanilla's codecs.
 
 ---
 

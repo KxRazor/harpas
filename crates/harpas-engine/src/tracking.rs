@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use harpas_core::math::{cos_f32, sin_f32};
 use harpas_core::random::RandomSource;
 
-use crate::entity::{EntityHandle, ItemEntity};
+use crate::entity::{ItemEntity, RemovedEntity};
 use crate::inventory::ItemStack;
 use crate::world::ChunkPos;
 use crate::{Game, player};
@@ -176,7 +176,6 @@ impl Game {
                 }
                 if stack.is_empty() {
                     entities.remove(handle);
-                    entities.removed.push(handle);
                 } else {
                     entities.set_stack(handle, stack);
                 }
@@ -185,16 +184,15 @@ impl Game {
     }
 
     /// Updates which players see each item entity and sends them its changes (`ChunkMap.tick`).
-    pub(crate) fn track_entities(&mut self, removed: &[EntityHandle]) {
+    pub(crate) fn track_entities(&mut self, removed: &[RemovedEntity]) {
         let Some(world) = &mut self.world else {
             return;
         };
         let entities = &mut world.entities;
         // Entities that left: their viewers remove them.
-        for handle in removed {
-            let i = entities.slot(*handle);
-            let id = entities.network_id[i];
-            for viewer in std::mem::take(&mut entities.server[i].seen_by) {
+        for removal in removed {
+            let id = removal.network_id;
+            for &viewer in &removal.viewers {
                 if let Some(player) = self.players.iter().find(|p| p.player.entity_id == viewer) {
                     player.send(player::Output::RemoveEntity(id));
                 }

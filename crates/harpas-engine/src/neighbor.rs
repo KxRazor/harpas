@@ -17,7 +17,7 @@
 
 use harpas_core::block::block_states;
 use harpas_worldgen::BlockGetter;
-use harpas_worldgen::shape_update::Direction;
+use harpas_worldgen::shape_update::{Direction, chest_shape};
 use log::error;
 
 use crate::block::{self, BlockPos};
@@ -306,24 +306,30 @@ impl World {
 
     /// `NeighborUpdater.executeShapeUpdate` and `Block.updateOrDestroy`.
     fn execute_shape_update(&mut self, update: ShapeUpdate) {
-        if !self.neighborhood_loaded(update.pos) {
-            return;
-        }
         let Some(state) = self.block_state(update.pos) else {
             return;
         };
-        self.fluid_shape_update(update.pos, state, update.neighbor_state);
-        let Some(shapes) = self.shape_updates.clone() else {
+        let is_chest = block_states().name(state) == Some(CHEST);
+        if !is_chest && !self.neighborhood_loaded(update.pos) {
             return;
+        }
+        self.fluid_shape_update(update.pos, state, update.neighbor_state);
+        let new = if is_chest {
+            // The chest rule only reads this neighbor, even at a chunk edge.
+            chest_shape(state, update.direction, update.neighbor_state)
+        } else {
+            let Some(shapes) = self.shape_updates.clone() else {
+                return;
+            };
+            let BlockPos { x, y, z } = update.pos;
+            shapes.update(
+                &Blocks(self),
+                state,
+                [x, y, z],
+                update.direction,
+                update.neighbor_state,
+            )
         };
-        let BlockPos { x, y, z } = update.pos;
-        let new = shapes.update(
-            &Blocks(self),
-            state,
-            [x, y, z],
-            update.direction,
-            update.neighbor_state,
-        );
         debug_assert_eq!(step(update.pos, update.direction), update.neighbor_pos);
         if new == state {
             return;

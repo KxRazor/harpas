@@ -1,5 +1,5 @@
 //! Clicks in the player's inventory menu, as vanilla's `AbstractContainerMenu.doClick` and `InventoryMenu` handle
-//! them, including the crafting grids and simple chest menus.
+//! them, including the crafting grids and chest menus.
 //!
 //! Every click type is ported: picking up and putting down stacks or one item (`PICKUP`), moving a stack to the
 //! other part of the inventory (`QUICK_MOVE`, `InventoryMenu.quickMoveStack`), swapping with a hotbar slot or the
@@ -77,7 +77,7 @@ fn with_count(stack: &ItemStack, count: i32) -> ItemStack {
 
 impl Inventory {
     fn is_result(&self, slot: usize) -> bool {
-        self.kind != MenuKind::Chest && slot == RESULT
+        !matches!(self.kind, MenuKind::Chest { .. }) && slot == RESULT
     }
 
     /// `Slot.mayPlace`.
@@ -295,7 +295,7 @@ impl Inventory {
         let original = stack.clone();
         let armor = armor_slot(&original);
         let moved = match self.kind {
-            MenuKind::Chest => {
+            MenuKind::Chest { .. } => {
                 let player = self.kind.player_slots();
                 if index < player.start {
                     self.move_stack_to(&mut stack, player.start, player.end, true)

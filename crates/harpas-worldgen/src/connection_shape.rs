@@ -102,16 +102,6 @@ const fn same_axis(a: Direction, b: Direction) -> bool {
     )
 }
 
-const fn clockwise(direction: Direction) -> Direction {
-    match direction {
-        Direction::North => Direction::East,
-        Direction::East => Direction::South,
-        Direction::South => Direction::West,
-        Direction::West => Direction::North,
-        other => other,
-    }
-}
-
 const fn counterclockwise(direction: Direction) -> Direction {
     match direction {
         Direction::North => Direction::West,
@@ -233,7 +223,7 @@ impl Connections {
     /// `FenceGateBlock.connectsToDirection`: a gate connects across its path, perpendicular to its facing.
     fn gate_across(&self, neighbor: u32, direction: Direction) -> bool {
         self.fence_gates.contains(neighbor)
-            && facing(neighbor).is_some_and(|f| same_axis(f, clockwise(direction)))
+            && facing(neighbor).is_some_and(|f| same_axis(f, direction.clockwise()))
     }
 
     /// `updateShape` of a connecting block, whose neighbor in `direction` is now `neighbor`; `read` reads the
@@ -273,7 +263,7 @@ impl Connections {
                 let Some(gate_facing) = facing(state) else {
                     return state;
                 };
-                if !horizontal(direction) || !same_axis(clockwise(gate_facing), direction) {
+                if !horizontal(direction) || !same_axis(gate_facing.clockwise(), direction) {
                     return state;
                 }
                 let in_wall = self.walls.contains(neighbor)
@@ -308,7 +298,7 @@ impl Connections {
                 }
                 state
             }
-            Connecting::Chest => self.chest(state, direction, neighbor),
+            Connecting::Chest => chest_shape(state, direction, neighbor),
             Connecting::WallAttached { solid } => {
                 let Some(facing) = facing(state) else {
                     return state;
@@ -415,41 +405,41 @@ impl Connections {
         };
         with_property(updated, "up", if raise { "true" } else { "false" })
     }
+}
 
-    /// `ChestBlock.updateShape`.
-    fn chest(&self, state: u32, direction: Direction, neighbor: u32) -> u32 {
-        if !horizontal(direction) {
-            return state;
-        }
-        let connected_direction = |chest: u32| {
-            let facing = facing(chest)?;
-            Some(if property(chest, "type") == Some("left") {
-                clockwise(facing)
+/// A chest's shape after its neighbor in `direction` changes (`ChestBlock.updateShape`).
+pub fn chest_shape(state: u32, direction: Direction, neighbor: u32) -> u32 {
+    if !horizontal(direction) {
+        state
+    } else if name(neighbor) == name(state) {
+        let neighbor_type = property(neighbor, "type");
+        if property(state, "type") == Some("single")
+            && neighbor_type != Some("single")
+            && facing(state) == facing(neighbor)
+            && connected_chest_direction(neighbor) == Some(direction.opposite())
+        {
+            let opposite = if neighbor_type == Some("left") {
+                "right"
             } else {
-                counterclockwise(facing)
-            })
-        };
-        if name(neighbor) == name(state) {
-            let neighbor_type = property(neighbor, "type");
-            if property(state, "type") == Some("single")
-                && neighbor_type != Some("single")
-                && facing(state) == facing(neighbor)
-                && connected_direction(neighbor) == Some(direction.opposite())
-            {
-                let opposite = if neighbor_type == Some("left") {
-                    "right"
-                } else {
-                    "left"
-                };
-                return with_property(state, "type", opposite);
-            }
-            return state;
-        }
-        if connected_direction(state) == Some(direction) {
-            return with_property(state, "type", "single");
+                "left"
+            };
+            return with_property(state, "type", opposite);
         }
         state
+    } else if connected_chest_direction(state) == Some(direction) {
+        with_property(state, "type", "single")
+    } else {
+        state
     }
+}
+
+fn connected_chest_direction(state: u32) -> Option<Direction> {
+    let facing = facing(state)?;
+    Some(if property(state, "type") == Some("left") {
+        facing.clockwise()
+    } else {
+        counterclockwise(facing)
+    })
 }
 
 /// `StairBlock.getStairsShape`.

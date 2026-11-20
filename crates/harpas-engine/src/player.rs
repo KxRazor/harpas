@@ -336,10 +336,12 @@ pub enum Output {
     },
     /// Open a crafting table screen.
     OpenCraftingTable(i32),
-    /// Open the three-row screen for an ordinary chest.
+    /// Open the three- or six-row screen for a chest.
     OpenChest {
         /// The player's active menu ID.
         container_id: i32,
+        /// Whether the screen combines two chest block entities.
+        double: bool,
         /// The chest's custom text component, if it has one.
         title: Option<harpas_core::nbt::Nbt>,
     },

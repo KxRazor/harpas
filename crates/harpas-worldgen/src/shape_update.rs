@@ -23,6 +23,8 @@ use crate::feature::{BlockGetter, FeatureWorld};
 use crate::placement::StateSet;
 use crate::survival::{SurvivalRule, compile_block_survival};
 
+pub use crate::connection_shape::chest_shape;
+
 /// One of the six directions (`Direction`), in vanilla's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -72,6 +74,17 @@ impl Direction {
             Self::South => Self::North,
             Self::West => Self::East,
             Self::East => Self::West,
+        }
+    }
+
+    /// Rotates a horizontal direction clockwise around the Y axis.
+    pub const fn clockwise(self) -> Self {
+        match self {
+            Self::North => Self::East,
+            Self::East => Self::South,
+            Self::South => Self::West,
+            Self::West => Self::North,
+            vertical => vertical,
         }
     }
 

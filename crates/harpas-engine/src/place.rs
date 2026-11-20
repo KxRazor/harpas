@@ -10,7 +10,7 @@
 //! The placements ported so far are those of blocks without properties, of pillars (their axis follows the
 //! clicked face), slabs (a second slab of the same kind makes a double slab), stairs, blocks that face the
 //! player (furnaces, carved pumpkins, glazed terracotta, looms and stonecutters), and fences, walls, panes and
-//! bars, which connect to their neighbors, and simple chests. Crafting tables and simple chests open a menu
+//! bars, which connect to their neighbors, and chests. Crafting tables and chests open a menu
 //! when used. Other interactive blocks, placement sounds and the message at the top of the world remain.
 
 use harpas_core::block::block_states;
@@ -22,7 +22,7 @@ use harpas_worldgen::shape_update::Direction;
 use crate::block::{self, BlockPos};
 use crate::chest::{self, CHEST};
 use crate::fluid::{FluidState, FluidType};
-use crate::inventory::{self, CHEST_SLOTS, ItemStack};
+use crate::inventory::{self, ItemStack};
 use crate::{Game, neighbor, player};
 
 /// What a click with an item did (`InteractionResult`): only a placement consumes it.
@@ -156,6 +156,7 @@ struct Context {
     pos: BlockPos,
     /// The player's horizontal direction.
     facing: Direction,
+    secondary_use: bool,
 }
 
 impl Context {
@@ -252,7 +253,7 @@ impl Game {
         let mode = self.players[index].player.profile.game_mode;
         let clicked = self.block_at(hit);
         if mode == player::GameMode::Spectator {
-            if chest::is_single(clicked) {
+            if block_states().name(clicked) == Some(CHEST) {
                 self.open_chest(index, hit);
             }
             return Placed::No;
@@ -322,6 +323,7 @@ impl Game {
             location,
             pos,
             facing: horizontal_direction(self.players[index].player.position.yaw),
+            secondary_use: self.players[index].secondary_use,
         };
         let can_place = replace_clicked
             || can_be_replaced(self.block_at(pos), stack.item, face, location, pos, false);
@@ -335,9 +337,6 @@ impl Game {
             // It cannot survive there.
             return Placed::No;
         };
-        if block_states().name(state) == Some(CHEST) && !chest::is_single(state) {
-            return Placed::No;
-        }
         if !self.unobstructed(state, pos) {
             return Placed::No;
         }
@@ -402,20 +401,20 @@ impl Game {
             ));
         }
         if name == CHEST {
-            let facing = context.facing.opposite();
-            let sides = match facing {
-                Direction::North | Direction::South => [Direction::West, Direction::East],
-                _ => [Direction::North, Direction::South],
-            };
-            if sides.into_iter().any(|side| {
-                let neighbor = self.block_at(step(context.pos, side));
-                chest::is_single(neighbor) && property(neighbor, "facing") == Some(facing.name())
-            }) {
-                return None;
-            }
+            let (facing, kind) = chest::placement(
+                context.pos,
+                context.face,
+                context.facing.opposite(),
+                context.secondary_use,
+                |pos| self.block_at(pos),
+            );
             return Some(with(
                 block,
-                &[("facing", facing.name()), ("waterlogged", water())],
+                &[
+                    ("facing", facing.name()),
+                    ("type", kind),
+                    ("waterlogged", water()),
+                ],
             ));
         }
         let faces_player = matches!(
@@ -645,14 +644,14 @@ impl Game {
         if !valid || !(0..=6).contains(&mode) {
             return;
         }
-        let chest = if let Some(position) = state.chest_position() {
+        let chest = if let Some(chest) = state.block_menu.as_ref().and_then(|menu| menu.chest) {
             let world = self.world.as_ref().expect("an open chest is in the world");
-            let Ok(items) = world.chest_items(position) else {
+            let Ok((items, _)) = world.chest_menu(chest) else {
                 self.close_block_menu(index);
                 return;
             };
-            self.synchronize_chest(position, &items);
-            Some((position, items))
+            self.synchronize_chest(chest, &items);
+            Some((chest, items))
         } else {
             None
         };
@@ -678,13 +677,13 @@ impl Game {
             inventory.remote_carried = inventory::Remote::Hashed(carried);
             (mismatch, drops)
         });
-        if let Some((position, items)) = chest {
+        if let Some((chest, items)) = chest {
             let menu = state.block_menu.as_mut().expect("chest viewer has a menu");
-            let updated = &menu.contents.slots[..CHEST_SLOTS];
+            let updated = &menu.contents.slots[..items.len()];
             if updated != items {
                 let world = self.world.as_mut().expect("an open chest is in the world");
-                if let Err(error) = world.save_chest(position, updated) {
-                    log::warn!("Cannot update chest at {position:?}: {error}");
+                if let Err(error) = world.save_chest_menu(chest, &items, updated) {
+                    log::warn!("Cannot update chest at {:?}: {error}", menu.position);
                     let (inventory, contents) =
                         before.expect("chest clicks have a rollback snapshot");
                     state.inventory = inventory;
@@ -693,7 +692,7 @@ impl Game {
                     return;
                 }
                 let updated = updated.to_vec();
-                self.synchronize_chest(position, &updated);
+                self.synchronize_chest(chest, &updated);
             }
         }
         for stack in drops {

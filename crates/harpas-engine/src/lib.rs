@@ -1191,7 +1191,12 @@ impl Game {
         let events = world.take_level_events();
         send_level_events(&self.players, &events);
         for viewer in 0..self.players.len() {
-            if self.players[viewer].chest_position() == Some(pos) {
+            if let Some(chest) = self.players[viewer]
+                .block_menu
+                .as_ref()
+                .and_then(|menu| menu.chest)
+                && chest.positions().any(|half| half == pos)
+            {
                 self.close_block_menu(viewer);
             }
         }

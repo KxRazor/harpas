@@ -4630,6 +4630,200 @@ mod tests {
     }
 
     #[test]
+    fn double_chest_shares_slots_across_chunks_and_splits_on_break() {
+        use crate::chest::CHEST;
+        use crate::inventory::{CHEST_SLOTS, HOTBAR, ItemStack};
+        use harpas_core::block_behavior::Face;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let left = BlockPos {
+            x: 15,
+            y: -51,
+            z: 9,
+        };
+        let right = BlockPos { x: 16, ..left };
+        save(
+            &folder,
+            &[(left.chunk(), DATA_VERSION), (right.chunk(), DATA_VERSION)],
+        );
+        let (first_output, first) = crate::player::output_channel();
+        let (second_output, second) = crate::player::output_channel();
+        let mut game = Game {
+            pending: Vec::new(),
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.join(1, profile(), 2, 2, false, first_output);
+        let mut other = profile();
+        other.uuid = 2;
+        game.join(2, other, 2, 2, false, second_output);
+        wait_until(|| {
+            for player in &mut game.players {
+                player.awaiting_chunk_batch = false;
+            }
+            tick(&mut game, 1);
+            game.players.iter().all(|player| {
+                [left, right]
+                    .into_iter()
+                    .all(|pos| player.sent_chunks.contains(&pos.chunk()))
+            })
+        });
+        for (index, player) in game.players.iter_mut().enumerate() {
+            player.awaiting_teleport = None;
+            player.player.position = crate::player::Position {
+                x: 15.5 + index as f64,
+                y: -51.0,
+                z: 7.5,
+                ..Default::default()
+            };
+            player.player.profile.game_mode = GameMode::Survival;
+        }
+        let states = block_states();
+        let air = states.default_state("minecraft:air").unwrap();
+        let above_right = BlockPos {
+            y: right.y + 1,
+            ..right
+        };
+        let world = game.world.as_mut().unwrap();
+        for pos in [
+            left,
+            right,
+            BlockPos {
+                y: left.y + 1,
+                ..left
+            },
+        ] {
+            assert!(world.set_block_state(pos, air).is_some());
+        }
+        let stack = |name: &str, count| ItemStack {
+            item: items().id(name).unwrap(),
+            count,
+            ..ItemStack::empty()
+        };
+        game.players[0].inventory.slots[HOTBAR] = stack(CHEST, 2);
+        game.use_item_on(
+            0,
+            false,
+            BlockPos {
+                y: left.y - 1,
+                ..left
+            },
+            Face::Up,
+            [0.5; 3],
+            1,
+        );
+        game.players[0].secondary_use = true;
+        game.players[0].player.position.yaw = 90.0;
+        game.use_item_on(0, false, left, Face::East, [0.5; 3], 2);
+        game.players[0].secondary_use = false;
+        assert!(game.players[0].inventory.slots[HOTBAR].is_empty());
+        let chest_state = |kind| {
+            states
+                .state(CHEST, [("facing", "north"), ("type", kind)])
+                .unwrap()
+                .0
+        };
+        let world = game.world.as_mut().unwrap();
+        assert_eq!(world.block_state(left), Some(chest_state("left")));
+        assert_eq!(world.block_state(right), Some(chest_state("right")));
+
+        world
+            .save_chest(
+                left,
+                &[stack("minecraft:stone", 60), stack("minecraft:diamond", 1)],
+            )
+            .unwrap();
+        world
+            .save_chest(right, &[stack("minecraft:stone", 61)])
+            .unwrap();
+        game.use_item_on(0, false, left, Face::Up, [0.5; 3], 3);
+        assert_eq!(
+            game.players[0].container_id(),
+            0,
+            "the other half is obstructed"
+        );
+        assert!(
+            game.world
+                .as_mut()
+                .unwrap()
+                .set_block_state(above_right, air)
+                .is_some()
+        );
+        first.try_iter().for_each(drop);
+        second.try_iter().for_each(drop);
+        game.players[0].inventory.slots[HOTBAR] = stack("minecraft:stone", 9);
+        for (index, (pos, output)) in [(left, &first), (right, &second)].into_iter().enumerate() {
+            game.use_item_on(index, false, pos, Face::Up, [0.5; 3], 4);
+            assert_eq!(
+                output.try_recv(),
+                Ok(Output::OpenChest {
+                    container_id: 1,
+                    double: true,
+                    title: None
+                })
+            );
+            let Output::InventoryContent { slots, .. } = output.try_recv().unwrap() else {
+                panic!("expected the inventory contents");
+            };
+            assert_eq!(slots.len(), 90);
+            assert_eq!(slots[0], stack("minecraft:stone", 61));
+            assert_eq!(slots[CHEST_SLOTS], stack("minecraft:stone", 60));
+        }
+        // One shift-click fills partial stacks in both chunks before placing the rest in the right half.
+        game.click_container(0, 1, -1, 81, 0, 1, Vec::new(), None);
+        game.send_inventory_changes();
+        let slots = &game.players[1].block_menu.as_ref().unwrap().contents.slots;
+        assert_eq!(slots[0], stack("minecraft:stone", 64));
+        assert_eq!(slots[1], stack("minecraft:stone", 2));
+        assert_eq!(slots[CHEST_SLOTS], stack("minecraft:stone", 64));
+        for slot in [0, CHEST_SLOTS as i16] {
+            assert!(second.try_iter().any(
+                |o| matches!(o, Output::SetSlot { container_id: 1, slot: changed, stack: item, .. }
+                if changed == slot && item == stack("minecraft:stone", 64))
+            ));
+        }
+        game.players[0].player.profile.game_mode = GameMode::Creative;
+        assert!(game.destroy_block(0, right));
+        assert!(game.players.iter().all(|p| p.block_menu.is_none()));
+        assert!(first.try_iter().any(|o| o == Output::CloseContainer(1)));
+        assert!(second.try_iter().any(|o| o == Output::CloseContainer(1)));
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(world.block_state(left), Some(chest_state("single")));
+        assert!(world.chest_tag(right).unwrap().is_none());
+        let dropped: Vec<_> = world
+            .entities
+            .order
+            .iter()
+            .filter_map(|&h| world.entities.item(h))
+            .collect();
+        assert!(
+            dropped
+                .iter()
+                .all(|item| item.stack.name() == Some("minecraft:stone"))
+        );
+        assert_eq!(dropped.iter().map(|item| item.stack.count).sum::<i32>(), 66);
+        game.use_item_on(1, false, left, Face::Up, [0.5; 3], 5);
+        assert_eq!(
+            second.try_recv(),
+            Ok(Output::OpenChest {
+                container_id: 2,
+                double: false,
+                title: None
+            })
+        );
+        let Output::InventoryContent { slots, .. } = second.try_recv().unwrap() else {
+            panic!("expected the surviving chest contents");
+        };
+        assert_eq!(slots.len(), 63);
+        assert_eq!(slots[0], stack("minecraft:stone", 64));
+        assert_eq!(slots[1], stack("minecraft:diamond", 1));
+    }
+
+    #[test]
     fn simple_chest_shares_items_between_viewers_and_drops_them_on_break() {
         use crate::inventory::{CHEST_SLOTS, HOTBAR, ItemStack};
         use harpas_core::block_behavior::Face;
@@ -4692,7 +4886,13 @@ mod tests {
         assert!(game.players[0].inventory.slots[HOTBAR].is_empty());
         let world = game.world.as_mut().unwrap();
         let placed = world.block_state(chest).unwrap();
-        assert!(crate::chest::is_single(placed));
+        assert!(
+            states
+                .properties(placed)
+                .unwrap()
+                .1
+                .contains(&("type", "single"))
+        );
         assert!(
             states
                 .properties(placed)
@@ -4717,6 +4917,7 @@ mod tests {
                 output.try_recv(),
                 Ok(Output::OpenChest {
                     container_id: 1,
+                    double: false,
                     title: None
                 })
             );

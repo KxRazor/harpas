@@ -560,15 +560,20 @@ pub(crate) fn send(
             .into(),
             Output::OpenChest {
                 container_id,
+                double,
                 title,
             } => clientbound::OpenScreen {
                 container_id,
-                // `minecraft:generic_9x3` in the vanilla 26.1 menu registry.
-                kind: 2,
+                // `minecraft:generic_9x6` and `minecraft:generic_9x3` in the vanilla 26.1 menu registry.
+                kind: if double { 5 } else { 2 },
                 title: title.unwrap_or_else(|| {
                     Nbt::Compound(harpas_core::nbt::Compound::from_iter([(
                         "translate".to_owned(),
-                        Nbt::from("container.chest"),
+                        Nbt::from(if double {
+                            "container.chestDouble"
+                        } else {
+                            "container.chest"
+                        }),
                     )]))
                 }),
             }

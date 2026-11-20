@@ -204,7 +204,7 @@ fn run() -> io::Result<()> {
     let loot = match harpas_engine::loot::LootTables::from_zip_path(&data_pack) {
         Ok(loot) => Some(Arc::new(loot)),
         Err(error) => {
-            warn!("Broken blocks will drop nothing: {error}");
+            warn!("Block drops and dungeon chest loot will be unavailable: {error}");
             None
         }
     };

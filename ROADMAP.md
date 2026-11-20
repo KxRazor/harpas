@@ -434,7 +434,9 @@ as shown by the parity report.
   - [x] Double chests: pairing by placement, a shared 54-slot menu, and separating on break with the other
         half's items intact. Slot order, shift-click transfers and Anvil storage are compared with vanilla
         across a chunk boundary (`chest_parity`).
-  - [ ] Chests with loot tables, the other containers, the other recipe types, and smelting.
+  - [x] Dungeon chests roll their loot on first opening and save the resulting slots in Anvil. The item stacks,
+        enchanted books and slot order are compared with vanilla for eight seeds (`chest_parity`).
+  - [ ] The other chest loot tables, the other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets

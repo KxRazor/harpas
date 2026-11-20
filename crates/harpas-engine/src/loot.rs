@@ -1,5 +1,4 @@
-//! Block loot tables from the vanilla data pack (`data/minecraft/loot_table/blocks/`), evaluated as vanilla's
-//! `LootTable.getRandomItems` does with the parameters of a broken block.
+//! Loot tables from the vanilla data pack, evaluated for broken blocks and dungeon chests.
 //!
 //! A table rolls each pool whose conditions pass, as many times as its `rolls`, and each roll picks one of the
 //! entries that expand, by weight; then the entry's, the pool's and the table's functions apply, and stacks over
@@ -9,8 +8,9 @@
 //! Supported: `item`, `alternatives`, `group`, `sequence` and `empty` entries; the conditions
 //! `survives_explosion`, `block_state_property`, `match_tool` (by item, the tool's data components not being
 //! decoded yet), `random_chance`, `table_bonus`, `any_of`, `all_of` and `inverted`; the functions `set_count`,
-//! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Enchantments are
-//! read as none, since item components are not decoded yet. Not done yet: `location_check` and
+//! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Dungeon books
+//! support `enchant_randomly` with the vanilla loot enchantment tag. Tool enchantments are read as none.
+//! Not done yet: `location_check` and
 //! `entity_properties` conditions (read as false) and `dynamic` entries (which add nothing), and the functions
 //! that copy data into the item (`copy_components`, `copy_state`), which drop the item without it.
 
@@ -25,6 +25,11 @@ use log::warn;
 use serde_json::Value;
 
 use crate::inventory::ItemStack;
+use crate::item_data::ItemCodec;
+
+mod dungeon;
+
+pub(crate) use dungeon::DUNGEON_CHEST;
 
 /// A number provider (`NumberProvider`).
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +269,8 @@ enum Function {
     },
     /// `apply_bonus` that changes nothing without a level, though `uniform_bonus_count` still draws.
     UniformBonus,
+    /// The book entry in the dungeon table, using the `on_random_loot` enchantment tag.
+    EnchantBook,
     /// A function that changes nothing for a broken block without an explosion or the data it copies.
     None,
 }
@@ -318,6 +325,11 @@ impl Function {
             "minecraft:explosion_decay" | "minecraft:copy_components" | "minecraft:copy_state" => {
                 Self::None
             }
+            "minecraft:enchant_randomly"
+                if value["options"].as_str() == Some(dungeon::BOOK_TAG) =>
+            {
+                Self::EnchantBook
+            }
             other => {
                 warn!("Loot function {other} is not ported; it changes nothing");
                 Self::None
@@ -326,7 +338,8 @@ impl Function {
         (function, conditions)
     }
 
-    fn apply(&self, stack: &mut ItemStack, random: &mut dyn RandomSource) {
+    fn apply(&self, stack: &mut ItemStack, context: &mut Context<'_>) -> io::Result<()> {
+        let random = &mut *context.random;
         match self {
             Self::SetCount { count, add } => {
                 let n = count.int(random);
@@ -351,8 +364,16 @@ impl Function {
             Self::UniformBonus => {
                 stack.count += random.next_int_bounded(1);
             }
+            Self::EnchantBook => {
+                if let Some((books, codec)) = context.books
+                    && stack.name() == Some("minecraft:book")
+                {
+                    *stack = books.enchant(stack.count, codec, random)?;
+                }
+            }
             Self::None => {}
         }
+        Ok(())
     }
 }
 
@@ -377,12 +398,13 @@ fn decorate(
     functions: &[(Function, Vec<Condition>)],
     stack: &mut ItemStack,
     context: &mut Context<'_>,
-) {
+) -> io::Result<()> {
     for (function, conditions) in functions {
         if all(conditions, context) {
-            function.apply(stack, context.random);
+            function.apply(stack, context)?;
         }
     }
+    Ok(())
 }
 
 /// A pool entry (`LootPoolEntryContainer`).
@@ -509,6 +531,7 @@ struct Context<'a> {
     state: u32,
     tool: &'a ItemStack,
     random: &'a mut dyn RandomSource,
+    books: Option<(&'a dungeon::BookEnchantments, &'a ItemCodec)>,
 }
 
 impl LootTable {
@@ -555,12 +578,16 @@ impl LootTable {
         state: u32,
         tool: &ItemStack,
         random: &mut dyn RandomSource,
-    ) -> Vec<ItemStack> {
-        let mut context = Context {
+    ) -> io::Result<Vec<ItemStack>> {
+        self.roll(Context {
             state,
             tool,
             random,
-        };
+            books: None,
+        })
+    }
+
+    fn roll(&self, mut context: Context<'_>) -> io::Result<Vec<ItemStack>> {
         let mut stacks = Vec::new();
         for pool in &self.pools {
             if !all(&pool.conditions, &mut context) {
@@ -604,9 +631,9 @@ impl LootTable {
                     count: 1,
                     components: Default::default(),
                 };
-                decorate(functions, &mut stack, &mut context);
-                decorate(&pool.functions, &mut stack, &mut context);
-                decorate(&self.functions, &mut stack, &mut context);
+                decorate(functions, &mut stack, &mut context)?;
+                decorate(&pool.functions, &mut stack, &mut context)?;
+                decorate(&self.functions, &mut stack, &mut context)?;
                 stacks.push(stack);
             }
         }
@@ -627,23 +654,24 @@ impl LootTable {
                 left -= count;
             }
         }
-        split
+        Ok(split)
     }
 }
 
-/// The block loot tables, by block name.
+/// The loot tables for blocks and dungeon chests.
 #[derive(Debug, Default)]
 pub struct LootTables {
     blocks: HashMap<String, LootTable>,
+    pub(crate) dungeon: Option<dungeon::DungeonLoot>,
 }
 
 impl LootTables {
-    /// Reads the block loot tables of a data pack archive, such as the vanilla data the server provisions.
+    /// Reads loot tables from a data pack archive, such as the vanilla data the server provisions.
     pub fn from_zip_path(path: impl AsRef<Path>) -> io::Result<Self> {
         Self::from_zip_reader(std::fs::File::open(path)?)
     }
 
-    /// Reads the block loot tables of a data pack archive.
+    /// Reads loot tables from a data pack archive.
     pub fn from_zip_reader(reader: impl Read + Seek) -> io::Result<Self> {
         let mut archive = zip::ZipArchive::new(reader).map_err(io::Error::other)?;
         let mut tables = Self::default();
@@ -660,6 +688,10 @@ impl LootTables {
             entry.read_to_string(&mut text)?;
             let json: Value = serde_json::from_str(&text).map_err(io::Error::other)?;
             tables.insert(&format!("minecraft:{block}"), &json);
+        }
+        match dungeon::DungeonLoot::load(&mut archive) {
+            Ok(dungeon) => tables.dungeon = dungeon,
+            Err(error) => warn!("Dungeon chests cannot generate their loot: {error}"),
         }
         Ok(tables)
     }
@@ -716,11 +748,13 @@ mod tests {
             ]}]}]}),
         );
         let mut random = LegacyRandom::new(0);
-        let drops = table.drops(
-            state("minecraft:stone", &[]),
-            &ItemStack::empty(),
-            &mut random,
-        );
+        let drops = table
+            .drops(
+                state("minecraft:stone", &[]),
+                &ItemStack::empty(),
+                &mut random,
+            )
+            .unwrap();
         assert_eq!(names(&drops), [("minecraft:cobblestone", 1)]);
     }
 
@@ -736,11 +770,19 @@ mod tests {
         let double = state("minecraft:oak_slab", &[("type", "double")]);
         let bottom = state("minecraft:oak_slab", &[("type", "bottom")]);
         assert_eq!(
-            names(&slab.drops(double, &ItemStack::empty(), &mut random)),
+            names(
+                &slab
+                    .drops(double, &ItemStack::empty(), &mut random)
+                    .unwrap()
+            ),
             [("minecraft:oak_slab", 2)]
         );
         assert_eq!(
-            names(&slab.drops(bottom, &ItemStack::empty(), &mut random)),
+            names(
+                &slab
+                    .drops(bottom, &ItemStack::empty(), &mut random)
+                    .unwrap()
+            ),
             [("minecraft:oak_slab", 1)]
         );
         let glowstone = LootTable::parse(
@@ -750,11 +792,13 @@ mod tests {
                 {"function": "minecraft:limit_count", "limit": {"min": 1.0, "max": 4.0}}]}]}]}),
         );
         for _ in 0..50 {
-            let drops = glowstone.drops(
-                state("minecraft:glowstone", &[]),
-                &ItemStack::empty(),
-                &mut random,
-            );
+            let drops = glowstone
+                .drops(
+                    state("minecraft:glowstone", &[]),
+                    &ItemStack::empty(),
+                    &mut random,
+                )
+                .unwrap();
             assert!((2..=4).contains(&drops[0].count));
         }
     }
@@ -777,12 +821,13 @@ mod tests {
             components: Default::default(),
         };
         assert_eq!(
-            names(&table.drops(grass, &shears, &mut random)),
+            names(&table.drops(grass, &shears, &mut random).unwrap()),
             [("minecraft:short_grass", 1)]
         );
         assert!(
             table
                 .drops(grass, &ItemStack::empty(), &mut random)
+                .unwrap()
                 .is_empty()
         );
     }

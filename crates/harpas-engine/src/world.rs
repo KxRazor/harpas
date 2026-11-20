@@ -487,7 +487,7 @@ pub struct World {
     pub(crate) entities: crate::entity::Entities,
     entity_data: HashMap<ChunkPos, EntityChunk>,
     item_codec: Arc<RwLock<Arc<ItemCodec>>>,
-    /// The block loot tables, without which broken blocks drop nothing.
+    /// Loot tables for broken blocks and dungeon chests.
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
     pub(crate) seed: i64,
@@ -4982,7 +4982,7 @@ mod tests {
             .collect();
         assert_eq!(dropped, [stack("minecraft:diamond", 4)]);
 
-        // A generated chest keeps its loot seed even when a player tries to open or break it.
+        // Without the loot data, trying to open or break the chest preserves its seed.
         let world = game.world.as_mut().unwrap();
         assert!(world.set_block_state(chest, placed).is_some());
         let chunk = world.chunk_contents_mut(chunk_pos).unwrap();
@@ -5004,6 +5004,63 @@ mod tests {
         assert_eq!(
             game.world.as_ref().unwrap().chest_tag(chest).unwrap(),
             Some(&tag)
+        );
+
+        use std::io::{Cursor, Write};
+        use zip::write::SimpleFileOptions;
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, json) in [
+            (
+                "loot_table/chests/simple_dungeon",
+                r#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"#,
+            ),
+            (
+                "tags/enchantment/on_random_loot",
+                r#"{"values":["minecraft:sharpness"]}"#,
+            ),
+            ("enchantment/sharpness", r#"{"max_level":5}"#),
+        ] {
+            zip.start_file(
+                format!("data/minecraft/{path}.json"),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(json.as_bytes()).unwrap();
+        }
+        let loot = crate::loot::LootTables::from_zip_reader(zip.finish().unwrap()).unwrap();
+        game.world.as_mut().unwrap().set_loot_tables(Arc::new(loot));
+
+        game.players[0].player.profile.game_mode = GameMode::Spectator;
+        game.use_item_on(0, false, chest, Face::Up, [0.5; 3], 5);
+        assert_eq!(game.players[0].container_id(), 0);
+        assert_eq!(
+            game.world.as_ref().unwrap().chest_tag(chest).unwrap(),
+            Some(&tag)
+        );
+
+        game.players[0].player.profile.game_mode = GameMode::Survival;
+        game.use_item_on(0, false, chest, Face::Up, [0.5; 3], 6);
+        let world = game.world.as_ref().unwrap();
+        let slot = world
+            .chest_items(chest)
+            .unwrap()
+            .iter()
+            .position(|item| *item == stack("minecraft:diamond", 1))
+            .unwrap();
+        let menu = game.players[0].container_id();
+        assert_ne!(menu, 0);
+        game.click_container(0, menu, -1, slot as i16, 0, 1, Vec::new(), None);
+        game.close_container(0, menu);
+        game.use_item_on(0, false, chest, Face::Up, [0.5; 3], 7);
+        assert_ne!(game.players[0].container_id(), 0);
+        assert!(
+            game.world
+                .as_ref()
+                .unwrap()
+                .chest_items(chest)
+                .unwrap()
+                .iter()
+                .all(ItemStack::is_empty)
         );
     }
 

@@ -819,6 +819,7 @@ impl World {
             }
             None => table.drops(state, tool, &mut self.random),
         };
+        let Ok(stacks) = stacks else { return };
         for stack in stacks {
             self.pop_resource(pos, stack);
         }

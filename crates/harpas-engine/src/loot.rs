@@ -9,7 +9,8 @@
 //! `survives_explosion`, `block_state_property`, `match_tool` (by item, the tool's data components not being
 //! decoded yet), `random_chance`, `table_bonus`, `any_of`, `all_of` and `inverted`; the functions `set_count`,
 //! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Chest books
-//! support `enchant_randomly` with the vanilla loot enchantment tag. Tool enchantments are read as none.
+//! support `enchant_randomly` with the vanilla loot enchantment tag, and chest potions support `set_potion`.
+//! Tool enchantments are read as none.
 //! Not done yet: `location_check` and
 //! `entity_properties` conditions (read as false) and `dynamic` entries (which add nothing), and the functions
 //! that copy data into the item (`copy_components`, `copy_state`), which drop the item without it.
@@ -269,6 +270,7 @@ enum Function {
     UniformBonus,
     /// A book in a chest table, using the `on_random_loot` enchantment tag.
     EnchantBook,
+    SetPotion(String),
     /// A function that changes nothing for a broken block without an explosion or the data it copies.
     None,
 }
@@ -326,6 +328,9 @@ impl Function {
             "minecraft:enchant_randomly" if value["options"].as_str() == Some(chest::BOOK_TAG) => {
                 Self::EnchantBook
             }
+            "minecraft:set_potion" => value["id"]
+                .as_str()
+                .map_or(Self::None, |name| Self::SetPotion(name.to_owned())),
             other => {
                 warn!("Loot function {other} is not ported; it changes nothing");
                 Self::None
@@ -361,10 +366,15 @@ impl Function {
                 stack.count += random.next_int_bounded(1);
             }
             Self::EnchantBook => {
-                if let Some((books, codec)) = context.books
+                if let Some((books, codec)) = context.chest
                     && stack.name() == Some("minecraft:book")
                 {
                     *stack = books.enchant(stack.count, codec, random)?;
+                }
+            }
+            Self::SetPotion(name) => {
+                if let Some((_, codec)) = context.chest {
+                    codec.set_potion(stack, name)?;
                 }
             }
             Self::None => {}
@@ -527,7 +537,7 @@ struct Context<'a> {
     state: u32,
     tool: &'a ItemStack,
     random: &'a mut dyn RandomSource,
-    books: Option<(&'a chest::BookEnchantments, &'a ItemCodec)>,
+    chest: Option<(&'a chest::BookEnchantments, &'a ItemCodec)>,
 }
 
 impl LootTable {
@@ -579,7 +589,7 @@ impl LootTable {
             state,
             tool,
             random,
-            books: None,
+            chest: None,
         })
     }
 

@@ -97,11 +97,14 @@ public final class ChestLootProbe {
                 var table = switch (args[3]) {
                     case "simple_dungeon" -> BuiltInLootTables.SIMPLE_DUNGEON;
                     case "desert_pyramid" -> BuiltInLootTables.DESERT_PYRAMID;
+                    case "buried_treasure" -> BuiltInLootTables.BURIED_TREASURE;
                     default -> throw new IllegalArgumentException(args[3]);
                 };
+                Files.write(Path.of(args[4]), BuiltInRegistries.POTION.stream()
+                    .map(potion -> BuiltInRegistries.POTION.getKey(potion).toString()).toList());
                 var tags = new ListTag();
                 var ops = lookup.createSerializationContext(NbtOps.INSTANCE);
-                for (int i = 4; i < args.length; i++) {
+                for (int i = 5; i < args.length; i++) {
                     var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Loot Chest", lookup);
                     chest.setLevel(level);
                     chest.setLootTable(table, Long.parseLong(args[i]));

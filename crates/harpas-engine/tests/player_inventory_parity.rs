@@ -50,7 +50,10 @@ fn player_inventory_nbt_and_component_values_survive_a_vanilla_round_trip() {
     let names: Vec<String> = serde_json::from_value(values["components"].clone()).unwrap();
     let enchantments: Vec<String> = serde_json::from_value(values["enchantments"].clone()).unwrap();
     let enchantment_refs: Vec<_> = enchantments.iter().map(String::as_str).collect();
-    let codec = ItemCodec::new(&names).with_enchantments(&enchantment_refs);
+    let potions: Vec<String> = serde_json::from_value(values["potions"].clone()).unwrap();
+    let codec = ItemCodec::new(&names)
+        .with_enchantments(&enchantment_refs)
+        .with_potions(&potions);
     let original = read(&original_path);
     let inventory = PlayerInventory::read(original.clone(), &codec).unwrap();
     for index in 0..41 {

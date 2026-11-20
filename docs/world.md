@@ -160,14 +160,13 @@ server and is reported; shutdown drains the
 player saves even when the chunk flush fails. A saturated player-data queue refuses additional loads rather
 than blocking the logic thread.
 
-Saved NBT and network bytes have different component codecs. `harpas-engine::item_data` converts 26 values:
+Saved NBT and network bytes have different component codecs. `harpas-engine::item_data` converts 27 values:
 custom data, maximum stack size, maximum damage, damage, unbreakable, custom name, minimum attack charge,
 item name, item model, lore, rarity, repair cost, glint override, intangible projectile, glider, tooltip style,
-dyed color, map color, map ID, potion duration scale, bucket entity data, ominous bottle amplifier, note block
-sound, enchantability, enchantments and stored enchantments. Component IDs come from the owner's generated
-built-in registry, and enchantment IDs use the synchronized registry sent to clients. Removed components are
-preserved as removed. These codecs preserve data; the gameplay effects of all these components are not yet
-ported.
+dyed color, map color, map ID, potion contents without custom effects, potion duration scale, bucket entity
+data, ominous bottle amplifier, note block sound, enchantability, enchantments and stored enchantments. Item
+component and potion IDs come from the owner's generated built-in registries. Enchantment IDs use the
+synchronized registry sent to clients. Removed components are preserved as removed.
 
 The remaining component values are explicit errors. An existing inventory containing one cannot be loaded;
 a Creative stack that cannot be saved is rejected before it changes the inventory. This prevents stripping

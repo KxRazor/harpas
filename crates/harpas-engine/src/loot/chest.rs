@@ -25,7 +25,11 @@ pub(crate) struct ChestLootTables {
 impl ChestLootTables {
     pub(super) fn load(archive: &mut ZipArchive<impl Read + Seek>) -> io::Result<Option<Self>> {
         let mut tables = HashMap::new();
-        for name in ["chests/simple_dungeon", "chests/desert_pyramid"] {
+        for name in [
+            "chests/simple_dungeon",
+            "chests/desert_pyramid",
+            "chests/buried_treasure",
+        ] {
             let data = match archive.by_name(&format!("data/minecraft/loot_table/{name}.json")) {
                 Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other),
                 Err(zip::result::ZipError::FileNotFound) => continue,
@@ -79,7 +83,7 @@ impl ChestLootTables {
             state: block_states().default_state("minecraft:air").unwrap(),
             tool: &ItemStack::empty(),
             random,
-            books: Some((&self.books, codec)),
+            chest: Some((&self.books, codec)),
         })?;
         let mut slots: [usize; CHEST_SLOTS] = std::array::from_fn(|i| i);
         shuffle(&mut slots, random);

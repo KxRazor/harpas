@@ -440,6 +440,8 @@ as shown by the parity report.
         vanilla with a saved loot seed and with the world's random sequence (`chest_parity`).
   - [x] Desert pyramid chests roll their loot when opened or broken unopened. Menu slots, saved contents and
         dropped stacks match vanilla, including enchanted books and Dune armor trim templates (`chest_parity`).
+  - [x] Buried treasure chests roll their loot when opened or broken unopened, including hearts of the sea and
+        potions of Water Breathing. Menu slots, saved contents and dropped stacks match vanilla (`chest_parity`).
   - [ ] The other chest loot tables, the other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
@@ -449,9 +451,9 @@ as shown by the parity report.
         and Set Creative Mode Slot.
   - [x] Set Entity Metadata, with the serializers item entities use.
   - [x] Click Container, with stacks hashed as the client predicts them, and Set Cursor Item.
-  - [x] Saved-NBT/network conversion for 26 item component values, including damage, names, lore, custom
-        data, enchantments and stored enchantments, plus removed components; unported component values are
-        refused without overwriting the player's data.
+  - [x] Saved-NBT/network conversion for 27 item component values, including damage, names, lore, custom
+        data, enchantments, stored enchantments and potion contents without custom effects, plus removed
+        components. Unsupported values are refused without overwriting the player's data.
   - [ ] The remaining data component values, the other serializers, and the other 15 packets.
 - [ ] Entity physics and collisions, ported one to one.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,

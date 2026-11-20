@@ -9,7 +9,7 @@ Status: in progress. The Java 26.1 Handshaking, Status, Login and Configuration 
 schema, and so is Play except for 15 packets that need item stacks, entity metadata, particles, the command
 tree or debug subscriptions ([Prototype results](#prototype-results)); those and Bedrock are design. Item stacks
 are written by hand, with the values of their data components kept as the bytes the client sent, which a
-client in Creative sends each with its length. The engine now converts 26 component values between saved
+client in Creative sends each with its length. The engine now converts 27 component values between saved
 NBT and network bytes for player inventory persistence ([world.md](world.md#player-inventories)); the other
 component codecs remain unimplemented. Entity
 metadata is written by hand too, with the serializers of the entities ported so far. Facts about sources cite

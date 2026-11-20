@@ -4847,6 +4847,10 @@ mod tests {
         other.uuid = 2;
         game.join(2, other, 2, 2, false, second_output);
         wait_until(|| {
+            // Acknowledge each batch so the saved chunk can arrive after its empty neighbors.
+            for player in &mut game.players {
+                player.awaiting_chunk_batch = false;
+            }
             tick(&mut game, 1);
             game.players
                 .iter()
@@ -5229,6 +5233,7 @@ mod tests {
         };
         tick(&mut game, 1);
         wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
             tick(&mut game, 2);
             game.players[0].sent_chunks.contains(&chunk_pos)
         });

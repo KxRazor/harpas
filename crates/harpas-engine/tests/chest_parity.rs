@@ -4,6 +4,7 @@
 #[path = "../../harpas-worldgen/tests/reference/mod.rs"]
 mod reference;
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -186,23 +187,37 @@ fn double_chest_order_shift_clicks_and_anvil_storage_match_vanilla() {
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
+    check_chest_loot("simple_dungeon", &["minecraft:enchanted_book"]);
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn desert_pyramid_chest_loot_matches_vanilla_on_open_and_break() {
+    check_chest_loot(
+        "desert_pyramid",
+        &[
+            "minecraft:enchanted_book",
+            "minecraft:dune_armor_trim_smithing_template",
+        ],
+    );
+}
+
+fn check_chest_loot(table: &str, required_items: &[&str]) {
     let reference = Reference::required();
     reference.compile(&[
         ("ChestProbe.java", include_str!("ChestProbe.java")),
-        (
-            "DungeonChestProbe.java",
-            include_str!("DungeonChestProbe.java"),
-        ),
+        ("ChestLootProbe.java", include_str!("ChestLootProbe.java")),
     ]);
-    let tags = reference.temp.0.join("dungeon.nbt");
+    let tags = reference.temp.0.join("loot.nbt");
     let components = reference.temp.0.join("components.txt");
     let enchantments = reference.temp.0.join("enchantments.txt");
     let seeds = [0_i64, 1, 2, 3, 17, -1, 123456789, -7046029254386353131];
     reference.java(
-        "DungeonChestProbe",
+        "ChestLootProbe",
         [&tags, &components, &enchantments]
             .map(|path| path.display().to_string())
             .into_iter()
+            .chain([table.to_owned()])
             .chain(seeds.map(|seed| seed.to_string())),
     );
     let tags = read_tags(&tags);
@@ -216,7 +231,7 @@ fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
     );
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
     let pos = BlockPos { x: 1, y: 65, z: 0 };
-    let mut enchanted_books = 0;
+    let mut observed = HashSet::new();
     for (seed, [unopened, expected, removal]) in seeds.into_iter().zip(cases) {
         let Some(Nbt::List(List::Compound(items))) = expected.get("Items") else {
             panic!("expected loot for seed {seed}");
@@ -227,10 +242,10 @@ fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
                 panic!("no slot")
             };
             let stack = codec.read(tag).unwrap();
-            enchanted_books += usize::from(stack.name() == Some("minecraft:enchanted_book"));
+            observed.extend(stack.name());
             slots[*slot as usize] = stack;
         }
-        let world = reference.temp.0.join(format!("dungeon-{seed}"));
+        let world = reference.temp.0.join(format!("open-{seed}"));
         let region = dimension_dir(&world, "minecraft:overworld").join("region");
         fs::create_dir_all(&region).unwrap();
         save_chest_fixture(&region, pos, "single", unopened);
@@ -299,7 +314,7 @@ fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
         } else {
             GameMode::Creative
         };
-        let world = reference.temp.0.join(format!("break-dungeon-{seed}"));
+        let world = reference.temp.0.join(format!("break-{seed}"));
         let region = dimension_dir(&world, "minecraft:overworld").join("region");
         fs::create_dir_all(&region).unwrap();
         save_chest_fixture(&region, pos, "single", unopened);
@@ -363,7 +378,9 @@ fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
             None | Some(Nbt::List(List::Empty))
         ));
     }
-    assert!(enchanted_books > 0, "sample must include an enchanted book");
+    for item in required_items {
+        assert!(observed.contains(item), "sample must include {item}");
+    }
 }
 
 fn check_chest(double: bool) {

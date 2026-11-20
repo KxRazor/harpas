@@ -135,7 +135,12 @@ impl World {
         let was_chest = block_states().name(old) == Some(CHEST);
         let is_chest = block_states().name(state) == Some(CHEST);
         let contents = if was_chest && !is_chest {
-            match self.chest_items(pos) {
+            let items = if flags & UPDATE_SUPPRESS_DROPS == 0 {
+                self.unpack_chest_items(pos)
+            } else {
+                self.chest_items(pos)
+            };
+            match items {
                 Ok(items) => Some(items),
                 Err(error) => {
                     // Keep loot seeds and unsupported stacks in the world until their codecs are available.
@@ -212,7 +217,7 @@ impl World {
         if block_states().is_air(state) {
             return false;
         }
-        if block_states().name(state) == Some(CHEST) && self.chest_items(pos).is_err() {
+        if block_states().name(state) == Some(CHEST) && self.unpack_chest_items(pos).is_err() {
             return false;
         }
         let fire = matches!(

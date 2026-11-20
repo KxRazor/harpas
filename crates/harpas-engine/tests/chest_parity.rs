@@ -15,11 +15,11 @@ use harpas_core::block::block_states;
 use harpas_core::block_behavior::Face;
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
 use harpas_core::nbt::{Compound, List, Nbt};
-use harpas_engine::block::BlockPos;
+use harpas_engine::block::{BlockPos, DigAction};
 use harpas_engine::inventory::ItemStack;
 use harpas_engine::item_data::ItemCodec;
 use harpas_engine::loot::LootTables;
-use harpas_engine::player::{GameMode, Input, Output, Profile};
+use harpas_engine::player::{GameMode, Input, Movement, Output, Profile};
 use harpas_engine::{GameData, Handle, PlayerSession};
 use reference::Reference;
 
@@ -63,7 +63,7 @@ fn receive(session: &PlayerSession, predicate: impl Fn(&Output) -> bool) -> Outp
     }
 }
 
-fn join_and_load(engine: &Engine, positions: &[BlockPos]) -> PlayerSession {
+fn join_and_load(engine: &Engine, positions: &[BlockPos], game_mode: GameMode) -> PlayerSession {
     let id = engine.0.next_entity_id().unwrap();
     let session = engine
         .0
@@ -73,7 +73,7 @@ fn join_and_load(engine: &Engine, positions: &[BlockPos]) -> PlayerSession {
                 uuid: id as u128,
                 name: "ChestViewer".into(),
                 properties: Vec::new(),
-                game_mode: GameMode::Survival,
+                game_mode,
             },
             2,
             true,
@@ -185,7 +185,7 @@ fn double_chest_order_shift_clicks_and_anvil_storage_match_vanilla() {
 
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
-fn dungeon_chest_loot_matches_vanilla_and_survives_reload() {
+fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
     let reference = Reference::required();
     reference.compile(&[
         ("ChestProbe.java", include_str!("ChestProbe.java")),
@@ -206,8 +206,8 @@ fn dungeon_chest_loot_matches_vanilla_and_survives_reload() {
             .chain(seeds.map(|seed| seed.to_string())),
     );
     let tags = read_tags(&tags);
-    let (pairs, _) = tags.as_chunks::<2>();
-    assert_eq!(tags.len(), seeds.len() * 2);
+    let (cases, _) = tags.as_chunks::<3>();
+    assert_eq!(tags.len(), seeds.len() * 3);
     let names = fs::read_to_string(components).unwrap();
     let enchantments = fs::read_to_string(enchantments).unwrap();
     let codec = Arc::new(
@@ -217,7 +217,7 @@ fn dungeon_chest_loot_matches_vanilla_and_survives_reload() {
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
     let pos = BlockPos { x: 1, y: 65, z: 0 };
     let mut enchanted_books = 0;
-    for (seed, [unopened, expected]) in seeds.into_iter().zip(pairs) {
+    for (seed, [unopened, expected, removal]) in seeds.into_iter().zip(cases) {
         let Some(Nbt::List(List::Compound(items))) = expected.get("Items") else {
             panic!("expected loot for seed {seed}");
         };
@@ -248,7 +248,7 @@ fn dungeon_chest_loot_matches_vanilla_and_survives_reload() {
             )
             .unwrap();
             let engine = Engine(handle, Some(thread));
-            let session = join_and_load(&engine, &[pos]);
+            let session = join_and_load(&engine, &[pos], GameMode::Survival);
             use_chest(&session, pos, 1);
             assert_eq!(
                 receive(&session, |output| matches!(
@@ -281,6 +281,87 @@ fn dungeon_chest_loot_matches_vanilla_and_survives_reload() {
                 "saved chest for seed {seed}"
             );
         }
+
+        let Some(Nbt::List(List::Compound(drops))) = removal.get("Drops") else {
+            panic!("expected drops for seed {seed}");
+        };
+        let mut drops: Vec<_> = drops.iter().map(|tag| codec.read(tag).unwrap()).collect();
+        let mode = if seed == 0 {
+            drops.push(
+                codec
+                    .read(&Compound::from_iter([
+                        ("id", Nbt::from("minecraft:chest")),
+                        ("count", Nbt::Int(1)),
+                    ]))
+                    .unwrap(),
+            );
+            GameMode::Survival
+        } else {
+            GameMode::Creative
+        };
+        let world = reference.temp.0.join(format!("break-dungeon-{seed}"));
+        let region = dimension_dir(&world, "minecraft:overworld").join("region");
+        fs::create_dir_all(&region).unwrap();
+        save_chest_fixture(&region, pos, "single", unopened);
+        let (handle, thread) = harpas_engine::start_with_world(
+            &world,
+            BIOMES,
+            GameData {
+                items: Some(codec.clone()),
+                loot: Some(loot.clone()),
+                ..GameData::default()
+            },
+        )
+        .unwrap();
+        let engine = Engine(handle, Some(thread));
+        let session = join_and_load(&engine, &[pos], mode);
+        if mode == GameMode::Survival {
+            session
+                .send(Input::Movement(Movement {
+                    position: None,
+                    rotation: None,
+                    on_ground: true,
+                }))
+                .unwrap();
+        }
+        for (sequence, action) in [DigAction::Start, DigAction::Finish]
+            .into_iter()
+            .enumerate()
+        {
+            session
+                .send(Input::Dig {
+                    action,
+                    position: pos,
+                    sequence: sequence as i32 + 1,
+                })
+                .unwrap();
+        }
+        receive(
+            &session,
+            |output| matches!(output, Output::SectionBlocks(blocks) if blocks.iter().any(|&(p, state)| p == pos && block_states().is_air(state))),
+        );
+        for expected in drops {
+            let Output::SpawnItem { stack, .. } = receive(&session, |output| {
+                matches!(output, Output::SpawnItem { .. })
+            }) else {
+                unreachable!()
+            };
+            assert_eq!(stack, expected, "dropped stack for seed {seed}");
+        }
+        drop(engine);
+        assert!(
+            !std::iter::from_fn(|| session.try_recv())
+                .any(|output| matches!(output, Output::SpawnItem { .. }))
+        );
+        let saved = Region::open(&region, 0, 0)
+            .unwrap()
+            .chunk(0, 0)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            saved.get("block_entities"),
+            None | Some(Nbt::List(List::Empty))
+        ));
     }
     assert!(enchanted_books > 0, "sample must include an enchanted book");
 }
@@ -329,7 +410,7 @@ fn check_chest(double: bool) {
     )
     .unwrap();
     let engine = Engine(handle, Some(thread));
-    let session = join_and_load(&engine, &positions);
+    let session = join_and_load(&engine, &positions, GameMode::Survival);
     let chest_slots = 27 * halves.len();
     let last_chest_slot = chest_slots - 1;
     let last_player_slot = chest_slots + 35;

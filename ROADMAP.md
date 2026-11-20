@@ -436,6 +436,8 @@ as shown by the parity report.
         across a chunk boundary (`chest_parity`).
   - [x] Dungeon chests roll their loot on first opening and save the resulting slots in Anvil. The item stacks,
         enchanted books and slot order are compared with vanilla for eight seeds (`chest_parity`).
+  - [x] Breaking an unopened dungeon chest rolls and drops its contents. The dropped stacks are compared against
+        vanilla with a saved loot seed and with the world's random sequence (`chest_parity`).
   - [ ] The other chest loot tables, the other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and

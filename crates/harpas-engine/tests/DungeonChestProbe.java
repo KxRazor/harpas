@@ -1,4 +1,4 @@
-// Calls vanilla's chest loot unpacking with the shipped data pack and a deterministic level.
+// Opens and removes dungeon chests using the shipped data pack and a deterministic level.
 import java.nio.file.*;
 import java.util.*;
 import net.minecraft.SharedConstants;
@@ -17,9 +17,15 @@ import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.util.RandomSource;
 import net.minecraft.util.Util;
 import net.minecraft.world.RandomSequences;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.flag.*;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.WorldDataConfiguration;
-import net.minecraft.world.level.block.entity.ChestBlockEntity;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.properties.ChestType;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.storage.loot.BuiltInLootTables;
 
 public final class DungeonChestProbe {
@@ -34,11 +40,19 @@ public final class DungeonChestProbe {
     static final class ProbeLevel extends ServerLevel {
         ProbeServer server;
         RegistryAccess access;
+        GameRules rules;
+        List<ItemStack> drops;
         ProbeLevel() { super(null, null, null, null, null, null, false, 0, List.of(), false); }
         @Override public MinecraftServer getServer() { return server; }
         @Override public FeatureFlagSet enabledFeatures() { return FeatureFlags.VANILLA_SET; }
         @Override public RegistryAccess registryAccess() { return access; }
         @Override public boolean hasChunk(int x, int z) { return false; }
+        @Override public GameRules getGameRules() { return rules; }
+        @Override public void updateNeighbourForOutputSignal(BlockPos pos, Block block) {}
+        @Override public boolean addFreshEntity(Entity entity) {
+            drops.add(((ItemEntity) entity).getItem().copy());
+            return true;
+        }
     }
 
     public static void main(String[] args) throws Exception {
@@ -63,6 +77,10 @@ public final class DungeonChestProbe {
                 level.server.registries = stem.dataPackResources().fullRegistries();
                 level.server.sequences = new RandomSequences();
                 level.access = stem.registries().compositeAccess();
+                level.rules = new GameRules(FeatureFlags.VANILLA_SET);
+                var randomField = Level.class.getDeclaredField("random");
+                randomField.setAccessible(true);
+                randomField.set(level, RandomSource.create(0));
                 var lookup = level.server.registries.lookup();
                 for (var pending : BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(lookup)) pending.apply();
                 var componentNames = BuiltInRegistries.DATA_COMPONENT_TYPE.keySet().stream()
@@ -77,14 +95,27 @@ public final class DungeonChestProbe {
                 }
                 Files.write(Path.of(args[2]), enchantmentNames);
                 var tags = new ListTag();
+                var ops = lookup.createSerializationContext(NbtOps.INSTANCE);
                 for (int i = 3; i < args.length; i++) {
-                    var chest = ChestProbe.make(ChestProbe.SINGLE,
-                        net.minecraft.world.level.block.state.properties.ChestType.SINGLE, "Dungeon", lookup);
+                    var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Dungeon", lookup);
                     chest.setLevel(level);
                     chest.setLootTable(BuiltInLootTables.SIMPLE_DUNGEON, Long.parseLong(args[i]));
-                    tags.add(chest.saveWithFullMetadata(lookup));
+                    var pending = chest.saveWithFullMetadata(lookup);
+                    tags.add(pending);
+                    level.server.sequences = new RandomSequences();
                     chest.unpackLootTable(null);
                     tags.add(chest.saveWithFullMetadata(lookup));
+
+                    level.server.sequences = new RandomSequences();
+                    var unopened = ChestProbe.load(chest.getBlockPos(), ChestType.SINGLE, pending, lookup);
+                    unopened.setLevel(level);
+                    level.drops = new ArrayList<>();
+                    unopened.preRemoveSideEffects(unopened.getBlockPos(), unopened.getBlockState());
+                    var drops = new ListTag();
+                    for (var drop : level.drops) drops.add(ItemStack.CODEC.encodeStart(ops, drop).getOrThrow());
+                    var removal = new CompoundTag();
+                    removal.put("Drops", drops);
+                    tags.add(removal);
                 }
                 try (var out = new java.io.DataOutputStream(Files.newOutputStream(Path.of(args[0])))) {
                     NbtIo.writeAnyTag(tags, out);

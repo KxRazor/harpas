@@ -4983,9 +4983,6 @@ mod tests {
         assert_eq!(dropped, [stack("minecraft:diamond", 4)]);
 
         // Without the loot data, trying to open or break the chest preserves its seed.
-        let world = game.world.as_mut().unwrap();
-        assert!(world.set_block_state(chest, placed).is_some());
-        let chunk = world.chunk_contents_mut(chunk_pos).unwrap();
         let tag = Compound::from_iter([
             ("id", Nbt::from(crate::chest::CHEST)),
             ("x", Nbt::Int(chest.x)),
@@ -4994,10 +4991,15 @@ mod tests {
             ("LootTable", Nbt::from("minecraft:chests/simple_dungeon")),
             ("LootTableSeed", Nbt::Long(23)),
         ]);
-        chunk.rest.insert(
-            "block_entities",
-            Nbt::List(harpas_core::nbt::List::Compound(vec![tag.clone()])),
-        );
+        let place_unopened = |world: &mut World| {
+            assert!(world.set_block_state(chest, placed).is_some());
+            let chunk = world.chunk_contents_mut(chunk_pos).unwrap();
+            chunk.rest.insert(
+                "block_entities",
+                Nbt::List(harpas_core::nbt::List::Compound(vec![tag.clone()])),
+            );
+        };
+        place_unopened(game.world.as_mut().unwrap());
         game.use_item_on(0, false, chest, Face::Up, [0.5; 3], 4);
         assert_eq!(game.players[0].container_id(), 0);
         assert!(!game.destroy_block(0, chest));
@@ -5061,6 +5063,28 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(ItemStack::is_empty)
+        );
+
+        // A spent chest does not roll loot again. Breaking an unopened one drops its roll once.
+        assert!(game.destroy_block(0, chest));
+        let world = game.world.as_mut().unwrap();
+        assert_eq!(world.entities.order.len(), 1);
+        place_unopened(world);
+        assert!(game.destroy_block(0, chest));
+        assert!(!game.destroy_block(0, chest));
+        let world = game.world.as_ref().unwrap();
+        assert_eq!(world.block_state(chest), Some(air));
+        assert!(world.chest_tag(chest).unwrap().is_none());
+        let dropped: Vec<_> = world
+            .entities
+            .order
+            .iter()
+            .filter_map(|&h| world.entities.item(h))
+            .map(|item| item.stack.clone())
+            .collect();
+        assert_eq!(
+            dropped,
+            [stack("minecraft:diamond", 4), stack("minecraft:diamond", 1)]
         );
     }
 

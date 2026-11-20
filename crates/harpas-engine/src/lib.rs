@@ -204,7 +204,7 @@ pub fn start_with_world(
 pub struct GameData {
     /// The blocks' shape rules; without them, block changes leave their neighbors as they are.
     pub shapes: Option<Arc<ShapeUpdates>>,
-    /// The block loot tables; without them, broken blocks drop nothing.
+    /// Loot tables for broken blocks and dungeon chests.
     pub loot: Option<Arc<loot::LootTables>>,
     /// The crafting recipes; without them, nothing is crafted.
     pub recipes: Option<Arc<recipe::Recipes>>,

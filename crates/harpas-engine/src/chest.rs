@@ -6,11 +6,13 @@ use std::sync::OnceLock;
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
 use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_core::random::{LegacyRandom, RandomSequence, RandomSource};
 use harpas_worldgen::shape_update::Direction;
 
 use crate::block::BlockPos;
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
+use crate::loot::DUNGEON_CHEST;
 use crate::world::{ChunkState, World};
 
 pub(crate) const CHEST: &str = "minecraft:chest";
@@ -257,6 +259,82 @@ impl World {
     }
 
     pub(crate) fn chest_menu(&self, chest: Chest) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
+        self.chest_menu_using(chest, |_, tag| read_items(tag, self.chest_codec()))
+    }
+
+    pub(crate) fn open_chest_menu(
+        &mut self,
+        chest: Chest,
+        spectator: bool,
+    ) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
+        let mut tags = Vec::new();
+        let mut sequence = None;
+        let mut world_random = None;
+        let menu = self.chest_menu_using(chest, |pos, tag| {
+            let Some(tag) = tag.filter(|tag| tag.get("LootTable").is_some()) else {
+                return read_items(tag, self.chest_codec());
+            };
+            if spectator {
+                return Err(invalid("spectators cannot open a chest with pending loot"));
+            }
+            if !matches!(tag.get("LootTable"), Some(Nbt::String(id))
+                if id == DUNGEON_CHEST || id == "chests/simple_dungeon")
+            {
+                return Err(invalid("unsupported chest loot table"));
+            }
+            let dungeon = self
+                .loot
+                .as_ref()
+                .and_then(|loot| loot.dungeon.as_ref())
+                .ok_or_else(|| invalid("dungeon loot table is unavailable"))?;
+            let seed = match tag.get("LootTableSeed") {
+                None => 0,
+                Some(Nbt::Long(seed)) => *seed,
+                _ => return Err(invalid("invalid chest loot seed")),
+            };
+            let mut seeded;
+            let random: &mut dyn RandomSource = if seed != 0 {
+                seeded = LegacyRandom::new(seed);
+                &mut seeded
+            } else if let Some(name) = &dungeon.table.random_sequence {
+                let (_, sequence) = sequence.get_or_insert_with(|| {
+                    let sequence = self
+                        .random_sequences
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)));
+                    (name.clone(), sequence)
+                });
+                sequence.random()
+            } else {
+                world_random.get_or_insert_with(|| self.random.clone())
+            };
+            let slots = dungeon.fill(self.chest_codec(), random)?;
+            let mut updated = tag.clone();
+            updated.remove("LootTable");
+            updated.remove("LootTableSeed");
+            updated.insert("Items", Nbt::List(write_items(&slots, self.chest_codec())?));
+            tags.push((pos, updated));
+            Ok(slots)
+        })?;
+        // A double chest opens as one container. Commit neither half until both are ready.
+        for (pos, tag) in tags {
+            self.store_chest_tag(pos, tag);
+        }
+        if let Some((name, sequence)) = sequence {
+            self.random_sequences.insert(name, sequence);
+        }
+        if let Some(random) = world_random {
+            self.random = random;
+        }
+        Ok(menu)
+    }
+
+    fn chest_menu_using(
+        &self,
+        chest: Chest,
+        mut items_at: impl FnMut(BlockPos, Option<&Compound>) -> io::Result<[ItemStack; CHEST_SLOTS]>,
+    ) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
         let mut items = Vec::with_capacity(CHEST_SLOTS * (1 + usize::from(chest.is_double())));
         let mut title = None;
         for pos in chest.positions() {
@@ -269,7 +347,7 @@ impl World {
                     title = tag.get("CustomName").cloned();
                 }
             }
-            items.extend(read_items(tag, self.chest_codec())?);
+            items.extend(items_at(pos, tag)?);
         }
         Ok((items, title))
     }

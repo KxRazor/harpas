@@ -80,14 +80,16 @@ impl Game {
     }
 
     pub(crate) fn open_chest(&mut self, index: usize, position: BlockPos) {
-        let Some(world) = &self.world else { return };
+        let Some(world) = &mut self.world else { return };
         let Some(chest) = Chest::at(world, position) else {
             return;
         };
         if chest.is_blocked(world) {
             return;
         }
-        let Ok((items, title)) = world.chest_menu(chest) else {
+        let spectator =
+            self.players[index].player.profile.game_mode == crate::player::GameMode::Spectator;
+        let Ok((items, title)) = world.open_chest_menu(chest, spectator) else {
             return;
         };
         let double = chest.is_double();

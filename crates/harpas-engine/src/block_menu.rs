@@ -4,24 +4,20 @@ use harpas_core::block::block_states;
 
 use crate::Game;
 use crate::block::BlockPos;
-use crate::chest;
-use crate::inventory::{CHEST_SLOTS, Inventory, ItemStack, MenuKind, OFF_HAND, Remote};
+use crate::chest::Chest;
+use crate::inventory::{Inventory, ItemStack, MenuKind, OFF_HAND, Remote};
 use crate::player::{Output, PlayerState};
 
 pub(crate) struct BlockMenu {
     pub(crate) id: i32,
     pub(crate) position: BlockPos,
+    pub(crate) chest: Option<Chest>,
     pub(crate) contents: Inventory,
 }
 
 impl PlayerState {
     pub(crate) fn container_id(&self) -> i32 {
         self.block_menu.as_ref().map_or(0, |menu| menu.id)
-    }
-
-    pub(crate) fn chest_position(&self) -> Option<BlockPos> {
-        let menu = self.block_menu.as_ref()?;
-        (menu.contents.kind == MenuKind::Chest).then_some(menu.position)
     }
 
     /// Borrows the active menu with the current player inventory, then writes back the shared slots.
@@ -48,7 +44,13 @@ impl PlayerState {
 }
 
 impl Game {
-    fn open_block_menu(&mut self, index: usize, position: BlockPos, contents: Inventory) -> i32 {
+    fn open_block_menu(
+        &mut self,
+        index: usize,
+        position: BlockPos,
+        contents: Inventory,
+        chest: Option<Chest>,
+    ) -> i32 {
         let active = self.players[index].container_id();
         if active != 0 {
             self.close_container(index, active);
@@ -60,68 +62,70 @@ impl Game {
         state.block_menu = Some(BlockMenu {
             id,
             position,
+            chest,
             contents,
         });
         id
     }
 
     pub(crate) fn open_crafting_table(&mut self, index: usize, position: BlockPos) {
-        let id = self.open_block_menu(index, position, block_inventory(MenuKind::CraftingTable));
+        let id = self.open_block_menu(
+            index,
+            position,
+            block_inventory(MenuKind::CraftingTable),
+            None,
+        );
         self.players[index].send(Output::OpenCraftingTable(id));
         self.broadcast_full_state(index);
     }
 
     pub(crate) fn open_chest(&mut self, index: usize, position: BlockPos) {
-        if !chest::is_single(self.block_at(position))
-            || chest::blocks_opening(self.block_at(BlockPos {
-                y: position.y + 1,
-                ..position
-            }))
-        {
-            return;
-        }
         let Some(world) = &self.world else { return };
-        let Ok(tag) = world.chest_tag(position) else {
+        let Some(chest) = Chest::at(world, position) else {
             return;
         };
-        if tag.is_some_and(|tag| tag.get("lock").is_some()) {
+        if chest.is_blocked(world) {
             return;
         }
-        let Ok(items) = chest::read_items(tag, world.chest_codec()) else {
+        let Ok((items, title)) = world.chest_menu(chest) else {
             return;
         };
-        let title = tag.and_then(|tag| tag.get("CustomName")).cloned();
-        let mut menu = block_inventory(MenuKind::Chest);
-        menu.slots[..CHEST_SLOTS].clone_from_slice(&items);
-        let id = self.open_block_menu(index, position, menu);
+        let double = chest.is_double();
+        let mut menu = block_inventory(MenuKind::Chest { double });
+        menu.slots[..items.len()].clone_from_slice(&items);
+        let id = self.open_block_menu(index, position, menu, Some(chest));
         self.players[index].send(Output::OpenChest {
             container_id: id,
+            double,
             title,
         });
         self.broadcast_full_state(index);
     }
 
-    /// A block menu remains valid while its block exists and is within eight blocks of the player's feet.
+    /// A block menu remains valid while its blocks still form that container and are within eight blocks.
     pub(crate) fn validate_block_menu(&mut self, index: usize) {
         let Some(menu) = &self.players[index].block_menu else {
             return;
         };
         let p = self.players[index].player.position;
-        let state = self.block_at(menu.position);
-        let same_block = match menu.contents.kind {
-            MenuKind::CraftingTable => {
-                block_states().name(state) == Some("minecraft:crafting_table")
-            }
-            MenuKind::Chest => chest::is_single(state),
-            MenuKind::Player => unreachable!("a player's inventory is not a block menu"),
-        };
-        let valid = same_block
-            && [menu.position.x, menu.position.y, menu.position.z]
+        let in_range = |pos: BlockPos| {
+            [pos.x, pos.y, pos.z]
                 .into_iter()
                 .zip([p.x, p.y, p.z])
                 .map(|(coordinate, feet)| (f64::from(coordinate) + 0.5 - feet).powi(2))
                 .sum::<f64>()
-                <= 64.0;
+                <= 64.0
+        };
+        let valid = if let Some(chest) = menu.chest {
+            self.world
+                .as_ref()
+                .and_then(|world| Chest::at(world, menu.position))
+                == Some(chest)
+                && chest.positions().all(in_range)
+        } else {
+            block_states().name(self.block_at(menu.position)) == Some("minecraft:crafting_table")
+                && in_range(menu.position)
+        };
         if !valid {
             self.close_block_menu(index);
         }
@@ -133,11 +137,12 @@ impl Game {
         self.close_container(index, id);
     }
 
-    pub(crate) fn synchronize_chest(&mut self, position: BlockPos, items: &[ItemStack]) {
+    pub(crate) fn synchronize_chest(&mut self, chest: Chest, items: &[ItemStack]) {
         for player in &mut self.players {
-            if player.chest_position() == Some(position) {
-                let menu = player.block_menu.as_mut().expect("chest viewer has a menu");
-                menu.contents.slots[..CHEST_SLOTS].clone_from_slice(items);
+            if let Some(menu) = &mut player.block_menu
+                && menu.chest == Some(chest)
+            {
+                menu.contents.slots[..items.len()].clone_from_slice(items);
             }
         }
     }

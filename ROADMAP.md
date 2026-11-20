@@ -430,8 +430,11 @@ as shown by the parity report.
         longer reachable; native recipe and shift-click comparisons (`crafting_table_parity`).
   - [x] Simple chests: placement, opening a shared 27-slot menu, item drops on breaking, and vanilla-compatible
         contents saved in Anvil. Shift-click transfers and the saved chest block entity are checked against
-        vanilla (`simple_chest_parity`).
-  - [ ] Double chests, chests with loot tables, the other containers, the other recipe types, and smelting.
+        vanilla (`chest_parity`).
+  - [x] Double chests: pairing by placement, a shared 54-slot menu, and separating on break with the other
+        half's items intact. Slot order, shift-click transfers and Anvil storage are compared with vanilla
+        across a chunk boundary (`chest_parity`).
+  - [ ] Chests with loot tables, the other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets

@@ -126,7 +126,9 @@ pub(crate) enum MenuKind {
     #[default]
     Player,
     CraftingTable,
-    Chest,
+    Chest {
+        double: bool,
+    },
 }
 
 impl MenuKind {
@@ -134,7 +136,7 @@ impl MenuKind {
         let first = match self {
             Self::Player => 9,
             Self::CraftingTable => 10,
-            Self::Chest => CHEST_SLOTS,
+            Self::Chest { double } => CHEST_SLOTS * (1 + usize::from(double)),
         };
         first..first + 36
     }
@@ -183,7 +185,7 @@ impl Inventory {
         1..match self.kind {
             MenuKind::Player => 5,
             MenuKind::CraftingTable => 10,
-            MenuKind::Chest => 1,
+            MenuKind::Chest { .. } => 1,
         }
     }
 

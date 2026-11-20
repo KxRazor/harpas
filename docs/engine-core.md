@@ -97,11 +97,14 @@ returns the cursor and ingredients to the inventory and drops what does not fit;
 items. The result slot is a preview, not an additional saved item. Recipe-book placement, special recipes,
 and results with data components remain to be implemented.
 
-A simple chest has 27 shared slots. Its chunk's block entity holds the authoritative contents in vanilla's
-`Items` list. Each viewer has its own window ID, cursor and synchronization state. Clicks update the chunk
-before the new slots are sent to viewers, and the next chunk save includes that inventory. Breaking a chest
-closes its viewers' menus and drops the stored items. Double chests, locks and structure loot are pending.
-Chests with deferred loot or unsupported item data retain their saved block entity until it can be decoded.
+Placed chests pair with a compatible single neighbor according to their facing and whether the player is
+sneaking. A single chest has 27 slots. A double chest has 54, with the right half's slots first when opened
+from either side. A solid block above either half prevents opening. Each viewer has a separate window ID,
+cursor and synchronization state. The authoritative contents live in each half's vanilla `Items` list.
+Clicks encode the changes to both halves before updating their chunks and sending the slots to viewers.
+Breaking either half closes the menus for the pair, drops the broken half's items and leaves the other half
+as a single chest with its own contents. Locks and structure loot are pending. Chests with deferred loot
+or unsupported item data retain their saved block entity until it can be decoded.
 
 Player inventories now load before their first inventory synchronization and before gameplay can change
 items. A dedicated worker reads and writes their vanilla player documents; the logic thread takes immutable

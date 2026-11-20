@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
 use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_worldgen::shape_update::Direction;
 
 use crate::block::BlockPos;
 use crate::inventory::{CHEST_SLOTS, ItemStack};
@@ -14,20 +15,117 @@ use crate::world::{ChunkState, World};
 
 pub(crate) const CHEST: &str = "minecraft:chest";
 
-pub(crate) fn is_single(state: u32) -> bool {
-    block_states()
-        .properties(state)
-        .is_some_and(|(name, properties)| name == CHEST && properties.contains(&("type", "single")))
+fn properties(state: u32) -> Option<(Direction, &'static str)> {
+    let (name, properties) = block_states().properties(state)?;
+    if name != CHEST {
+        return None;
+    }
+    let property = |key| properties.iter().find(|(k, _)| *k == key).map(|&(_, v)| v);
+    Some((
+        Direction::from_name(property("facing")?)?,
+        property("type")?,
+    ))
 }
 
-pub(crate) fn blocks_opening(state: u32) -> bool {
-    block_behavior().is_solid_render(state)
+fn relative(pos: BlockPos, direction: Direction) -> BlockPos {
+    let [x, y, z] = direction.step([pos.x, pos.y, pos.z]);
+    BlockPos { x, y, z }
 }
 
-pub(crate) fn read_items(
-    tag: Option<&Compound>,
-    codec: &ItemCodec,
-) -> io::Result<[ItemStack; CHEST_SLOTS]> {
+/// `ChestBlock.getStateForPlacement`. Normal placement checks clockwise first. Secondary use pairs
+/// only with a compatible single chest behind the clicked face and follows that chest's facing.
+pub(crate) fn placement(
+    pos: BlockPos,
+    face: Direction,
+    facing: Direction,
+    secondary_use: bool,
+    block_at: impl Fn(BlockPos) -> u32,
+) -> (Direction, &'static str) {
+    let candidate = |direction| {
+        let (facing, kind) = properties(block_at(relative(pos, direction)))?;
+        (kind == "single").then_some(facing)
+    };
+    if secondary_use {
+        let side = face.opposite();
+        if let Some(partner) = candidate(side) {
+            let left = partner.clockwise();
+            if side == left {
+                return (partner, "left");
+            }
+            if side == left.opposite() {
+                return (partner, "right");
+            }
+        }
+    } else {
+        let left = facing.clockwise();
+        if candidate(left) == Some(facing) {
+            return (facing, "left");
+        }
+        if candidate(left.opposite()) == Some(facing) {
+            return (facing, "right");
+        }
+    }
+    (facing, "single")
+}
+
+/// The block entities opened by a chest menu, in slot order. Vanilla puts the right half first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Chest {
+    first: BlockPos,
+    second: Option<BlockPos>,
+}
+
+impl Chest {
+    pub(crate) fn at(world: &World, pos: BlockPos) -> Option<Self> {
+        let (facing, kind) = properties(world.block_state(pos)?)?;
+        let single = Self {
+            first: pos,
+            second: None,
+        };
+        let clockwise = facing.clockwise();
+        let (direction, other_kind) = match kind {
+            "left" => (clockwise, "right"),
+            "right" => (clockwise.opposite(), "left"),
+            _ => return Some(single),
+        };
+        let other = relative(pos, direction);
+        let partner = match world.block_state(other) {
+            Some(state) => properties(state),
+            None if matches!(world.chunk(other.chunk()), Some(ChunkState::Missing)) => None,
+            None => return None,
+        };
+        if partner != Some((facing, other_kind)) {
+            return Some(single);
+        }
+        let (first, second) = if kind == "right" {
+            (pos, other)
+        } else {
+            (other, pos)
+        };
+        Some(Self {
+            first,
+            second: Some(second),
+        })
+    }
+
+    pub(crate) fn positions(self) -> impl Iterator<Item = BlockPos> {
+        std::iter::once(self.first).chain(self.second)
+    }
+
+    pub(crate) fn is_double(self) -> bool {
+        self.second.is_some()
+    }
+
+    pub(crate) fn is_blocked(self, world: &World) -> bool {
+        self.positions().any(|pos| {
+            world
+                .block_state(relative(pos, Direction::Up))
+                .is_some_and(|state| block_behavior().is_solid_render(state))
+        })
+    }
+}
+
+fn read_items(tag: Option<&Compound>, codec: &ItemCodec) -> io::Result<[ItemStack; CHEST_SLOTS]> {
     let mut slots = std::array::from_fn(|_| ItemStack::empty());
     let Some(tag) = tag else { return Ok(slots) };
     if tag.get("LootTable").is_some() {
@@ -97,7 +195,7 @@ fn new_tag(pos: BlockPos) -> Compound {
 }
 
 impl World {
-    pub(crate) fn chest_codec(&self) -> &ItemCodec {
+    fn chest_codec(&self) -> &ItemCodec {
         static DEFAULT: OnceLock<ItemCodec> = OnceLock::new();
         self.player_store.as_ref().map_or_else(
             || DEFAULT.get_or_init(ItemCodec::default),
@@ -122,14 +220,24 @@ impl World {
     }
 
     pub(crate) fn save_chest(&mut self, pos: BlockPos, slots: &[ItemStack]) -> io::Result<()> {
+        let tag = self.chest_with_items(pos, slots)?;
+        self.store_chest_tag(pos, tag);
+        Ok(())
+    }
+
+    fn chest_with_items(&self, pos: BlockPos, slots: &[ItemStack]) -> io::Result<Compound> {
         let mut tag = self
             .chest_tag(pos)?
             .cloned()
             .unwrap_or_else(|| new_tag(pos));
         tag.insert("Items", Nbt::List(write_items(slots, self.chest_codec())?));
+        Ok(tag)
+    }
+
+    fn store_chest_tag(&mut self, pos: BlockPos, tag: Compound) {
         let chunk = self
             .chunk_contents_mut(pos.chunk())
-            .ok_or_else(|| invalid("chest chunk is no longer loaded"))?;
+            .expect("chest tag was prepared in a loaded chunk");
         let mut entities = match chunk.rest.remove("block_entities") {
             Some(Nbt::List(List::Compound(entities))) => entities,
             _ => Vec::new(), // Already checked by chest_tag.
@@ -142,10 +250,115 @@ impl World {
         chunk
             .rest
             .insert("block_entities", Nbt::List(List::Compound(entities)));
-        Ok(())
     }
 
     pub(crate) fn chest_items(&self, pos: BlockPos) -> io::Result<[ItemStack; CHEST_SLOTS]> {
         read_items(self.chest_tag(pos)?, self.chest_codec())
+    }
+
+    pub(crate) fn chest_menu(&self, chest: Chest) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
+        let mut items = Vec::with_capacity(CHEST_SLOTS * (1 + usize::from(chest.is_double())));
+        let mut title = None;
+        for pos in chest.positions() {
+            let tag = self.chest_tag(pos)?;
+            if let Some(tag) = tag {
+                if tag.get("lock").is_some() {
+                    return Err(invalid("chest is locked"));
+                }
+                if title.is_none() {
+                    title = tag.get("CustomName").cloned();
+                }
+            }
+            items.extend(read_items(tag, self.chest_codec())?);
+        }
+        Ok((items, title))
+    }
+
+    pub(crate) fn save_chest_menu(
+        &mut self,
+        chest: Chest,
+        before: &[ItemStack],
+        updated: &[ItemStack],
+    ) -> io::Result<()> {
+        // Encode every changed half before writing either. A click can move an item across chunks.
+        let mut tags = Vec::new();
+        for (index, pos) in chest.positions().enumerate() {
+            let range = index * CHEST_SLOTS..(index + 1) * CHEST_SLOTS;
+            if updated[range.clone()] != before[range.clone()] {
+                tags.push((pos, self.chest_with_items(pos, &updated[range])?));
+            }
+        }
+        for (pos, tag) in tags {
+            self.store_chest_tag(pos, tag);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_prefers_the_clockwise_single_and_sneaking_requires_a_side_click() {
+        let pos = BlockPos { x: 0, y: 65, z: 0 };
+        let state = |facing: Direction, kind| {
+            block_states()
+                .state(CHEST, [("facing", facing.name()), ("type", kind)])
+                .unwrap()
+                .0
+        };
+        let air = block_states().default_state("minecraft:air").unwrap();
+        for facing in [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ] {
+            let clockwise = facing.clockwise();
+            let beside = relative(pos, clockwise);
+            let other = relative(pos, clockwise.opposite());
+            let singles = |at| {
+                if at == beside || at == other {
+                    state(facing, "single")
+                } else {
+                    air
+                }
+            };
+            assert_eq!(
+                placement(pos, Direction::Up, facing, false, singles),
+                (facing, "left")
+            );
+            assert_eq!(
+                placement(pos, Direction::Up, facing, true, singles),
+                (facing, "single")
+            );
+            assert_eq!(
+                placement(pos, clockwise, clockwise, true, singles),
+                (facing, "right")
+            );
+            let double = |at| {
+                if at == beside {
+                    state(facing, "right")
+                } else {
+                    air
+                }
+            };
+            assert_eq!(
+                placement(pos, Direction::Up, facing, false, double),
+                (facing, "single")
+            );
+            let in_front = |at| {
+                if at == relative(pos, facing) {
+                    state(facing, "single")
+                } else {
+                    air
+                }
+            };
+            assert_eq!(
+                placement(pos, facing.opposite(), facing, true, in_front),
+                (facing, "single")
+            );
+        }
     }
 }

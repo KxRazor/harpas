@@ -1,0 +1,1 @@
+- Breaking an unopened dungeon chest now generates and drops its loot (`harpas-engine`).

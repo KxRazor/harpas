@@ -196,6 +196,28 @@ fn new_tag(pos: BlockPos) -> Compound {
     ])
 }
 
+/// Loot and random state are committed together after every requested chest half can be read.
+#[derive(Default)]
+struct ChestLoot {
+    tags: Vec<(BlockPos, Compound)>,
+    sequence: Option<(String, RandomSequence)>,
+    world_random: Option<LegacyRandom>,
+}
+
+impl ChestLoot {
+    fn commit(self, world: &mut World) {
+        for (pos, tag) in self.tags {
+            world.store_chest_tag(pos, tag);
+        }
+        if let Some((name, sequence)) = self.sequence {
+            world.random_sequences.insert(name, sequence);
+        }
+        if let Some(random) = self.world_random {
+            world.random = random;
+        }
+    }
+}
+
 impl World {
     fn chest_codec(&self) -> &ItemCodec {
         static DEFAULT: OnceLock<ItemCodec> = OnceLock::new();
@@ -258,6 +280,17 @@ impl World {
         read_items(self.chest_tag(pos)?, self.chest_codec())
     }
 
+    /// Removal reads the chest being destroyed, even if it has a lock, an obstructed lid or a paired half.
+    pub(crate) fn unpack_chest_items(
+        &mut self,
+        pos: BlockPos,
+    ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
+        let mut loot = ChestLoot::default();
+        let slots = self.prepare_chest_items(pos, self.chest_tag(pos)?, false, &mut loot)?;
+        loot.commit(self);
+        Ok(slots)
+    }
+
     pub(crate) fn chest_menu(&self, chest: Chest) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
         self.chest_menu_using(chest, |_, tag| read_items(tag, self.chest_codec()))
     }
@@ -267,67 +300,66 @@ impl World {
         chest: Chest,
         spectator: bool,
     ) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
-        let mut tags = Vec::new();
-        let mut sequence = None;
-        let mut world_random = None;
+        let mut loot = ChestLoot::default();
         let menu = self.chest_menu_using(chest, |pos, tag| {
-            let Some(tag) = tag.filter(|tag| tag.get("LootTable").is_some()) else {
-                return read_items(tag, self.chest_codec());
-            };
-            if spectator {
-                return Err(invalid("spectators cannot open a chest with pending loot"));
-            }
-            if !matches!(tag.get("LootTable"), Some(Nbt::String(id))
-                if id == DUNGEON_CHEST || id == "chests/simple_dungeon")
-            {
-                return Err(invalid("unsupported chest loot table"));
-            }
-            let dungeon = self
-                .loot
-                .as_ref()
-                .and_then(|loot| loot.dungeon.as_ref())
-                .ok_or_else(|| invalid("dungeon loot table is unavailable"))?;
-            let seed = match tag.get("LootTableSeed") {
-                None => 0,
-                Some(Nbt::Long(seed)) => *seed,
-                _ => return Err(invalid("invalid chest loot seed")),
-            };
-            let mut seeded;
-            let random: &mut dyn RandomSource = if seed != 0 {
-                seeded = LegacyRandom::new(seed);
-                &mut seeded
-            } else if let Some(name) = &dungeon.table.random_sequence {
-                let (_, sequence) = sequence.get_or_insert_with(|| {
-                    let sequence = self
-                        .random_sequences
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)));
-                    (name.clone(), sequence)
-                });
-                sequence.random()
-            } else {
-                world_random.get_or_insert_with(|| self.random.clone())
-            };
-            let slots = dungeon.fill(self.chest_codec(), random)?;
-            let mut updated = tag.clone();
-            updated.remove("LootTable");
-            updated.remove("LootTableSeed");
-            updated.insert("Items", Nbt::List(write_items(&slots, self.chest_codec())?));
-            tags.push((pos, updated));
-            Ok(slots)
+            self.prepare_chest_items(pos, tag, spectator, &mut loot)
         })?;
-        // A double chest opens as one container. Commit neither half until both are ready.
-        for (pos, tag) in tags {
-            self.store_chest_tag(pos, tag);
-        }
-        if let Some((name, sequence)) = sequence {
-            self.random_sequences.insert(name, sequence);
-        }
-        if let Some(random) = world_random {
-            self.random = random;
-        }
+        loot.commit(self);
         Ok(menu)
+    }
+
+    fn prepare_chest_items(
+        &self,
+        pos: BlockPos,
+        tag: Option<&Compound>,
+        spectator: bool,
+        loot: &mut ChestLoot,
+    ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
+        let Some(tag) = tag.filter(|tag| tag.get("LootTable").is_some()) else {
+            return read_items(tag, self.chest_codec());
+        };
+        if spectator {
+            return Err(invalid("spectators cannot open a chest with pending loot"));
+        }
+        if !matches!(tag.get("LootTable"), Some(Nbt::String(id))
+            if id == DUNGEON_CHEST || id == "chests/simple_dungeon")
+        {
+            return Err(invalid("unsupported chest loot table"));
+        }
+        let dungeon = self
+            .loot
+            .as_ref()
+            .and_then(|loot| loot.dungeon.as_ref())
+            .ok_or_else(|| invalid("dungeon loot table is unavailable"))?;
+        let seed = match tag.get("LootTableSeed") {
+            None => 0,
+            Some(Nbt::Long(seed)) => *seed,
+            _ => return Err(invalid("invalid chest loot seed")),
+        };
+        let mut seeded;
+        let random: &mut dyn RandomSource = if seed != 0 {
+            seeded = LegacyRandom::new(seed);
+            &mut seeded
+        } else if let Some(name) = &dungeon.table.random_sequence {
+            let (_, sequence) = loot.sequence.get_or_insert_with(|| {
+                let sequence = self
+                    .random_sequences
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)));
+                (name.clone(), sequence)
+            });
+            sequence.random()
+        } else {
+            loot.world_random.get_or_insert_with(|| self.random.clone())
+        };
+        let slots = dungeon.fill(self.chest_codec(), random)?;
+        let mut updated = tag.clone();
+        updated.remove("LootTable");
+        updated.remove("LootTableSeed");
+        updated.insert("Items", Nbt::List(write_items(&slots, self.chest_codec())?));
+        loot.tags.push((pos, updated));
+        Ok(slots)
     }
 
     fn chest_menu_using(

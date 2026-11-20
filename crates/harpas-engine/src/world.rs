@@ -487,7 +487,7 @@ pub struct World {
     pub(crate) entities: crate::entity::Entities,
     entity_data: HashMap<ChunkPos, EntityChunk>,
     item_codec: Arc<RwLock<Arc<ItemCodec>>>,
-    /// Loot tables for broken blocks and dungeon chests.
+    /// Loot tables for broken blocks and supported chests.
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
     pub(crate) seed: i64,
@@ -5086,6 +5086,120 @@ mod tests {
             dropped,
             [stack("minecraft:diamond", 4), stack("minecraft:diamond", 1)]
         );
+    }
+
+    #[test]
+    fn double_chest_unpacks_two_loot_tables_with_independent_random_sequences() {
+        use std::io::{Cursor, Write};
+
+        use crate::chest::{CHEST, Chest};
+        use crate::item_data::ItemCodec;
+        use crate::loot::LootTables;
+        use harpas_core::random::RandomSequence;
+        use serde_json::json;
+        use zip::write::SimpleFileOptions;
+
+        let folder = Folder::new();
+        let left = BlockPos { x: 8, y: -51, z: 9 };
+        let right = BlockPos { x: 9, ..left };
+        save(&folder, &[(left.chunk(), DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[left.chunk()]);
+        let halves = [
+            (right, "right", "chests/simple_dungeon", "minecraft:diamond"),
+            (
+                left,
+                "left",
+                "chests/desert_pyramid",
+                "minecraft:gold_ingot",
+            ),
+        ];
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let mut tags = Vec::new();
+        for (pos, kind, table, item) in halves {
+            let state = block_states()
+                .state(CHEST, [("facing", "north"), ("type", kind)])
+                .unwrap()
+                .0;
+            world.set_block_state(pos, state).unwrap();
+            tags.push(Compound::from_iter([
+                ("id", Nbt::from(CHEST)),
+                ("x", Nbt::Int(pos.x)),
+                ("y", Nbt::Int(pos.y)),
+                ("z", Nbt::Int(pos.z)),
+                ("LootTable", Nbt::from(table)),
+            ]));
+            zip.start_file(
+                format!("data/minecraft/loot_table/{table}.json"),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+            write!(
+                zip,
+                "{}",
+                json!({
+                    "random_sequence": format!("minecraft:{table}"),
+                    "pools": [{"rolls": 1, "entries": [{"type": "minecraft:item", "name": item}]}],
+                })
+            )
+            .unwrap();
+        }
+        for (path, json) in [
+            (
+                "tags/enchantment/on_random_loot",
+                r#"{"values":["minecraft:sharpness"]}"#,
+            ),
+            ("enchantment/sharpness", r#"{"max_level":5}"#),
+        ] {
+            zip.start_file(
+                format!("data/minecraft/{path}.json"),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(json.as_bytes()).unwrap();
+        }
+        let loot = Arc::new(LootTables::from_zip_reader(zip.finish().unwrap()).unwrap());
+        world.set_loot_tables(loot.clone());
+
+        tags[1].insert("LootTableSeed", "invalid");
+        let write_tags = |world: &mut World, tags: &[Compound]| {
+            world.chunk_contents_mut(left.chunk()).unwrap().rest.insert(
+                "block_entities",
+                Nbt::List(harpas_core::nbt::List::Compound(tags.to_vec())),
+            );
+        };
+        write_tags(&mut world, &tags);
+        let chest = Chest::at(&world, left).unwrap();
+        assert!(chest.is_double());
+        assert!(world.open_chest_menu(chest, false).is_err());
+        assert_eq!(world.chest_tag(right).unwrap(), Some(&tags[0]));
+        assert!(world.random_sequences.is_empty());
+
+        tags[1].remove("LootTableSeed");
+        write_tags(&mut world, &tags);
+        let (menu, _) = world.open_chest_menu(chest, false).unwrap();
+        let chests = loot.chests.as_ref().unwrap();
+        let codec = ItemCodec::default();
+        let mut expected = Vec::new();
+        for (pos, _, id, _) in halves {
+            let name = format!("minecraft:{id}");
+            let mut sequence = RandomSequence::new(world.seed, Some(&name));
+            expected.extend(
+                chests
+                    .fill(chests.get(id).unwrap(), &codec, sequence.random())
+                    .unwrap(),
+            );
+            assert_eq!(world.random_sequences.get(&name), Some(&sequence));
+            assert!(
+                world
+                    .chest_tag(pos)
+                    .unwrap()
+                    .unwrap()
+                    .get("LootTable")
+                    .is_none()
+            );
+        }
+        assert_eq!(menu, expected);
     }
 
     #[test]

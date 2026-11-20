@@ -1,5 +1,6 @@
 //! Ordinary chest block entities use the chunk's saved NBT as the authoritative inventory.
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::OnceLock;
 
@@ -12,7 +13,6 @@ use harpas_worldgen::shape_update::Direction;
 use crate::block::BlockPos;
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
-use crate::loot::DUNGEON_CHEST;
 use crate::world::{ChunkState, World};
 
 pub(crate) const CHEST: &str = "minecraft:chest";
@@ -200,7 +200,7 @@ fn new_tag(pos: BlockPos) -> Compound {
 #[derive(Default)]
 struct ChestLoot {
     tags: Vec<(BlockPos, Compound)>,
-    sequence: Option<(String, RandomSequence)>,
+    sequences: HashMap<String, RandomSequence>,
     world_random: Option<LegacyRandom>,
 }
 
@@ -209,9 +209,7 @@ impl ChestLoot {
         for (pos, tag) in self.tags {
             world.store_chest_tag(pos, tag);
         }
-        if let Some((name, sequence)) = self.sequence {
-            world.random_sequences.insert(name, sequence);
-        }
+        world.random_sequences.extend(self.sequences);
         if let Some(random) = self.world_random {
             world.random = random;
         }
@@ -321,16 +319,17 @@ impl World {
         if spectator {
             return Err(invalid("spectators cannot open a chest with pending loot"));
         }
-        if !matches!(tag.get("LootTable"), Some(Nbt::String(id))
-            if id == DUNGEON_CHEST || id == "chests/simple_dungeon")
-        {
-            return Err(invalid("unsupported chest loot table"));
-        }
-        let dungeon = self
+        let Some(Nbt::String(id)) = tag.get("LootTable") else {
+            return Err(invalid("invalid chest loot table ID"));
+        };
+        let chests = self
             .loot
             .as_ref()
-            .and_then(|loot| loot.dungeon.as_ref())
-            .ok_or_else(|| invalid("dungeon loot table is unavailable"))?;
+            .and_then(|loot| loot.chests.as_ref())
+            .ok_or_else(|| invalid("chest loot data is unavailable"))?;
+        let table = chests
+            .get(id)
+            .ok_or_else(|| invalid(format!("chest loot table {id} is unavailable")))?;
         let seed = match tag.get("LootTableSeed") {
             None => 0,
             Some(Nbt::Long(seed)) => *seed,
@@ -340,20 +339,20 @@ impl World {
         let random: &mut dyn RandomSource = if seed != 0 {
             seeded = LegacyRandom::new(seed);
             &mut seeded
-        } else if let Some(name) = &dungeon.table.random_sequence {
-            let (_, sequence) = loot.sequence.get_or_insert_with(|| {
-                let sequence = self
-                    .random_sequences
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)));
-                (name.clone(), sequence)
-            });
-            sequence.random()
+        } else if let Some(name) = &table.random_sequence {
+            loot.sequences
+                .entry(name.clone())
+                .or_insert_with(|| {
+                    self.random_sequences
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)))
+                })
+                .random()
         } else {
             loot.world_random.get_or_insert_with(|| self.random.clone())
         };
-        let slots = dungeon.fill(self.chest_codec(), random)?;
+        let slots = chests.fill(table, self.chest_codec(), random)?;
         let mut updated = tag.clone();
         updated.remove("LootTable");
         updated.remove("LootTableSeed");

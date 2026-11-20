@@ -438,6 +438,8 @@ as shown by the parity report.
         enchanted books and slot order are compared with vanilla for eight seeds (`chest_parity`).
   - [x] Breaking an unopened dungeon chest rolls and drops its contents. The dropped stacks are compared against
         vanilla with a saved loot seed and with the world's random sequence (`chest_parity`).
+  - [x] Desert pyramid chests roll their loot when opened or broken unopened. Menu slots, saved contents and
+        dropped stacks match vanilla, including enchanted books and Dune armor trim templates (`chest_parity`).
   - [ ] The other chest loot tables, the other containers, the other recipe types, and smelting.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and

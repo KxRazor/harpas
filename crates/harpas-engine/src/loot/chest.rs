@@ -1,10 +1,12 @@
-//! The shipped dungeon table and the placement of its rolls into an empty chest.
+//! The supported vanilla chest tables and the placement of their rolls into empty chests.
 
+use std::collections::HashMap;
 use std::io::{self, Read, Seek};
 
 use harpas_core::block::block_states;
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_core::random::RandomSource;
+use log::warn;
 use serde_json::Value;
 use zip::ZipArchive;
 
@@ -12,22 +14,33 @@ use super::{Context, LootTable};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
 
-pub(crate) const DUNGEON_CHEST: &str = "minecraft:chests/simple_dungeon";
 pub(super) const BOOK_TAG: &str = "#minecraft:on_random_loot";
 
 #[derive(Debug)]
-pub(crate) struct DungeonLoot {
-    pub(crate) table: LootTable,
+pub(crate) struct ChestLootTables {
+    tables: HashMap<&'static str, LootTable>,
     books: BookEnchantments,
 }
 
-impl DungeonLoot {
+impl ChestLootTables {
     pub(super) fn load(archive: &mut ZipArchive<impl Read + Seek>) -> io::Result<Option<Self>> {
-        let data = match archive.by_name("data/minecraft/loot_table/chests/simple_dungeon.json") {
-            Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other)?,
-            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
-            Err(error) => return Err(io::Error::other(error)),
-        };
+        let mut tables = HashMap::new();
+        for name in ["chests/simple_dungeon", "chests/desert_pyramid"] {
+            let data = match archive.by_name(&format!("data/minecraft/loot_table/{name}.json")) {
+                Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other),
+                Err(zip::result::ZipError::FileNotFound) => continue,
+                Err(error) => Err(io::Error::other(error)),
+            };
+            match data {
+                Ok(data) => {
+                    tables.insert(name, LootTable::parse(&data));
+                }
+                Err(error) => warn!("Cannot load chest loot table {name}: {error}"),
+            }
+        }
+        if tables.is_empty() {
+            return Ok(None);
+        }
         let mut names = Vec::new();
         book_options(archive, BOOK_TAG, &mut Vec::new(), &mut names)?;
         let mut books = Vec::new();
@@ -44,20 +57,25 @@ impl DungeonLoot {
             books.push((name, max_level));
         }
         if books.is_empty() {
-            return Err(invalid("dungeon loot enchantment tag is empty"));
+            return Err(invalid("chest loot enchantment tag is empty"));
         }
         Ok(Some(Self {
-            table: LootTable::parse(&data),
+            tables,
             books: BookEnchantments(books),
         }))
     }
 
+    pub(crate) fn get(&self, id: &str) -> Option<&LootTable> {
+        self.tables.get(id.strip_prefix("minecraft:").unwrap_or(id))
+    }
+
     pub(crate) fn fill(
         &self,
+        table: &LootTable,
         codec: &ItemCodec,
         random: &mut dyn RandomSource,
     ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
-        let rolled = self.table.roll(Context {
+        let rolled = table.roll(Context {
             state: block_states().default_state("minecraft:air").unwrap(),
             tool: &ItemStack::empty(),
             random,

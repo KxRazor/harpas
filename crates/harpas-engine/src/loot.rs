@@ -1,4 +1,4 @@
-//! Loot tables from the vanilla data pack, evaluated for broken blocks and dungeon chests.
+//! Loot tables from the vanilla data pack, evaluated for broken blocks and chests.
 //!
 //! A table rolls each pool whose conditions pass, as many times as its `rolls`, and each roll picks one of the
 //! entries that expand, by weight; then the entry's, the pool's and the table's functions apply, and stacks over
@@ -8,7 +8,7 @@
 //! Supported: `item`, `alternatives`, `group`, `sequence` and `empty` entries; the conditions
 //! `survives_explosion`, `block_state_property`, `match_tool` (by item, the tool's data components not being
 //! decoded yet), `random_chance`, `table_bonus`, `any_of`, `all_of` and `inverted`; the functions `set_count`,
-//! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Dungeon books
+//! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Chest books
 //! support `enchant_randomly` with the vanilla loot enchantment tag. Tool enchantments are read as none.
 //! Not done yet: `location_check` and
 //! `entity_properties` conditions (read as false) and `dynamic` entries (which add nothing), and the functions
@@ -27,9 +27,7 @@ use serde_json::Value;
 use crate::inventory::ItemStack;
 use crate::item_data::ItemCodec;
 
-mod dungeon;
-
-pub(crate) use dungeon::DUNGEON_CHEST;
+mod chest;
 
 /// A number provider (`NumberProvider`).
 #[derive(Debug, Clone, PartialEq)]
@@ -269,7 +267,7 @@ enum Function {
     },
     /// `apply_bonus` that changes nothing without a level, though `uniform_bonus_count` still draws.
     UniformBonus,
-    /// The book entry in the dungeon table, using the `on_random_loot` enchantment tag.
+    /// A book in a chest table, using the `on_random_loot` enchantment tag.
     EnchantBook,
     /// A function that changes nothing for a broken block without an explosion or the data it copies.
     None,
@@ -325,9 +323,7 @@ impl Function {
             "minecraft:explosion_decay" | "minecraft:copy_components" | "minecraft:copy_state" => {
                 Self::None
             }
-            "minecraft:enchant_randomly"
-                if value["options"].as_str() == Some(dungeon::BOOK_TAG) =>
-            {
+            "minecraft:enchant_randomly" if value["options"].as_str() == Some(chest::BOOK_TAG) => {
                 Self::EnchantBook
             }
             other => {
@@ -531,7 +527,7 @@ struct Context<'a> {
     state: u32,
     tool: &'a ItemStack,
     random: &'a mut dyn RandomSource,
-    books: Option<(&'a dungeon::BookEnchantments, &'a ItemCodec)>,
+    books: Option<(&'a chest::BookEnchantments, &'a ItemCodec)>,
 }
 
 impl LootTable {
@@ -658,11 +654,11 @@ impl LootTable {
     }
 }
 
-/// The loot tables for blocks and dungeon chests.
+/// The loot tables for blocks and supported chests.
 #[derive(Debug, Default)]
 pub struct LootTables {
     blocks: HashMap<String, LootTable>,
-    pub(crate) dungeon: Option<dungeon::DungeonLoot>,
+    pub(crate) chests: Option<chest::ChestLootTables>,
 }
 
 impl LootTables {
@@ -689,9 +685,9 @@ impl LootTables {
             let json: Value = serde_json::from_str(&text).map_err(io::Error::other)?;
             tables.insert(&format!("minecraft:{block}"), &json);
         }
-        match dungeon::DungeonLoot::load(&mut archive) {
-            Ok(dungeon) => tables.dungeon = dungeon,
-            Err(error) => warn!("Dungeon chests cannot generate their loot: {error}"),
+        match chest::ChestLootTables::load(&mut archive) {
+            Ok(chests) => tables.chests = chests,
+            Err(error) => warn!("Chests cannot generate their loot: {error}"),
         }
         Ok(tables)
     }

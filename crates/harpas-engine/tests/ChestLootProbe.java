@@ -1,4 +1,4 @@
-// Opens and removes dungeon chests using the shipped data pack and a deterministic level.
+// Opens and removes chests using the shipped data pack and a deterministic level.
 import java.nio.file.*;
 import java.util.*;
 import net.minecraft.SharedConstants;
@@ -28,7 +28,7 @@ import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.storage.loot.BuiltInLootTables;
 
-public final class DungeonChestProbe {
+public final class ChestLootProbe {
     static final class ProbeServer extends DedicatedServer {
         ReloadableServerRegistries.Holder registries;
         RandomSequences sequences;
@@ -94,12 +94,17 @@ public final class DungeonChestProbe {
                     enchantmentNames.add(enchantments.getKey(enchantment).toString());
                 }
                 Files.write(Path.of(args[2]), enchantmentNames);
+                var table = switch (args[3]) {
+                    case "simple_dungeon" -> BuiltInLootTables.SIMPLE_DUNGEON;
+                    case "desert_pyramid" -> BuiltInLootTables.DESERT_PYRAMID;
+                    default -> throw new IllegalArgumentException(args[3]);
+                };
                 var tags = new ListTag();
                 var ops = lookup.createSerializationContext(NbtOps.INSTANCE);
-                for (int i = 3; i < args.length; i++) {
-                    var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Dungeon", lookup);
+                for (int i = 4; i < args.length; i++) {
+                    var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Loot Chest", lookup);
                     chest.setLevel(level);
-                    chest.setLootTable(BuiltInLootTables.SIMPLE_DUNGEON, Long.parseLong(args[i]));
+                    chest.setLootTable(table, Long.parseLong(args[i]));
                     var pending = chest.saveWithFullMetadata(lookup);
                     tags.add(pending);
                     level.server.sequences = new RandomSequences();

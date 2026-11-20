@@ -21,6 +21,7 @@ use harpas_worldgen::shape_update::Direction;
 use log::error;
 
 use crate::block::{self, BlockPos};
+use crate::chest::CHEST;
 use crate::world::{ChunkState, World};
 
 /// `Block.UPDATE_NEIGHBORS`: run neighbor updates around the change.
@@ -131,11 +132,38 @@ impl World {
         if old == state {
             return false;
         }
+        let was_chest = block_states().name(old) == Some(CHEST);
+        let is_chest = block_states().name(state) == Some(CHEST);
+        let contents = if was_chest && !is_chest {
+            match self.chest_items(pos) {
+                Ok(items) => Some(items),
+                Err(error) => {
+                    // Keep loot seeds and unsupported stacks in the world until their codecs are available.
+                    log::debug!("Keeping chest at {pos:?}: {error}");
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
         let Some(chunk) = self.chunk_mut(pos.chunk()) else {
             return false;
         };
         if block::set(chunk, pos, state).is_none() {
             return false;
+        }
+        if let Some(items) = contents
+            && flags & UPDATE_SUPPRESS_DROPS == 0
+        {
+            for stack in items {
+                self.pop_resource(pos, stack);
+            }
+        }
+        if is_chest
+            && !was_chest
+            && let Err(error) = self.save_chest(pos, &[])
+        {
+            log::debug!("Cannot initialize chest at {pos:?}: {error}");
         }
         if block::changes_light(old, state) {
             self.relight_around(pos);
@@ -182,6 +210,9 @@ impl World {
             return false;
         };
         if block_states().is_air(state) {
+            return false;
+        }
+        if block_states().name(state) == Some(CHEST) && self.chest_items(pos).is_err() {
             return false;
         }
         let fire = matches!(

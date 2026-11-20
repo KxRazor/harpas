@@ -3,7 +3,8 @@
 //! Design: `docs/engine-core.md`.
 
 pub mod block;
-mod crafting;
+mod block_menu;
+mod chest;
 pub mod entity;
 pub mod entity_data;
 pub(crate) mod fluid;
@@ -898,9 +899,9 @@ impl Game {
         else {
             return;
         };
-        if self.players[index].crafting_table.is_some() {
+        if self.players[index].block_menu.is_some() {
             let drops = self.players[index].with_menu(inventory::Inventory::take_transient_items);
-            self.players[index].crafting_table = None;
+            self.players[index].block_menu = None;
             for stack in drops {
                 self.drop_item(index, stack);
             }
@@ -1055,7 +1056,7 @@ impl Game {
                     self.players[index].digging.has_delayed_destroy = false;
                 } else if self.increment_destroy_progress(index, state, pos, start) >= 1.0 {
                     self.players[index].digging.has_delayed_destroy = false;
-                    self.destroy_block(index, pos);
+                    self.destroy_and_acknowledge(index, pos);
                 }
             } else if digging.is_destroying {
                 let pos = digging.destroy_pos;
@@ -1140,8 +1141,7 @@ impl Game {
     }
 
     /// Breaks a block for a player, as vanilla's `ServerPlayerGameMode.destroyBlock`. Returns whether the
-    /// player's prediction stands. A block broken in Survival drops nothing and costs no hunger until items and
-    /// hunger exist.
+    /// player's prediction stands.
     fn destroy_block(&mut self, index: usize, pos: block::BlockPos) -> bool {
         let Some(world) = &mut self.world else {
             return true;
@@ -1153,6 +1153,14 @@ impl Game {
         // Only operators may break these, and there are none yet.
         if block::is_game_master_block(state) {
             world.block_changed(pos);
+            return false;
+        }
+        if !world.set_block(
+            pos,
+            block::removed(state),
+            neighbor::UPDATE_ALL,
+            neighbor::UPDATE_LIMIT,
+        ) {
             return false;
         }
         // `playerWillDestroy`: the particles and sound of the broken block, for the other players nearby.
@@ -1169,12 +1177,6 @@ impl Game {
                 });
             }
         }
-        world.set_block(
-            pos,
-            block::removed(state),
-            neighbor::UPDATE_ALL,
-            neighbor::UPDATE_LIMIT,
-        );
         // A player in Survival who may harvest the block gets its drops (`playerDestroy`); in Creative, none.
         let mode = self.players[index].player.profile.game_mode;
         let tool = {
@@ -1188,6 +1190,11 @@ impl Game {
         // The particles and sound of the blocks that broke with it, for every player nearby.
         let events = world.take_level_events();
         send_level_events(&self.players, &events);
+        for viewer in 0..self.players.len() {
+            if self.players[viewer].chest_position() == Some(pos) {
+                self.close_block_menu(viewer);
+            }
+        }
         true
     }
 

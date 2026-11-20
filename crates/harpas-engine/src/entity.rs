@@ -826,7 +826,7 @@ impl World {
 
     /// `Block.popResource`: an item entity at a random point around the block's center, thrown a little up, picked
     /// up after 10 ticks.
-    fn pop_resource(&mut self, pos: BlockPos, stack: ItemStack) {
+    pub(crate) fn pop_resource(&mut self, pos: BlockPos, stack: ItemStack) {
         if stack.is_empty() {
             return;
         }

@@ -11,7 +11,8 @@ Creative and, with an empty hand, in Survival, the neighbors of a changed block 
 shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, players place
 blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their
 loot, players pick items up, and they move items in their inventory and craft in its 2x2 grid or at a crafting
-table's 3x3 grid; the other placements, scheduled block ticks and random ticks are to come), saving other world and player data,
+table's 3x3 grid and store items in simple chests; the other placements, scheduled block ticks and random ticks
+are to come), saving other world and player data,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -94,7 +95,13 @@ are a view of the player's inventory, so pickups and item use continue to change
 closes when its table is gone or more than eight blocks from the player's feet to the table's center. Closing
 returns the cursor and ingredients to the inventory and drops what does not fit; departure drops the transient
 items. The result slot is a preview, not an additional saved item. Recipe-book placement, special recipes,
-results with data components and the other containers remain to be implemented.
+and results with data components remain to be implemented.
+
+A simple chest has 27 shared slots. Its chunk's block entity holds the authoritative contents in vanilla's
+`Items` list. Each viewer has its own window ID, cursor and synchronization state. Clicks update the chunk
+before the new slots are sent to viewers, and the next chunk save includes that inventory. Breaking a chest
+closes its viewers' menus and drops the stored items. Double chests, locks and structure loot are pending.
+Chests with deferred loot or unsupported item data retain their saved block entity until it can be decoded.
 
 Player inventories now load before their first inventory synchronization and before gameplay can change
 items. A dedicated worker reads and writes their vanilla player documents; the logic thread takes immutable

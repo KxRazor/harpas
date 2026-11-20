@@ -1273,11 +1273,15 @@ impl World {
         let ChunkState::Loaded(_) = self.chunks.get(&pos)? else {
             return None;
         };
-        let changes = self.changes.entry(pos).or_default();
-        changes.terrain_changed();
         self.invalidate_light(pos);
-        let Some(ChunkState::Loaded(chunk)) = self.chunks.get_mut(&pos) else {
-            unreachable!("the chunk was loaded above");
+        self.chunk_contents_mut(pos)
+    }
+
+    /// Edits saved metadata without invalidating light, which only depends on block states.
+    pub(crate) fn chunk_contents_mut(&mut self, pos: ChunkPos) -> Option<&mut Chunk> {
+        self.mark_changed(pos);
+        let ChunkState::Loaded(chunk) = self.chunks.get_mut(&pos)? else {
+            return None;
         };
         Some(Arc::make_mut(chunk))
     }
@@ -4626,6 +4630,183 @@ mod tests {
     }
 
     #[test]
+    fn simple_chest_shares_items_between_viewers_and_drops_them_on_break() {
+        use crate::inventory::{CHEST_SLOTS, HOTBAR, ItemStack};
+        use harpas_core::block_behavior::Face;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let chunk_pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(chunk_pos, DATA_VERSION)]);
+        let (first_output, first) = crate::player::output_channel();
+        let (second_output, second) = crate::player::output_channel();
+        let mut game = Game {
+            pending: Vec::new(),
+            players: Vec::new(),
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            world: Some(World::open(&folder.0, BIOMES).unwrap()),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.join(1, profile(), 2, 2, false, first_output);
+        let mut other = profile();
+        other.uuid = 2;
+        game.join(2, other, 2, 2, false, second_output);
+        wait_until(|| {
+            tick(&mut game, 1);
+            game.players
+                .iter()
+                .all(|player| player.sent_chunks.contains(&chunk_pos))
+        });
+        for (index, player) in game.players.iter_mut().enumerate() {
+            player.awaiting_teleport = None;
+            player.player.position = crate::player::Position {
+                x: 7.5 + index as f64,
+                y: -51.0,
+                z: 7.5,
+                ..Default::default()
+            };
+            player.player.profile.game_mode = GameMode::Survival;
+        }
+        let chest = BlockPos { x: 8, y: -51, z: 9 };
+        let below = BlockPos {
+            y: chest.y - 1,
+            ..chest
+        };
+        let above = BlockPos {
+            y: chest.y + 1,
+            ..chest
+        };
+        let states = block_states();
+        let air = states.default_state("minecraft:air").unwrap();
+        let stone = states.default_state("minecraft:stone").unwrap();
+        let world = game.world.as_mut().unwrap();
+        world.set_block_state(chest, air);
+        let stack = |name: &str, count| ItemStack {
+            item: items().id(name).unwrap(),
+            count,
+            ..ItemStack::empty()
+        };
+        game.players[0].inventory.slots[HOTBAR] = stack(crate::chest::CHEST, 1);
+        game.use_item_on(0, false, below, Face::Up, [0.5; 3], 1);
+        assert!(game.players[0].inventory.slots[HOTBAR].is_empty());
+        let world = game.world.as_mut().unwrap();
+        let placed = world.block_state(chest).unwrap();
+        assert!(crate::chest::is_single(placed));
+        assert!(
+            states
+                .properties(placed)
+                .unwrap()
+                .1
+                .contains(&("facing", "north"))
+        );
+        assert!(world.chest_tag(chest).unwrap().is_some());
+
+        game.use_item_on(0, false, chest, Face::Up, [0.5; 3], 2);
+        assert_eq!(game.players[0].container_id(), 0, "blocked by stone");
+        assert_eq!(
+            game.world.as_mut().unwrap().set_block_state(above, air),
+            Some(stone)
+        );
+        first.try_iter().for_each(drop);
+        second.try_iter().for_each(drop);
+        game.players[0].inventory.slots[HOTBAR] = stack("minecraft:diamond", 9);
+        for (index, output) in [&first, &second].into_iter().enumerate() {
+            game.use_item_on(index, false, chest, Face::Up, [0.5; 3], 3);
+            assert_eq!(
+                output.try_recv(),
+                Ok(Output::OpenChest {
+                    container_id: 1,
+                    title: None
+                })
+            );
+            assert!(
+                matches!(output.try_recv(), Ok(Output::InventoryContent { container_id: 1, slots, .. }) if slots.len() == 63)
+            );
+            output.try_iter().for_each(drop);
+        }
+        let click = |game: &mut Game, index: usize, slot, button, mode| {
+            let id = game.players[index]
+                .block_menu
+                .as_ref()
+                .unwrap()
+                .contents
+                .state_id();
+            game.click_container(index, 1, id, slot, button, mode, Vec::new(), None);
+        };
+        // Shift-click into slot zero, then take half from a second viewer's screen before the next tick.
+        click(&mut game, 0, 54, 0, 1);
+        click(&mut game, 1, 0, 1, 0);
+        assert_eq!(
+            game.players[1].inventory.carried,
+            stack("minecraft:diamond", 5)
+        );
+        game.send_inventory_changes();
+        assert!(first.try_iter().any(|output| matches!(
+            output, Output::SetSlot { container_id: 1, slot: 0, stack: changed, .. }
+            if changed == stack("minecraft:diamond", 4)
+        )));
+        click(&mut game, 0, 0, 0, 1);
+        assert_eq!(
+            game.players[0].inventory.slots[HOTBAR + 8],
+            stack("minecraft:diamond", 4)
+        );
+        assert!(game.world.as_ref().unwrap().chest_items(chest).unwrap()[0].is_empty());
+        // The last visible slot is the last hotbar slot. Shift-click it back into the empty chest.
+        click(&mut game, 0, 62, 0, 1);
+        assert!(game.players[0].inventory.slots[HOTBAR + 8].is_empty());
+        let world = game.world.as_ref().unwrap();
+        let items = world.chest_items(chest).unwrap();
+        assert_eq!(items[0], stack("minecraft:diamond", 4));
+        assert!(items[1..CHEST_SLOTS].iter().all(ItemStack::is_empty));
+
+        // Breaking in Creative still scatters the stored items and closes both screens.
+        game.players[0].player.profile.game_mode = GameMode::Creative;
+        assert!(game.destroy_block(0, chest));
+        assert!(game.players.iter().all(|p| p.block_menu.is_none()));
+        assert!(first.try_iter().any(|o| o == Output::CloseContainer(1)));
+        assert!(second.try_iter().any(|o| o == Output::CloseContainer(1)));
+        assert_eq!(
+            game.players[1].inventory.slots[HOTBAR],
+            stack("minecraft:diamond", 5)
+        );
+        let world = game.world.as_ref().unwrap();
+        assert!(world.chest_tag(chest).unwrap().is_none());
+        let dropped: Vec<_> = world
+            .entities
+            .order
+            .iter()
+            .filter_map(|&h| world.entities.item(h))
+            .map(|item| item.stack.clone())
+            .collect();
+        assert_eq!(dropped, [stack("minecraft:diamond", 4)]);
+
+        // A generated chest keeps its loot seed even when a player tries to open or break it.
+        let world = game.world.as_mut().unwrap();
+        assert!(world.set_block_state(chest, placed).is_some());
+        let chunk = world.chunk_contents_mut(chunk_pos).unwrap();
+        let tag = Compound::from_iter([
+            ("id", Nbt::from(crate::chest::CHEST)),
+            ("x", Nbt::Int(chest.x)),
+            ("y", Nbt::Int(chest.y)),
+            ("z", Nbt::Int(chest.z)),
+            ("LootTable", Nbt::from("minecraft:chests/simple_dungeon")),
+            ("LootTableSeed", Nbt::Long(23)),
+        ]);
+        chunk.rest.insert(
+            "block_entities",
+            Nbt::List(harpas_core::nbt::List::Compound(vec![tag.clone()])),
+        );
+        game.use_item_on(0, false, chest, Face::Up, [0.5; 3], 4);
+        assert_eq!(game.players[0].container_id(), 0);
+        assert!(!game.destroy_block(0, chest));
+        assert_eq!(
+            game.world.as_ref().unwrap().chest_tag(chest).unwrap(),
+            Some(&tag)
+        );
+    }
+
+    #[test]
     fn crafting_tables_have_independent_menus_and_return_items_when_they_close() {
         use crate::inventory::ItemStack;
         use harpas_core::block_behavior::Face;
@@ -4689,7 +4870,7 @@ mod tests {
         game.send_inventory_changes();
         received.try_iter().for_each(drop);
         let menu_state = game.players[0]
-            .crafting_table
+            .block_menu
             .as_ref()
             .unwrap()
             .contents
@@ -4711,7 +4892,7 @@ mod tests {
             })
         ));
         let menu_state = game.players[0]
-            .crafting_table
+            .block_menu
             .as_ref()
             .unwrap()
             .contents
@@ -4741,12 +4922,7 @@ mod tests {
         game.players[1].player.position = game.players[0].player.position;
         game.open_crafting_table(1, table);
         assert!(
-            game.players[1]
-                .crafting_table
-                .as_ref()
-                .unwrap()
-                .contents
-                .slots[..10]
+            game.players[1].block_menu.as_ref().unwrap().contents.slots[..10]
                 .iter()
                 .all(ItemStack::is_empty)
         );
@@ -4754,13 +4930,7 @@ mod tests {
         game.close_container(0, 0);
         game.click_container(0, 0, -1, 9, 0, 0, Vec::new(), None);
         assert_eq!(
-            game.players[0]
-                .crafting_table
-                .as_ref()
-                .unwrap()
-                .contents
-                .slots[9]
-                .count,
+            game.players[0].block_menu.as_ref().unwrap().contents.slots[9].count,
             3
         );
         // A pickup updates the inventory while the menu is open, and the table sees it in its own layout.
@@ -4775,10 +4945,10 @@ mod tests {
             ..Default::default()
         };
         game.send_inventory_changes();
-        assert!(game.players[0].crafting_table.is_some());
+        assert!(game.players[0].block_menu.is_some());
         game.players[0].player.position.x += 0.001;
         game.send_inventory_changes();
-        assert!(game.players[0].crafting_table.is_none());
+        assert!(game.players[0].block_menu.is_none());
         assert!(received.try_iter().any(|o| o == Output::CloseContainer(1)));
         let count = |inventory: &crate::inventory::Inventory, name: &str| {
             inventory.slots[9..45]
@@ -4798,7 +4968,7 @@ mod tests {
         game.players[1].with_menu(|menu| menu.slots[8] = stack("minecraft:diamond", 2));
         game.world.as_mut().unwrap().set_block_state(table, stone);
         game.send_inventory_changes();
-        assert!(game.players[1].crafting_table.is_none());
+        assert!(game.players[1].block_menu.is_none());
         assert!(other.try_iter().any(|o| o == Output::CloseContainer(1)));
         assert_eq!(count(&game.players[1].inventory, "minecraft:diamond"), 2);
         // Opening another table closes the previous grid, increments the ID and rejects old clicks.
@@ -4820,14 +4990,14 @@ mod tests {
         game.players[0].secondary_use = true;
         game.players[0].inventory.slots[36] = stack("minecraft:stone", 1);
         game.use_item_on(0, false, table, Face::Up, [0.5; 3], 2);
-        assert!(game.players[0].crafting_table.is_none());
+        assert!(game.players[0].block_menu.is_none());
         game.players[0].inventory.slots[36] = ItemStack::empty();
         game.use_item_on(0, false, table, Face::Up, [0.5; 3], 3);
         assert_eq!(game.players[0].container_id(), 4);
         game.close_container(0, 4);
         game.players[0].player.profile.game_mode = GameMode::Spectator;
         game.use_item_on(0, false, table, Face::Up, [0.5; 3], 4);
-        assert!(game.players[0].crafting_table.is_none());
+        assert!(game.players[0].block_menu.is_none());
         // Disconnecting drops the transient grid and cursor instead of leaving them in a discarded menu.
         game.players[0].player.profile.game_mode = GameMode::Survival;
         game.open_crafting_table(0, table);

@@ -47,6 +47,29 @@ are intentionally not supported because they change vanilla behavior
 ([engine-core.md](engine-core.md#non-goals)). Paper's anti-xray settings map to Harpas' anti-xray
 ([world.md](world.md#anti-xray)).
 
+### Whitelist, bans and operators
+
+The four lists are loaded when the server starts, in vanilla's formats, and written back as vanilla writes them:
+`banned-players.json`, `banned-ips.json` and `ops.json` always, `whitelist.json` only when it does not exist. The
+entries come out in the order of vanilla's `HashMap`, with dates in the system's time zone and Gson's escaping,
+so the files are the same as vanilla's. Unlike vanilla, a file that cannot be read is left as it is rather than
+overwritten with what could be read of it.
+
+A player who has authenticated is checked in the order of vanilla's `PlayerList.canPlayerLogin`, with its
+messages:
+
+1. A player ban: `multiplayer.disconnect.banned.reason` with the reason, or the default reason, and the end of
+   the ban if it has one.
+2. The whitelist, when `white-list=true`: `multiplayer.disconnect.not_whitelisted`. Operators skip it.
+3. An IP ban: `multiplayer.disconnect.banned_ip.reason`. The key is the address as vanilla cuts it from
+   `/address:port`, so an IPv6 address leaves only `[` and its first group, as in vanilla.
+4. `max-players`: operators with `bypassesPlayerLimit` skip it.
+
+A ban whose end has passed still matches at first, as in vanilla: the login that finds it fails without a message,
+and the expired bans of that list are dropped until the server restarts, so the player's next login goes on. The
+commands that change the lists come with the command tree ([commands.md](commands.md)); until then the files are
+edited while the server is stopped.
+
 ---
 
 ## Server folder

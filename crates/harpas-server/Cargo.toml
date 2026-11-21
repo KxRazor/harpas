@@ -21,6 +21,7 @@ harpas-engine.workspace = true
 harpas-java.workspace = true
 harpas-protocol-java.workspace = true
 harpas-worldgen.workspace = true
+indexmap.workspace = true
 jiff.workspace = true
 log.workspace = true
 rustls.workspace = true

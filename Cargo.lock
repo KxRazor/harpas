@@ -866,6 +866,7 @@ dependencies = [
  "harpas-java",
  "harpas-protocol-java",
  "harpas-worldgen",
+ "indexmap",
  "jiff",
  "log",
  "nix",

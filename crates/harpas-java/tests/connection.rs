@@ -4,8 +4,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use harpas_java::{
-    Connection, ConnectionError, FrameReader, PlayEvent, ServerInfo, ServerKey, State,
-    offline_uuid, write_frame,
+    Connection, ConnectionError, FrameReader, LoginVerdict, PlayEvent, ServerInfo, ServerKey,
+    State, offline_uuid, write_frame,
 };
 use harpas_protocol_java::codec::DecodeError;
 use harpas_protocol_java::v26_1::{configuration, handshaking, login, play, status};
@@ -920,4 +920,98 @@ fn a_full_server_refuses_logins_as_vanilla() {
     let mut connection = new_connection();
     connection.receive(&bytes, &one_free).unwrap();
     assert!(connection.player().is_some());
+}
+
+#[test]
+fn checked_logins_wait_for_the_verdict_before_login_success() {
+    let bytes = [
+        handshake(775, handshaking::Intent::Login),
+        login_start("Steve"),
+    ]
+    .concat();
+    let full = ServerInfo {
+        max_players: 1,
+        online_players: 1,
+        ..offline()
+    };
+    let checking = || {
+        let mut connection = new_connection();
+        connection.require_login_check();
+        connection.receive(&bytes, &full).unwrap();
+        assert_eq!(connection.state(), State::Login);
+        assert!(connection.take_output().is_empty());
+        let player = connection.login_check().expect("a player to check");
+        assert_eq!(player.name, "Steve");
+        assert_eq!(player.uuid, offline_uuid("Steve"));
+        connection
+    };
+
+    // A refusal is sent as it is, whether or not the server is full.
+    let mut connection = checking();
+    let text = r#"{"translate":"multiplayer.disconnect.not_whitelisted"}"#;
+    connection
+        .checked(LoginVerdict::Refuse(text.to_owned()), &full)
+        .unwrap();
+    assert!(connection.is_closed());
+    assert!(connection.player().is_none());
+    assert_eq!(login_disconnect_reason(&connection.take_output()), text);
+
+    // Allowed players still find the server full, after the other checks, as in vanilla.
+    let mut connection = checking();
+    let allow = LoginVerdict::Allow {
+        bypasses_player_limit: false,
+    };
+    connection.checked(allow.clone(), &full).unwrap();
+    assert!(connection.is_closed());
+    assert_eq!(
+        login_disconnect_reason(&connection.take_output()),
+        r#"{"translate":"multiplayer.disconnect.server_full"}"#
+    );
+
+    // Operators who bypass the limit log in anyway, and a second verdict changes nothing.
+    let mut connection = checking();
+    connection
+        .checked(
+            LoginVerdict::Allow {
+                bypasses_player_limit: true,
+            },
+            &full,
+        )
+        .unwrap();
+    assert!(connection.login_check().is_none());
+    assert_eq!(connection.player().map(|p| p.name.as_str()), Some("Steve"));
+    let output = connection.take_output();
+    assert!(matches!(
+        login::clientbound::Packet::decode(&frames(&output)[0]),
+        Ok(login::clientbound::Packet::LoginSuccess(_))
+    ));
+    connection.checked(allow, &full).unwrap();
+    assert!(connection.take_output().is_empty());
+    assert!(!connection.is_closed());
+}
+
+#[test]
+fn packets_sent_during_the_login_check_wait_for_it() {
+    let acknowledged: login::serverbound::Packet = login::serverbound::LoginAcknowledged.into();
+    let bytes = [
+        handshake(775, handshaking::Intent::Login),
+        login_start("Steve"),
+        frame(acknowledged, |p, buf| p.encode(buf)),
+    ]
+    .concat();
+    let info = offline();
+    let mut connection = new_connection();
+    connection.require_login_check();
+    connection.receive(&bytes, &info).unwrap();
+    assert_eq!(connection.state(), State::Login);
+    assert!(connection.login_check().is_some());
+    connection
+        .checked(
+            LoginVerdict::Allow {
+                bypasses_player_limit: false,
+            },
+            &info,
+        )
+        .unwrap();
+    assert_eq!(connection.state(), State::Configuration);
 }

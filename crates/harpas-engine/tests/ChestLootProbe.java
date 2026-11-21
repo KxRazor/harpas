@@ -98,6 +98,7 @@ public final class ChestLootProbe {
                     case "simple_dungeon" -> BuiltInLootTables.SIMPLE_DUNGEON;
                     case "desert_pyramid" -> BuiltInLootTables.DESERT_PYRAMID;
                     case "buried_treasure" -> BuiltInLootTables.BURIED_TREASURE;
+                    case "shipwreck_treasure" -> BuiltInLootTables.SHIPWRECK_TREASURE;
                     default -> throw new IllegalArgumentException(args[3]);
                 };
                 Files.write(Path.of(args[4]), BuiltInRegistries.POTION.stream()

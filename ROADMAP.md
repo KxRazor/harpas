@@ -449,6 +449,8 @@ as shown by the parity report.
         dropped stacks match vanilla, including enchanted books and Dune armor trim templates (`chest_parity`).
   - [x] Buried treasure chests roll their loot when opened or broken unopened, including hearts of the sea and
         potions of Water Breathing. Menu slots, saved contents and dropped stacks match vanilla (`chest_parity`).
+  - [x] Shipwreck treasure chests roll their loot when opened or broken unopened. Menu slots, saved contents
+        and dropped stacks match vanilla, including Coast armor trim templates and nautilus armor (`chest_parity`).
   - [x] Normal furnaces open a three-slot menu, smelt on the game tick, and save their slots and timers in Anvil.
         Fuel values, blocked output and resumed iron smelting are compared with vanilla (`furnace_parity`).
   - [ ] The other chest loot tables, containers and recipe types, furnace experience and recipe-book placement.

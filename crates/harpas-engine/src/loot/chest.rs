@@ -29,6 +29,7 @@ impl ChestLootTables {
             "chests/simple_dungeon",
             "chests/desert_pyramid",
             "chests/buried_treasure",
+            "chests/shipwreck_treasure",
         ] {
             let data = match archive.by_name(&format!("data/minecraft/loot_table/{name}.json")) {
                 Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other),

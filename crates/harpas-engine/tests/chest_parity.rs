@@ -184,10 +184,12 @@ fn double_chest_order_shift_clicks_and_anvil_storage_match_vanilla() {
     check_chest(true);
 }
 
+const LOOT_SEEDS: [i64; 8] = [0, 1, 2, 3, 17, -1, 123456789, -7046029254386353131];
+
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
-    check_chest_loot("simple_dungeon", &["minecraft:enchanted_book"]);
+    check_chest_loot("simple_dungeon", &LOOT_SEEDS, &["minecraft:enchanted_book"]);
 }
 
 #[test]
@@ -195,6 +197,7 @@ fn dungeon_chest_loot_matches_vanilla_on_open_and_break() {
 fn desert_pyramid_chest_loot_matches_vanilla_on_open_and_break() {
     check_chest_loot(
         "desert_pyramid",
+        &LOOT_SEEDS,
         &[
             "minecraft:enchanted_book",
             "minecraft:dune_armor_trim_smithing_template",
@@ -207,11 +210,25 @@ fn desert_pyramid_chest_loot_matches_vanilla_on_open_and_break() {
 fn buried_treasure_chest_loot_matches_vanilla_on_open_and_break() {
     check_chest_loot(
         "buried_treasure",
+        &LOOT_SEEDS,
         &["minecraft:heart_of_the_sea", "minecraft:potion"],
     );
 }
 
-fn check_chest_loot(table: &str, required_items: &[&str]) {
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn shipwreck_treasure_chest_loot_matches_vanilla_on_open_and_break() {
+    check_chest_loot(
+        "shipwreck_treasure",
+        &[0, 1, 2, 3, 6, -1, 123456789, -7046029254386353131],
+        &[
+            "minecraft:coast_armor_trim_smithing_template",
+            "minecraft:iron_nautilus_armor",
+        ],
+    );
+}
+
+fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
     let reference = Reference::required();
     reference.compile(&[
         ("ChestProbe.java", include_str!("ChestProbe.java")),
@@ -221,7 +238,6 @@ fn check_chest_loot(table: &str, required_items: &[&str]) {
     let components = reference.temp.0.join("components.txt");
     let enchantments = reference.temp.0.join("enchantments.txt");
     let potions = reference.temp.0.join("potions.txt");
-    let seeds = [0_i64, 1, 2, 3, 17, -1, 123456789, -7046029254386353131];
     reference.java(
         "ChestLootProbe",
         [&tags, &components, &enchantments]
@@ -229,7 +245,7 @@ fn check_chest_loot(table: &str, required_items: &[&str]) {
             .into_iter()
             .chain([table.to_owned()])
             .chain([potions.display().to_string()])
-            .chain(seeds.map(|seed| seed.to_string())),
+            .chain(seeds.iter().map(i64::to_string)),
     );
     let tags = read_tags(&tags);
     let (cases, _) = tags.as_chunks::<3>();
@@ -246,7 +262,7 @@ fn check_chest_loot(table: &str, required_items: &[&str]) {
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
     let pos = BlockPos { x: 1, y: 65, z: 0 };
     let mut observed = HashSet::new();
-    for (seed, [unopened, expected, removal]) in seeds.into_iter().zip(cases) {
+    for (&seed, [unopened, expected, removal]) in seeds.iter().zip(cases) {
         let Some(Nbt::List(List::Compound(items))) = expected.get("Items") else {
             panic!("expected loot for seed {seed}");
         };

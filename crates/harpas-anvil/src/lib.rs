@@ -12,6 +12,7 @@
 mod chunk;
 mod file;
 mod journal;
+mod maps;
 mod region;
 mod version;
 mod world;
@@ -19,6 +20,7 @@ mod world;
 pub use chunk::{Chunk, ChunkSection};
 pub use file::Source;
 pub use journal::{Recovery, recover};
+pub use maps::MapFiles;
 pub use region::{Region, read_chunk, read_entity_chunk, region_of, write_chunks};
 pub use version::{
     DATA_VERSION, MINECRAFT_VERSION, SUPPORTED, VersionError, check_chunk, check_level,

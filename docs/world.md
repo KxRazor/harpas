@@ -55,7 +55,9 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
   [7]: the new file is written first (`level.dat_new` for `level.dat`), the current one becomes `<name>_old`,
   and the new one takes its place. Reading falls back to the `_old` backup when the file is missing or
   damaged, so a crash at any point leaves a readable file.
-- The rest of the world folder (statistics, advancements, saved data such as maps, raids and scoreboards)
+- Map images live in `data/minecraft/maps/<id>.dat`, with `last_id.dat` recording the last allocated ID.
+  A worker saves the treasure map before the chest can give out an item with that ID.
+- The rest of the world folder (statistics, advancements, saved data such as raids and scoreboards)
   uses vanilla's files and formats.
 
 ### Supported world versions

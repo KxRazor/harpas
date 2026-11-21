@@ -14,6 +14,7 @@ pub mod inventory;
 pub mod item_data;
 pub mod light;
 pub mod loot;
+mod maps;
 mod menu;
 pub mod mining;
 pub mod neighbor;
@@ -25,6 +26,8 @@ pub(crate) mod ticks;
 mod tracking;
 pub mod world;
 pub mod worldgen;
+
+pub use maps::{MapData, MapIcon, MapIconKind};
 
 use std::collections::HashSet;
 use std::fmt;
@@ -207,7 +210,7 @@ pub fn start_with_world(
 pub struct GameData {
     /// The blocks' shape rules; without them, block changes leave their neighbors as they are.
     pub shapes: Option<Arc<ShapeUpdates>>,
-    /// Loot tables for broken blocks and dungeon chests.
+    /// Loot tables for broken blocks and supported chests.
     pub loot: Option<Arc<loot::LootTables>>,
     /// The crafting recipes; without them, nothing is crafted.
     pub recipes: Option<Arc<recipe::Recipes>>,
@@ -508,6 +511,7 @@ impl TickWork for Game {
         self.track_entities(&removed);
         // Players tick with the entities (`ServerPlayer.tick`), and pick up the items they touch (`aiStep`).
         self.tick_digging();
+        self.retry_map_chests();
         self.pick_up_items();
         // Block entities tick after entities. A furnace's lit block state is broadcast on the next tick.
         let furnaces = self
@@ -518,6 +522,7 @@ impl TickWork for Game {
             self.synchronize_furnace(position, &furnace);
         }
         self.send_inventory_changes();
+        self.send_held_maps();
     }
 
     fn connections(&mut self) {
@@ -1177,6 +1182,14 @@ impl Game {
         // Only operators may break these, and there are none yet.
         if block::is_game_master_block(state) {
             world.block_changed(pos);
+            return false;
+        }
+        if let Err(error) = world.prepare_chest_map(pos) {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                self.players[index].pending_map_chest = Some(maps::PendingChestAction::Break(pos));
+            } else {
+                log::debug!("Cannot break chest at {pos:?}: {error}");
+            }
             return false;
         }
         if !world.set_block(

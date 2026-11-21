@@ -9,10 +9,12 @@ use harpas_worldgen::{
     GeneratedChunk, HeightmapType, NoiseBasedChunkGenerator, StructureTemplates, WorldgenData,
 };
 
-use crate::world::{ChunkGenerator, ChunkPos, ChunkReader};
+use crate::block::BlockPos;
+use crate::world::{ChunkGenerator, ChunkPos, ChunkReader, ChunkSource, ChunkStorage};
 
 mod features;
 mod structures;
+mod treasure;
 
 pub use features::{decorated, decorated_with_structures};
 
@@ -21,6 +23,9 @@ pub use structures::DecorationStarts;
 /// The structure starts whose pieces reach a chunk, which its decoration places, with what they read around it.
 pub type StartSource =
     dyn Fn(ChunkPos, &ChunkReader<'_>) -> io::Result<DecorationStarts> + Send + Sync;
+
+type TreasureSource =
+    dyn Fn(BlockPos, &ChunkStorage) -> io::Result<Option<(crate::MapData, [i32; 2])>> + Send + Sync;
 
 /// The Overworld's structure starts for decoration, read from saved chunks where they have them.
 pub fn overworld_starts(
@@ -51,6 +56,23 @@ pub struct Overworld {
     pub generator: Arc<ChunkGenerator>,
     /// The structure starts whose pieces reach a chunk, when the world generates structures.
     pub starts: Option<Arc<StartSource>>,
+    treasure: Option<Arc<TreasureSource>>,
+}
+
+impl Overworld {
+    /// Adds FEATURES decoration and enables exploration maps to use the same structure and biome generator.
+    pub fn decorate(
+        self,
+        seed: i64,
+        data: Arc<WorldgenData>,
+        templates: Arc<StructureTemplates>,
+    ) -> io::Result<Arc<dyn ChunkSource>> {
+        if let Some(starts) = self.starts {
+            features::with_structures(self.generator, starts, seed, data, templates, self.treasure)
+        } else {
+            decorated(self.generator, seed, &data, templates)
+        }
+    }
 }
 
 /// Compiles the Overworld's generator, whose biome IDs match the registry used to read and send chunks, and with
@@ -87,6 +109,16 @@ pub fn overworld(
             Arc::clone(&data),
         )
     });
+    let treasure = structure_source.as_ref().map(|structures| {
+        let (structures, generator, data) = (
+            Arc::clone(structures),
+            Arc::clone(&generator),
+            Arc::clone(&data),
+        );
+        Arc::new(move |pos, storage: &ChunkStorage| {
+            treasure::build(&structures, &generator, &data, pos, storage)
+        }) as Arc<TreasureSource>
+    });
     let chunks: Arc<ChunkGenerator> = Arc::new(move |pos, read| {
         let mut structures = if let Some(structures) = &structure_source {
             structures.for_chunk(pos, &generator, &data, read)?
@@ -109,6 +141,7 @@ pub fn overworld(
     Ok(Overworld {
         generator: chunks,
         starts,
+        treasure,
     })
 }
 

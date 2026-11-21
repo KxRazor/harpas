@@ -75,6 +75,7 @@ impl Game {
             self.players[index].send(Output::CloseContainer(active));
         }
         let state = &mut self.players[index];
+        state.pending_map_chest = None;
         state.next_container_id = state.next_container_id % 100 + 1;
         let id = state.next_container_id;
         state.block_menu = Some(BlockMenu {
@@ -107,8 +108,17 @@ impl Game {
         }
         let spectator =
             self.players[index].player.profile.game_mode == crate::player::GameMode::Spectator;
-        let Ok((items, title)) = world.open_chest_menu(chest, spectator) else {
-            return;
+        let (items, title) = match world.open_chest_menu(chest, spectator) {
+            Ok(menu) => menu,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                self.players[index].pending_map_chest =
+                    Some(crate::maps::PendingChestAction::Open(position));
+                return;
+            }
+            Err(error) => {
+                log::debug!("Cannot open chest at {position:?}: {error}");
+                return;
+            }
         };
         let double = chest.is_double();
         let mut menu = block_inventory(MenuKind::Chest { double });

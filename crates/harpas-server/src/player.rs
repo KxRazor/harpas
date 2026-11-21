@@ -273,6 +273,46 @@ pub(crate) fn send(
 ) -> Option<&'static str> {
     while let Some(output) = session.try_recv() {
         let packet = match output {
+            Output::MapUpdate {
+                id,
+                scale,
+                locked,
+                icons,
+                colors,
+            } => clientbound::MapData {
+                map_id: id,
+                scale,
+                locked,
+                icons: Some(
+                    icons
+                        .into_iter()
+                        .map(|icon| play::MapIcon {
+                            kind: match icon.kind {
+                                harpas_engine::MapIconKind::Player => 0,
+                                harpas_engine::MapIconKind::PlayerOffMap => 6,
+                                harpas_engine::MapIconKind::PlayerOffLimits => 7,
+                                harpas_engine::MapIconKind::RedX => 26,
+                            },
+                            x: icon.x,
+                            z: icon.z,
+                            direction: icon.direction,
+                            display_name: None,
+                        })
+                        .collect(),
+                ),
+                patch: colors.map_or(play::MapPatch::Unchanged, |colors| {
+                    play::MapPatch::Patch(
+                        128,
+                        play::MapPatchData {
+                            rows: 128,
+                            x: 0,
+                            y: 0,
+                            colors: colors.to_vec(),
+                        },
+                    )
+                }),
+            }
+            .into(),
             Output::ChatSessionEnded { uuid } => clientbound::PlayerInfoUpdate {
                 updates: play::PlayerInfoUpdates {
                     actions: play::PlayerInfoActions {

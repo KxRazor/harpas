@@ -1,6 +1,6 @@
 //! Players, movement checks, and what each player can see.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -238,6 +238,19 @@ pub struct Player {
 /// A message for a player's connection to translate into edition-specific packets.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
+    /// Update the image and decorations of a map in one of the player's hands.
+    MapUpdate {
+        /// The item's saved map ID.
+        id: i32,
+        /// The number of doublings of each pixel's width in blocks.
+        scale: i8,
+        /// Whether the map is locked in saved data.
+        locked: bool,
+        /// The current decorations.
+        icons: Vec<crate::MapIcon>,
+        /// The full 128 × 128 image on the first update.
+        colors: Option<Arc<[u8]>>,
+    },
     /// Publish a player's signing session before any messages using it.
     ChatSession {
         /// Player who owns the session.
@@ -576,6 +589,8 @@ pub(crate) struct PlayerState {
     /// The highest block change sequence to acknowledge in this tick (`ackBlockChangesUpTo`).
     pub(crate) acknowledge_block_changes: Option<i32>,
     pub(crate) digging: Digging,
+    pub(crate) pending_map_chest: Option<crate::maps::PendingChestAction>,
+    pub(crate) sent_maps: HashMap<i32, Vec<crate::MapIcon>>,
     pub(crate) inventory: Inventory,
     pub(crate) data_ready: bool,
     pub(crate) saved_inventory: Option<Arc<crate::player_data::PlayerInventory>>,
@@ -660,6 +675,8 @@ impl PlayerState {
             chat_spam: 0,
             acknowledge_block_changes: None,
             digging: Digging::default(),
+            pending_map_chest: None,
+            sent_maps: HashMap::new(),
             inventory: Inventory::default(),
             data_ready: true,
             saved_inventory: None,

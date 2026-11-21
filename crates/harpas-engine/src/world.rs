@@ -154,6 +154,15 @@ pub trait ChunkSource: Send + Sync {
         storage: &ChunkStorage,
     ) -> io::Result<Generated>;
 
+    /// Finds the buried treasure for an unopened shipwreck chest and builds its map preview.
+    fn treasure_map(
+        &self,
+        _origin: BlockPos,
+        _storage: &ChunkStorage,
+    ) -> io::Result<Option<(crate::MapData, [i32; 2])>> {
+        Ok(None)
+    }
+
     /// Saves any chunks the source holds in memory. Called on shutdown, once no worker is running.
     fn flush(&self, storage: &ChunkStorage) -> io::Result<()>;
 }
@@ -492,6 +501,7 @@ pub struct World {
     item_codec: Arc<RwLock<Arc<ItemCodec>>>,
     /// Loot tables for broken blocks and supported chests.
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
+    pub(crate) maps: crate::maps::Maps,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
     pub(crate) seed: i64,
     /// The crafting recipes, smelting recipes and furnace fuels.
@@ -590,6 +600,7 @@ impl World {
         let source = generator
             .clone()
             .map(|source| (source, Arc::clone(&storage)));
+        let maps = crate::maps::Maps::start(world_dir, source.clone())?;
         let load = Arc::new(move |pos: ChunkPos| {
             let storage = &*load_storage;
             let nbt = storage.read_unchecked(pos)?;
@@ -686,6 +697,7 @@ impl World {
             entity_data: HashMap::new(),
             item_codec,
             loot: None,
+            maps,
             seed,
             recipes: None,
             mining: None,
@@ -706,6 +718,13 @@ impl World {
         if let Some(store) = &mut self.player_store {
             store.codec = codec;
         }
+    }
+
+    pub(crate) fn item_codec(&self) -> Arc<ItemCodec> {
+        self.item_codec
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Incorporates entity mutations before snapshots or eviction. The entity and terrain revisions share
@@ -1924,6 +1943,7 @@ mod tests {
             entity_data: HashMap::new(),
             item_codec: Arc::new(RwLock::new(Arc::default())),
             loot: None,
+            maps: crate::maps::Maps::start(Path::new("test"), None).unwrap(),
             seed: 0,
             recipes: None,
             mining: None,
@@ -5701,7 +5721,7 @@ mod tests {
             let mut sequence = RandomSequence::new(world.seed, Some(&name));
             expected.extend(
                 chests
-                    .fill(chests.get(id).unwrap(), &codec, sequence.random())
+                    .fill(chests.get(id).unwrap(), &codec, sequence.random(), None)
                     .unwrap(),
             );
             assert_eq!(world.random_sequences.get(&name), Some(&sequence));

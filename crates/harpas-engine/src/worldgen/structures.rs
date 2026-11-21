@@ -109,6 +109,31 @@ impl ChunkStructures {
 }
 
 impl Structures {
+    pub(super) fn buried_treasure_at(
+        &self,
+        pos: ChunkPos,
+        set: &str,
+        generator: &NoiseBasedChunkGenerator,
+        data: &WorldgenData,
+        read: &ChunkReader<'_>,
+    ) -> io::Result<bool> {
+        let saved = read(pos)?;
+        if let Some(saved) = &saved
+            && saved.get("Status") != Some(&Nbt::from("minecraft:empty"))
+        {
+            return Ok(saved_starts(pos, saved, data, &self.templates)?
+                .iter()
+                .any(|start| start.structure == "minecraft:buried_treasure"));
+        }
+        if !self.state.is_structure_chunk(set, pos.x, pos.z) {
+            return Ok(false);
+        }
+        Ok(self
+            .starts(pos, generator, data, &|_| Ok(None))?
+            .iter()
+            .any(|start| start.structure == "minecraft:buried_treasure"))
+    }
+
     pub(super) fn new(
         seed: i64,
         data: &WorldgenData,

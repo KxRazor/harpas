@@ -5,9 +5,11 @@
 pub mod block;
 mod block_menu;
 mod chest;
+mod container_storage;
 pub mod entity;
 pub mod entity_data;
 pub(crate) mod fluid;
+mod furnace;
 pub mod inventory;
 pub mod item_data;
 pub mod light;
@@ -503,6 +505,14 @@ impl TickWork for Game {
         // Players tick with the entities (`ServerPlayer.tick`), and pick up the items they touch (`aiStep`).
         self.tick_digging();
         self.pick_up_items();
+        // Block entities tick after entities. A furnace's lit block state is broadcast on the next tick.
+        let furnaces = self
+            .world
+            .as_mut()
+            .map_or_else(Vec::new, world::World::tick_furnaces);
+        for (position, furnace) in furnaces {
+            self.synchronize_furnace(position, &furnace);
+        }
         self.send_inventory_changes();
     }
 
@@ -1191,11 +1201,10 @@ impl Game {
         let events = world.take_level_events();
         send_level_events(&self.players, &events);
         for viewer in 0..self.players.len() {
-            if let Some(chest) = self.players[viewer]
+            if self.players[viewer]
                 .block_menu
                 .as_ref()
-                .and_then(|menu| menu.chest)
-                && chest.positions().any(|half| half == pos)
+                .is_some_and(|menu| menu.uses(pos))
             {
                 self.close_block_menu(viewer);
             }

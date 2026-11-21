@@ -11,8 +11,8 @@ Creative and, with an empty hand, in Survival, the neighbors of a changed block 
 shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, players place
 blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their
 loot, players pick items up, and they move items in their inventory and craft in its 2x2 grid or at a crafting
-table's 3x3 grid and store items in simple chests; the other placements, scheduled block ticks and random ticks
-are to come), saving other world and player data,
+table's 3x3 grid, store items in chests, and smelt items in normal furnaces), saving other world and player data,
+other placements, scheduled block ticks, random ticks,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -67,8 +67,8 @@ dimensions, connections and autosave, in that order; autosave is scheduled every
 phase applies completed chunk reads and saves, and schedules unloading; the autosave phase queues immutable
 chunk snapshots without waiting for disk. Connection and player work is implemented. In the dimension phase,
 the game time advances and the scheduled fluid ticks due in the chunks of the players' views run, at most 65,536,
-in vanilla's order; scheduled block ticks, which no ported block uses yet, stay saved as they were. The other
-phases remain placeholders.
+in vanilla's order. Normal furnace block entities tick after entities. Scheduled block ticks stay saved as they
+were until blocks use them.
 
 Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting
 messages into edition-specific packets. The logic thread owns each player's profile and position and publishes
@@ -105,6 +105,10 @@ Clicks encode the changes to both halves before updating their chunks and sendin
 Breaking either half closes the menus for the pair, drops the broken half's items and leaves the other half
 as a single chest with its own contents. Locks and structure loot are pending. Chests with deferred loot
 or unsupported item data retain their saved block entity until it can be decoded.
+
+Normal furnaces use the installed data pack's smelting recipes and item tags. Their inputs, fuel, output
+and timers are held in the furnace block entity in Anvil. A loaded furnace ticks while burning, cooling or
+able to cook. Each viewer receives changes to the shared slots and the four burn and cooking properties.
 
 Player inventories now load before their first inventory synchronization and before gameplay can change
 items. A dedicated worker reads and writes their vanilla player documents; the logic thread takes immutable

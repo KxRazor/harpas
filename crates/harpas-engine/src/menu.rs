@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::furnace::{FUEL, INPUT, RESULT as SMELTED};
 use crate::inventory::{Inventory, ItemStack, MenuKind};
 use crate::recipe::{Recipes, remainder};
 
@@ -76,14 +77,20 @@ fn with_count(stack: &ItemStack, count: i32) -> ItemStack {
 }
 
 impl Inventory {
-    fn is_result(&self, slot: usize) -> bool {
-        !matches!(self.kind, MenuKind::Chest { .. }) && slot == RESULT
+    fn is_crafting_result(&self, slot: usize) -> bool {
+        matches!(self.kind, MenuKind::Player | MenuKind::CraftingTable) && slot == RESULT
     }
 
     /// `Slot.mayPlace`.
-    fn may_place(&self, slot: usize, stack: &ItemStack) -> bool {
+    fn may_place(&self, slot: usize, stack: &ItemStack, context: &Context<'_>) -> bool {
         match slot {
-            s if self.is_result(s) => false,
+            SMELTED if self.kind == MenuKind::Furnace => false,
+            FUEL if self.kind == MenuKind::Furnace => {
+                context.recipes.is_some_and(|r| r.burn_duration(stack) > 0)
+                    || (stack.name() == Some("minecraft:bucket")
+                        && self.slots[FUEL].name() != Some("minecraft:bucket"))
+            }
+            s if self.is_crafting_result(s) => false,
             s if self.kind == MenuKind::Player && ARMOR.contains(&s) => {
                 armor_slot(stack) == Some(s)
             }
@@ -93,7 +100,11 @@ impl Inventory {
 
     /// `Slot.getMaxStackSize(stack)`: one in an armor slot, otherwise as many as the stack holds.
     fn slot_max(&self, slot: usize, stack: &ItemStack) -> i32 {
-        let limit = if self.kind == MenuKind::Player && ARMOR.contains(&slot) {
+        let limit = if (self.kind == MenuKind::Player && ARMOR.contains(&slot))
+            || (self.kind == MenuKind::Furnace
+                && slot == FUEL
+                && stack.name() == Some("minecraft:bucket"))
+        {
             1
         } else {
             99
@@ -111,8 +122,14 @@ impl Inventory {
     }
 
     /// `Slot.safeInsert`: puts up to `count` of `stack` in the slot; returns what is left.
-    fn safe_insert(&mut self, slot: usize, mut stack: ItemStack, count: i32) -> ItemStack {
-        if stack.is_empty() || !self.may_place(slot, &stack) {
+    fn safe_insert(
+        &mut self,
+        slot: usize,
+        mut stack: ItemStack,
+        count: i32,
+        context: &Context<'_>,
+    ) -> ItemStack {
+        if stack.is_empty() || !self.may_place(slot, &stack, context) {
             return stack;
         }
         let held = self.slots[slot].clone();
@@ -151,7 +168,7 @@ impl Inventory {
         if held.is_empty() {
             return None;
         }
-        if self.is_result(slot) {
+        if self.is_crafting_result(slot) {
             if decrement < held.count {
                 return None;
             }
@@ -186,7 +203,7 @@ impl Inventory {
 
     /// Crafts the result of the grid again (`slotChangedCraftingGrid`).
     pub(crate) fn update_result(&mut self, context: &Context<'_>) {
-        if self.is_result(RESULT) {
+        if self.is_crafting_result(RESULT) {
             let grid: Vec<&ItemStack> = self.grid().map(|slot| &self.slots[slot]).collect();
             self.slots[RESULT] = context.recipes.map_or_else(ItemStack::empty, |recipes| {
                 recipes.craft(
@@ -238,6 +255,7 @@ impl Inventory {
         start: usize,
         end: usize,
         reverse: bool,
+        context: &Context<'_>,
     ) -> bool {
         let order: Vec<usize> = if reverse {
             (start..end).rev().collect()
@@ -269,7 +287,7 @@ impl Inventory {
         }
         if !stack.is_empty() {
             for &slot in &order {
-                if self.slots[slot].is_empty() && self.may_place(slot, stack) {
+                if self.slots[slot].is_empty() && self.may_place(slot, stack, context) {
                     let n = stack.count.min(self.slot_max(slot, stack));
                     self.set(slot, with_count(stack, n));
                     stack.count -= n;
@@ -293,32 +311,53 @@ impl Inventory {
             return ItemStack::empty();
         }
         let original = stack.clone();
-        let armor = armor_slot(&original);
-        let moved = match self.kind {
+        let armor = armor_slot(&original).filter(|&slot| self.slots[slot].is_empty());
+        let kind = self.kind;
+        let player = kind.player_slots();
+        let mut move_to =
+            |start, end, reverse| self.move_stack_to(&mut stack, start, end, reverse, context);
+        let moved = match kind {
             MenuKind::Chest { .. } => {
-                let player = self.kind.player_slots();
                 if index < player.start {
-                    self.move_stack_to(&mut stack, player.start, player.end, true)
+                    move_to(player.start, player.end, true)
                 } else {
-                    self.move_stack_to(&mut stack, 0, player.start, false)
+                    move_to(0, player.start, false)
                 }
             }
+            MenuKind::Furnace => match index {
+                SMELTED => move_to(player.start, player.end, true),
+                INPUT | FUEL => move_to(player.start, player.end, false),
+                _ if context
+                    .recipes
+                    .is_some_and(|r| r.smelting(&original).is_some()) =>
+                {
+                    move_to(INPUT, INPUT + 1, false)
+                }
+                _ if context
+                    .recipes
+                    .is_some_and(|r| r.burn_duration(&original) > 0) =>
+                {
+                    move_to(FUEL, FUEL + 1, false)
+                }
+                _ if index < player.end - 9 => move_to(player.end - 9, player.end, false),
+                _ => move_to(player.start, player.end - 9, false),
+            },
             MenuKind::CraftingTable => match index {
-                RESULT => self.move_stack_to(&mut stack, 10, 46, true),
-                1..=9 => self.move_stack_to(&mut stack, 10, 46, false),
-                10..=36 => self.move_stack_to(&mut stack, 37, 46, false),
-                _ => self.move_stack_to(&mut stack, 10, 37, false),
+                RESULT => move_to(10, 46, true),
+                1..=9 => move_to(10, 46, false),
+                10..=36 => move_to(37, 46, false),
+                _ => move_to(10, 37, false),
             },
             MenuKind::Player => match index {
-                RESULT => self.move_stack_to(&mut stack, 9, 45, true),
-                1..=8 => self.move_stack_to(&mut stack, 9, 45, false),
-                _ if armor.is_some_and(|a| self.slots[a].is_empty()) => {
+                RESULT => move_to(9, 45, true),
+                1..=8 => move_to(9, 45, false),
+                _ if armor.is_some() => {
                     let a = armor.expect("an armor slot");
-                    self.move_stack_to(&mut stack, a, a + 1, false)
+                    move_to(a, a + 1, false)
                 }
-                9..=35 => self.move_stack_to(&mut stack, 36, 45, false),
-                36..=44 => self.move_stack_to(&mut stack, 9, 36, false),
-                _ => self.move_stack_to(&mut stack, 9, 45, false),
+                9..=35 => move_to(36, 45, false),
+                36..=44 => move_to(9, 36, false),
+                _ => move_to(9, 45, false),
             },
         };
         if !moved {
@@ -336,7 +375,7 @@ impl Inventory {
         if stack.count == original.count {
             return ItemStack::empty();
         }
-        if self.is_result(index) {
+        if self.is_crafting_result(index) {
             // `onTake`, then what did not fit is dropped.
             self.slots[RESULT] = ItemStack::empty();
             self.take_result(context, drops);
@@ -419,7 +458,7 @@ impl Inventory {
                     return drops;
                 }
                 if theirs.is_empty() {
-                    if self.is_result(index) {
+                    if self.is_crafting_result(index) {
                         self.slots[RESULT] = ItemStack::empty();
                         self.set(other, ours);
                         self.take_result(context, &mut drops);
@@ -428,7 +467,7 @@ impl Inventory {
                         self.set(index, ItemStack::empty());
                     }
                 } else if ours.is_empty() {
-                    if self.may_place(index, &theirs) {
+                    if self.may_place(index, &theirs, context) {
                         let max = self.slot_max(index, &theirs);
                         if theirs.count > max {
                             self.set(index, with_count(&theirs, max));
@@ -438,7 +477,7 @@ impl Inventory {
                             self.set(index, theirs);
                         }
                     }
-                } else if self.may_place(index, &theirs) {
+                } else if self.may_place(index, &theirs, context) {
                     let max = self.slot_max(index, &theirs);
                     if theirs.count > max {
                         self.set(index, with_count(&theirs, max));
@@ -502,7 +541,7 @@ impl Inventory {
                     {
                         let s = i as usize;
                         let held = self.slots[s].clone();
-                        if !self.is_result(s)
+                        if !self.is_crafting_result(s)
                             && !held.is_empty()
                             && self.can_quick_replace(s, &self.carried.clone(), true)
                             && (pass != 0 || held.count != max_stack(&held))
@@ -533,7 +572,7 @@ impl Inventory {
         if held.is_empty() {
             if !carried.is_empty() {
                 let n = if primary { carried.count } else { 1 };
-                self.carried = self.safe_insert(index, carried, n);
+                self.carried = self.safe_insert(index, carried, n, context);
             }
         } else if carried.is_empty() {
             let n = if primary {
@@ -544,10 +583,10 @@ impl Inventory {
             if let Some(taken) = self.try_remove(index, n, i32::MAX, context, drops) {
                 self.carried = taken;
             }
-        } else if self.may_place(index, &carried) {
+        } else if self.may_place(index, &carried, context) {
             if same_item_same_components(&held, &carried) {
                 let n = if primary { carried.count } else { 1 };
-                self.carried = self.safe_insert(index, carried, n);
+                self.carried = self.safe_insert(index, carried, n, context);
             } else if carried.count <= self.slot_max(index, &carried) {
                 self.carried = held;
                 self.set(index, carried);
@@ -591,9 +630,9 @@ impl Inventory {
         } else if self.quickcraft.status == 1 {
             let Some(slot) = index else { return };
             let carried = self.carried.clone();
-            if !self.is_result(slot)
+            if !self.is_crafting_result(slot)
                 && self.can_quick_replace(slot, &carried, true)
-                && self.may_place(slot, &carried)
+                && self.may_place(slot, &carried, context)
                 && (self.quickcraft.kind == 2
                     || carried.count as usize > self.quickcraft.slots.len())
                 && !self.quickcraft.slots.contains(&slot)
@@ -614,7 +653,7 @@ impl Inventory {
                 for &slot in &slots {
                     let carried = self.carried.clone();
                     if self.can_quick_replace(slot, &carried, true)
-                        && self.may_place(slot, &carried)
+                        && self.may_place(slot, &carried, context)
                         && (kind == 2 || carried.count as usize >= slots.len())
                     {
                         let held = self.slots[slot].count;
@@ -662,7 +701,7 @@ impl Inventory {
         for slot in self.grid() {
             back.push(std::mem::take(&mut self.slots[slot]));
         }
-        if self.is_result(RESULT) {
+        if self.is_crafting_result(RESULT) {
             self.slots[RESULT] = ItemStack::empty();
         }
         self.reset_quick_craft();

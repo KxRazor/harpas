@@ -581,6 +581,31 @@ pub(crate) fn send(
             Output::CloseContainer(container_id) => {
                 clientbound::CloseContainer { container_id }.into()
             }
+            Output::OpenFurnace {
+                container_id,
+                title,
+            } => clientbound::OpenScreen {
+                container_id,
+                // `minecraft:furnace` in the vanilla 26.1 menu registry.
+                kind: 14,
+                title: title.unwrap_or_else(|| {
+                    Nbt::Compound(harpas_core::nbt::Compound::from_iter([(
+                        "translate",
+                        Nbt::from("container.furnace"),
+                    )]))
+                }),
+            }
+            .into(),
+            Output::ContainerProperty {
+                container_id,
+                property,
+                value,
+            } => clientbound::SetContainerProperty {
+                container_id,
+                property,
+                value,
+            }
+            .into(),
             Output::InventoryContent {
                 container_id,
                 state_id,

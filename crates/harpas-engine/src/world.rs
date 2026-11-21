@@ -1,7 +1,7 @@
 //! Loading and saving overworld chunks without doing disk I/O on the logic thread.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +21,7 @@ use log::{error, warn};
 use crate::block::{self, BlockPos};
 use crate::entity_data::{EntityChunk, SavedItem};
 use crate::fluid::FluidType;
+use crate::furnace::Furnace;
 use crate::item_data::ItemCodec;
 use crate::light::{self, Light, Lighter};
 use crate::neighbor;
@@ -480,6 +481,8 @@ pub struct World {
     /// The scheduled fluid ticks of the loaded chunks. Their block ticks stay saved as they were until blocks
     /// that tick exist.
     pub(crate) fluid_ticks: LevelTicks<FluidType>,
+    /// Loaded furnaces that can cook, are burning or have progress left to cool.
+    pub(crate) active_furnaces: BTreeSet<BlockPos>,
     /// The level's random source, which lava's spread delay draws from.
     pub(crate) random: LegacyRandom,
     pub(crate) item_uuids: XoroshiroRandom,
@@ -491,7 +494,7 @@ pub struct World {
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
     pub(crate) seed: i64,
-    /// The crafting recipes, without which nothing is crafted.
+    /// The crafting recipes, smelting recipes and furnace fuels.
     pub(crate) recipes: Option<Arc<crate::recipe::Recipes>>,
     pub(crate) player_store: Option<crate::player_data::PlayerStore>,
     /// The world's named random sequences (`RandomSequences`), which loot tables draw from.
@@ -675,6 +678,7 @@ impl World {
             light_updates: Vec::new(),
             game_time,
             fluid_ticks: LevelTicks::default(),
+            active_furnaces: BTreeSet::new(),
             random: LegacyRandom::new(0),
             item_uuids,
             entities: crate::entity::Entities::default(),
@@ -1104,6 +1108,31 @@ impl World {
         }
     }
 
+    /// Tick block entities in the same chunks as scheduled fluid ticks.
+    pub(crate) fn tick_furnaces(&mut self) -> Vec<(BlockPos, Furnace)> {
+        let Some(recipes) = self.recipes.clone() else {
+            return Vec::new();
+        };
+        let ticking: Vec<_> = self
+            .active_furnaces
+            .iter()
+            .copied()
+            .filter(|pos| self.wanted_set.contains(&pos.chunk()))
+            .collect();
+        let mut changed = Vec::new();
+        for pos in ticking {
+            match self.tick_furnace(pos, &recipes) {
+                Ok(Some(furnace)) => changed.push((pos, furnace)),
+                Ok(None) => {}
+                Err(error) => {
+                    self.active_furnaces.remove(&pos);
+                    warn!("Cannot tick furnace at {pos:?}: {error}");
+                }
+            }
+        }
+        changed
+    }
+
     /// The fluid ticks to save with a chunk: its own, when it has some or was read with the list, so that a chunk
     /// without them is saved as it was.
     fn saved_fluid_ticks(&self, pos: ChunkPos, chunk: &Chunk) -> Option<Nbt> {
@@ -1511,6 +1540,9 @@ impl World {
             let saved = ticks::read_saved(chunk.rest.get("fluid_ticks"), FluidType::from_name);
             self.fluid_ticks.add_chunk(pos, saved, self.game_time);
         }
+        if kept {
+            self.load_furnaces(pos);
+        }
         // A lit chunk saved while its light was out of date is lit again, as vanilla would.
         if kept
             && self.relights(pos)
@@ -1591,6 +1623,8 @@ impl World {
         let chunks = &self.chunks;
         self.fluid_ticks
             .retain_chunks(|pos| chunks.contains_key(&pos));
+        self.active_furnaces
+            .retain(|pos| chunks.contains_key(&pos.chunk()));
         // A region is saved once its first unwanted chunk has waited long enough, with every chunk that
         // left the views since.
         let now = Instant::now();
@@ -1881,6 +1915,7 @@ mod tests {
             light_updates: Vec::new(),
             game_time: 0,
             fluid_ticks: LevelTicks::default(),
+            active_furnaces: BTreeSet::new(),
             random: LegacyRandom::new(0),
             item_uuids: XoroshiroRandom::new(0),
             entities: crate::entity::Entities::default(),
@@ -4821,6 +4856,161 @@ mod tests {
         assert_eq!(slots.len(), 63);
         assert_eq!(slots[0], stack("minecraft:stone", 64));
         assert_eq!(slots[1], stack("minecraft:diamond", 1));
+    }
+
+    #[test]
+    fn furnace_menu_cooks_and_resumes_from_anvil() {
+        use crate::furnace::FURNACE;
+        use crate::inventory::{HOTBAR, ItemStack};
+        use harpas_core::block_behavior::Face;
+        use harpas_core::item::items;
+
+        let folder = Folder::new();
+        let pos = BlockPos { x: 8, y: -51, z: 9 };
+        save(&folder, &[(pos.chunk(), DATA_VERSION)]);
+        let recipe = serde_json::json!({
+            "type": "minecraft:smelting", "ingredient": "minecraft:raw_iron",
+            "result": {"id": "minecraft:iron_ingot"}, "cookingtime": 200,
+        });
+        let recipes = Arc::new(crate::recipe::Recipes::from_json(
+            &HashMap::new(),
+            [&recipe],
+        ));
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        world.recipes = Some(recipes.clone());
+        let (sender, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: Vec::new(),
+            players: Vec::new(),
+            online_players: Arc::default(),
+            world: Some(world),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.join(1, profile(), 2, 2, false, sender);
+        wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
+            tick(&mut game, 1);
+            game.players[0].sent_chunks.contains(&pos.chunk())
+        });
+        let player = &mut game.players[0];
+        player.awaiting_teleport = None;
+        player.player.position = crate::player::Position {
+            x: 8.5,
+            y: -51.0,
+            z: 7.5,
+            ..Default::default()
+        };
+        player.player.profile.game_mode = GameMode::Survival;
+        let stack = |name: &str, count| ItemStack {
+            item: items().id(name).unwrap(),
+            count,
+            ..ItemStack::default()
+        };
+        player.inventory.slots[HOTBAR] = stack(FURNACE, 1);
+        player.inventory.slots[HOTBAR + 1] = stack("minecraft:raw_iron", 3);
+        player.inventory.slots[HOTBAR + 2] = stack("minecraft:coal", 1);
+        let world = game.world.as_mut().unwrap();
+        let air = block_states().default_state("minecraft:air").unwrap();
+        world.set_block_state(pos, air);
+        let floor = BlockPos {
+            y: pos.y - 1,
+            ..pos
+        };
+        game.use_item_on(0, false, floor, Face::Up, [0.5; 3], 1);
+        assert!(game.players[0].inventory.slots[HOTBAR].is_empty());
+        let world = game.world.as_mut().unwrap();
+        assert_eq!(
+            block_states().name(world.block_state(pos).unwrap()),
+            Some(FURNACE)
+        );
+        let mut furnace = world.furnace(pos).unwrap();
+        furnace.slots[2] = stack("minecraft:iron_ingot", 64);
+        world.save_furnace(pos, &furnace).unwrap();
+
+        received.try_iter().for_each(drop);
+        game.use_item_on(0, false, pos, Face::Up, [0.5; 3], 2);
+        assert_eq!(
+            received.try_recv(),
+            Ok(Output::OpenFurnace {
+                container_id: 1,
+                title: None
+            })
+        );
+        assert!(
+            matches!(received.try_recv(), Ok(Output::InventoryContent { container_id: 1, slots, .. }) if slots.len() == 39)
+        );
+        let click = |game: &mut Game, slot, mode| {
+            game.click_container(0, 1, -1, slot, 0, mode, Vec::new(), None);
+        };
+        click(&mut game, 31, 1); // Raw iron from the hotbar.
+        click(&mut game, 32, 1); // Coal from the hotbar.
+        for n in 1..=3 {
+            tick(&mut game, n);
+        }
+        let furnace = game.world.as_ref().unwrap().furnace(pos).unwrap();
+        assert_eq!(furnace.properties(), [0, 0, 0, 200]);
+        assert_eq!(
+            furnace.slots,
+            [
+                stack("minecraft:raw_iron", 3),
+                stack("minecraft:coal", 1),
+                stack("minecraft:iron_ingot", 64)
+            ]
+        );
+
+        click(&mut game, 2, 1);
+        assert_eq!(
+            game.players[0].inventory.slots[HOTBAR + 8],
+            stack("minecraft:iron_ingot", 64)
+        );
+        received.try_iter().for_each(drop);
+        for n in 1..=80 {
+            tick(&mut game, n);
+        }
+        assert!(received.try_iter().any(|output| output
+            == Output::ContainerProperty {
+                container_id: 1,
+                property: 2,
+                value: 80,
+            }));
+        let mut world = game.world.take().unwrap();
+        let before = world.furnace(pos).unwrap();
+        assert_eq!(before.properties(), [1521, 1600, 80, 200]);
+        assert!(before.slots[1].is_empty());
+        assert_eq!(
+            block_states().light_emission(world.block_state(pos).unwrap()),
+            13
+        );
+        world.flush().unwrap();
+        drop(world);
+
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        world.recipes = Some(recipes);
+        load_chunks(&mut world, &[pos.chunk()]);
+        assert_eq!(world.furnace(pos).unwrap(), before);
+        for _ in 0..119 {
+            world.tick_furnaces();
+        }
+        assert!(world.furnace(pos).unwrap().slots[2].is_empty());
+        world.tick_furnaces();
+        let cooked = world.furnace(pos).unwrap();
+        assert_eq!(cooked.properties(), [1401, 1600, 0, 200]);
+        assert_eq!(cooked.slots[0], stack("minecraft:raw_iron", 2));
+        assert_eq!(cooked.slots[2], stack("minecraft:iron_ingot", 1));
+
+        game.world = Some(world);
+        click(&mut game, 2, 1);
+        assert_eq!(
+            game.players[0].inventory.slots[HOTBAR + 7],
+            stack("minecraft:iron_ingot", 1)
+        );
+        assert!(game.world.as_ref().unwrap().furnace(pos).unwrap().slots[2].is_empty());
+        assert!(game.destroy_block(0, pos));
+        assert!(game.players[0].block_menu.is_none());
+        let world = game.world.as_ref().unwrap();
+        assert!(!world.active_furnaces.contains(&pos));
+        assert!(world.container_tag(pos, FURNACE).unwrap().is_none());
     }
 
     #[test]

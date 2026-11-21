@@ -10,9 +10,11 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use chrono::{DateTime, Local, NaiveDate};
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use jiff::civil::{Date, Time};
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, ZonedDateTime};
 use log::{Level, LevelFilter, Log, Metadata, Record, error};
 use rustyline::ExternalPrinter;
 
@@ -29,7 +31,7 @@ struct Logger {
 struct State {
     dir: PathBuf,
     file: Option<File>,
-    date: NaiveDate,
+    date: Date,
     printer: Option<Printer>,
 }
 
@@ -41,7 +43,7 @@ pub fn init(dir: &Path) -> io::Result<()> {
         state: Mutex::new(State {
             dir: dir.to_owned(),
             file: Some(File::create(dir.join("latest.log"))?),
-            date: Local::now().date_naive(),
+            date: ZonedDateTime::now().date(),
             printer: None,
         }),
         colors: io::stdout().is_terminal(),
@@ -113,17 +115,18 @@ impl Log for Logger {
         }
         LOGGING.set(true);
         let _logging = Reset;
-        let now = Local::now();
+        let now = ZonedDateTime::now();
         let thread = std::thread::current();
         let line = format_line(
-            now,
+            now.time(),
             thread.name().unwrap_or("unnamed"),
             record.level(),
             &record.args().to_string(),
         );
+        let date = now.date();
         let mut state = self.lock();
-        if now.date_naive() != state.date {
-            state.date = now.date_naive();
+        if date != state.date {
+            state.date = date;
             state.file = None;
             let opened =
                 archive(&state.dir).and_then(|()| File::create(state.dir.join("latest.log")));
@@ -153,10 +156,10 @@ impl Log for Logger {
 }
 
 /// A log line in vanilla's format, without the line ending.
-fn format_line(time: DateTime<Local>, thread: &str, level: Level, message: &str) -> String {
+fn format_line(time: Time, thread: &str, level: Level, message: &str) -> String {
     format!(
         "[{}] [{thread}/{level}]: {message}",
-        time.format("%H:%M:%S")
+        time.strftime("%H:%M:%S")
     )
 }
 
@@ -169,7 +172,8 @@ fn archive(dir: &Path) -> io::Result<()> {
         Err(e) => return Err(e),
     };
     if metadata.len() > 0 {
-        let date = DateTime::<Local>::from(metadata.modified()?).format("%Y-%m-%d");
+        let modified = Timestamp::try_from(metadata.modified()?).map_err(io::Error::other)?;
+        let date = modified.to_zoned_datetime(TimeZone::system()).date();
         let target = (1..)
             .map(|n| dir.join(format!("{date}-{n}.log.gz")))
             .find(|path| !path.exists())
@@ -184,15 +188,15 @@ fn archive(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Read;
+    use std::time::{Duration, UNIX_EPOCH};
 
-    use chrono::TimeZone;
     use flate2::read::GzDecoder;
 
     use super::*;
 
     #[test]
     fn lines_have_vanillas_format() {
-        let time = Local.with_ymd_and_hms(2026, 11, 2, 9, 5, 7).unwrap();
+        let time = jiff::civil::time(9, 5, 7, 0);
         assert_eq!(
             format_line(time, "main", Level::Warn, "Hello"),
             "[09:05:07] [main/WARN]: Hello"
@@ -207,12 +211,20 @@ mod tests {
         archive(&dir).unwrap();
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
 
+        let latest = dir.join("latest.log");
+        let modified = UNIX_EPOCH + Duration::from_secs(7 * 24 * 60 * 60);
+        let date = Timestamp::try_from(modified)
+            .unwrap()
+            .to_zoned_datetime(TimeZone::system())
+            .date();
         for text in ["first run\n", "second run\n"] {
-            fs::write(dir.join("latest.log"), text).unwrap();
+            let mut file = File::create(&latest).unwrap();
+            file.write_all(text.as_bytes()).unwrap();
+            file.set_modified(modified).unwrap();
+            drop(file);
             archive(&dir).unwrap();
         }
-        assert!(!dir.join("latest.log").exists());
-        let date = Local::now().format("%Y-%m-%d");
+        assert!(!latest.exists());
         for (n, text) in [(1, "first run\n"), (2, "second run\n")] {
             let mut decoded = String::new();
             GzDecoder::new(File::open(dir.join(format!("{date}-{n}.log.gz"))).unwrap())

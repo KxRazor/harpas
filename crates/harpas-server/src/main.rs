@@ -409,8 +409,11 @@ fn load_properties(path: &Path) -> io::Result<Properties> {
     let mut properties = Properties::load(path)?;
     properties.complete();
     // Java's `Date.toString`, which vanilla writes as the second comment.
-    let timestamp = chrono::Local::now().format("%a %b %d %H:%M:%S %Z %Y");
-    if let Err(e) = properties.store(path, &timestamp.to_string()) {
+    // Keep the numeric offset previously printed by Chrono's %Z.
+    let timestamp = jiff::ZonedDateTime::now()
+        .strftime("%a %b %d %H:%M:%S %:z %Y")
+        .to_string();
+    if let Err(e) = properties.store(path, &timestamp) {
         warn!("Failed to save {}: {e}", path.display());
     }
     for name in properties.apply_env(std::env::vars()) {

@@ -20,7 +20,7 @@ this section is out of date.
 | BSD 3-Clause "New" or "Revised" License | `subtle 2.6.1` |
 | Boost Software License 1.0 | `clipboard-win 5.4.3` `error-code 3.4.0` |
 | ISC License | `ring 0.17.14` `rustls-webpki 0.103.16` `untrusted 0.9.0` |
-| MIT License | `aes 0.9.4` `android_system_properties 0.1.6` `base64 0.23.1` `base64ct 1.8.3` `bitflags 2.13.2` `block-buffer 0.12.1` `block2 0.6.2` `bumpalo 3.20.3` `bytes 1.12.1` `cfb8 0.9.1` `cfg-if 1.0.5` `chrono 0.4.45` `cipher 0.5.2` `cmov 0.5.4` `const-oid 0.10.2` `core-foundation 0.10.1` `core-foundation-sys 0.8.7` `cpubits 0.1.1` `cpufeatures 0.3.1` `crc32fast 1.5.4` `crypto-bigint 0.7.11` `crypto-common 0.2.2` `crypto-primes 0.7.2` `ctrlc 3.5.2` `ctutils 0.4.8` `der 0.8.3` `digest 0.11.3` `dispatch2 0.3.1` `equivalent 1.0.3` `flate2 1.1.11` `futures-core 0.3.34` `futures-task 0.3.34` `futures-util 0.3.34` `getrandom 0.2.17` `getrandom 0.4.3` `hashbrown 0.17.1` `hmac 0.13.0` `http 1.5.0` `httparse 1.10.1` `hybrid-array 0.4.15` `iana-time-zone 0.1.65` `iana-time-zone-haiku 0.1.2` `indexmap 2.14.2` `inout 0.2.5` `itoa 1.0.18` `js-sys 0.3.107` `libc 0.2.191` `log 0.4.35` `md-5 0.11.0` `memchr 2.8.3` `nix 0.31.3` `num-traits 0.2.19` `objc2 0.6.5` `objc2-encode 4.1.0` `once_cell 1.21.4` `openssl-probe 0.2.2` `pem-rfc7468 1.0.0` `percent-encoding 2.3.2` `phf 0.11.3` `phf_shared 0.11.3` `pin-project-lite 0.2.17` `pkcs1 0.8.0` `pkcs8 0.11.0` `proc-macro2 1.0.107` `quote 1.0.47` `r-efi 6.0.0` `rand_core 0.10.1` `rsa 0.10.0` `rustls 0.23.46` `rustls-native-certs 0.8.5` `rustls-pki-types 1.15.1` `rustyline 19.0.0` `schannel 0.1.30` `security-framework 3.7.0` `security-framework-sys 2.17.0` `serde_core 1.0.229` `serde_json 1.0.154` `serde_spanned 1.1.3` `sha1 0.11.0` `sha2 0.11.1` `signature 3.0.0` `siphasher 1.0.4` `slab 0.4.12` `spki 0.8.1` `syn 2.0.119` `syn 3.0.9` `toml 1.2.1+spec-1.1.0` `toml_datetime 1.1.3+spec-1.1.0` `toml_parser 1.1.5+spec-1.1.0` `toml_writer 1.2.0+spec-1.1.0` `typed-path 0.13.0` `typenum 1.20.1` `unicode-ident 1.0.27` `unicode-segmentation 1.13.3` `unicode-width 0.2.3` `unicode_names2 2.0.0` `ureq 3.5.1` `ureq-proto 0.7.1` `utf8-zero 0.8.1` `utf8parse 0.2.2` `wasi 0.11.1+wasi-snapshot-preview1` `wasm-bindgen 0.2.130` `wasm-bindgen-macro 0.2.130` `wasm-bindgen-macro-support 0.2.130` `wasm-bindgen-shared 0.2.130` `windows-core 0.62.2` `windows-implement 0.60.2` `windows-interface 0.59.3` `windows-link 0.2.1` `windows-result 0.4.1` `windows-strings 0.5.1` `windows-sys 0.52.0` `windows-sys 0.61.2` `windows-targets 0.52.6` `windows_aarch64_gnullvm 0.52.6` `windows_aarch64_msvc 0.52.6` `windows_i686_gnu 0.52.6` `windows_i686_gnullvm 0.52.6` `windows_i686_msvc 0.52.6` `windows_x86_64_gnu 0.52.6` `windows_x86_64_gnullvm 0.52.6` `windows_x86_64_msvc 0.52.6` `winnow 1.0.4` `zeroize 1.9.1` `zeroize_derive 1.5.0` `zip 9.5.1` `zmij 1.0.23` |
+| MIT License | `aes 0.9.4` `base64 0.23.1` `base64ct 1.8.3` `bitflags 2.13.2` `block-buffer 0.12.1` `block2 0.6.2` `bumpalo 3.20.3` `bytes 1.12.1` `cfb8 0.9.1` `cfg-if 1.0.5` `cipher 0.5.2` `cmov 0.5.4` `const-oid 0.10.2` `core-foundation 0.10.1` `core-foundation-sys 0.8.7` `cpubits 0.1.1` `cpufeatures 0.3.1` `crc32fast 1.5.4` `crypto-bigint 0.7.11` `crypto-common 0.2.2` `crypto-primes 0.7.2` `ctrlc 3.5.2` `ctutils 0.4.8` `der 0.8.3` `digest 0.11.3` `dispatch2 0.3.1` `equivalent 1.0.3` `flate2 1.1.11` `getrandom 0.2.17` `getrandom 0.4.3` `hashbrown 0.17.1` `hmac 0.13.0` `http 1.5.0` `httparse 1.10.1` `hybrid-array 0.4.15` `indexmap 2.14.2` `inout 0.2.5` `itoa 1.0.18` `jiff 1.0.1` `jiff-core 1.0.1` `jiff-tzdb 1.0.0` `jiff-tzdb-platform 1.0.0` `js-sys 0.3.107` `libc 0.2.191` `log 0.4.35` `md-5 0.11.0` `memchr 2.8.3` `nix 0.31.3` `num-traits 0.2.19` `objc2 0.6.5` `objc2-encode 4.1.0` `once_cell 1.21.4` `openssl-probe 0.2.2` `pem-rfc7468 1.0.0` `percent-encoding 2.3.2` `phf 0.11.3` `phf_shared 0.11.3` `pkcs1 0.8.0` `pkcs8 0.11.0` `portable-atomic 1.15.0` `portable-atomic-util 0.2.8` `proc-macro2 1.0.107` `quote 1.0.47` `r-efi 6.0.0` `rand_core 0.10.1` `rsa 0.10.0` `rustls 0.23.46` `rustls-native-certs 0.8.5` `rustls-pki-types 1.15.1` `rustyline 19.0.0` `schannel 0.1.30` `security-framework 3.7.0` `security-framework-sys 2.17.0` `serde_core 1.0.229` `serde_json 1.0.154` `serde_spanned 1.1.3` `sha1 0.11.0` `sha2 0.11.1` `signature 3.0.0` `siphasher 1.0.4` `spki 0.8.1` `syn 2.0.119` `syn 3.0.9` `toml 1.2.1+spec-1.1.0` `toml_datetime 1.1.3+spec-1.1.0` `toml_parser 1.1.5+spec-1.1.0` `toml_writer 1.2.0+spec-1.1.0` `typed-path 0.13.0` `typenum 1.20.1` `unicode-ident 1.0.27` `unicode-segmentation 1.13.3` `unicode-width 0.2.3` `unicode_names2 2.0.0` `ureq 3.5.1` `ureq-proto 0.7.1` `utf8-zero 0.8.1` `utf8parse 0.2.2` `wasi 0.11.1+wasi-snapshot-preview1` `wasm-bindgen 0.2.130` `wasm-bindgen-macro 0.2.130` `wasm-bindgen-macro-support 0.2.130` `wasm-bindgen-shared 0.2.130` `windows-link 0.2.1` `windows-sys 0.52.0` `windows-sys 0.61.2` `windows-targets 0.52.6` `windows_aarch64_gnullvm 0.52.6` `windows_aarch64_msvc 0.52.6` `windows_i686_gnu 0.52.6` `windows_i686_gnullvm 0.52.6` `windows_i686_msvc 0.52.6` `windows_x86_64_gnu 0.52.6` `windows_x86_64_gnullvm 0.52.6` `windows_x86_64_msvc 0.52.6` `winnow 1.0.4` `zeroize 1.9.1` `zeroize_derive 1.5.0` `zip 9.5.1` `zmij 1.0.23` |
 | Unicode License v3 | `unicode-ident 1.0.27` |
 | Unicode License Agreement - Data Files and Software (2016) | `unicode_names2 2.0.0` |
 | zlib License | `zlib-rs 0.6.8` |
@@ -1369,7 +1369,6 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ### MIT License
 
 - `aes 0.9.4`: Copyright (c) 2018-2024 The RustCrypto Project Developers; Copyright (c) 2018 Artyom Pavlov
-- `android_system_properties 0.1.6`: Copyright (c) 2013 Nicolas Silva
 - `base64 0.23.1`: Copyright (c) 2025 Alice Maz, Marshall Pierce
 - `base64ct 1.8.3`: Copyright (c) 2014 Steve "Sc00bz" Thomas (steve at tobtu dot com); Copyright (c) 2021-2025 The RustCrypto Project Developers
 - `bitflags 2.13.2`: Copyright (c) 2014 The Rust Project Developers
@@ -1379,7 +1378,6 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `bytes 1.12.1`: Copyright (c) 2018 Carl Lerche
 - `cfb8 0.9.1`: Copyright (c) 2018-2022 RustCrypto Developers; Copyright (c) 2018 Artyom Pavlov
 - `cfg-if 1.0.5`: Copyright (c) 2014 Alex Crichton
-- `chrono 0.4.45`: Copyright (c) <year> <copyright holders>
 - `cipher 0.5.2`: Copyright (c) 2016-2025 RustCrypto Developers
 - `cmov 0.5.4`: Copyright (c) 2022-2026 The RustCrypto Project Developers
 - `const-oid 0.10.2`: Copyright (c) 2020-2026 The RustCrypto Project Developers
@@ -1397,9 +1395,6 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `dispatch2 0.3.1`: Copyright (c) <year> <copyright holders>
 - `equivalent 1.0.3`: Copyright (c) 2016--2023
 - `flate2 1.1.11`: Copyright (c) 2014-2026 Alex Crichton
-- `futures-core 0.3.34`: Copyright (c) 2016 Alex Crichton; Copyright (c) 2017 The Tokio Authors
-- `futures-task 0.3.34`: Copyright (c) 2016 Alex Crichton; Copyright (c) 2017 The Tokio Authors
-- `futures-util 0.3.34`: Copyright (c) 2016 Alex Crichton; Copyright (c) 2017 The Tokio Authors
 - `getrandom 0.2.17`: Copyright (c) 2018-2024 The rust-random Project Developers; Copyright (c) 2014 The Rust Project Developers
 - `getrandom 0.4.3`: Copyright (c) 2018-2026 The rust-random Project Developers; Copyright (c) 2014 The Rust Project Developers
 - `hashbrown 0.17.1`: Copyright (c) 2016 Amanieu d'Antras
@@ -1407,11 +1402,13 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `http 1.5.0`: Copyright (c) 2017 http-rs authors
 - `httparse 1.10.1`: Copyright (c) 2015-2025 Sean McArthur
 - `hybrid-array 0.4.15`: Copyright (c) 2022-2026 The RustCrypto Project Developers
-- `iana-time-zone 0.1.65`: Copyright (c) 2020 Andrew D. Straw
-- `iana-time-zone-haiku 0.1.2`: Copyright (c) 2020 Andrew D. Straw
 - `indexmap 2.14.2`: Copyright (c) 2016--2017
 - `inout 0.2.5`: Copyright (c) 2022-2025 The RustCrypto Project Developers; Copyright (c) 2022 Artyom Pavlov
 - `itoa 1.0.18`
+- `jiff 1.0.1`: Copyright (c) 2015 Andrew Gallant
+- `jiff-core 1.0.1`: Copyright (c) 2015 Andrew Gallant
+- `jiff-tzdb 1.0.0`: Copyright (c) 2015 Andrew Gallant
+- `jiff-tzdb-platform 1.0.0`: Copyright (c) 2015 Andrew Gallant
 - `js-sys 0.3.107`: Copyright (c) 2014 Alex Crichton
 - `libc 0.2.191`: Copyright (c) The Rust Project Developers
 - `log 0.4.35`: Copyright (c) 2014 The Rust Project Developers
@@ -1427,9 +1424,10 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `percent-encoding 2.3.2`: Copyright (c) 2013-2025 The rust-url developers
 - `phf 0.11.3`: Copyright (c) 2014-2022 Steven Fackler, Yuki Okushi
 - `phf_shared 0.11.3`: Copyright (c) 2014-2022 Steven Fackler, Yuki Okushi
-- `pin-project-lite 0.2.17`
 - `pkcs1 0.8.0`: Copyright (c) 2021-2026 The RustCrypto Project Developers
 - `pkcs8 0.11.0`: Copyright (c) 2020-2026 The RustCrypto Project Developers
+- `portable-atomic 1.15.0`
+- `portable-atomic-util 0.2.8`
 - `proc-macro2 1.0.107`
 - `quote 1.0.47`
 - `r-efi 6.0.0`: Copyright (c) <year> <copyright holders>
@@ -1449,7 +1447,6 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `sha2 0.11.1`: Copyright (c) 2016-2026 The RustCrypto Project Developers; Copyright (c) 2016 Artyom Pavlov; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2006-2009 Graydon Hoare
 - `signature 3.0.0`: Copyright (c) 2018-2026 RustCrypto Developers
 - `siphasher 1.0.4`
-- `slab 0.4.12`: Copyright (c) 2019 Carl Lerche
 - `spki 0.8.1`: Copyright (c) 2021-2026 The RustCrypto Project Developers
 - `syn 2.0.119`
 - `syn 3.0.9`
@@ -1472,12 +1469,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `wasm-bindgen-macro 0.2.130`: Copyright (c) 2014 Alex Crichton
 - `wasm-bindgen-macro-support 0.2.130`: Copyright (c) 2014 Alex Crichton
 - `wasm-bindgen-shared 0.2.130`: Copyright (c) 2014 Alex Crichton
-- `windows-core 0.62.2`: Copyright (c) <year> <copyright holders>
-- `windows-implement 0.60.2`: Copyright (c) <year> <copyright holders>
-- `windows-interface 0.59.3`: Copyright (c) <year> <copyright holders>
 - `windows-link 0.2.1`: Copyright (c) <year> <copyright holders>
-- `windows-result 0.4.1`: Copyright (c) <year> <copyright holders>
-- `windows-strings 0.5.1`: Copyright (c) <year> <copyright holders>
 - `windows-sys 0.52.0`: Copyright (c) <year> <copyright holders>
 - `windows-sys 0.61.2`: Copyright (c) <year> <copyright holders>
 - `windows-targets 0.52.6`: Copyright (c) <year> <copyright holders>

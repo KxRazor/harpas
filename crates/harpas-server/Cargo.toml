@@ -12,7 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 base64.workspace = true
-chrono.workspace = true
 ctrlc.workspace = true
 flate2.workspace = true
 getrandom.workspace = true
@@ -22,6 +21,7 @@ harpas-engine.workspace = true
 harpas-java.workspace = true
 harpas-protocol-java.workspace = true
 harpas-worldgen.workspace = true
+jiff.workspace = true
 log.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true

@@ -1,0 +1,1 @@
+- Iron pickaxes mine faster and harvest diamonds, raw gold and redstone dust. Their wear saves with the player's inventory.

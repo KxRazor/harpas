@@ -398,6 +398,8 @@ as shown by the parity report.
   - [x] Breaking blocks in Survival, with each block's destroy speed and the destroy progress others see.
   - [x] Wooden and stone pickaxes use block tags for mining speed and harvest tier. Tool wear persists with
         the inventory. Stone, coal, iron and other representative blocks are compared with vanilla (`mining_parity`).
+  - [x] Iron pickaxes harvest diamond, gold and redstone ore, with speed, harvest eligibility and wear
+        compared with vanilla (`mining_parity`).
   - [ ] Mining with the remaining tools, enchantments and player effects.
   - [x] Shape updates: the neighbors of a changed block take their new shapes in vanilla's order, and those
         that can no longer stand break, with the rules ported for world generation.

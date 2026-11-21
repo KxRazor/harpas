@@ -89,7 +89,7 @@ gameplay work. The logic thread publishes chat sessions before messages and give
 sessions; verification and each recipient's acknowledgement window stay on the connection thread
 ([java-connection.md](java-connection.md#chat-signing)).
 
-Wooden and stone pickaxes use the installed block tags for mining speed and harvest eligibility. The server
+Wooden, stone and iron pickaxes use the installed block tags for mining speed and harvest eligibility. The server
 uses the held tool for break progress and block loot. A completed break updates the tool's saved damage
 and notifies its owner when the tool wears out.
 

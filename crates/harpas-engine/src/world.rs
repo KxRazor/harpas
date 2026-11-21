@@ -3486,7 +3486,7 @@ mod tests {
     }
 
     #[test]
-    fn survival_pickaxes_mine_materials_for_the_next_tool_and_furnace() {
+    fn survival_pickaxes_progress_from_wood_to_diamonds() {
         use crate::inventory::{HOTBAR, ItemStack};
         use harpas_core::block_behavior::Face;
         use harpas_core::item::items;
@@ -3508,10 +3508,22 @@ mod tests {
         save(&folder, &[(target.chunk(), DATA_VERSION)]);
         let mut rules = WorldgenData::default();
         for (tag, blocks) in [
-            ("mineable/pickaxe", &["stone", "coal_ore", "iron_ore"][..]),
+            (
+                "mineable/pickaxe",
+                &["stone", "coal_ore", "iron_ore", "diamond_ore"][..],
+            ),
             ("needs_stone_tool", &["iron_ore"][..]),
-            ("incorrect_for_wooden_tool", &["#needs_stone_tool"][..]),
-            ("incorrect_for_stone_tool", &[][..]),
+            ("needs_iron_tool", &["diamond_ore"][..]),
+            ("needs_diamond_tool", &[][..]),
+            (
+                "incorrect_for_wooden_tool",
+                &["#needs_stone_tool", "#incorrect_for_stone_tool"][..],
+            ),
+            (
+                "incorrect_for_stone_tool",
+                &["#needs_iron_tool", "#incorrect_for_iron_tool"][..],
+            ),
+            ("incorrect_for_iron_tool", &["#needs_diamond_tool"][..]),
         ] {
             rules.block_tags.insert(
                 format!("minecraft:{tag}"),
@@ -3541,6 +3553,7 @@ mod tests {
             ("stone", "cobblestone"),
             ("coal_ore", "coal"),
             ("iron_ore", "raw_iron"),
+            ("diamond_ore", "diamond"),
         ] {
             loot.insert(
                 &format!("minecraft:{block}"),
@@ -3557,6 +3570,7 @@ mod tests {
             &[
                 pickaxe_recipe("minecraft:oak_planks", "minecraft:wooden_pickaxe"),
                 pickaxe_recipe("minecraft:cobblestone", "minecraft:stone_pickaxe"),
+                pickaxe_recipe("minecraft:iron_ingot", "minecraft:iron_pickaxe"),
                 json!({"type": "minecraft:smelting", "ingredient": "minecraft:raw_iron", "result": {"id": "minecraft:iron_ingot"}}),
             ],
         )));
@@ -3608,7 +3622,7 @@ mod tests {
         world.set_block_state(table, state("crafting_table"));
         world.set_block_state(furnace, state("furnace"));
         game.players[0].inventory.slots[HOTBAR] = stack("minecraft:oak_planks", 3);
-        game.players[0].inventory.slots[HOTBAR + 1] = stack("minecraft:stick", 4);
+        game.players[0].inventory.slots[HOTBAR + 1] = stack("minecraft:stick", 6);
 
         let hotbar = |game: &Game, name| {
             game.players[0].inventory.slots[HOTBAR..HOTBAR + 9]
@@ -3720,21 +3734,31 @@ mod tests {
             "minecraft:cobblestone",
             "minecraft:stone_pickaxe",
         );
-        mine(&mut game, "iron_ore", 23, Some("minecraft:raw_iron"));
-        assert_eq!(damage(&game), Some(Nbt::Int(1)));
+        mine(&mut game, "diamond_ore", 75, None);
+        assert_eq!(hotbar(&game, "minecraft:diamond"), None);
+        for _ in 0..3 {
+            mine(&mut game, "iron_ore", 23, Some("minecraft:raw_iron"));
+        }
+        assert_eq!(damage(&game), Some(Nbt::Int(4)));
         game.use_item_on(0, false, furnace, Face::Up, [0.5; 3], 3);
         for name in ["minecraft:raw_iron", "minecraft:coal"] {
             let slot = 30 + hotbar(&game, name).unwrap() as i16;
             click(&mut game, slot, 0, 1);
         }
         let world = game.world.as_mut().unwrap();
-        for _ in 0..200 {
+        for _ in 0..600 {
             world.tick_furnaces();
         }
         assert_eq!(
             world.furnace(furnace).unwrap().slots[2],
-            stack("minecraft:iron_ingot", 1)
+            stack("minecraft:iron_ingot", 3)
         );
+        click(&mut game, 2, 0, 1);
+        game.close_container(0, game.players[0].container_id());
+        craft(&mut game, "minecraft:iron_ingot", "minecraft:iron_pickaxe");
+        mine(&mut game, "diamond_ore", 15, Some("minecraft:diamond"));
+        assert!(hotbar(&game, "minecraft:diamond").is_some());
+        assert_eq!(damage(&game), Some(Nbt::Int(1)));
     }
 
     #[test]

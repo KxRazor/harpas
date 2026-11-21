@@ -1,4 +1,4 @@
-//! Plain wooden and stone pickaxes against Vanilla 26.1's block progress and tool wear.
+//! Plain wooden, stone and iron pickaxes against Vanilla 26.1's block progress and tool wear.
 
 #[allow(dead_code)]
 #[path = "../../harpas-worldgen/tests/reference/mod.rs"]
@@ -89,7 +89,7 @@ fn compare(pack: &Path, expected: &Value) {
 
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
-fn wooden_and_stone_pickaxes_match_vanilla() {
+fn wooden_stone_and_iron_pickaxes_match_vanilla() {
     let reference = reference::Reference::required();
     reference.compile(&[("MiningProbe.java", include_str!("MiningProbe.java"))]);
     let report = reference.temp.0.join("mining.json");

@@ -31,6 +31,8 @@ pub struct ComponentPatch {
     pub added: Vec<(i32, Vec<u8>)>,
     /// Removed components, by type ID.
     pub removed: Vec<i32>,
+    /// Effective stack size when the item codec has resolved the patch's component IDs.
+    pub max_stack_size: Option<i32>,
     /// Unknown saved item fields, encoded as a named NBT compound, retained when stacks move or split.
     pub preserved: Vec<u8>,
 }
@@ -65,11 +67,13 @@ impl ItemStack {
     /// The most items this stack can hold: its item's default, unless its components may change it, up to 99.
     pub(crate) fn max_stack_size(&self) -> Option<i32> {
         let default = i32::from(items().max_stack_size(self.item)?);
-        Some(if self.components.added.is_empty() {
-            default
-        } else {
-            MAX_STACK_SIZE
-        })
+        self.components
+            .max_stack_size
+            .or(Some(if self.components.added.is_empty() {
+                default
+            } else {
+                MAX_STACK_SIZE
+            }))
     }
 
     /// Whether a client may send the stack (`ItemStack.validateStrict`): a known item, at most as many as its

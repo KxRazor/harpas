@@ -215,18 +215,18 @@ fn run() -> io::Result<()> {
             None
         }
     };
-    let components = block_entity_registry::load_builtin(Path::new(""))?
-        .and_then(|registries| registries.get("minecraft:data_component_type").cloned())
-        .unwrap_or_default();
+    let items = {
+        let registries = block_entity_registry::load_builtin(Path::new(""))?.unwrap_or_default();
+        let entries = |name| registries.get(name).map(Vec::as_slice).unwrap_or_default();
+        harpas_engine::item_data::ItemCodec::new(entries("minecraft:data_component_type"))
+            .with_enchantments(harpas_java::registry_names("minecraft:enchantment").unwrap_or(&[]))
+            .with_potions(entries("minecraft:potion"))
+    };
     let game_data = harpas_engine::GameData {
         shapes,
         loot,
         recipes,
-        items: Some(Arc::new(
-            harpas_engine::item_data::ItemCodec::new(&components).with_enchantments(
-                harpas_java::registry_names("minecraft:enchantment").unwrap_or(&[]),
-            ),
-        )),
+        items: Some(Arc::new(items)),
     };
     let mut server_info = server_info(&properties);
     server_info.tags = Arc::new(tags::load(Path::new(""), &data_pack)?);

@@ -112,6 +112,9 @@ public final class PlayerInventoryProbe {
                 "{\"minecraft:stored_enchantments\":{\"minecraft:fortune\":2}}",
                 "{\"minecraft:lore\":[\"Plain\",{\"text\":\"Styled\",\"italic\":false}]}",
                 "{\"minecraft:lore\":[]}",
+                "{\"minecraft:potion_contents\":{\"potion\":\"minecraft:water_breathing\"}}",
+                "{\"minecraft:potion_contents\":{\"custom_color\":1193046,\"custom_name\":\"test_potion\"}}",
+                "{\"minecraft:potion_contents\":{}}",
             };
             for (int i = 0; i < components.length; i++) {
                 var json = JsonParser.parseString("{\"id\":\"minecraft:stone\",\"count\":1,\"components\":" + components[i] + "}");
@@ -137,6 +140,9 @@ public final class PlayerInventoryProbe {
             var enchantmentNames = new JsonArray();
             for (var value : enchantments) enchantmentNames.add(enchantments.getKey(value).toString());
             result.add("enchantments", enchantmentNames);
+            var potionNames = new JsonArray();
+            for (var value : BuiltInRegistries.POTION) potionNames.add(BuiltInRegistries.POTION.getKey(value).toString());
+            result.add("potions", potionNames);
             var slots = new JsonArray();
             for (int i = 0; i < 41; i++) slots.add(describe(player.inventory.getItem(i), access));
             result.add("slots", slots);

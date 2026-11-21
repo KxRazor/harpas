@@ -506,7 +506,7 @@ impl Game {
     /// A stack the client puts in a slot in Creative (`handleSetCreativeModeSlot`). A stack the client may not
     /// send disconnects it, as a stack vanilla cannot read; a negative slot drops the stack. Vanilla's limit on
     /// how fast a player drops stacks is not ported yet.
-    pub(crate) fn set_creative_slot(&mut self, index: usize, slot: i16, stack: ItemStack) {
+    pub(crate) fn set_creative_slot(&mut self, index: usize, slot: i16, mut stack: ItemStack) {
         let state = &mut self.players[index];
         if !stack.is_valid() {
             state.disconnecting = true;
@@ -521,7 +521,10 @@ impl Game {
                 .world
                 .as_ref()
                 .and_then(|world| world.player_store.as_ref())
-            && let Err(error) = store.codec.write(&stack)
+            && let Err(error) = store
+                .codec
+                .write(&stack)
+                .and_then(|_| store.codec.resolve_stack_limit(&mut stack))
         {
             log::warn!(
                 "Refusing an unsavable Creative item from {}: {error}",
@@ -531,6 +534,11 @@ impl Game {
                 "Unsupported item data component",
             ));
             state.disconnecting = true;
+            return;
+        }
+        if !stack.is_valid() {
+            state.disconnecting = true;
+            state.send(player::Output::Disconnect("Network Protocol Error"));
             return;
         }
         if (1..=45).contains(&slot) {

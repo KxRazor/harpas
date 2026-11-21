@@ -202,6 +202,15 @@ fn desert_pyramid_chest_loot_matches_vanilla_on_open_and_break() {
     );
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn buried_treasure_chest_loot_matches_vanilla_on_open_and_break() {
+    check_chest_loot(
+        "buried_treasure",
+        &["minecraft:heart_of_the_sea", "minecraft:potion"],
+    );
+}
+
 fn check_chest_loot(table: &str, required_items: &[&str]) {
     let reference = Reference::required();
     reference.compile(&[
@@ -211,6 +220,7 @@ fn check_chest_loot(table: &str, required_items: &[&str]) {
     let tags = reference.temp.0.join("loot.nbt");
     let components = reference.temp.0.join("components.txt");
     let enchantments = reference.temp.0.join("enchantments.txt");
+    let potions = reference.temp.0.join("potions.txt");
     let seeds = [0_i64, 1, 2, 3, 17, -1, 123456789, -7046029254386353131];
     reference.java(
         "ChestLootProbe",
@@ -218,6 +228,7 @@ fn check_chest_loot(table: &str, required_items: &[&str]) {
             .map(|path| path.display().to_string())
             .into_iter()
             .chain([table.to_owned()])
+            .chain([potions.display().to_string()])
             .chain(seeds.map(|seed| seed.to_string())),
     );
     let tags = read_tags(&tags);
@@ -225,9 +236,12 @@ fn check_chest_loot(table: &str, required_items: &[&str]) {
     assert_eq!(tags.len(), seeds.len() * 3);
     let names = fs::read_to_string(components).unwrap();
     let enchantments = fs::read_to_string(enchantments).unwrap();
+    let potions = fs::read_to_string(potions).unwrap();
+    let potions: Vec<_> = potions.lines().map(str::to_owned).collect();
     let codec = Arc::new(
         ItemCodec::new(&names.lines().map(str::to_owned).collect::<Vec<_>>())
-            .with_enchantments(&enchantments.lines().collect::<Vec<_>>()),
+            .with_enchantments(&enchantments.lines().collect::<Vec<_>>())
+            .with_potions(&potions),
     );
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
     let pos = BlockPos { x: 1, y: 65, z: 0 };

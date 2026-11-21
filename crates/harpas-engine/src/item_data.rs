@@ -11,12 +11,15 @@ use harpas_core::nbt::{Compound, List, Nbt};
 
 use crate::inventory::{ComponentPatch, ItemStack};
 
+const POTION_CONTENTS: &str = "minecraft:potion_contents";
+
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
 #[derive(Debug, Default)]
 pub struct ItemCodec {
     names: Vec<String>,
     ids: HashMap<String, i32>,
     enchantments: Vec<String>,
+    potions: Vec<String>,
 }
 
 impl ItemCodec {
@@ -25,6 +28,7 @@ impl ItemCodec {
         Self {
             names: names.to_vec(),
             enchantments: Vec::new(),
+            potions: Vec::new(),
             ids: names
                 .iter()
                 .enumerate()
@@ -37,6 +41,29 @@ impl ItemCodec {
     pub fn with_enchantments(mut self, names: &[&str]) -> Self {
         self.enchantments = names.iter().map(|name| (*name).to_owned()).collect();
         self
+    }
+
+    /// Adds the locally generated built-in potion registry in numeric order.
+    pub fn with_potions(mut self, names: &[String]) -> Self {
+        self.potions = names.to_vec();
+        self
+    }
+
+    pub(crate) fn set_potion(&self, stack: &mut ItemStack, name: &str) -> io::Result<()> {
+        let id = *self
+            .ids
+            .get(POTION_CONTENTS)
+            .ok_or_else(|| invalid("missing potion contents component ID"))?;
+        let value = Nbt::Compound(Compound::from_iter([("potion", name)]));
+        let mut bytes = Vec::new();
+        encode_potion_contents(&mut bytes, &value, &self.potions)?;
+        let patch = Arc::make_mut(&mut stack.components);
+        match patch.added.binary_search_by_key(&id, |(id, _)| *id) {
+            Ok(index) => patch.added[index].1 = bytes,
+            Err(index) => patch.added.insert(index, (id, bytes)),
+        }
+        patch.removed.retain(|&removed| removed != id);
+        self.resolve_stack_limit(stack)
     }
 
     /// Reads a saved item, retaining fields outside the known item schema with the stack as it moves.
@@ -82,7 +109,7 @@ impl ItemCodec {
                     } else {
                         patch
                             .added
-                            .push((id, encode_component(&full, value, &self.enchantments)?));
+                            .push((id, encode_component(&full, value, self)?));
                     }
                 }
             }
@@ -100,13 +127,14 @@ impl ItemCodec {
         if !extra.is_empty() {
             Nbt::Compound(extra).write_named("", &mut patch.preserved);
         }
-        let stack = ItemStack {
+        let mut stack = ItemStack {
             item,
             count,
             components: Arc::new(patch),
         };
         // Prove that the loaded network values can be saved before exposing an editable inventory.
         self.write(&stack)?;
+        self.resolve_stack_limit(&mut stack)?;
         Ok(stack)
     }
 
@@ -138,7 +166,7 @@ impl ItemCodec {
             if components.get(name).is_some() {
                 return Err(invalid("duplicate component"));
             }
-            components.insert(name, decode_component(name, bytes, &self.enchantments)?);
+            components.insert(name, decode_component(name, bytes, self)?);
         }
         for id in &stack.components.removed {
             let name = self.name(*id)?;
@@ -156,6 +184,27 @@ impl ItemCodec {
             tag.insert("components", components);
         }
         Ok(tag)
+    }
+
+    /// Resolves the stack size of components that have passed codec validation.
+    pub(crate) fn resolve_stack_limit(&self, stack: &mut ItemStack) -> io::Result<()> {
+        let patch = &stack.components;
+        let mut limit = if patch.added.is_empty() {
+            None
+        } else {
+            items().max_stack_size(stack.item).map(i32::from)
+        };
+        if let Some(id) = self.ids.get("minecraft:max_stack_size") {
+            if let Some((_, bytes)) = patch.added.iter().find(|(kind, _)| kind == id) {
+                limit = Some(read_varint(&mut bytes.as_slice())?);
+            } else if patch.removed.contains(id) {
+                limit = Some(1);
+            }
+        }
+        if patch.max_stack_size != limit {
+            Arc::make_mut(&mut stack.components).max_stack_size = limit;
+        }
+        Ok(())
     }
 
     fn name(&self, id: i32) -> io::Result<&str> {
@@ -184,6 +233,7 @@ enum Kind {
     Rarity,
     Enchantable,
     Enchantments,
+    PotionContents,
 }
 
 fn kind(name: &str) -> io::Result<Kind> {
@@ -208,6 +258,7 @@ fn kind(name: &str) -> io::Result<Kind> {
         "rarity" => Kind::Rarity,
         "enchantable" => Kind::Enchantable,
         "enchantments" | "stored_enchantments" => Kind::Enchantments,
+        "potion_contents" => Kind::PotionContents,
         _ => return Err(invalid(format!("unsupported saved item component {name}"))),
     })
 }
@@ -219,7 +270,7 @@ fn integer(value: &Nbt) -> io::Result<i32> {
     }
 }
 
-fn encode_component(name: &str, value: &Nbt, enchantments: &[String]) -> io::Result<Vec<u8>> {
+fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Vec<u8>> {
     validate_component(name, value)?;
     let mut bytes = Vec::new();
     match kind(name)? {
@@ -240,10 +291,7 @@ fn encode_component(name: &str, value: &Nbt, enchantments: &[String]) -> io::Res
         }
         Kind::Nbt => value.write_network(&mut bytes),
         Kind::String => match value {
-            Nbt::String(value) => {
-                write_varint(&mut bytes, value.len() as i32);
-                bytes.extend_from_slice(value.as_bytes());
-            }
+            Nbt::String(value) => write_string(&mut bytes, value),
             _ => return Err(invalid("expected string component")),
         },
         Kind::Lore => match value {
@@ -289,7 +337,8 @@ fn encode_component(name: &str, value: &Nbt, enchantments: &[String]) -> io::Res
                 } else {
                     format!("minecraft:{name}")
                 };
-                let id = enchantments
+                let id = codec
+                    .enchantments
                     .iter()
                     .position(|name| *name == full)
                     .ok_or_else(|| invalid(format!("unknown enchantment {name}")))?;
@@ -312,11 +361,12 @@ fn encode_component(name: &str, value: &Nbt, enchantments: &[String]) -> io::Res
             ),
             _ => return Err(invalid("expected enchantable compound")),
         },
+        Kind::PotionContents => encode_potion_contents(&mut bytes, value, &codec.potions)?,
     }
     Ok(bytes)
 }
 
-fn decode_component(name: &str, mut bytes: &[u8], enchantments: &[String]) -> io::Result<Nbt> {
+fn decode_component(name: &str, mut bytes: &[u8], codec: &ItemCodec) -> io::Result<Nbt> {
     let value = match kind(name)? {
         Kind::VarInt => Nbt::Int(read_varint(&mut bytes)?),
         Kind::Int => Nbt::Int(i32::from_be_bytes(take(&mut bytes)?)),
@@ -327,24 +377,10 @@ fn decode_component(name: &str, mut bytes: &[u8], enchantments: &[String]) -> io
             }
             Nbt::Float(value)
         }
-        Kind::Bool => {
-            let [value] = take(&mut bytes)?;
-            if value > 1 {
-                return Err(invalid("invalid boolean component"));
-            }
-            Nbt::Byte(value as i8)
-        }
+        Kind::Bool => Nbt::Byte(i8::from(read_bool(&mut bytes)?)),
         Kind::Unit => Nbt::Compound(Compound::new()),
         Kind::Nbt => Nbt::read_network(&mut bytes).map_err(invalid)?,
-        Kind::String => {
-            let size = usize::try_from(read_varint(&mut bytes)?).map_err(invalid)?;
-            let value = bytes
-                .get(..size)
-                .ok_or_else(|| invalid("truncated string"))?;
-            let value = std::str::from_utf8(value).map_err(invalid)?.to_owned();
-            bytes = &bytes[size..];
-            Nbt::String(value)
-        }
+        Kind::String => Nbt::String(read_string(&mut bytes)?),
         Kind::Lore => {
             let size = usize::try_from(read_varint(&mut bytes)?).map_err(invalid)?;
             if size > 256 {
@@ -400,7 +436,8 @@ fn decode_component(name: &str, mut bytes: &[u8], enchantments: &[String]) -> io
             let mut levels = Compound::new();
             for _ in 0..size {
                 let id = usize::try_from(read_varint(&mut bytes)?).map_err(invalid)?;
-                let name = enchantments
+                let name = codec
+                    .enchantments
                     .get(id)
                     .ok_or_else(|| invalid("unknown enchantment ID"))?;
                 let level = read_varint(&mut bytes)?;
@@ -414,12 +451,73 @@ fn decode_component(name: &str, mut bytes: &[u8], enchantments: &[String]) -> io
             "value".to_owned(),
             Nbt::Int(read_varint(&mut bytes)?),
         )])),
+        Kind::PotionContents => decode_potion_contents(&mut bytes, &codec.potions)?,
     };
     if !bytes.is_empty() {
         return Err(invalid(format!("trailing bytes in component {name}")));
     }
     validate_component(name, &value)?;
     Ok(value)
+}
+
+fn encode_potion_contents(bytes: &mut Vec<u8>, value: &Nbt, potions: &[String]) -> io::Result<()> {
+    let Nbt::Compound(contents) = value else {
+        return Err(invalid("expected potion contents compound"));
+    };
+    let (mut potion, mut color, mut name) = (None, None, None);
+    for (field, value) in contents.iter() {
+        match (field, value) {
+            ("potion", Nbt::String(value)) => {
+                let id = potions
+                    .iter()
+                    .position(|name| {
+                        name == value || name.strip_prefix("minecraft:") == Some(value)
+                    })
+                    .ok_or_else(|| invalid(format!("unknown potion {value}")))?;
+                potion = Some(id as i32);
+            }
+            ("custom_color", Nbt::Int(value)) => color = Some(*value),
+            ("custom_name", Nbt::String(value)) => name = Some(value),
+            ("custom_effects", Nbt::List(effects)) if effects.is_empty() => {}
+            ("custom_effects", _) => return Err(invalid("custom potion effects are unsupported")),
+            _ => return Err(invalid(format!("invalid potion contents field {field}"))),
+        }
+    }
+    bytes.push(u8::from(potion.is_some()));
+    if let Some(id) = potion {
+        write_varint(bytes, id);
+    }
+    bytes.push(u8::from(color.is_some()));
+    if let Some(color) = color {
+        bytes.extend_from_slice(&color.to_be_bytes());
+    }
+    write_varint(bytes, 0); // Custom effect count.
+    bytes.push(u8::from(name.is_some()));
+    if let Some(name) = name {
+        write_string(bytes, name);
+    }
+    Ok(())
+}
+
+fn decode_potion_contents(bytes: &mut &[u8], potions: &[String]) -> io::Result<Nbt> {
+    let mut contents = Compound::new();
+    if read_bool(bytes)? {
+        let id = usize::try_from(read_varint(bytes)?).map_err(invalid)?;
+        let potion = potions
+            .get(id)
+            .ok_or_else(|| invalid("unknown potion ID"))?;
+        contents.insert("potion", potion.as_str());
+    }
+    if read_bool(bytes)? {
+        contents.insert("custom_color", i32::from_be_bytes(take(bytes)?));
+    }
+    if read_varint(bytes)? != 0 {
+        return Err(invalid("custom potion effects are unsupported"));
+    }
+    if read_bool(bytes)? {
+        contents.insert("custom_name", read_string(bytes)?);
+    }
+    Ok(Nbt::Compound(contents))
 }
 
 fn validate_component(name: &str, value: &Nbt) -> io::Result<()> {
@@ -471,6 +569,29 @@ fn write_varint(bytes: &mut Vec<u8>, value: i32) {
         if value == 0 {
             break;
         }
+    }
+}
+
+fn write_string(bytes: &mut Vec<u8>, value: &str) {
+    write_varint(bytes, value.len() as i32);
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn read_string(bytes: &mut &[u8]) -> io::Result<String> {
+    let size = usize::try_from(read_varint(bytes)?).map_err(invalid)?;
+    let (value, rest) = bytes
+        .split_at_checked(size)
+        .ok_or_else(|| invalid("truncated string"))?;
+    let value = std::str::from_utf8(value).map_err(invalid)?.to_owned();
+    *bytes = rest;
+    Ok(value)
+}
+
+fn read_bool(bytes: &mut &[u8]) -> io::Result<bool> {
+    match take(bytes)? {
+        [0] => Ok(false),
+        [1] => Ok(true),
+        _ => Err(invalid("invalid boolean component")),
     }
 }
 
@@ -569,6 +690,43 @@ mod tests {
             codec.write(&stack).is_err(),
             "a component's trailing bytes must not be dropped"
         );
+    }
+
+    #[test]
+    fn potion_contents_preserve_the_stack_limit_and_reject_custom_effects() {
+        let codec = ItemCodec::new(&[
+            POTION_CONTENTS.to_owned(),
+            "minecraft:max_stack_size".to_owned(),
+        ])
+        .with_potions(&["minecraft:test_potion".to_owned()]);
+        let tag = Compound::from_iter([("id", "minecraft:potion")]);
+        let mut potion = codec.read(&tag).unwrap();
+        codec.set_potion(&mut potion, "test_potion").unwrap();
+        assert_eq!(potion.max_stack_size(), Some(1));
+
+        let mut inventory = crate::inventory::Inventory::default();
+        for _ in 0..2 {
+            assert!(inventory.add(&mut potion.clone(), false));
+        }
+        assert_eq!(
+            inventory.slots[crate::inventory::HOTBAR..][..2],
+            [potion.clone(), potion.clone()]
+        );
+        let mut saved = codec.write(&potion).unwrap();
+        assert_eq!(codec.read(&saved).unwrap(), potion);
+
+        let mut components = Compound::from_iter([("minecraft:max_stack_size", Nbt::Int(16))]);
+        let mut contents = Compound::from_iter([("potion", "minecraft:test_potion")]);
+        components.insert(POTION_CONTENTS, contents.clone());
+        saved.insert("components", components.clone());
+        assert_eq!(codec.read(&saved).unwrap().max_stack_size(), Some(16));
+
+        contents.insert("custom_effects", List::Compound(vec![Compound::new()]));
+        components.insert(POTION_CONTENTS, contents);
+        saved.insert("components", components);
+        assert!(codec.read(&saved).is_err());
+        Arc::make_mut(&mut potion.components).added[0].1 = vec![0, 0, 1, 0];
+        assert!(codec.write(&potion).is_err());
     }
 }
 

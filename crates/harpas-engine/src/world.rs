@@ -3486,7 +3486,7 @@ mod tests {
     }
 
     #[test]
-    fn survival_pickaxes_progress_from_wood_to_diamonds() {
+    fn survival_pickaxes_progress_from_wood_to_obsidian() {
         use crate::inventory::{HOTBAR, ItemStack};
         use harpas_core::block_behavior::Face;
         use harpas_core::item::items;
@@ -3510,11 +3510,11 @@ mod tests {
         for (tag, blocks) in [
             (
                 "mineable/pickaxe",
-                &["stone", "coal_ore", "iron_ore", "diamond_ore"][..],
+                &["stone", "coal_ore", "iron_ore", "diamond_ore", "obsidian"][..],
             ),
             ("needs_stone_tool", &["iron_ore"][..]),
             ("needs_iron_tool", &["diamond_ore"][..]),
-            ("needs_diamond_tool", &[][..]),
+            ("needs_diamond_tool", &["obsidian"][..]),
             (
                 "incorrect_for_wooden_tool",
                 &["#needs_stone_tool", "#incorrect_for_stone_tool"][..],
@@ -3524,6 +3524,7 @@ mod tests {
                 &["#needs_iron_tool", "#incorrect_for_iron_tool"][..],
             ),
             ("incorrect_for_iron_tool", &["#needs_diamond_tool"][..]),
+            ("incorrect_for_diamond_tool", &[][..]),
         ] {
             rules.block_tags.insert(
                 format!("minecraft:{tag}"),
@@ -3554,6 +3555,7 @@ mod tests {
             ("coal_ore", "coal"),
             ("iron_ore", "raw_iron"),
             ("diamond_ore", "diamond"),
+            ("obsidian", "obsidian"),
         ] {
             loot.insert(
                 &format!("minecraft:{block}"),
@@ -3571,6 +3573,7 @@ mod tests {
                 pickaxe_recipe("minecraft:oak_planks", "minecraft:wooden_pickaxe"),
                 pickaxe_recipe("minecraft:cobblestone", "minecraft:stone_pickaxe"),
                 pickaxe_recipe("minecraft:iron_ingot", "minecraft:iron_pickaxe"),
+                pickaxe_recipe("minecraft:diamond", "minecraft:diamond_pickaxe"),
                 json!({"type": "minecraft:smelting", "ingredient": "minecraft:raw_iron", "result": {"id": "minecraft:iron_ingot"}}),
             ],
         )));
@@ -3622,7 +3625,7 @@ mod tests {
         world.set_block_state(table, state("crafting_table"));
         world.set_block_state(furnace, state("furnace"));
         game.players[0].inventory.slots[HOTBAR] = stack("minecraft:oak_planks", 3);
-        game.players[0].inventory.slots[HOTBAR + 1] = stack("minecraft:stick", 6);
+        game.players[0].inventory.slots[HOTBAR + 1] = stack("minecraft:stick", 8);
 
         let hotbar = |game: &Game, name| {
             game.players[0].inventory.slots[HOTBAR..HOTBAR + 9]
@@ -3756,8 +3759,47 @@ mod tests {
         click(&mut game, 2, 0, 1);
         game.close_container(0, game.players[0].container_id());
         craft(&mut game, "minecraft:iron_ingot", "minecraft:iron_pickaxe");
-        mine(&mut game, "diamond_ore", 15, Some("minecraft:diamond"));
-        assert!(hotbar(&game, "minecraft:diamond").is_some());
+        for _ in 0..3 {
+            mine(&mut game, "diamond_ore", 15, Some("minecraft:diamond"));
+        }
+        mine(&mut game, "obsidian", 834, None);
+        assert_eq!(damage(&game), Some(Nbt::Int(4)));
+        assert_eq!(hotbar(&game, "minecraft:obsidian"), None);
+
+        craft(&mut game, "minecraft:diamond", "minecraft:diamond_pickaxe");
+        mine(&mut game, "obsidian", 188, Some("minecraft:obsidian"));
+        assert!(hotbar(&game, "minecraft:obsidian").is_some());
+        assert_eq!(damage(&game), Some(Nbt::Int(1)));
+
+        game.leave(1);
+        game.world
+            .as_mut()
+            .unwrap()
+            .player_store
+            .as_mut()
+            .unwrap()
+            .flush()
+            .unwrap();
+        let (sender, _received) = crate::player::output_channel();
+        game.join(
+            2,
+            Profile {
+                game_mode: GameMode::Survival,
+                ..profile()
+            },
+            2,
+            2,
+            false,
+            sender,
+        );
+        wait_until(|| {
+            tick(&mut game, 2);
+            game.players[0].data_ready
+        });
+        assert_eq!(
+            Some(game.players[0].inventory.selected),
+            hotbar(&game, "minecraft:diamond_pickaxe")
+        );
         assert_eq!(damage(&game), Some(Nbt::Int(1)));
     }
 

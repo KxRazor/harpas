@@ -1,4 +1,4 @@
-//! Mining speed and harvest rules for wooden, stone and iron pickaxes.
+//! Mining speed and harvest rules for wooden, stone, iron and diamond pickaxes.
 
 use std::io;
 
@@ -16,6 +16,7 @@ pub struct MiningRules {
     incorrect_wooden: Vec<bool>,
     incorrect_stone: Vec<bool>,
     incorrect_iron: Vec<bool>,
+    incorrect_diamond: Vec<bool>,
 }
 
 /// How the selected item breaks a block before player modifiers are applied.
@@ -52,6 +53,7 @@ impl MiningRules {
             incorrect_wooden: data.block_tag_states("minecraft:incorrect_for_wooden_tool")?,
             incorrect_stone: data.block_tag_states("minecraft:incorrect_for_stone_tool")?,
             incorrect_iron: data.block_tag_states("minecraft:incorrect_for_iron_tool")?,
+            incorrect_diamond: data.block_tag_states("minecraft:incorrect_for_diamond_tool")?,
         })
     }
 
@@ -65,6 +67,7 @@ impl MiningRules {
             Some("minecraft:wooden_pickaxe") => (2.0, 59, &self.incorrect_wooden),
             Some("minecraft:stone_pickaxe") => (4.0, 131, &self.incorrect_stone),
             Some("minecraft:iron_pickaxe") => (6.0, 250, &self.incorrect_iron),
+            Some("minecraft:diamond_pickaxe") => (8.0, 1561, &self.incorrect_diamond),
             _ => return mining,
         };
         if block_states().hardness(state) > 0.0 {

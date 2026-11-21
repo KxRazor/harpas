@@ -400,6 +400,8 @@ as shown by the parity report.
         the inventory. Stone, coal, iron and other representative blocks are compared with vanilla (`mining_parity`).
   - [x] Iron pickaxes harvest diamond, gold and redstone ore, with speed, harvest eligibility and wear
         compared with vanilla (`mining_parity`).
+  - [x] Diamond pickaxes harvest obsidian. Mining speed, harvest eligibility and wear are compared with
+        vanilla (`mining_parity`), and the Survival test checks that wear persists on reconnect.
   - [ ] Mining with the remaining tools, enchantments and player effects.
   - [x] Shape updates: the neighbors of a changed block take their new shapes in vanilla's order, and those
         that can no longer stand break, with the rules ported for world generation.

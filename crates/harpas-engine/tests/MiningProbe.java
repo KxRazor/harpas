@@ -68,9 +68,11 @@ public final class MiningProbe {
                 }
                 report.add("components", ids);
                 var cases = new JsonArray();
-                for (var item : List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE)) {
+                for (var item : List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE,
+                        Items.DIAMOND_PICKAXE)) {
                     for (var name : List.of("stone", "cobblestone", "coal_ore", "iron_ore", "deepslate_iron_ore",
                             "gold_ore", "redstone_ore", "diamond_ore", "deepslate_diamond_ore", "obsidian",
+                            "crying_obsidian", "ancient_debris",
                             "dirt", "short_grass")) {
                         var block = BuiltInRegistries.BLOCK.getValue(net.minecraft.resources.Identifier.withDefaultNamespace(name));
                         var state = block.defaultBlockState();

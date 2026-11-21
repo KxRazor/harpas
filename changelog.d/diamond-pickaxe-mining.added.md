@@ -1,0 +1,1 @@
+- Diamond pickaxes mine at vanilla speed, harvest obsidian, and retain their wear when the player reconnects.

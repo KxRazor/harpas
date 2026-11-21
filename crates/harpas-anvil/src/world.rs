@@ -221,6 +221,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_restored_map_index_does_not_reuse_existing_ids() {
+        let folder = Folder::new();
+        let mut maps = crate::MapFiles::new(&folder.0);
+        let first = Compound::from_iter([("xCenter", 64)]);
+        let second = Compound::from_iter([("xCenter", 320)]);
+        assert_eq!(maps.create(first.clone()).unwrap(), 0);
+        assert_eq!(maps.create(second.clone()).unwrap(), 1);
+        let dir = folder.0.join("data/minecraft/maps");
+        fs::copy(dir.join("last_id.dat_old"), dir.join("last_id.dat")).unwrap();
+
+        let mut reopened = crate::MapFiles::new(&folder.0);
+        assert_eq!(reopened.create(Compound::new()).unwrap(), 2);
+        assert_eq!(reopened.read(0).unwrap(), Some(first));
+        assert_eq!(reopened.read(1).unwrap(), Some(second));
+    }
+
     fn level(name: &str) -> Compound {
         let mut data = Compound::new();
         data.insert("DataVersion", 4786);

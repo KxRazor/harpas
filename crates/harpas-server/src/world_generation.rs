@@ -130,17 +130,11 @@ pub(crate) fn prepare(
             harpas_java::biome_names(),
         )?,
     };
-    let generator = overworld.generator;
     if level.is_none() {
-        let spawn_y = spawn_height(Arc::clone(&generator))?;
+        let spawn_y = spawn_height(Arc::clone(&overworld.generator))?;
         harpas_anvil::write_level(world, &new_level(properties, spawn_y))?;
     }
-    let source = match overworld.starts {
-        Some(starts) => harpas_engine::worldgen::decorated_with_structures(
-            generator, starts, seed, data, templates,
-        )?,
-        None => harpas_engine::worldgen::decorated(generator, seed, &data, templates)?,
-    };
+    let source = overworld.decorate(seed, data, templates)?;
     info!("Prepared Overworld terrain generation for seed {seed}");
     Ok(Some(source))
 }

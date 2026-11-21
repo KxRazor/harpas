@@ -453,6 +453,8 @@ as shown by the parity report.
         and dropped stacks match vanilla, including Coast armor trim templates and nautilus armor (`chest_parity`).
   - [x] Shipwreck supply chests roll their loot when opened or broken unopened. Menu slots, saved contents
         and dropped stacks match vanilla, including suspicious stew effects and enchanted leather armor (`chest_parity`).
+  - [x] Shipwreck map chests roll their loot when opened or broken unopened. The buried treasure target, initial
+        coastline preview, saved map data and named empty map fallback are compared with vanilla (`chest_parity`).
   - [x] Normal furnaces open a three-slot menu, smelt on the game tick, and save their slots and timers in Anvil.
         Fuel values, blocked output and resumed iron smelting are compared with vanilla (`furnace_parity`).
   - [ ] The other chest loot tables, containers and recipe types, furnace experience and recipe-book placement.
@@ -464,9 +466,9 @@ as shown by the parity report.
         and Set Creative Mode Slot.
   - [x] Set Entity Metadata, with the serializers item entities use.
   - [x] Click Container, with stacks hashed as the client predicts them, and Set Cursor Item.
-  - [x] Saved-NBT/network conversion for 28 item component values, including damage, names, lore, custom
+  - [x] Saved-NBT/network conversion for 29 item component values, including damage, names, lore, custom
         data, enchantments, stored enchantments, potion contents without custom effects and suspicious stew
-        effects, plus removed components. Unsupported values are refused without overwriting the player's data.
+        effects, map decorations, and removed components. Unsupported values are refused without overwriting the player's data.
   - [ ] The remaining data component values, the other serializers, and the other 15 packets.
 - [ ] Entity physics and collisions, ported one to one.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,

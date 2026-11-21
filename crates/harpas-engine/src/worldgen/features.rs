@@ -24,8 +24,8 @@ use harpas_worldgen::{
     apply_biome_decoration_with_structures,
 };
 
-use super::StartSource;
 use super::structures::{DecorationStarts, terrain_block, terrain_height};
+use super::{StartSource, TreasureSource};
 
 use crate::world::{ChunkGenerator, ChunkPos, ChunkSource, ChunkStorage, Generated};
 
@@ -89,6 +89,17 @@ pub fn decorated_with_structures(
     data: Arc<WorldgenData>,
     templates: Arc<StructureTemplates>,
 ) -> io::Result<Arc<dyn ChunkSource>> {
+    with_structures(generator, starts, seed, data, templates, None)
+}
+
+pub(super) fn with_structures(
+    generator: Arc<ChunkGenerator>,
+    starts: Arc<StartSource>,
+    seed: i64,
+    data: Arc<WorldgenData>,
+    templates: Arc<StructureTemplates>,
+    treasure: Option<Arc<TreasureSource>>,
+) -> io::Result<Arc<dyn ChunkSource>> {
     let index = FeatureIndex::overworld_with(&data, Some(Arc::clone(&templates)))
         .map_err(io::Error::other)?;
     let mut decorator = Decorator::new(generator, seed, index, data.biomes.len(), CAPACITY);
@@ -97,6 +108,7 @@ pub fn decorated_with_structures(
         data,
         templates,
     });
+    decorator.treasure = treasure;
     Ok(Arc::new(decorator))
 }
 
@@ -136,6 +148,7 @@ struct State {
 pub(crate) struct Decorator {
     generator: Arc<ChunkGenerator>,
     structures: Option<Structures>,
+    treasure: Option<Arc<TreasureSource>>,
     seed: i64,
     index: FeatureIndex,
     biome_count: usize,
@@ -215,6 +228,7 @@ impl Decorator {
         Self {
             generator,
             structures: None,
+            treasure: None,
             seed,
             index,
             biome_count,
@@ -611,6 +625,16 @@ impl ChunkSource for Decorator {
         storage: &ChunkStorage,
     ) -> io::Result<Generated> {
         self.complete(pos, storage)
+    }
+
+    fn treasure_map(
+        &self,
+        origin: crate::block::BlockPos,
+        storage: &ChunkStorage,
+    ) -> io::Result<Option<(crate::MapData, [i32; 2])>> {
+        self.treasure
+            .as_ref()
+            .map_or(Ok(None), |find| find(origin, storage))
     }
 
     fn flush(&self, storage: &ChunkStorage) -> io::Result<()> {

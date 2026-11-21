@@ -273,6 +273,8 @@ enum Function {
     EnchantRandomly,
     SetPotion(String),
     SetStewEffect(Vec<StewEffect>),
+    TreasureMap,
+    SetTranslatedItemName(String),
     /// A function that changes nothing for a broken block without an explosion or the data it copies.
     None,
 }
@@ -368,6 +370,23 @@ impl Function {
                 .as_array()
                 .and_then(|entries| entries.iter().map(StewEffect::parse).collect())
                 .map_or(Self::None, Self::SetStewEffect),
+            "minecraft:exploration_map"
+                if value["decoration"] == "minecraft:red_x"
+                    && value["zoom"].as_i64() == Some(1)
+                    && value["destination"]
+                        .as_str()
+                        .unwrap_or("minecraft:on_treasure_maps")
+                        == "minecraft:on_treasure_maps"
+                    && value["search_radius"].as_i64().unwrap_or(50) == 50
+                    && value["skip_existing_chunks"].as_bool() == Some(false) =>
+            {
+                Self::TreasureMap
+            }
+            "minecraft:set_name" if value["target"] == "item_name" => value["name"]["translate"]
+                .as_str()
+                .map_or(Self::None, |name| {
+                    Self::SetTranslatedItemName(name.to_owned())
+                }),
             other => {
                 warn!("Loot function {other} is not ported; it changes nothing");
                 Self::None
@@ -419,6 +438,24 @@ impl Function {
                 {
                     let effect = &effects[random.next_int_bounded(effects.len() as i32) as usize];
                     codec.set_saved_component(stack, STEW_EFFECTS, &effect.roll(random))?;
+                }
+            }
+            Self::TreasureMap => {
+                if let Some((_, codec)) = context.chest
+                    && let Some(map) = context.treasure_map
+                    && stack.name() == Some("minecraft:map")
+                {
+                    map.apply(stack, codec)?;
+                }
+            }
+            Self::SetTranslatedItemName(translation) => {
+                if let Some((_, codec)) = context.chest {
+                    let name = Compound::from_iter([("translate", translation.as_str())]);
+                    codec.set_saved_component(
+                        stack,
+                        "minecraft:item_name",
+                        &Nbt::Compound(name),
+                    )?;
                 }
             }
             Self::None => {}
@@ -582,6 +619,7 @@ struct Context<'a> {
     tool: &'a ItemStack,
     random: &'a mut dyn RandomSource,
     chest: Option<(&'a chest::LootEnchantments, &'a ItemCodec)>,
+    treasure_map: Option<crate::maps::TreasureMap>,
 }
 
 impl LootTable {
@@ -634,6 +672,7 @@ impl LootTable {
             tool,
             random,
             chest: None,
+            treasure_map: None,
         })
     }
 

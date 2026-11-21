@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use harpas_anvil::{Chunk, ChunkSection, DATA_VERSION, Region, dimension_dir};
+use harpas_anvil::{Chunk, ChunkSection, DATA_VERSION, MapFiles, Region, dimension_dir};
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::Face;
 use harpas_core::chunk::{PalettedContainer, Section, Strategy};
@@ -21,7 +21,10 @@ use harpas_engine::inventory::ItemStack;
 use harpas_engine::item_data::ItemCodec;
 use harpas_engine::loot::LootTables;
 use harpas_engine::player::{GameMode, Input, Movement, Output, Profile};
+use harpas_engine::world::{ChunkPos, ChunkSource, ChunkStorage, Generated};
 use harpas_engine::{GameData, Handle, PlayerSession};
+use harpas_engine::{MapData, MapIconKind};
+use harpas_worldgen::{StructureTemplates, WorldgenData};
 use reference::Reference;
 
 const BIOMES: &[&str] = &["minecraft:plains"];
@@ -133,6 +136,30 @@ fn saved_chest(region_dir: &Path, pos: BlockPos) -> Compound {
     entities[0].clone()
 }
 
+fn check_map_file(world: &Path, expected: Option<&Compound>) {
+    let mut actual = MapFiles::new(world).read(0).unwrap();
+    let mut expected = expected.cloned();
+    let actual_colors = actual.as_mut().and_then(|data| data.remove("colors"));
+    let expected_colors = expected.as_mut().and_then(|data| data.remove("colors"));
+    assert_eq!(actual, expected, "saved map settings");
+    match (actual_colors, expected_colors) {
+        (Some(Nbt::ByteArray(actual)), Some(Nbt::ByteArray(expected))) => {
+            assert_eq!(actual.len(), expected.len(), "map image size");
+            for (pixel, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(
+                    *actual,
+                    expected,
+                    "map pixel ({}, {})",
+                    pixel % 128,
+                    pixel / 128
+                );
+            }
+        }
+        (None, None) => {}
+        _ => panic!("map image is missing or invalid"),
+    }
+}
+
 fn save_chest_fixture(region_dir: &Path, position: BlockPos, kind: &str, tag: &Compound) {
     let states = block_states();
     let mut section = Section::new(
@@ -161,6 +188,7 @@ fn save_chest_fixture(region_dir: &Path, position: BlockPos, kind: &str, tag: &C
             ("zPos", Nbt::Int(0)),
             ("Status", Nbt::from("minecraft:full")),
             ("isLightOn", Nbt::Byte(1)),
+            ("structures", Nbt::Compound(Compound::new())),
             (
                 "block_entities",
                 Nbt::List(List::Compound(vec![tag.clone()])),
@@ -245,6 +273,60 @@ fn shipwreck_supply_chest_loot_matches_vanilla_on_open_and_break() {
     );
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn shipwreck_map_chest_matches_vanilla_and_sends_the_image_after_restart() {
+    check_chest_loot("shipwreck_map", &[0, -1], &["minecraft:filled_map"]);
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn shipwreck_map_chest_keeps_the_named_empty_map_when_there_is_no_target() {
+    check_chest_loot("shipwreck_map_empty", &[0, -1], &["minecraft:map"]);
+}
+
+/// Supply only the real structure and biome query. The test's playable chunk is the chest fixture.
+struct MapFixtureSource(Arc<dyn ChunkSource>);
+
+impl ChunkSource for MapFixtureSource {
+    fn resumes(&self, _: &str) -> bool {
+        false
+    }
+
+    fn generate(
+        &self,
+        pos: ChunkPos,
+        _: Option<Compound>,
+        _: &ChunkStorage,
+    ) -> std::io::Result<Generated> {
+        Ok(Generated {
+            chunk: Chunk {
+                sections: Vec::new(),
+                rest: Compound::from_iter([
+                    ("DataVersion", Nbt::Int(DATA_VERSION)),
+                    ("xPos", Nbt::Int(pos.x)),
+                    ("zPos", Nbt::Int(pos.z)),
+                    ("Status", Nbt::from("minecraft:full")),
+                    ("isLightOn", Nbt::Byte(1)),
+                ]),
+            },
+            changed: false,
+        })
+    }
+
+    fn treasure_map(
+        &self,
+        pos: BlockPos,
+        storage: &ChunkStorage,
+    ) -> std::io::Result<Option<(MapData, [i32; 2])>> {
+        self.0.treasure_map(pos, storage)
+    }
+
+    fn flush(&self, _: &ChunkStorage) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
     let reference = Reference::required();
     reference.compile(&[
@@ -283,12 +365,51 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
             .with_mob_effects(&effects.lines().map(str::to_owned).collect::<Vec<_>>()),
     );
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
+    let map_source = (table == "shipwreck_map").then(|| {
+        let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
+        data.structure_sets
+            .retain(|name, _| name == "minecraft:buried_treasures");
+        let data = Arc::new(data);
+        let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
+        let biomes: Vec<_> = data.biomes.keys().map(String::as_str).collect();
+        let source =
+            harpas_engine::worldgen::overworld(0, data.clone(), templates.clone(), true, &biomes)
+                .unwrap()
+                .decorate(0, data.clone(), templates)
+                .unwrap();
+        (Arc::new(MapFixtureSource(source)), data)
+    });
+    let start = |world: &Path, data: Option<Arc<LootTables>>| {
+        let game = GameData {
+            items: Some(codec.clone()),
+            loot: data,
+            ..GameData::default()
+        };
+        let (handle, thread) = if let Some((source, registries)) = &map_source {
+            let biomes: Vec<_> = registries.biomes.keys().map(String::as_str).collect();
+            if game.loot.is_some() {
+                harpas_engine::start_with_world_source(world, &biomes, source.clone(), game)
+            } else {
+                harpas_engine::start_with_world(world, &biomes, game)
+            }
+        } else {
+            harpas_engine::start_with_world(world, BIOMES, game)
+        }
+        .unwrap();
+        Engine(handle, Some(thread))
+    };
     let pos = BlockPos { x: 1, y: 65, z: 0 };
     let mut observed = HashSet::new();
     for (&seed, [unopened, expected, removal]) in seeds.iter().zip(cases) {
         let Some(Nbt::List(List::Compound(items))) = expected.get("Items") else {
             panic!("expected loot for seed {seed}");
         };
+        let expected_map = match removal.get("MapData") {
+            Some(Nbt::Compound(map)) => Some(map),
+            None => None,
+            _ => panic!("invalid vanilla map data"),
+        };
+        assert_eq!(expected_map.is_some(), map_source.is_some());
         let mut slots = vec![ItemStack::empty(); 27];
         for tag in items {
             let Some(Nbt::Byte(slot)) = tag.get("Slot") else {
@@ -322,18 +443,13 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
 
         // Reopen with no loot data after shutdown. Only the saved items can supply this menu.
         for data in [Some(loot.clone()), None] {
-            let (handle, thread) = harpas_engine::start_with_world(
-                &world,
-                BIOMES,
-                GameData {
-                    items: Some(codec.clone()),
-                    loot: data,
-                    ..GameData::default()
-                },
-            )
-            .unwrap();
-            let engine = Engine(handle, Some(thread));
-            let session = join_and_load(&engine, &[pos], GameMode::Survival);
+            let engine = start(&world, data);
+            let mode = if expected_map.is_some() {
+                GameMode::Creative
+            } else {
+                GameMode::Survival
+            };
+            let session = join_and_load(&engine, &[pos], mode);
             use_chest(&session, pos, 1);
             assert_eq!(
                 receive(&session, |output| matches!(
@@ -359,6 +475,46 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
                 unreachable!()
             };
             assert_eq!(&actual[..27], slots, "menu slots for seed {seed}");
+            if let Some(map) = expected_map {
+                check_map_file(&world, Some(map));
+                let stack = slots
+                    .iter()
+                    .find(|stack| stack.name() == Some("minecraft:filled_map"))
+                    .unwrap();
+                session.send(Input::CloseContainer(1)).unwrap();
+                session
+                    .send(Input::SetCreativeSlot {
+                        slot: 36,
+                        stack: stack.clone(),
+                    })
+                    .unwrap();
+                let Output::MapUpdate {
+                    id: 0,
+                    scale: 1,
+                    locked: false,
+                    icons,
+                    colors: Some(colors),
+                } = receive(&session, |output| {
+                    matches!(output, Output::MapUpdate { .. })
+                })
+                else {
+                    panic!("expected first map update with its full image");
+                };
+                let Some(Nbt::ByteArray(expected_colors)) = map.get("colors") else {
+                    unreachable!()
+                };
+                assert!(
+                    colors
+                        .iter()
+                        .copied()
+                        .eq(expected_colors.iter().map(|&color| color as u8))
+                );
+                assert_eq!(icons.len(), 2);
+                assert_eq!(icons[1].kind, MapIconKind::RedX);
+                assert_eq!(icons[1].direction, 8);
+            } else if table == "shipwreck_map_empty" {
+                check_map_file(&world, None);
+            }
             drop(engine);
             assert_eq!(
                 &saved_chest(&region, pos),
@@ -388,17 +544,7 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
         let region = dimension_dir(&world, "minecraft:overworld").join("region");
         fs::create_dir_all(&region).unwrap();
         save_chest_fixture(&region, pos, "single", unopened);
-        let (handle, thread) = harpas_engine::start_with_world(
-            &world,
-            BIOMES,
-            GameData {
-                items: Some(codec.clone()),
-                loot: Some(loot.clone()),
-                ..GameData::default()
-            },
-        )
-        .unwrap();
-        let engine = Engine(handle, Some(thread));
+        let engine = start(&world, Some(loot.clone()));
         let session = join_and_load(&engine, &[pos], mode);
         if mode == GameMode::Survival {
             session
@@ -434,6 +580,7 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
             assert_eq!(stack, expected, "dropped stack for seed {seed}");
         }
         drop(engine);
+        check_map_file(&world, expected_map);
         assert!(
             !std::iter::from_fn(|| session.try_recv())
                 .any(|output| matches!(output, Output::SpawnItem { .. }))

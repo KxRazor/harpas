@@ -13,6 +13,7 @@ use crate::block::BlockPos;
 use crate::container_storage::{new_tag, read_items, write_items};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
+use crate::maps::{MAP_TABLE, MapChest};
 use crate::world::{ChunkState, World};
 
 pub(crate) const CHEST: &str = "minecraft:chest";
@@ -143,6 +144,7 @@ struct ChestLoot {
     tags: Vec<(BlockPos, Compound)>,
     sequences: HashMap<String, RandomSequence>,
     world_random: Option<LegacyRandom>,
+    maps: Vec<MapChest>,
 }
 
 impl ChestLoot {
@@ -154,10 +156,46 @@ impl ChestLoot {
         if let Some(random) = self.world_random {
             world.random = random;
         }
+        for chest in self.maps {
+            world.maps.consume(chest);
+        }
     }
 }
 
+fn map_chest(pos: BlockPos, tag: &Compound) -> Option<MapChest> {
+    let Some(Nbt::String(id)) = tag.get("LootTable") else {
+        return None;
+    };
+    if id.strip_prefix("minecraft:").unwrap_or(id) != MAP_TABLE {
+        return None;
+    }
+    let seed = match tag.get("LootTableSeed") {
+        None => 0,
+        Some(Nbt::Long(seed)) => *seed,
+        _ => return None,
+    };
+    Some(MapChest { pos, seed })
+}
+
 impl World {
+    pub(crate) fn prepare_chest_map(&mut self, pos: BlockPos) -> io::Result<()> {
+        if self
+            .loot
+            .as_ref()
+            .and_then(|loot| loot.chests.as_ref())
+            .and_then(|chests| chests.get(MAP_TABLE))
+            .is_some()
+            && self
+                .block_state(pos)
+                .and_then(|state| block_states().name(state))
+                == Some(CHEST)
+            && let Some(chest) = self.chest_tag(pos)?.and_then(|tag| map_chest(pos, tag))
+        {
+            self.maps.prepare(chest)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn chest_tag(&self, pos: BlockPos) -> io::Result<Option<&Compound>> {
         self.container_tag(pos, CHEST)
     }
@@ -189,6 +227,7 @@ impl World {
         &mut self,
         pos: BlockPos,
     ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
+        self.prepare_chest_map(pos)?;
         let mut loot = ChestLoot::default();
         let slots = self.prepare_chest_items(pos, self.chest_tag(pos)?, false, &mut loot)?;
         loot.commit(self);
@@ -206,6 +245,19 @@ impl World {
         chest: Chest,
         spectator: bool,
     ) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
+        if !spectator {
+            for pos in chest.positions() {
+                if self
+                    .chest_tag(pos)?
+                    .is_some_and(|tag| tag.get("lock").is_some())
+                {
+                    return Err(invalid("chest is locked"));
+                }
+            }
+            for pos in chest.positions() {
+                self.prepare_chest_map(pos)?;
+            }
+        }
         let mut loot = ChestLoot::default();
         let menu = self.chest_menu_using(chest, |pos, tag| {
             self.prepare_chest_items(pos, tag, spectator, &mut loot)
@@ -260,7 +312,9 @@ impl World {
         } else {
             loot.world_random.get_or_insert_with(|| self.random.clone())
         };
-        let slots = chests.fill(table, self.block_item_codec(), random)?;
+        let map = map_chest(pos, tag);
+        let treasure_map = map.and_then(|chest| self.maps.prepared(chest));
+        let slots = chests.fill(table, self.block_item_codec(), random, treasure_map)?;
         let mut updated = tag.clone();
         updated.remove("LootTable");
         updated.remove("LootTableSeed");
@@ -269,6 +323,7 @@ impl World {
             Nbt::List(write_items(&slots, self.block_item_codec())?),
         );
         loot.tags.push((pos, updated));
+        loot.maps.extend(map);
         Ok(slots)
     }
 

@@ -158,6 +158,10 @@ This table is the base of the parity report published with every release ([relea
   each placed, its random tail and every block of the chunk and its eight neighbors.
 - **Heightmaps of gameplay blocks.** Predicates are compared for terrain and carver blocks; the classification of
   other blocks is provisional until block updates exist.
+- **Shipwreck map chests.** `chest_parity` compares the live menu, saved items, drops, buried treasure
+  coordinates and all 16,384 pixels of the initial preview with vanilla 26.1. It checks the named empty map
+  when no destination is found and the image and red X sent while holding the map before and after restart.
+  Painting terrain over the initial preview during exploration remains pending.
 
 ---
 

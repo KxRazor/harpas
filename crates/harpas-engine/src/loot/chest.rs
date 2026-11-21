@@ -14,6 +14,7 @@ use zip::ZipArchive;
 use super::{Context, LootTable};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
+use crate::maps::{MAP_TABLE, TreasureMap};
 
 pub(super) const ENCHANTMENT_TAG: &str = "#minecraft:on_random_loot";
 
@@ -32,6 +33,7 @@ impl ChestLootTables {
             "chests/buried_treasure",
             "chests/shipwreck_treasure",
             "chests/shipwreck_supply",
+            MAP_TABLE,
         ] {
             let data = match archive.by_name(&format!("data/minecraft/loot_table/{name}.json")) {
                 Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other),
@@ -96,12 +98,14 @@ impl ChestLootTables {
         table: &LootTable,
         codec: &ItemCodec,
         random: &mut dyn RandomSource,
+        treasure_map: Option<TreasureMap>,
     ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
         let rolled = table.roll(Context {
             state: block_states().default_state("minecraft:air").unwrap(),
             tool: &ItemStack::empty(),
             random,
             chest: Some((&self.enchantments, codec)),
+            treasure_map,
         })?;
         let mut slots: [usize; CHEST_SLOTS] = std::array::from_fn(|i| i);
         shuffle(&mut slots, random);

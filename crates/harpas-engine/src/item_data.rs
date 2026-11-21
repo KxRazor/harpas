@@ -144,6 +144,10 @@ impl ItemCodec {
         Ok(broken)
     }
 
+    pub(crate) fn saved_component(&self, stack: &ItemStack, name: &str) -> Option<Nbt> {
+        decode_component(name, self.component_bytes(stack, name)?, self).ok()
+    }
+
     fn component_bytes<'a>(&self, stack: &'a ItemStack, name: &str) -> Option<&'a [u8]> {
         let id = self.ids.get(name)?;
         stack
@@ -326,6 +330,7 @@ enum Kind {
     Bool,
     Unit,
     Nbt,
+    MapDecorations,
     String,
     Lore,
     Rarity,
@@ -352,6 +357,7 @@ fn kind(name: &str) -> io::Result<Kind> {
         | "item_name"
         | "bucket_entity_data"
         | "intangible_projectile" => Kind::Nbt,
+        "map_decorations" => Kind::MapDecorations,
         "item_model" | "tooltip_style" | "note_block_sound" => Kind::String,
         "lore" => Kind::Lore,
         "rarity" => Kind::Rarity,
@@ -390,6 +396,30 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
             }
         }
         Kind::Nbt => value.write_network(&mut bytes),
+        Kind::MapDecorations => {
+            let Nbt::Compound(entries) = value else {
+                unreachable!("validated map decorations")
+            };
+            // NBT compound key order is immaterial. Give equivalent markers the same stack bytes.
+            let mut entries: Vec<_> = entries.iter().collect();
+            entries.sort_unstable_by_key(|(id, _)| *id);
+            let ordered = entries
+                .into_iter()
+                .map(|(id, marker)| {
+                    let Nbt::Compound(marker) = marker else {
+                        unreachable!("validated map marker")
+                    };
+                    let mut fields: Vec<_> = marker.iter().collect();
+                    fields.sort_unstable_by_key(|(key, _)| *key);
+                    let sorted = fields
+                        .into_iter()
+                        .map(|(key, value)| (key, value.clone()))
+                        .collect();
+                    (id, Nbt::Compound(sorted))
+                })
+                .collect();
+            Nbt::Compound(ordered).write_network(&mut bytes);
+        }
         Kind::String => match value {
             Nbt::String(value) => write_string(&mut bytes, value),
             _ => return Err(invalid("expected string component")),
@@ -480,7 +510,7 @@ fn decode_component(name: &str, mut bytes: &[u8], codec: &ItemCodec) -> io::Resu
         }
         Kind::Bool => Nbt::Byte(i8::from(read_bool(&mut bytes)?)),
         Kind::Unit => Nbt::Compound(Compound::new()),
-        Kind::Nbt => Nbt::read_network(&mut bytes).map_err(invalid)?,
+        Kind::Nbt | Kind::MapDecorations => Nbt::read_network(&mut bytes).map_err(invalid)?,
         Kind::String => Nbt::String(read_string(&mut bytes)?),
         Kind::Lore => {
             let size = usize::try_from(read_varint(&mut bytes)?).map_err(invalid)?;
@@ -683,7 +713,15 @@ fn validate_component(name: &str, value: &Nbt) -> io::Result<()> {
             value.is_finite() && (0.0..=1.0).contains(value)
         }
         ("intangible_projectile", value) => matches!(value, Nbt::Compound(c) if c.is_empty()),
-        ("custom_data" | "bucket_entity_data", value) => matches!(value, Nbt::Compound(_)),
+        ("custom_data" | "bucket_entity_data", value) => {
+            matches!(value, Nbt::Compound(_))
+        }
+        ("map_decorations", value) => matches!(value, Nbt::Compound(decorations)
+            if decorations.iter().all(|(_, marker)| matches!(marker, Nbt::Compound(entry)
+                if matches!(entry.get("type"), Some(Nbt::String(_)))
+                    && matches!(entry.get("x"), Some(Nbt::Double(x)) if x.is_finite())
+                    && matches!(entry.get("z"), Some(Nbt::Double(z)) if z.is_finite())
+                    && matches!(entry.get("rotation"), Some(Nbt::Float(r)) if r.is_finite())))),
         ("custom_name" | "item_name", value) => {
             matches!(value, Nbt::String(_) | Nbt::Compound(_) | Nbt::List(_))
         }

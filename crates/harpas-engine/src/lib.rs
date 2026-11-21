@@ -1184,7 +1184,7 @@ impl Game {
             world.block_changed(pos);
             return false;
         }
-        if let Err(error) = world.prepare_chest_map(pos) {
+        if let Err(error) = world.prepare_chest_maps([pos]) {
             if error.kind() == io::ErrorKind::WouldBlock {
                 self.players[index].pending_map_chest = Some(maps::PendingChestAction::Break(pos));
             } else {

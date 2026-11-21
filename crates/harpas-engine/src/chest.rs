@@ -13,7 +13,9 @@ use crate::block::BlockPos;
 use crate::container_storage::{new_tag, read_items, write_items};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
-use crate::maps::{MAP_TABLE, MapChest};
+use crate::loot::LootTable;
+use crate::loot::chest::ChestLootTables;
+use crate::maps::MapChest;
 use crate::world::{ChunkState, World};
 
 pub(crate) const CHEST: &str = "minecraft:chest";
@@ -162,38 +164,95 @@ impl ChestLoot {
     }
 }
 
-fn map_chest(pos: BlockPos, tag: &Compound) -> Option<MapChest> {
+/// An unopened chest whose loot table can roll an exploration map, with the table.
+fn map_chest<'a>(
+    pos: BlockPos,
+    tag: &Compound,
+    chests: &'a ChestLootTables,
+) -> Option<(MapChest, &'a LootTable)> {
     let Some(Nbt::String(id)) = tag.get("LootTable") else {
         return None;
     };
-    if id.strip_prefix("minecraft:").unwrap_or(id) != MAP_TABLE {
-        return None;
-    }
+    let table = chests.get(id).filter(|table| table.has_treasure_map())?;
     let seed = match tag.get("LootTableSeed") {
         None => 0,
         Some(Nbt::Long(seed)) => *seed,
         _ => return None,
     };
-    Some(MapChest { pos, seed })
+    Some((MapChest { pos, seed }, table))
 }
 
 impl World {
-    pub(crate) fn prepare_chest_map(&mut self, pos: BlockPos) -> io::Result<()> {
-        if self
-            .loot
-            .as_ref()
-            .and_then(|loot| loot.chests.as_ref())
-            .and_then(|chests| chests.get(MAP_TABLE))
-            .is_some()
-            && self
+    /// Starts the treasure searches for the chests at `positions` whose loot will roll an exploration
+    /// map, and fails with `WouldBlock` until each search is done. The loot is rolled ahead with copies of
+    /// the random state, in the order the chests are unpacked, to learn which chests roll the map.
+    pub(crate) fn prepare_chest_maps(
+        &mut self,
+        positions: impl IntoIterator<Item = BlockPos>,
+    ) -> io::Result<()> {
+        let Some(loot) = self.loot.clone() else {
+            return Ok(());
+        };
+        let Some(chests) = loot.chests.as_ref() else {
+            return Ok(());
+        };
+        let mut ahead = ChestLoot::default();
+        let mut searches = Vec::new();
+        for pos in positions {
+            if self
                 .block_state(pos)
                 .and_then(|state| block_states().name(state))
-                == Some(CHEST)
-            && let Some(chest) = self.chest_tag(pos)?.and_then(|tag| map_chest(pos, tag))
-        {
-            self.maps.prepare(chest)?;
+                != Some(CHEST)
+            {
+                continue;
+            }
+            let Some(tag) = self.chest_tag(pos)? else {
+                continue;
+            };
+            let Some((chest, table)) = map_chest(pos, tag, chests) else {
+                continue;
+            };
+            let mut seeded = None;
+            let random = self.loot_random(table, chest.seed, &mut ahead, &mut seeded);
+            if chests.rolls_treasure_map(table, self.block_item_codec(), random)? {
+                searches.push(chest);
+            }
         }
-        Ok(())
+        let mut result = Ok(());
+        for chest in searches {
+            if let Err(error) = self.maps.prepare(chest)
+                && result.is_ok()
+            {
+                result = Err(error);
+            }
+        }
+        result
+    }
+
+    /// The random source a chest's loot draws from: its saved seed, else the table's random sequence,
+    /// else the world's random. Draws are kept in `loot` until it is committed.
+    fn loot_random<'a>(
+        &self,
+        table: &LootTable,
+        seed: i64,
+        loot: &'a mut ChestLoot,
+        seeded: &'a mut Option<LegacyRandom>,
+    ) -> &'a mut dyn RandomSource {
+        if seed != 0 {
+            seeded.insert(LegacyRandom::new(seed))
+        } else if let Some(name) = &table.random_sequence {
+            loot.sequences
+                .entry(name.clone())
+                .or_insert_with(|| {
+                    self.random_sequences
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)))
+                })
+                .random()
+        } else {
+            loot.world_random.get_or_insert_with(|| self.random.clone())
+        }
     }
 
     pub(crate) fn chest_tag(&self, pos: BlockPos) -> io::Result<Option<&Compound>> {
@@ -227,7 +286,7 @@ impl World {
         &mut self,
         pos: BlockPos,
     ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
-        self.prepare_chest_map(pos)?;
+        self.prepare_chest_maps([pos])?;
         let mut loot = ChestLoot::default();
         let slots = self.prepare_chest_items(pos, self.chest_tag(pos)?, false, &mut loot)?;
         loot.commit(self);
@@ -254,9 +313,7 @@ impl World {
                     return Err(invalid("chest is locked"));
                 }
             }
-            for pos in chest.positions() {
-                self.prepare_chest_map(pos)?;
-            }
+            self.prepare_chest_maps(chest.positions())?;
         }
         let mut loot = ChestLoot::default();
         let menu = self.chest_menu_using(chest, |pos, tag| {
@@ -295,25 +352,10 @@ impl World {
             Some(Nbt::Long(seed)) => *seed,
             _ => return Err(invalid("invalid chest loot seed")),
         };
-        let mut seeded;
-        let random: &mut dyn RandomSource = if seed != 0 {
-            seeded = LegacyRandom::new(seed);
-            &mut seeded
-        } else if let Some(name) = &table.random_sequence {
-            loot.sequences
-                .entry(name.clone())
-                .or_insert_with(|| {
-                    self.random_sequences
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| RandomSequence::new(self.seed, Some(name)))
-                })
-                .random()
-        } else {
-            loot.world_random.get_or_insert_with(|| self.random.clone())
-        };
-        let map = map_chest(pos, tag);
+        let map = map_chest(pos, tag, chests).map(|(chest, _)| chest);
         let treasure_map = map.and_then(|chest| self.maps.prepared(chest));
+        let mut seeded = None;
+        let random = self.loot_random(table, seed, loot, &mut seeded);
         let slots = chests.fill(table, self.block_item_codec(), random, treasure_map)?;
         let mut updated = tag.clone();
         updated.remove("LootTable");

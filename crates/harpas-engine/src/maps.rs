@@ -20,7 +20,6 @@ use crate::item_data::{ItemCodec, invalid};
 use crate::player::{Output, Position};
 use crate::world::{ChunkSource, ChunkStorage};
 
-pub(crate) const MAP_TABLE: &str = "chests/shipwreck_map";
 const SIDE: usize = 128;
 const SCALE: i8 = 1;
 const MAX_LOADED: usize = 128;

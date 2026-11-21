@@ -9,6 +9,7 @@
 //!
 //! Design: `docs/operations.md`.
 
+mod access;
 mod block_entity_registry;
 mod chunks;
 mod console;
@@ -26,16 +27,18 @@ mod tags;
 mod vanilla_data;
 mod world_generation;
 
+use access::{AccessLists, Verdict};
+
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use harpas_java::{AuthOutcome, Connection, ServerInfo, ServerKey, State};
+use harpas_java::{AuthOutcome, Connection, LoginVerdict, ServerInfo, ServerKey, State};
 use harpas_protocol_java::v26_1::play::GameMode;
 use log::{error, info, warn};
 
@@ -187,6 +190,7 @@ fn run() -> io::Result<()> {
             block_entity_registry::Registry::default()
         }
     };
+    let access = AccessLists::load(Path::new(""), properties.parsed("white-list", false));
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
     let worldgen_data = Arc::new(
@@ -252,6 +256,7 @@ fn run() -> io::Result<()> {
     let environment = Arc::new(ConnectionEnvironment {
         info: server_info,
         chunks: chunks::Cache::new(block_entities),
+        access: Mutex::new(access),
     });
     let info = &environment.info;
     info!("Default game type: {:?}", info.game_mode);
@@ -328,7 +333,16 @@ fn run() -> io::Result<()> {
             .name(format!("Connection {peer}"))
             .spawn(move || {
                 let session = session.as_deref();
-                if let Err(e) = serve(stream, &environment, key, session, &logic, &mut permit) {
+                let peer = peer.ip();
+                if let Err(e) = serve(
+                    stream,
+                    &environment,
+                    key,
+                    session,
+                    &logic,
+                    peer,
+                    &mut permit,
+                ) {
                     info!("{peer} disconnected: {e}");
                 }
                 drop(guard);
@@ -489,6 +503,8 @@ fn load_icon(path: &Path) -> Option<String> {
 struct ConnectionEnvironment {
     info: ServerInfo,
     chunks: chunks::Cache,
+    /// Bans, the whitelist and operators, checked when players log in.
+    access: Mutex<AccessLists>,
 }
 
 fn serve(
@@ -497,22 +513,32 @@ fn serve(
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+    peer: IpAddr,
     permit: &mut Permit,
 ) -> io::Result<()> {
     // Dropping the socket closes the connection.
     let mut socket = Socket::new(stream, WRITE_TIMEOUT, CONNECTION_POLL_INTERVAL)?;
-    drive(&mut socket, environment, key, session, logic, Some(permit))
+    drive(
+        &mut socket,
+        environment,
+        key,
+        session,
+        logic,
+        peer,
+        Some(permit),
+    )
 }
 
 /// Drives the I/O-free connection state machine over a stream. Once the player has joined, the end of the
 /// connection is logged as vanilla logs it, errors included; errors before that are returned. With a `permit`,
-/// login attempts count against the connection limits.
+/// login attempts count against the connection limits. `peer` is the client's address, for IP bans.
 fn drive(
     stream: &mut (impl Read + Write),
     environment: &ConnectionEnvironment,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+    peer: IpAddr,
     permit: Option<&mut Permit>,
 ) -> io::Result<()> {
     let mut departure = Departure::default();
@@ -522,6 +548,7 @@ fn drive(
         key,
         session,
         logic,
+        peer,
         permit,
         &mut departure,
     );
@@ -561,12 +588,14 @@ struct Departure {
     kick: Option<&'static str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn play(
     stream: &mut (impl Read + Write),
     environment: &ConnectionEnvironment,
     key: Arc<ServerKey>,
     session: Option<&SessionServer>,
     logic: &harpas_engine::Handle,
+    peer: IpAddr,
     mut permit: Option<&mut Permit>,
     departure: &mut Departure,
 ) -> io::Result<()> {
@@ -579,6 +608,7 @@ fn play(
     if permit.is_some() {
         connection.require_admission();
     }
+    connection.require_login_check();
     if let Some(session) = session {
         connection.set_chat_authority(session.chat_authority());
     }
@@ -629,6 +659,29 @@ fn play(
             let outcome = session.map_or(AuthOutcome::Unavailable, |s| s.has_joined(&request));
             connection.authenticated(outcome, &info);
             stream.write_all(&connection.take_output())?;
+        }
+        if let Some(player) = connection.login_check() {
+            let verdict = environment
+                .access
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .check(player.uuid, peer, jiff::Timestamp::now());
+            let verdict = match verdict {
+                Verdict::Allow {
+                    bypasses_player_limit,
+                } => LoginVerdict::Allow {
+                    bypasses_player_limit,
+                },
+                Verdict::Refuse(text) => LoginVerdict::Refuse(text),
+                // Vanilla's login fails on an expired ban and closes without a message.
+                Verdict::Fail => {
+                    warn!("Failed to handle packet for /{peer}");
+                    return Err(io::Error::other("its ban expired while it was checked"));
+                }
+            };
+            let checked = connection.checked(verdict, &info);
+            stream.write_all(&connection.take_output())?;
+            checked.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         }
         // In offline mode too, as vanilla logs it.
         if !uuid_logged && let Some(player) = connection.player() {
@@ -784,6 +837,7 @@ mod tests {
             Arc::clone(key),
             None,
             logic,
+            LOOPBACK,
             None,
         )
         .unwrap();
@@ -798,10 +852,13 @@ mod tests {
         json["players"]["online"].as_u64().unwrap()
     }
 
+    const LOOPBACK: IpAddr = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
     fn test_environment(info: &ServerInfo) -> ConnectionEnvironment {
         ConnectionEnvironment {
             info: info.clone(),
             chunks: chunks::Cache::new(block_entity_registry::Registry::default()),
+            access: Mutex::new(AccessLists::none()),
         }
     }
 
@@ -845,6 +902,7 @@ mod tests {
                     client_key,
                     None,
                     &client_logic,
+                    LOOPBACK,
                     None,
                 )
             });
@@ -1049,6 +1107,7 @@ mod tests {
                     key,
                     None,
                     &logic,
+                    LOOPBACK,
                     None,
                     &mut departure,
                 );
@@ -1108,6 +1167,7 @@ mod tests {
                     key,
                     None,
                     &logic,
+                    LOOPBACK,
                     None,
                     &mut departure,
                 );
@@ -1194,6 +1254,7 @@ mod tests {
                     key,
                     None,
                     &logic,
+                    LOOPBACK,
                     None,
                 )
             });

@@ -155,6 +155,19 @@ pub enum AuthOutcome {
     Unavailable,
 }
 
+/// The server's answer for a player waiting at [`Connection::login_check`], once the player is authenticated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginVerdict {
+    /// The player logs in if fewer than `max-players` players are in Play, or regardless with
+    /// `bypasses_player_limit`, as for operators with `bypassesPlayerLimit` in vanilla.
+    Allow {
+        /// Whether the player may log in when the server is full.
+        bypasses_player_limit: bool,
+    },
+    /// Login Disconnect with this JSON text component, and the connection closes.
+    Refuse(String),
+}
+
 /// Where a connection is in the Login state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LoginStep {
@@ -164,6 +177,8 @@ enum LoginStep {
     Encryption { username: String, token: [u8; 4] },
     /// Waiting for the caller to authenticate the player with Mojang.
     Authenticating,
+    /// Waiting for the caller's [`LoginVerdict`] on the authenticated player.
+    Checking,
     /// Login Success sent; waiting for Login Acknowledged.
     Success,
     /// Login Acknowledged; the connection is past Login.
@@ -198,6 +213,8 @@ pub struct Connection {
     status_sent: bool,
     login: LoginStep,
     auth_request: Option<AuthRequest>,
+    requires_login_check: bool,
+    checking: Option<Player>,
     player: Option<Player>,
     next_keepalive: Option<Instant>,
     pending_keepalive: Option<PendingKeepAlive>,
@@ -264,6 +281,8 @@ impl Connection {
             status_sent: false,
             login: LoginStep::Start,
             auth_request: None,
+            requires_login_check: false,
+            checking: None,
             player: None,
             next_keepalive: None,
             pending_keepalive: None,
@@ -322,6 +341,44 @@ impl Connection {
                 self.disconnect_login(&translate("multiplayer.disconnect.authservers_down", &[]))
             }
         }
+    }
+
+    /// Makes an authenticated player wait at [`login_check`](Self::login_check) until the caller answers with
+    /// [`checked`](Self::checked), so that bans, the whitelist and operators are checked before Login Success.
+    /// Without it, every authenticated player is allowed if the server is not full.
+    pub fn require_login_check(&mut self) {
+        self.requires_login_check = true;
+    }
+
+    /// The authenticated player waiting for a [`LoginVerdict`], if any.
+    pub fn login_check(&self) -> Option<&Player> {
+        self.checking.as_ref()
+    }
+
+    /// Finishes Login for the player at [`login_check`](Self::login_check): Login Success, or Login Disconnect.
+    /// Packets the client sent meanwhile, held until now, are then handled.
+    pub fn checked(
+        &mut self,
+        verdict: LoginVerdict,
+        info: &ServerInfo,
+    ) -> Result<(), ConnectionError> {
+        if self.login != LoginStep::Checking || self.is_closed() {
+            return Ok(());
+        }
+        let Some(player) = self.checking.take() else {
+            return Ok(());
+        };
+        match verdict {
+            LoginVerdict::Allow {
+                bypasses_player_limit,
+            } => self.allow_login(player, bypasses_player_limit, info),
+            LoginVerdict::Refuse(text) => self.disconnect_login(&text),
+        }
+        let result = self.handle_frames(info);
+        if result.is_err() {
+            self.state = State::Closed;
+        }
+        result
     }
 
     /// Bytes to send to the client, in order. Taking them empties the output.
@@ -615,7 +672,7 @@ impl Connection {
     }
 
     fn handle_frames(&mut self, info: &ServerInfo) -> Result<(), ConnectionError> {
-        while !self.is_closed() && !self.awaiting_admission {
+        while !self.is_closed() && !self.awaiting_admission && self.login != LoginStep::Checking {
             let limit = packet_limit(self.state);
             let Some(frame) = self
                 .frames
@@ -798,10 +855,21 @@ impl Connection {
         }
     }
 
-    /// Sends Set Compression when compression is on, then Login Success.
+    /// Checks the authenticated player, or waits for the caller to check it.
     fn finish_login(&mut self, player: Player, info: &ServerInfo) {
-        // Vanilla counts the players in Play, after authentication and before compression starts.
-        if info.online_players >= info.max_players {
+        if self.requires_login_check {
+            self.checking = Some(player);
+            self.login = LoginStep::Checking;
+        } else {
+            self.allow_login(player, false, info);
+        }
+    }
+
+    /// Sends Set Compression when compression is on, then Login Success.
+    fn allow_login(&mut self, player: Player, bypasses_player_limit: bool, info: &ServerInfo) {
+        // Vanilla counts the players in Play, after authentication and before compression starts, and checks
+        // this last, after bans and the whitelist.
+        if info.online_players >= info.max_players && !bypasses_player_limit {
             self.disconnect_login(&translate("multiplayer.disconnect.server_full", &[]));
             return;
         }

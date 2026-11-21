@@ -488,6 +488,12 @@ as shown by the parity report.
 - [ ] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
       `banned-ips.json` and `ops.json`: checked at login in vanilla's order, managed by their commands, and
       operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).
+  - [x] The four files loaded and written back at startup as vanilla writes them, and logins checked in vanilla's
+        order with its messages: player bans, the whitelist that operators skip, IP bans, then `max-players`,
+        which operators with `bypassesPlayerLimit` skip. Logins and files are compared with vanilla on the
+        network (`access_list_parity`).
+  - [ ] The `whitelist`, `ban`, `ban-ip`, `banlist`, `pardon`, `pardon-ip`, `op` and `deop` commands, with
+        `enforce-whitelist` and the profile lookups they need.
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).

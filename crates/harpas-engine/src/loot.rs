@@ -8,8 +8,8 @@
 //! Supported: `item`, `alternatives`, `group`, `sequence` and `empty` entries; the conditions
 //! `survives_explosion`, `block_state_property`, `match_tool` (by item, the tool's data components not being
 //! decoded yet), `random_chance`, `table_bonus`, `any_of`, `all_of` and `inverted`; the functions `set_count`,
-//! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Chest books
-//! support `enchant_randomly` with the vanilla loot enchantment tag, and chest potions support `set_potion`.
+//! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Chest loot
+//! supports `enchant_randomly` with the vanilla loot enchantment tag, `set_potion` and `set_stew_effect`.
 //! Tool enchantments are read as none.
 //! Not done yet: `location_check` and
 //! `entity_properties` conditions (read as false) and `dynamic` entries (which add nothing), and the functions
@@ -21,12 +21,13 @@ use std::path::Path;
 
 use harpas_core::block::block_states;
 use harpas_core::item::items;
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_core::random::RandomSource;
 use log::warn;
 use serde_json::Value;
 
 use crate::inventory::ItemStack;
-use crate::item_data::ItemCodec;
+use crate::item_data::{ItemCodec, STEW_EFFECTS};
 
 mod chest;
 
@@ -268,11 +269,41 @@ enum Function {
     },
     /// `apply_bonus` that changes nothing without a level, though `uniform_bonus_count` still draws.
     UniformBonus,
-    /// A book in a chest table, using the `on_random_loot` enchantment tag.
-    EnchantBook,
+    /// An enchantment from the `on_random_loot` tag, filtered by the item.
+    EnchantRandomly,
     SetPotion(String),
+    SetStewEffect(Vec<StewEffect>),
     /// A function that changes nothing for a broken block without an explosion or the data it copies.
     None,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StewEffect {
+    name: String,
+    duration: Number,
+}
+
+impl StewEffect {
+    fn parse(value: &Value) -> Option<Self> {
+        Some(Self {
+            name: value["type"].as_str()?.to_owned(),
+            duration: Number::parse(&value["duration"])?,
+        })
+    }
+
+    fn roll(&self, random: &mut dyn RandomSource) -> Nbt {
+        let duration = self.duration.int(random);
+        let name = self.name.strip_prefix("minecraft:").unwrap_or(&self.name);
+        // Vanilla's instant effects use the sampled duration directly. Other effects use ticks.
+        let ticks = match name {
+            "instant_health" | "instant_damage" | "saturation" => duration,
+            _ => duration.saturating_mul(20),
+        };
+        Nbt::List(List::Compound(vec![Compound::from_iter([
+            ("id", Nbt::from(self.name.as_str())),
+            ("duration", Nbt::Int(ticks)),
+        ])]))
+    }
 }
 
 impl Function {
@@ -325,12 +356,18 @@ impl Function {
             "minecraft:explosion_decay" | "minecraft:copy_components" | "minecraft:copy_state" => {
                 Self::None
             }
-            "minecraft:enchant_randomly" if value["options"].as_str() == Some(chest::BOOK_TAG) => {
-                Self::EnchantBook
+            "minecraft:enchant_randomly"
+                if value["options"].as_str() == Some(chest::ENCHANTMENT_TAG) =>
+            {
+                Self::EnchantRandomly
             }
             "minecraft:set_potion" => value["id"]
                 .as_str()
                 .map_or(Self::None, |name| Self::SetPotion(name.to_owned())),
+            "minecraft:set_stew_effect" => value["effects"]
+                .as_array()
+                .and_then(|entries| entries.iter().map(StewEffect::parse).collect())
+                .map_or(Self::None, Self::SetStewEffect),
             other => {
                 warn!("Loot function {other} is not ported; it changes nothing");
                 Self::None
@@ -365,16 +402,23 @@ impl Function {
             Self::UniformBonus => {
                 stack.count += random.next_int_bounded(1);
             }
-            Self::EnchantBook => {
-                if let Some((books, codec)) = context.chest
-                    && stack.name() == Some("minecraft:book")
-                {
-                    *stack = books.enchant(stack.count, codec, random)?;
+            Self::EnchantRandomly => {
+                if let Some((enchantments, codec)) = context.chest {
+                    enchantments.enchant(stack, codec, random)?;
                 }
             }
             Self::SetPotion(name) => {
                 if let Some((_, codec)) = context.chest {
                     codec.set_potion(stack, name)?;
+                }
+            }
+            Self::SetStewEffect(effects) => {
+                if let Some((_, codec)) = context.chest
+                    && stack.name() == Some("minecraft:suspicious_stew")
+                    && !effects.is_empty()
+                {
+                    let effect = &effects[random.next_int_bounded(effects.len() as i32) as usize];
+                    codec.set_saved_component(stack, STEW_EFFECTS, &effect.roll(random))?;
                 }
             }
             Self::None => {}
@@ -537,7 +581,7 @@ struct Context<'a> {
     state: u32,
     tool: &'a ItemStack,
     random: &'a mut dyn RandomSource,
-    chest: Option<(&'a chest::BookEnchantments, &'a ItemCodec)>,
+    chest: Option<(&'a chest::LootEnchantments, &'a ItemCodec)>,
 }
 
 impl LootTable {

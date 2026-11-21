@@ -221,6 +221,7 @@ fn run() -> io::Result<()> {
         harpas_engine::item_data::ItemCodec::new(entries("minecraft:data_component_type"))
             .with_enchantments(harpas_java::registry_names("minecraft:enchantment").unwrap_or(&[]))
             .with_potions(entries("minecraft:potion"))
+            .with_mob_effects(entries("minecraft:mob_effect"))
     };
     let game_data = harpas_engine::GameData {
         shapes,

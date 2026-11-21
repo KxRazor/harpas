@@ -12,6 +12,8 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use crate::inventory::{ComponentPatch, ItemStack};
 
 const POTION_CONTENTS: &str = "minecraft:potion_contents";
+pub(crate) const STEW_EFFECTS: &str = "minecraft:suspicious_stew_effects";
+const DEFAULT_STEW_DURATION: i32 = 160;
 const DAMAGE: &str = "minecraft:damage";
 const MAX_DAMAGE: &str = "minecraft:max_damage";
 const UNBREAKABLE: &str = "minecraft:unbreakable";
@@ -23,6 +25,7 @@ pub struct ItemCodec {
     ids: HashMap<String, i32>,
     enchantments: Vec<String>,
     potions: Vec<String>,
+    mob_effects: Vec<String>,
 }
 
 impl Default for ItemCodec {
@@ -60,6 +63,7 @@ impl ItemCodec {
             names,
             enchantments: Vec::new(),
             potions: Vec::new(),
+            mob_effects: Vec::new(),
         }
     }
 
@@ -75,15 +79,28 @@ impl ItemCodec {
         self
     }
 
+    /// Adds the locally generated built-in mob effect registry in numeric order.
+    pub fn with_mob_effects(mut self, names: &[String]) -> Self {
+        self.mob_effects = names.to_vec();
+        self
+    }
+
     pub(crate) fn set_potion(&self, stack: &mut ItemStack, name: &str) -> io::Result<()> {
-        let id = *self
-            .ids
-            .get(POTION_CONTENTS)
-            .ok_or_else(|| invalid("missing potion contents component ID"))?;
         let value = Nbt::Compound(Compound::from_iter([("potion", name)]));
-        let mut bytes = Vec::new();
-        encode_potion_contents(&mut bytes, &value, &self.potions)?;
-        Self::set_component(stack, id, bytes);
+        self.set_saved_component(stack, POTION_CONTENTS, &value)
+    }
+
+    pub(crate) fn set_saved_component(
+        &self,
+        stack: &mut ItemStack,
+        name: &str,
+        value: &Nbt,
+    ) -> io::Result<()> {
+        let &id = self
+            .ids
+            .get(name)
+            .ok_or_else(|| invalid(format!("missing item component ID for {name}")))?;
+        Self::set_component(stack, id, encode_component(name, value, self)?);
         self.resolve_stack_limit(stack)
     }
 
@@ -315,6 +332,7 @@ enum Kind {
     Enchantable,
     Enchantments,
     PotionContents,
+    StewEffects,
 }
 
 fn kind(name: &str) -> io::Result<Kind> {
@@ -340,6 +358,7 @@ fn kind(name: &str) -> io::Result<Kind> {
         "enchantable" => Kind::Enchantable,
         "enchantments" | "stored_enchantments" => Kind::Enchantments,
         "potion_contents" => Kind::PotionContents,
+        "suspicious_stew_effects" => Kind::StewEffects,
         _ => return Err(invalid(format!("unsupported saved item component {name}"))),
     })
 }
@@ -443,6 +462,7 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
             _ => return Err(invalid("expected enchantable compound")),
         },
         Kind::PotionContents => encode_potion_contents(&mut bytes, value, &codec.potions)?,
+        Kind::StewEffects => encode_stew_effects(&mut bytes, value, &codec.mob_effects)?,
     }
     Ok(bytes)
 }
@@ -533,6 +553,7 @@ fn decode_component(name: &str, mut bytes: &[u8], codec: &ItemCodec) -> io::Resu
             Nbt::Int(read_varint(&mut bytes)?),
         )])),
         Kind::PotionContents => decode_potion_contents(&mut bytes, &codec.potions)?,
+        Kind::StewEffects => decode_stew_effects(&mut bytes, &codec.mob_effects)?,
     };
     if !bytes.is_empty() {
         return Err(invalid(format!("trailing bytes in component {name}")));
@@ -599,6 +620,55 @@ fn decode_potion_contents(bytes: &mut &[u8], potions: &[String]) -> io::Result<N
         contents.insert("custom_name", read_string(bytes)?);
     }
     Ok(Nbt::Compound(contents))
+}
+
+fn encode_stew_effects(bytes: &mut Vec<u8>, value: &Nbt, effects: &[String]) -> io::Result<()> {
+    let entries = match value {
+        Nbt::List(List::Empty) => &[][..],
+        Nbt::List(List::Compound(entries)) => entries.as_slice(),
+        _ => return Err(invalid("expected a list of stew effects")),
+    };
+    write_varint(bytes, entries.len() as i32);
+    for entry in entries {
+        let Some(Nbt::String(name)) = entry.get("id") else {
+            return Err(invalid("stew effect has no string id"));
+        };
+        let id = effects
+            .iter()
+            .position(|effect| effect == name || effect.strip_prefix("minecraft:") == Some(name))
+            .ok_or_else(|| invalid(format!("unknown mob effect {name}")))?;
+        let duration = entry.get("duration");
+        if entry.len() != 1 + usize::from(duration.is_some()) {
+            return Err(invalid("unknown stew effect field"));
+        }
+        write_varint(bytes, id as i32);
+        write_varint(bytes, duration.map_or(Ok(DEFAULT_STEW_DURATION), integer)?);
+    }
+    Ok(())
+}
+
+fn decode_stew_effects(bytes: &mut &[u8], effects: &[String]) -> io::Result<Nbt> {
+    let count = usize::try_from(read_varint(bytes)?).map_err(invalid)?;
+    if count == 0 {
+        return Ok(Nbt::List(List::Empty));
+    }
+    if count > bytes.len() / 2 {
+        return Err(invalid("truncated stew effects"));
+    }
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = usize::try_from(read_varint(bytes)?).map_err(invalid)?;
+        let effect = effects
+            .get(id)
+            .ok_or_else(|| invalid("unknown mob effect ID"))?;
+        let mut entry = Compound::from_iter([("id", effect.as_str())]);
+        let duration = read_varint(bytes)?;
+        if duration != DEFAULT_STEW_DURATION {
+            entry.insert("duration", duration);
+        }
+        entries.push(entry);
+    }
+    Ok(Nbt::List(List::Compound(entries)))
 }
 
 fn validate_component(name: &str, value: &Nbt) -> io::Result<()> {
@@ -843,6 +913,27 @@ mod tests {
         assert!(codec.read(&saved).is_err());
         Arc::make_mut(&mut potion.components).added[0].1 = vec![0, 0, 1, 0];
         assert!(codec.write(&potion).is_err());
+    }
+
+    #[test]
+    fn saved_stew_can_contain_multiple_effects_and_default_duration() {
+        let codec = ItemCodec::new(&[STEW_EFFECTS.to_owned()])
+            .with_mob_effects(&["minecraft:first".to_owned(), "minecraft:second".to_owned()]);
+        let effects = List::Compound(vec![
+            Compound::from_iter([("id", "minecraft:first")]),
+            Compound::from_iter([
+                ("id", Nbt::from("minecraft:second")),
+                ("duration", Nbt::Int(5)),
+            ]),
+        ]);
+        let mut tag = Compound::from_iter([
+            ("id", Nbt::from("minecraft:suspicious_stew")),
+            ("count", Nbt::Int(1)),
+        ]);
+        tag.insert("components", Compound::from_iter([(STEW_EFFECTS, effects)]));
+        let stack = codec.read(&tag).unwrap();
+        assert_eq!(stack.components.added, [(0, vec![2, 0, 160, 1, 1, 5])]);
+        assert_eq!(codec.write(&stack).unwrap(), tag);
     }
 }
 

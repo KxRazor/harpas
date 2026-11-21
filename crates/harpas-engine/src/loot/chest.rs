@@ -1,9 +1,10 @@
 //! The supported vanilla chest tables and the placement of their rolls into empty chests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek};
 
 use harpas_core::block::block_states;
+use harpas_core::item::items;
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_core::random::RandomSource;
 use log::warn;
@@ -14,12 +15,12 @@ use super::{Context, LootTable};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
 
-pub(super) const BOOK_TAG: &str = "#minecraft:on_random_loot";
+pub(super) const ENCHANTMENT_TAG: &str = "#minecraft:on_random_loot";
 
 #[derive(Debug)]
 pub(crate) struct ChestLootTables {
     tables: HashMap<&'static str, LootTable>,
-    books: BookEnchantments,
+    enchantments: LootEnchantments,
 }
 
 impl ChestLootTables {
@@ -30,6 +31,7 @@ impl ChestLootTables {
             "chests/desert_pyramid",
             "chests/buried_treasure",
             "chests/shipwreck_treasure",
+            "chests/shipwreck_supply",
         ] {
             let data = match archive.by_name(&format!("data/minecraft/loot_table/{name}.json")) {
                 Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other),
@@ -47,8 +49,14 @@ impl ChestLootTables {
             return Ok(None);
         }
         let mut names = Vec::new();
-        book_options(archive, BOOK_TAG, &mut Vec::new(), &mut names)?;
-        let mut books = Vec::new();
+        collect_tag(
+            archive,
+            "enchantment",
+            ENCHANTMENT_TAG,
+            &mut Vec::new(),
+            &mut names,
+        )?;
+        let mut enchantments = Vec::new();
         for name in names {
             let path = name
                 .strip_prefix("minecraft:")
@@ -59,14 +67,23 @@ impl ChestLootTables {
                 .and_then(|level| i32::try_from(level).ok())
                 .filter(|level| *level > 0)
                 .ok_or_else(|| invalid("invalid loot enchantment level"))?;
-            books.push((name, max_level));
+            let supported = definition
+                .get("supported_items")
+                .map(|value| supported_items(archive, value))
+                .transpose()?
+                .unwrap_or_default();
+            enchantments.push(LootEnchantment {
+                name,
+                max_level,
+                supported,
+            });
         }
-        if books.is_empty() {
+        if enchantments.is_empty() {
             return Err(invalid("chest loot enchantment tag is empty"));
         }
         Ok(Some(Self {
             tables,
-            books: BookEnchantments(books),
+            enchantments: LootEnchantments(enchantments),
         }))
     }
 
@@ -84,7 +101,7 @@ impl ChestLootTables {
             state: block_states().default_state("minecraft:air").unwrap(),
             tool: &ItemStack::empty(),
             random,
-            chest: Some((&self.books, codec)),
+            chest: Some((&self.enchantments, codec)),
         })?;
         let mut slots: [usize; CHEST_SLOTS] = std::array::from_fn(|i| i);
         shuffle(&mut slots, random);
@@ -102,32 +119,33 @@ fn json(archive: &mut ZipArchive<impl Read + Seek>, path: &str) -> io::Result<Va
 }
 
 // Tag entries keep their order across nested tags and duplicate IDs.
-fn book_options(
+fn collect_tag(
     archive: &mut ZipArchive<impl Read + Seek>,
+    registry: &str,
     tag: &str,
     active: &mut Vec<String>,
     names: &mut Vec<String>,
 ) -> io::Result<()> {
     let path = tag
         .strip_prefix("#minecraft:")
-        .ok_or_else(|| invalid("invalid loot enchantment tag"))?;
+        .ok_or_else(|| invalid(format!("invalid {registry} tag {tag}")))?;
     if active.iter().any(|name| name == path) {
-        return Err(invalid("recursive loot enchantment tag"));
+        return Err(invalid(format!("recursive {registry} tag {tag}")));
     }
     active.push(path.to_owned());
     let data = json(
         archive,
-        &format!("data/minecraft/tags/enchantment/{path}.json"),
+        &format!("data/minecraft/tags/{registry}/{path}.json"),
     )?;
     let entries = data["values"]
         .as_array()
-        .ok_or_else(|| invalid("invalid loot enchantment tag entries"))?;
+        .ok_or_else(|| invalid(format!("invalid entries for {registry} tag {tag}")))?;
     for value in entries {
         let name = value
             .as_str()
-            .ok_or_else(|| invalid("invalid loot enchantment tag entry"))?;
+            .ok_or_else(|| invalid(format!("invalid entry in {registry} tag {tag}")))?;
         if name.starts_with('#') {
-            book_options(archive, name, active, names)?;
+            collect_tag(archive, registry, name, active, names)?;
         } else if !names.iter().any(|id| id == name) {
             names.push(name.to_owned());
         }
@@ -136,30 +154,77 @@ fn book_options(
     Ok(())
 }
 
-#[derive(Debug)]
-pub(super) struct BookEnchantments(Vec<(String, i32)>);
+fn supported_items(
+    archive: &mut ZipArchive<impl Read + Seek>,
+    value: &Value,
+) -> io::Result<HashSet<u32>> {
+    let mut names = Vec::new();
+    match value {
+        Value::String(tag) if tag.starts_with('#') => {
+            collect_tag(archive, "item", tag, &mut Vec::new(), &mut names)?;
+        }
+        Value::String(name) => names.push(name.clone()),
+        Value::Array(entries) => {
+            for entry in entries {
+                let name = entry
+                    .as_str()
+                    .ok_or_else(|| invalid("invalid supported enchantment item"))?;
+                names.push(name.to_owned());
+            }
+        }
+        _ => return Err(invalid("invalid supported enchantment items")),
+    }
+    names
+        .iter()
+        .map(|name| {
+            items()
+                .id(name)
+                .ok_or_else(|| invalid(format!("unknown item {name}")))
+        })
+        .collect()
+}
 
-impl BookEnchantments {
+#[derive(Debug)]
+struct LootEnchantment {
+    name: String,
+    max_level: i32,
+    supported: HashSet<u32>,
+}
+
+#[derive(Debug)]
+pub(super) struct LootEnchantments(Vec<LootEnchantment>);
+
+impl LootEnchantments {
     pub(super) fn enchant(
         &self,
-        count: i32,
+        stack: &mut ItemStack,
         codec: &ItemCodec,
         random: &mut dyn RandomSource,
-    ) -> io::Result<ItemStack> {
-        let (name, max_level) = &self.0[random.next_int_bounded(self.0.len() as i32) as usize];
-        let level = if *max_level == 1 {
+    ) -> io::Result<()> {
+        let book = stack.name() == Some("minecraft:book");
+        // Loot enchantments use supported items, including gear outside an enchantment's primary items.
+        let options: Vec<_> = self
+            .0
+            .iter()
+            .filter(|enchantment| book || enchantment.supported.contains(&stack.item))
+            .collect();
+        if options.is_empty() {
+            return Ok(());
+        }
+        let enchantment = options[random.next_int_bounded(options.len() as i32) as usize];
+        let level = if enchantment.max_level == 1 {
             1
         } else {
-            random.next_int_between_inclusive(1, *max_level)
+            random.next_int_between_inclusive(1, enchantment.max_level)
         };
-        let enchantments = Compound::from_iter([(name.as_str(), Nbt::Int(level))]);
-        let components =
-            Compound::from_iter([("minecraft:stored_enchantments", Nbt::Compound(enchantments))]);
-        codec.read(&Compound::from_iter([
-            ("id", Nbt::from("minecraft:enchanted_book")),
-            ("count", Nbt::Int(count)),
-            ("components", Nbt::Compound(components)),
-        ]))
+        let enchantments = Nbt::Compound(Compound::from_iter([(enchantment.name.as_str(), level)]));
+        let component = if book {
+            stack.item = items().id("minecraft:enchanted_book").unwrap();
+            "minecraft:stored_enchantments"
+        } else {
+            "minecraft:enchantments"
+        };
+        codec.set_saved_component(stack, component, &enchantments)
     }
 }
 

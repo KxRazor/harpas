@@ -228,6 +228,23 @@ fn shipwreck_treasure_chest_loot_matches_vanilla_on_open_and_break() {
     );
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn shipwreck_supply_chest_loot_matches_vanilla_on_open_and_break() {
+    // Covers all six stew effects and all four leather armor pieces, including Thorns on boots.
+    check_chest_loot(
+        "shipwreck_supply",
+        &[0, 1, 2, 3, 4, 9, 16, -1],
+        &[
+            "minecraft:suspicious_stew",
+            "minecraft:leather_helmet",
+            "minecraft:leather_chestplate",
+            "minecraft:leather_leggings",
+            "minecraft:leather_boots",
+        ],
+    );
+}
+
 fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
     let reference = Reference::required();
     reference.compile(&[
@@ -238,13 +255,14 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
     let components = reference.temp.0.join("components.txt");
     let enchantments = reference.temp.0.join("enchantments.txt");
     let potions = reference.temp.0.join("potions.txt");
+    let effects = reference.temp.0.join("effects.txt");
     reference.java(
         "ChestLootProbe",
         [&tags, &components, &enchantments]
             .map(|path| path.display().to_string())
             .into_iter()
             .chain([table.to_owned()])
-            .chain([potions.display().to_string()])
+            .chain([&potions, &effects].map(|path| path.display().to_string()))
             .chain(seeds.iter().map(i64::to_string)),
     );
     let tags = read_tags(&tags);
@@ -253,11 +271,16 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
     let names = fs::read_to_string(components).unwrap();
     let enchantments = fs::read_to_string(enchantments).unwrap();
     let potions = fs::read_to_string(potions).unwrap();
-    let potions: Vec<_> = potions.lines().map(str::to_owned).collect();
+    let effects = fs::read_to_string(effects).unwrap();
+    let stew_component = names
+        .lines()
+        .position(|name| name == "minecraft:suspicious_stew_effects")
+        .unwrap() as i32;
     let codec = Arc::new(
         ItemCodec::new(&names.lines().map(str::to_owned).collect::<Vec<_>>())
             .with_enchantments(&enchantments.lines().collect::<Vec<_>>())
-            .with_potions(&potions),
+            .with_potions(&potions.lines().map(str::to_owned).collect::<Vec<_>>())
+            .with_mob_effects(&effects.lines().map(str::to_owned).collect::<Vec<_>>()),
     );
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
     let pos = BlockPos { x: 1, y: 65, z: 0 };
@@ -274,6 +297,23 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
             let stack = codec.read(tag).unwrap();
             observed.extend(stack.name());
             slots[*slot as usize] = stack;
+        }
+        let Some(Nbt::Compound(stew_bytes)) = removal.get("StewBytes") else {
+            panic!("expected stew component bytes for seed {seed}");
+        };
+        for (slot, value) in stew_bytes.iter() {
+            let Nbt::ByteArray(bytes) = value else {
+                panic!("invalid stew component at slot {slot}");
+            };
+            let stack = &slots[slot.parse::<usize>().unwrap()];
+            let (_, actual) = stack
+                .components
+                .added
+                .iter()
+                .find(|(id, _)| *id == stew_component)
+                .unwrap();
+            let expected: Vec<_> = bytes.iter().map(|&byte| byte as u8).collect();
+            assert_eq!(*actual, expected, "seed {seed}, slot {slot}");
         }
         let world = reference.temp.0.join(format!("open-{seed}"));
         let region = dimension_dir(&world, "minecraft:overworld").join("region");

@@ -39,12 +39,12 @@ harpas-protocol-codegen = { path = "crates/harpas-protocol-codegen" }
 aes = "0.9.3"
 base64 = "0.23.1"
 cfb8 = "0.9.1"
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 ctr = "0.10.1"
 ctrlc = { version = "3.5.2", features = ["termination"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 getrandom = "0.4.3"
 indexmap = "2.14.2"
+jiff = "1.0.1"
 jni = { version = "0.22.4", features = ["invocation"] }
 libdeflater = "1.26.1"
 log = "0.4.35"

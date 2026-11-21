@@ -102,18 +102,14 @@ pub(crate) fn void_air() -> u32 {
 /// How much of `state` a player whose destroy speed is `speed` breaks each tick, 1 being the whole block
 /// (`BlockBehaviour.getDestroyProgress`): the speed divided by the block's hardness, and by 30, or by 100 for a
 /// block that needs a tool the player does not hold. A block of hardness -1 never breaks, and one of hardness 0
-/// breaks at once. A player holds nothing until items exist.
-pub(crate) fn destroy_progress(state: u32, speed: f32) -> f32 {
+/// breaks at once.
+pub fn destroy_progress(state: u32, speed: f32, can_harvest: bool) -> f32 {
     let states = block_states();
     let hardness = states.hardness(state);
     if hardness == -1.0 {
         return 0.0;
     }
-    let divisor = if states.requires_correct_tool(state) {
-        100.0
-    } else {
-        30.0
-    };
+    let divisor = if can_harvest { 30.0 } else { 100.0 };
     speed / hardness / divisor
 }
 
@@ -439,15 +435,18 @@ mod tests {
     #[test]
     fn destroy_progress_follows_hardness_and_the_tool_a_block_needs() {
         assert_eq!(
-            destroy_progress(state("minecraft:dirt"), 1.0),
+            destroy_progress(state("minecraft:dirt"), 1.0, true),
             1.0 / 0.5 / 30.0
         );
         assert_eq!(
-            destroy_progress(state("minecraft:stone"), 1.0),
+            destroy_progress(state("minecraft:stone"), 1.0, false),
             1.0 / 1.5 / 100.0
         );
-        assert_eq!(destroy_progress(state("minecraft:bedrock"), 1.0), 0.0);
-        assert!(destroy_progress(state("minecraft:short_grass"), 0.2) >= 1.0);
+        assert_eq!(
+            destroy_progress(state("minecraft:bedrock"), 1.0, false),
+            0.0
+        );
+        assert!(destroy_progress(state("minecraft:short_grass"), 0.2, true) >= 1.0);
     }
 
     #[test]

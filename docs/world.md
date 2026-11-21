@@ -165,14 +165,14 @@ custom data, maximum stack size, maximum damage, damage, unbreakable, custom nam
 item name, item model, lore, rarity, repair cost, glint override, intangible projectile, glider, tooltip style,
 dyed color, map color, map ID, potion contents without custom effects, potion duration scale, bucket entity
 data, ominous bottle amplifier, note block sound, enchantability, enchantments and stored enchantments. Item
-component and potion IDs come from the owner's generated built-in registries. Enchantment IDs use the
-synchronized registry sent to clients. Removed components are preserved as removed.
+component and potion IDs come from the owner's generated built-in registries. Built-in Java 26.1 IDs also
+cover the components needed to save worn pickaxes. Enchantment IDs use the synchronized registry sent to
+clients. Removed components are preserved as removed.
 
 The remaining component values are explicit errors. An existing inventory containing one cannot be loaded;
 a Creative stack that cannot be saved is rejected before it changes the inventory. This prevents stripping
-components or overwriting the original document while their codecs are still unimplemented. Without the
-locally generated component registry, unmodified items still save and load, but component-bearing items
-require `harpas vanilla-data generate-registry` with Java 25 as described below.
+components or overwriting the original document while their codecs are still unimplemented. Run
+`harpas vanilla-data generate-registry` with Java 25 to enable the other implemented component codecs.
 
 The cursor, crafting result and crafting input grids are transient menu slots and are not written as
 persistent slots. Ordinary departure drops the cursor and input items, as the menu removal rules do; shutdown

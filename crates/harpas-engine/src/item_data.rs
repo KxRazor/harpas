@@ -1,5 +1,5 @@
-//! Item stacks in vanilla's saved NBT. Component IDs come from the owner's generated registry, not a second
-//! hard-coded registry. Unsupported component codecs are errors: a saved item is never loaded with its data
+//! Item stacks in vanilla's saved NBT. The owner's generated registry supplies component IDs, with the pinned
+//! Java 26.1 IDs used by mining available when the registry is absent. A saved item is never loaded with its data
 //! stripped, and a new Creative stack must be serializable before it is accepted.
 
 use std::collections::HashMap;
@@ -12,9 +12,12 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use crate::inventory::{ComponentPatch, ItemStack};
 
 const POTION_CONTENTS: &str = "minecraft:potion_contents";
+const DAMAGE: &str = "minecraft:damage";
+const MAX_DAMAGE: &str = "minecraft:max_damage";
+const UNBREAKABLE: &str = "minecraft:unbreakable";
 
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ItemCodec {
     names: Vec<String>,
     ids: HashMap<String, i32>,
@@ -22,18 +25,41 @@ pub struct ItemCodec {
     potions: Vec<String>,
 }
 
+impl Default for ItemCodec {
+    fn default() -> Self {
+        Self::new(&[])
+    }
+}
+
 impl ItemCodec {
     /// Component names in the numeric order of the locally generated `minecraft:data_component_type` registry.
+    /// An empty registry uses the Java 26.1 IDs needed for basic mining tools.
     pub fn new(names: &[String]) -> Self {
+        let names = if names.is_empty() {
+            let mut names = vec![String::new(); 29];
+            for (index, name) in [
+                (1, "minecraft:max_stack_size"),
+                (2, MAX_DAMAGE),
+                (3, DAMAGE),
+                (4, UNBREAKABLE),
+                (28, "minecraft:tool"),
+            ] {
+                names[index] = name.to_owned();
+            }
+            names
+        } else {
+            names.to_vec()
+        };
         Self {
-            names: names.to_vec(),
-            enchantments: Vec::new(),
-            potions: Vec::new(),
             ids: names
                 .iter()
                 .enumerate()
+                .filter(|(_, name)| !name.is_empty())
                 .map(|(id, name)| (name.clone(), id as i32))
                 .collect(),
+            names,
+            enchantments: Vec::new(),
+            potions: Vec::new(),
         }
     }
 
@@ -57,13 +83,67 @@ impl ItemCodec {
         let value = Nbt::Compound(Compound::from_iter([("potion", name)]));
         let mut bytes = Vec::new();
         encode_potion_contents(&mut bytes, &value, &self.potions)?;
+        Self::set_component(stack, id, bytes);
+        self.resolve_stack_limit(stack)
+    }
+
+    pub(crate) fn component_removed(&self, stack: &ItemStack, name: &str) -> bool {
+        self.ids
+            .get(name)
+            .is_some_and(|id| stack.components.removed.contains(id))
+    }
+
+    /// Applies one durability point to the held tool. Returns whether it broke.
+    pub(crate) fn wear_tool(&self, stack: &mut ItemStack, default_max: i32) -> io::Result<bool> {
+        let Some(&damage_id) = self.ids.get(DAMAGE) else {
+            return Ok(false);
+        };
+        let has_unbreakable = self.component_bytes(stack, UNBREAKABLE).is_some();
+        if stack.is_empty()
+            || has_unbreakable
+            || self.component_removed(stack, DAMAGE)
+            || self.component_removed(stack, MAX_DAMAGE)
+        {
+            return Ok(false);
+        }
+        let number = |name, default| {
+            self.component_bytes(stack, name)
+                .map_or(Ok(default), |mut bytes| read_varint(&mut bytes))
+        };
+        let maximum = number(MAX_DAMAGE, default_max)?;
+        let next_damage = number(DAMAGE, 0)?.saturating_add(1).min(maximum);
+        let broken = next_damage >= maximum;
+        if broken && stack.count == 1 {
+            *stack = ItemStack::empty();
+            return Ok(true);
+        }
+        let mut bytes = Vec::new();
+        write_varint(&mut bytes, next_damage);
+        let mut updated = stack.clone();
+        Self::set_component(&mut updated, damage_id, bytes);
+        self.resolve_stack_limit(&mut updated)?;
+        updated.count -= i32::from(broken);
+        *stack = updated;
+        Ok(broken)
+    }
+
+    fn component_bytes<'a>(&self, stack: &'a ItemStack, name: &str) -> Option<&'a [u8]> {
+        let id = self.ids.get(name)?;
+        stack
+            .components
+            .added
+            .iter()
+            .find(|(kind, _)| kind == id)
+            .map(|(_, bytes)| bytes.as_slice())
+    }
+
+    fn set_component(stack: &mut ItemStack, id: i32, bytes: Vec<u8>) {
         let patch = Arc::make_mut(&mut stack.components);
         match patch.added.binary_search_by_key(&id, |(id, _)| *id) {
             Ok(index) => patch.added[index].1 = bytes,
             Err(index) => patch.added.insert(index, (id, bytes)),
         }
         patch.removed.retain(|&removed| removed != id);
-        self.resolve_stack_limit(stack)
     }
 
     /// Reads a saved item, retaining fields outside the known item schema with the stack as it moves.
@@ -211,6 +291,7 @@ impl ItemCodec {
         usize::try_from(id)
             .ok()
             .and_then(|id| self.names.get(id))
+            .filter(|name| !name.is_empty())
             .map(String::as_str)
             .ok_or_else(|| {
                 invalid(format!(
@@ -627,6 +708,41 @@ pub(crate) fn invalid(message: impl ToString) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mining_wear_respects_saved_durability_overrides() {
+        let codec = ItemCodec::default();
+        let tool = |components| {
+            codec
+                .read(&Compound::from_iter([
+                    ("id", Nbt::from("minecraft:wooden_pickaxe")),
+                    ("components", Nbt::Compound(components)),
+                ]))
+                .unwrap()
+        };
+        let mut short_lived = tool(Compound::from_iter([("minecraft:max_damage", 2)]));
+        assert!(!codec.wear_tool(&mut short_lived, 59).unwrap());
+        assert_eq!(
+            short_lived,
+            tool(Compound::from_iter([
+                ("minecraft:max_damage", 2),
+                ("minecraft:damage", 1)
+            ]))
+        );
+        assert!(codec.wear_tool(&mut short_lived, 59).unwrap());
+        assert!(short_lived.is_empty());
+
+        for component in [
+            "minecraft:unbreakable",
+            "!minecraft:damage",
+            "!minecraft:max_damage",
+        ] {
+            let original = tool(Compound::from_iter([(component, Compound::new())]));
+            let mut protected = original.clone();
+            assert!(!codec.wear_tool(&mut protected, 59).unwrap());
+            assert_eq!(protected, original);
+        }
+    }
 
     #[test]
     fn components_and_removals_survive_moves_count_changes_and_save_load() {

@@ -378,6 +378,8 @@ pub enum Output {
     SelectedHotbarSlot(i32),
     /// The stack the player's cursor carries changed.
     SetCarried(ItemStack),
+    /// The entity's main-hand item broke.
+    MainHandItemBroken(i32),
     /// One slot of a menu changed.
     SetSlot {
         /// The menu: 0 for the player's inventory.
@@ -783,11 +785,8 @@ impl PlayerState {
         }
     }
 
-    /// How fast the player breaks blocks with an empty hand, as vanilla's `Player.getDestroySpeed` without
-    /// tools, effects or enchantments, which come with items: the `block_break_speed` attribute (1), times the
-    /// `submerged_mining_speed` attribute (0.2) with the eyes in water, divided by 5 off the ground.
-    pub(crate) fn destroy_speed(&self, eye_in_water: bool) -> f32 {
-        let mut speed = 1.0_f32;
+    /// Applies the player's default mining speed modifiers to the held item's speed.
+    pub(crate) fn destroy_speed(&self, mut speed: f32, eye_in_water: bool) -> f32 {
         if eye_in_water {
             speed *= 0.2;
         }

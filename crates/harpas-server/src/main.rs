@@ -226,6 +226,13 @@ fn run() -> io::Result<()> {
         shapes,
         loot,
         recipes,
+        mining: match harpas_engine::mining::MiningRules::new(&worldgen_data) {
+            Ok(rules) => Some(Arc::new(rules)),
+            Err(error) => {
+                warn!("Pickaxe mining rules will be unavailable: {error}");
+                None
+            }
+        },
         items: Some(Arc::new(items)),
     };
     let mut server_info = server_info(&properties);

@@ -623,6 +623,11 @@ pub(crate) fn send(
                 item: packet_stack(&stack),
             }
             .into(),
+            Output::MainHandItemBroken(entity_id) => clientbound::EntityEvent {
+                entity_id,
+                event: 47, // MAINHAND_BREAK in Java 26.1.
+            }
+            .into(),
             Output::SetSlot {
                 container_id,
                 state_id,

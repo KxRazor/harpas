@@ -5,9 +5,11 @@ import net.minecraft.SharedConstants;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.*;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.*;
 import net.minecraft.server.dedicated.DedicatedServer;
@@ -99,13 +101,16 @@ public final class ChestLootProbe {
                     case "desert_pyramid" -> BuiltInLootTables.DESERT_PYRAMID;
                     case "buried_treasure" -> BuiltInLootTables.BURIED_TREASURE;
                     case "shipwreck_treasure" -> BuiltInLootTables.SHIPWRECK_TREASURE;
+                    case "shipwreck_supply" -> BuiltInLootTables.SHIPWRECK_SUPPLY;
                     default -> throw new IllegalArgumentException(args[3]);
                 };
                 Files.write(Path.of(args[4]), BuiltInRegistries.POTION.stream()
                     .map(potion -> BuiltInRegistries.POTION.getKey(potion).toString()).toList());
+                Files.write(Path.of(args[5]), BuiltInRegistries.MOB_EFFECT.stream()
+                    .map(effect -> BuiltInRegistries.MOB_EFFECT.getKey(effect).toString()).toList());
                 var tags = new ListTag();
                 var ops = lookup.createSerializationContext(NbtOps.INSTANCE);
-                for (int i = 5; i < args.length; i++) {
+                for (int i = 6; i < args.length; i++) {
                     var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Loot Chest", lookup);
                     chest.setLevel(level);
                     chest.setLootTable(table, Long.parseLong(args[i]));
@@ -124,6 +129,20 @@ public final class ChestLootProbe {
                     for (var drop : level.drops) drops.add(ItemStack.CODEC.encodeStart(ops, drop).getOrThrow());
                     var removal = new CompoundTag();
                     removal.put("Drops", drops);
+                    var stewBytes = new CompoundTag();
+                    var type = DataComponents.SUSPICIOUS_STEW_EFFECTS;
+                    for (int slot = 0; slot < chest.getContainerSize(); slot++) {
+                        var effects = chest.getItem(slot).get(type);
+                        if (effects == null) continue;
+                        var buffer = new RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), level.access);
+                        try {
+                            type.streamCodec().encode(buffer, effects);
+                            stewBytes.putByteArray(Integer.toString(slot), io.netty.buffer.ByteBufUtil.getBytes(buffer));
+                        } finally {
+                            buffer.release();
+                        }
+                    }
+                    removal.put("StewBytes", stewBytes);
                     tags.add(removal);
                 }
                 try (var out = new java.io.DataOutputStream(Files.newOutputStream(Path.of(args[0])))) {

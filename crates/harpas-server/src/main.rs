@@ -211,7 +211,7 @@ fn run() -> io::Result<()> {
     let recipes = match harpas_engine::recipe::Recipes::from_zip_path(&data_pack) {
         Ok(recipes) => Some(Arc::new(recipes)),
         Err(error) => {
-            warn!("Nothing can be crafted: {error}");
+            warn!("Crafting and smelting recipes will be unavailable: {error}");
             None
         }
     };

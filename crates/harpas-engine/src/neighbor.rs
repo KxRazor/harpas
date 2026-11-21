@@ -22,6 +22,7 @@ use log::error;
 
 use crate::block::{self, BlockPos};
 use crate::chest::CHEST;
+use crate::furnace::{FURNACE, Furnace};
 use crate::world::{ChunkState, World};
 
 /// `Block.UPDATE_NEIGHBORS`: run neighbor updates around the change.
@@ -132,8 +133,12 @@ impl World {
         if old == state {
             return false;
         }
-        let was_chest = block_states().name(old) == Some(CHEST);
-        let is_chest = block_states().name(state) == Some(CHEST);
+        let old_name = block_states().name(old);
+        let new_name = block_states().name(state);
+        let was_chest = old_name == Some(CHEST);
+        let is_chest = new_name == Some(CHEST);
+        let was_furnace = old_name == Some(FURNACE);
+        let is_furnace = new_name == Some(FURNACE);
         let contents = if was_chest && !is_chest {
             let items = if flags & UPDATE_SUPPRESS_DROPS == 0 {
                 self.unpack_chest_items(pos)
@@ -145,6 +150,17 @@ impl World {
                 Err(error) => {
                     // Keep loot seeds and unsupported stacks in the world until their codecs are available.
                     log::debug!("Keeping chest at {pos:?}: {error}");
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+        let furnace_slots = if was_furnace && !is_furnace {
+            match self.furnace(pos) {
+                Ok(furnace) => Some(furnace.slots),
+                Err(error) => {
+                    log::debug!("Keeping furnace at {pos:?}: {error}");
                     return false;
                 }
             }
@@ -163,6 +179,20 @@ impl World {
             for stack in items {
                 self.pop_resource(pos, stack);
             }
+        }
+        if let Some(items) = furnace_slots {
+            self.active_furnaces.remove(&pos);
+            if flags & UPDATE_SUPPRESS_DROPS == 0 {
+                for stack in items {
+                    self.pop_resource(pos, stack);
+                }
+            }
+        }
+        if is_furnace
+            && !was_furnace
+            && let Err(error) = self.save_furnace(pos, &Furnace::default())
+        {
+            log::debug!("Cannot initialize furnace at {pos:?}: {error}");
         }
         if is_chest
             && !was_chest

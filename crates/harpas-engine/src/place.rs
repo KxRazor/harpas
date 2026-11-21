@@ -10,7 +10,7 @@
 //! The placements ported so far are those of blocks without properties, of pillars (their axis follows the
 //! clicked face), slabs (a second slab of the same kind makes a double slab), stairs, blocks that face the
 //! player (furnaces, carved pumpkins, glazed terracotta, looms and stonecutters), and fences, walls, panes and
-//! bars, which connect to their neighbors, and chests. Crafting tables and chests open a menu
+//! bars, which connect to their neighbors, and chests. Crafting tables, chests and furnaces open a menu
 //! when used. Other interactive blocks, placement sounds and the message at the top of the world remain.
 
 use harpas_core::block::block_states;
@@ -20,8 +20,10 @@ use harpas_worldgen::BlockGetter;
 use harpas_worldgen::shape_update::Direction;
 
 use crate::block::{self, BlockPos};
-use crate::chest::{self, CHEST};
+use crate::block_menu::Backing;
+use crate::chest::{self, CHEST, Chest};
 use crate::fluid::{FluidState, FluidType};
+use crate::furnace::{FURNACE, Furnace};
 use crate::inventory::{self, ItemStack};
 use crate::{Game, neighbor, player};
 
@@ -30,6 +32,20 @@ use crate::{Game, neighbor, player};
 enum Placed {
     Yes,
     No,
+}
+
+enum SharedSlots {
+    Chest(Chest, Vec<ItemStack>),
+    Furnace(Furnace),
+}
+
+impl SharedSlots {
+    fn items(&self) -> &[ItemStack] {
+        match self {
+            Self::Chest(_, items) => items,
+            Self::Furnace(furnace) => &furnace.slots,
+        }
+    }
 }
 
 fn direction(face: Face) -> Direction {
@@ -60,7 +76,7 @@ fn horizontal_direction(yaw: f32) -> Direction {
 }
 
 /// The state with some properties set to other values.
-fn with(state: u32, changes: &[(&str, &str)]) -> u32 {
+pub(crate) fn with(state: u32, changes: &[(&str, &str)]) -> u32 {
     let states = block_states();
     let Some((name, properties)) = states.properties(state) else {
         return state;
@@ -253,8 +269,10 @@ impl Game {
         let mode = self.players[index].player.profile.game_mode;
         let clicked = self.block_at(hit);
         if mode == player::GameMode::Spectator {
-            if block_states().name(clicked) == Some(CHEST) {
-                self.open_chest(index, hit);
+            match block_states().name(clicked) {
+                Some(CHEST) => self.open_chest(index, hit),
+                Some(FURNACE) => self.open_furnace(index, hit),
+                _ => {}
             }
             return Placed::No;
         }
@@ -266,6 +284,7 @@ impl Game {
             match block_states().name(clicked) {
                 Some("minecraft:crafting_table") => self.open_crafting_table(index, hit),
                 Some(CHEST) => self.open_chest(index, hit),
+                Some(FURNACE) => self.open_furnace(index, hit),
                 _ => {}
             }
             if reacts_to_use(clicked) {
@@ -619,6 +638,17 @@ impl Game {
             }
         });
         state.send(output);
+        if let Some(menu) = &state.block_menu
+            && let Backing::Furnace(properties) = menu.backing
+        {
+            for (property, value) in properties.into_iter().enumerate() {
+                state.send(player::Output::ContainerProperty {
+                    container_id,
+                    property: property as i16,
+                    value,
+                });
+            }
+        }
     }
 
     /// A click in a container (`handleContainerClick`). The ID must name the active menu.
@@ -652,16 +682,33 @@ impl Game {
         if !valid || !(0..=6).contains(&mode) {
             return;
         }
-        let chest = if let Some(chest) = state.block_menu.as_ref().and_then(|menu| menu.chest) {
-            let world = self.world.as_ref().expect("an open chest is in the world");
-            let Ok((items, _)) = world.chest_menu(chest) else {
-                self.close_block_menu(index);
-                return;
-            };
-            self.synchronize_chest(chest, &items);
-            Some((chest, items))
-        } else {
-            None
+        let shared = match state
+            .block_menu
+            .as_ref()
+            .map(|menu| (menu.position, menu.backing))
+        {
+            Some((_, Backing::Chest(chest))) => {
+                let world = self.world.as_ref().expect("an open chest is in the world");
+                let Ok((items, _)) = world.chest_menu(chest) else {
+                    self.close_block_menu(index);
+                    return;
+                };
+                self.synchronize_chest(chest, &items);
+                Some(SharedSlots::Chest(chest, items))
+            }
+            Some((pos, Backing::Furnace(_))) => {
+                let world = self
+                    .world
+                    .as_ref()
+                    .expect("an open furnace is in the world");
+                let Ok(furnace) = world.furnace(pos) else {
+                    self.close_block_menu(index);
+                    return;
+                };
+                self.synchronize_furnace(pos, &furnace);
+                Some(SharedSlots::Furnace(furnace))
+            }
+            _ => None,
         };
         let recipes = self.world.as_ref().and_then(|w| w.recipes.clone());
         let context = crate::menu::Context {
@@ -669,8 +716,11 @@ impl Game {
             creative: mode_now == player::GameMode::Creative,
         };
         let state = &mut self.players[index];
-        let before = chest.as_ref().map(|_| {
-            let menu = state.block_menu.as_ref().expect("chest viewer has a menu");
+        let before = shared.as_ref().map(|_| {
+            let menu = state
+                .block_menu
+                .as_ref()
+                .expect("container viewer has a menu");
             (state.inventory.clone(), menu.contents.clone())
         });
         let (mismatch, drops) = state.with_menu(|inventory| {
@@ -685,22 +735,46 @@ impl Game {
             inventory.remote_carried = inventory::Remote::Hashed(carried);
             (mismatch, drops)
         });
-        if let Some((chest, items)) = chest {
-            let menu = state.block_menu.as_mut().expect("chest viewer has a menu");
-            let updated = &menu.contents.slots[..items.len()];
-            if updated != items {
-                let world = self.world.as_mut().expect("an open chest is in the world");
-                if let Err(error) = world.save_chest_menu(chest, &items, updated) {
-                    log::warn!("Cannot update chest at {:?}: {error}", menu.position);
+        if let Some(mut shared) = shared {
+            let menu = state
+                .block_menu
+                .as_mut()
+                .expect("container viewer has a menu");
+            let updated = &menu.contents.slots[..shared.items().len()];
+            if updated != shared.items() {
+                let world = self
+                    .world
+                    .as_mut()
+                    .expect("an open container is in the world");
+                let position = menu.position;
+                let result = match &mut shared {
+                    SharedSlots::Chest(chest, items) => {
+                        world.save_chest_menu(*chest, items, updated)
+                    }
+                    SharedSlots::Furnace(furnace) => {
+                        let slots = std::array::from_fn(|i| updated[i].clone());
+                        furnace.set_slots(slots, recipes.as_deref());
+                        world.save_furnace(position, furnace)
+                    }
+                };
+                if let Err(error) = result {
+                    log::warn!("Cannot update container at {position:?}: {error}");
                     let (inventory, contents) =
-                        before.expect("chest clicks have a rollback snapshot");
+                        before.expect("shared container clicks have a rollback snapshot");
                     state.inventory = inventory;
                     menu.contents = contents;
                     self.broadcast_full_state(index);
                     return;
                 }
-                let updated = updated.to_vec();
-                self.synchronize_chest(chest, &updated);
+                match shared {
+                    SharedSlots::Chest(chest, _) => {
+                        let updated = updated.to_vec();
+                        self.synchronize_chest(chest, &updated);
+                    }
+                    SharedSlots::Furnace(furnace) => {
+                        self.synchronize_furnace(position, &furnace);
+                    }
+                }
             }
         }
         for stack in drops {

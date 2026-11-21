@@ -1,5 +1,4 @@
-//! Crafting recipes from the vanilla data pack (`data/minecraft/recipe/`), matched as vanilla's
-//! `RecipeManager.getRecipeFor` does for a crafting grid.
+//! Crafting and smelting recipes from the vanilla data pack (`data/minecraft/recipe/`).
 //!
 //! The grid is trimmed to the box its items fill (`CraftingInput.ofPositioned`). A shaped recipe matches a grid of
 //! its size whose every cell its pattern's ingredient accepts, as written or mirrored; a shapeless recipe matches a
@@ -17,6 +16,7 @@ use std::path::Path;
 use harpas_core::item::items;
 use serde_json::Value;
 
+use crate::furnace::fuel_times;
 use crate::inventory::ItemStack;
 
 /// The items an ingredient accepts (`Ingredient`, a set of items).
@@ -121,10 +121,19 @@ impl Recipe {
     }
 }
 
-/// The crafting recipes, in the order of their IDs.
+#[derive(Clone, Debug)]
+pub(crate) struct SmeltingRecipe {
+    pub(crate) id: Option<String>,
+    pub(crate) result: ItemStack,
+    pub(crate) ticks: i32,
+}
+
+/// Crafting and smelting recipes, in the order of their IDs.
 #[derive(Debug, Default)]
 pub struct Recipes {
     recipes: Vec<Recipe>,
+    smelting: HashMap<u32, SmeltingRecipe>,
+    fuels: HashMap<u32, i32>,
 }
 
 /// The item tags of a data pack, resolved to items.
@@ -180,12 +189,12 @@ fn ingredient(value: &Value, tags: &HashMap<String, HashSet<u32>>) -> Option<Ing
 }
 
 impl Recipes {
-    /// Reads the crafting recipes and item tags of a data pack archive.
+    /// Reads the recipes and item tags of a data pack archive.
     pub fn from_zip_path(path: impl AsRef<Path>) -> io::Result<Self> {
         Self::from_zip_reader(std::fs::File::open(path)?)
     }
 
-    /// Reads the crafting recipes and item tags of a data pack archive.
+    /// Reads the recipes and item tags of a data pack archive.
     pub fn from_zip_reader(reader: impl Read + Seek) -> io::Result<Self> {
         let mut archive = zip::ZipArchive::new(reader).map_err(io::Error::other)?;
         let mut tags = HashMap::new();
@@ -221,7 +230,10 @@ impl Recipes {
                 recipes.insert(format!("minecraft:{recipe}"), json);
             }
         }
-        Ok(Self::from_json(&tags, recipes.values()))
+        Ok(Self::from_entries(
+            &tags,
+            recipes.iter().map(|(id, json)| (Some(id.as_str()), json)),
+        ))
     }
 
     /// Builds the recipes from item tags (each a list of item names and `#` tags) and recipe JSON, in order.
@@ -229,12 +241,81 @@ impl Recipes {
         tags: &HashMap<String, Vec<String>>,
         recipes: impl IntoIterator<Item = &'a Value>,
     ) -> Self {
+        Self::from_entries(tags, recipes.into_iter().map(|json| (None, json)))
+    }
+
+    fn from_entries<'a>(
+        tags: &HashMap<String, Vec<String>>,
+        recipes: impl IntoIterator<Item = (Option<&'a str>, &'a Value)>,
+    ) -> Self {
         let tags = resolve_tags(tags);
-        let parsed = recipes
-            .into_iter()
-            .filter_map(|json| Self::parse(json, &tags))
-            .collect();
-        Self { recipes: parsed }
+        let mut parsed = Self {
+            fuels: fuel_times(&tags),
+            ..Self::default()
+        };
+        for (id, json) in recipes {
+            if json.get("type").and_then(Value::as_str) == Some("minecraft:smelting") {
+                let Some((recipe, ingredients)) = Self::parse_smelting(id, json, &tags) else {
+                    continue;
+                };
+                for item in ingredients {
+                    parsed
+                        .smelting
+                        .entry(item)
+                        .or_insert_with(|| recipe.clone());
+                }
+            } else if let Some(recipe) = Self::parse(json, &tags) {
+                parsed.recipes.push(recipe);
+            }
+        }
+        parsed
+    }
+
+    fn parse_smelting(
+        id: Option<&str>,
+        json: &Value,
+        tags: &HashMap<String, HashSet<u32>>,
+    ) -> Option<(SmeltingRecipe, Ingredient)> {
+        let result = json.get("result")?;
+        if result.get("components").is_some() {
+            return None;
+        }
+        let stack = ItemStack {
+            item: items().id(result.get("id")?.as_str()?)?,
+            count: i32::try_from(result.get("count").and_then(Value::as_i64).unwrap_or(1)).ok()?,
+            ..ItemStack::default()
+        };
+        let ticks = i16::try_from(
+            json.get("cookingtime")
+                .and_then(Value::as_i64)
+                .unwrap_or(200),
+        )
+        .ok()?;
+        if ticks <= 0 || stack.is_empty() || !stack.is_valid() {
+            return None;
+        }
+        let ingredients = ingredient(json.get("ingredient")?, tags)?;
+        Some((
+            SmeltingRecipe {
+                id: id.map(str::to_owned),
+                result: stack,
+                ticks: i32::from(ticks),
+            },
+            ingredients,
+        ))
+    }
+
+    pub(crate) fn smelting(&self, stack: &ItemStack) -> Option<&SmeltingRecipe> {
+        self.smelting.get(&stack.item).filter(|_| !stack.is_empty())
+    }
+
+    /// The number of ticks the stack's item fuels a furnace, or zero for an item that cannot burn.
+    pub fn burn_duration(&self, stack: &ItemStack) -> i32 {
+        if stack.is_empty() {
+            0
+        } else {
+            self.fuels.get(&stack.item).copied().unwrap_or(0)
+        }
     }
 
     fn parse(json: &Value, tags: &HashMap<String, HashSet<u32>>) -> Option<Recipe> {
@@ -304,12 +385,12 @@ impl Recipes {
         Some(Recipe { shape, result })
     }
 
-    /// The number of recipes.
+    /// The number of crafting recipes.
     pub fn len(&self) -> usize {
         self.recipes.len()
     }
 
-    /// Whether there are no recipes.
+    /// Whether there are no crafting recipes.
     pub fn is_empty(&self) -> bool {
         self.recipes.is_empty()
     }

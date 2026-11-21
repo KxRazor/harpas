@@ -5,14 +5,32 @@ use harpas_core::block::block_states;
 use crate::Game;
 use crate::block::BlockPos;
 use crate::chest::Chest;
+use crate::furnace::{FURNACE, FURNACE_SLOTS, Furnace};
 use crate::inventory::{Inventory, ItemStack, MenuKind, OFF_HAND, Remote};
 use crate::player::{Output, PlayerState};
 
 pub(crate) struct BlockMenu {
     pub(crate) id: i32,
     pub(crate) position: BlockPos,
-    pub(crate) chest: Option<Chest>,
+    pub(crate) backing: Backing,
     pub(crate) contents: Inventory,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Backing {
+    CraftingTable,
+    Chest(Chest),
+    Furnace([i16; 4]),
+}
+
+impl BlockMenu {
+    pub(crate) fn uses(&self, pos: BlockPos) -> bool {
+        match self.backing {
+            Backing::CraftingTable => false,
+            Backing::Chest(chest) => chest.positions().any(|half| half == pos),
+            Backing::Furnace(_) => self.position == pos,
+        }
+    }
 }
 
 impl PlayerState {
@@ -49,7 +67,7 @@ impl Game {
         index: usize,
         position: BlockPos,
         contents: Inventory,
-        chest: Option<Chest>,
+        backing: Backing,
     ) -> i32 {
         let active = self.players[index].container_id();
         if active != 0 {
@@ -62,7 +80,7 @@ impl Game {
         state.block_menu = Some(BlockMenu {
             id,
             position,
-            chest,
+            backing,
             contents,
         });
         id
@@ -73,7 +91,7 @@ impl Game {
             index,
             position,
             block_inventory(MenuKind::CraftingTable),
-            None,
+            Backing::CraftingTable,
         );
         self.players[index].send(Output::OpenCraftingTable(id));
         self.broadcast_full_state(index);
@@ -95,10 +113,37 @@ impl Game {
         let double = chest.is_double();
         let mut menu = block_inventory(MenuKind::Chest { double });
         menu.slots[..items.len()].clone_from_slice(&items);
-        let id = self.open_block_menu(index, position, menu, Some(chest));
+        let id = self.open_block_menu(index, position, menu, Backing::Chest(chest));
         self.players[index].send(Output::OpenChest {
             container_id: id,
             double,
+            title,
+        });
+        self.broadcast_full_state(index);
+    }
+
+    pub(crate) fn open_furnace(&mut self, index: usize, position: BlockPos) {
+        let Some(world) = &self.world else { return };
+        let Ok(tag) = world.container_tag(position, FURNACE) else {
+            return;
+        };
+        if tag.is_some_and(|tag| tag.get("lock").is_some()) {
+            return;
+        }
+        let title = tag.and_then(|tag| tag.get("CustomName").cloned());
+        let Ok(furnace) = world.furnace(position) else {
+            return;
+        };
+        let mut menu = block_inventory(MenuKind::Furnace);
+        menu.slots[..FURNACE_SLOTS].clone_from_slice(&furnace.slots);
+        let id = self.open_block_menu(
+            index,
+            position,
+            menu,
+            Backing::Furnace(furnace.properties()),
+        );
+        self.players[index].send(Output::OpenFurnace {
+            container_id: id,
             title,
         });
         self.broadcast_full_state(index);
@@ -118,15 +163,20 @@ impl Game {
                 .sum::<f64>()
                 <= 64.0
         };
-        let valid = if let Some(chest) = menu.chest {
-            self.world
-                .as_ref()
-                .and_then(|world| Chest::at(world, menu.position))
-                == Some(chest)
-                && chest.positions().all(in_range)
-        } else {
-            block_states().name(self.block_at(menu.position)) == Some("minecraft:crafting_table")
+        let at = |kind| {
+            block_states().name(self.block_at(menu.position)) == Some(kind)
                 && in_range(menu.position)
+        };
+        let valid = match menu.backing {
+            Backing::Chest(chest) => {
+                self.world
+                    .as_ref()
+                    .and_then(|world| Chest::at(world, menu.position))
+                    == Some(chest)
+                    && chest.positions().all(in_range)
+            }
+            Backing::CraftingTable => at("minecraft:crafting_table"),
+            Backing::Furnace(_) => at(FURNACE),
         };
         if !valid {
             self.close_block_menu(index);
@@ -142,9 +192,32 @@ impl Game {
     pub(crate) fn synchronize_chest(&mut self, chest: Chest, items: &[ItemStack]) {
         for player in &mut self.players {
             if let Some(menu) = &mut player.block_menu
-                && menu.chest == Some(chest)
+                && matches!(menu.backing, Backing::Chest(open) if open == chest)
             {
                 menu.contents.slots[..items.len()].clone_from_slice(items);
+            }
+        }
+    }
+
+    pub(crate) fn synchronize_furnace(&mut self, position: BlockPos, furnace: &Furnace) {
+        let properties = furnace.properties();
+        for player in &mut self.players {
+            if let Some(menu) = &mut player.block_menu
+                && menu.position == position
+                && let Backing::Furnace(sent) = &mut menu.backing
+            {
+                menu.contents.slots[..FURNACE_SLOTS].clone_from_slice(&furnace.slots);
+                let previous = std::mem::replace(sent, properties);
+                let id = menu.id;
+                for (property, (value, old)) in properties.into_iter().zip(previous).enumerate() {
+                    if value != old {
+                        player.send(Output::ContainerProperty {
+                            container_id: id,
+                            property: property as i16,
+                            value,
+                        });
+                    }
+                }
             }
         }
     }

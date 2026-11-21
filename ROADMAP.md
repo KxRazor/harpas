@@ -442,7 +442,9 @@ as shown by the parity report.
         dropped stacks match vanilla, including enchanted books and Dune armor trim templates (`chest_parity`).
   - [x] Buried treasure chests roll their loot when opened or broken unopened, including hearts of the sea and
         potions of Water Breathing. Menu slots, saved contents and dropped stacks match vanilla (`chest_parity`).
-  - [ ] The other chest loot tables, the other containers, the other recipe types, and smelting.
+  - [x] Normal furnaces open a three-slot menu, smelt on the game tick, and save their slots and timers in Anvil.
+        Fuel values, blocked output and resumed iron smelting are compared with vanilla (`furnace_parity`).
+  - [ ] The other chest loot tables, containers and recipe types, furnace experience and recipe-book placement.
   - [ ] Data components, which loot functions copy into items and conditions read, and the other loot tables.
 - [ ] The last 21 Java Play packets: item stacks and their 110 data components, entity metadata, particles and
       the command tree written by hand as the design says, and the debug subscription packets

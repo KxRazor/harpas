@@ -345,6 +345,22 @@ pub enum Output {
         /// The chest's custom text component, if it has one.
         title: Option<harpas_core::nbt::Nbt>,
     },
+    /// Open the normal furnace screen.
+    OpenFurnace {
+        /// The player's active menu ID.
+        container_id: i32,
+        /// The furnace's custom text component, if it has one.
+        title: Option<harpas_core::nbt::Nbt>,
+    },
+    /// The value of a menu property, such as the furnace's progress.
+    ContainerProperty {
+        /// The player's active menu ID.
+        container_id: i32,
+        /// The property index.
+        property: i16,
+        /// The current value.
+        value: i16,
+    },
     /// Close the active container screen.
     CloseContainer(i32),
     /// Every slot of a menu, on opening or when the client's state is stale.

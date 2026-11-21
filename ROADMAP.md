@@ -455,6 +455,9 @@ as shown by the parity report.
         and dropped stacks match vanilla, including suspicious stew effects and enchanted leather armor (`chest_parity`).
   - [x] Shipwreck map chests roll their loot when opened or broken unopened. The buried treasure target, initial
         coastline preview, saved map data and named empty map fallback are compared with vanilla (`chest_parity`).
+  - [x] Small and big ocean ruin chests roll their loot when opened or broken unopened. Only chests whose loot
+        includes the treasure map search for buried treasure and take a map ID. Menu slots, saved contents,
+        dropped stacks and map data match vanilla (`chest_parity`).
   - [x] Normal furnaces open a three-slot menu, smelt on the game tick, and save their slots and timers in Anvil.
         Fuel values, blocked output and resumed iron smelting are compared with vanilla (`furnace_parity`).
   - [ ] The other chest loot tables, containers and recipe types, furnace experience and recipe-book placement.

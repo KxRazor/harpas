@@ -71,7 +71,7 @@ public final class ChestLootProbe {
         @Override public BiomeManager getBiomeManager() { return search.biomes; }
         @Override public BlockPos findNearestMapStructure(TagKey<Structure> tag, BlockPos pos, int radius, boolean skip) {
             if (skip || !tag.location().toString().equals("minecraft:on_treasure_maps") || radius != 50) {
-                throw new AssertionError("Unexpected shipwreck map search");
+                throw new AssertionError("Unexpected treasure map search");
             }
             return search == null ? null : search.find(this, pos, radius);
         }
@@ -195,6 +195,8 @@ public final class ChestLootProbe {
                     case "shipwreck_treasure" -> BuiltInLootTables.SHIPWRECK_TREASURE;
                     case "shipwreck_supply" -> BuiltInLootTables.SHIPWRECK_SUPPLY;
                     case "shipwreck_map", "shipwreck_map_empty" -> BuiltInLootTables.SHIPWRECK_MAP;
+                    case "underwater_ruin_small" -> BuiltInLootTables.UNDERWATER_RUIN_SMALL;
+                    case "underwater_ruin_big" -> BuiltInLootTables.UNDERWATER_RUIN_BIG;
                     default -> throw new IllegalArgumentException(args[3]);
                 };
                 Files.write(Path.of(args[4]), BuiltInRegistries.POTION.stream()
@@ -203,8 +205,13 @@ public final class ChestLootProbe {
                     .map(effect -> BuiltInRegistries.MOB_EFFECT.getKey(effect).toString()).toList());
                 var tags = new ListTag();
                 var ops = lookup.createSerializationContext(NbtOps.INSTANCE);
-                if (args[3].equals("shipwreck_map")) level.search = new MapSearch(level.access);
+                if (Set.of("shipwreck_map", "underwater_ruin_small", "underwater_ruin_big").contains(args[3])) {
+                    level.search = new MapSearch(level.access);
+                }
                 for (int i = 6; i < args.length; i++) {
+                    // Only seeds that roll the map create map data.
+                    level.latestMap = null;
+                    level.mapData = null;
                     var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Loot Chest", lookup);
                     chest.setLevel(level);
                     chest.setLootTable(table, Long.parseLong(args[i]));

@@ -14,7 +14,7 @@ use zip::ZipArchive;
 use super::{Context, LootTable};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
-use crate::maps::{MAP_TABLE, TreasureMap};
+use crate::maps::TreasureMap;
 
 pub(super) const ENCHANTMENT_TAG: &str = "#minecraft:on_random_loot";
 
@@ -33,7 +33,9 @@ impl ChestLootTables {
             "chests/buried_treasure",
             "chests/shipwreck_treasure",
             "chests/shipwreck_supply",
-            MAP_TABLE,
+            "chests/shipwreck_map",
+            "chests/underwater_ruin_small",
+            "chests/underwater_ruin_big",
         ] {
             let data = match archive.by_name(&format!("data/minecraft/loot_table/{name}.json")) {
                 Ok(entry) => serde_json::from_reader(entry).map_err(io::Error::other),
@@ -100,20 +102,46 @@ impl ChestLootTables {
         random: &mut dyn RandomSource,
         treasure_map: Option<TreasureMap>,
     ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
-        let rolled = table.roll(Context {
+        self.fill_reporting_map(table, codec, random, treasure_map)
+            .map(|(contents, _)| contents)
+    }
+
+    /// Fills a chest without a treasure map, to learn whether the real fill would search for one. The
+    /// search allocates a map ID, so vanilla only makes it when the map entry is rolled.
+    pub(crate) fn rolls_treasure_map(
+        &self,
+        table: &LootTable,
+        codec: &ItemCodec,
+        random: &mut dyn RandomSource,
+    ) -> io::Result<bool> {
+        self.fill_reporting_map(table, codec, random, None)
+            .map(|(_, requested)| requested)
+    }
+
+    fn fill_reporting_map(
+        &self,
+        table: &LootTable,
+        codec: &ItemCodec,
+        random: &mut dyn RandomSource,
+        treasure_map: Option<TreasureMap>,
+    ) -> io::Result<([ItemStack; CHEST_SLOTS], bool)> {
+        let mut context = Context {
             state: block_states().default_state("minecraft:air").unwrap(),
             tool: &ItemStack::empty(),
-            random,
+            random: &mut *random,
             chest: Some((&self.enchantments, codec)),
             treasure_map,
-        })?;
+            treasure_requested: false,
+        };
+        let rolled = table.roll(&mut context)?;
+        let requested = context.treasure_requested;
         let mut slots: [usize; CHEST_SLOTS] = std::array::from_fn(|i| i);
         shuffle(&mut slots, random);
         let mut contents = std::array::from_fn(|_| ItemStack::empty());
         for (slot, stack) in slots.into_iter().rev().zip(spread(rolled, random)) {
             contents[slot] = stack;
         }
-        Ok(contents)
+        Ok((contents, requested))
     }
 }
 

@@ -154,7 +154,7 @@ pub trait ChunkSource: Send + Sync {
         storage: &ChunkStorage,
     ) -> io::Result<Generated>;
 
-    /// Finds the buried treasure for an unopened shipwreck chest and builds its map preview.
+    /// Finds the buried treasure nearest an unopened chest that rolled a treasure map, and builds the preview.
     fn treasure_map(
         &self,
         _origin: BlockPos,
@@ -5735,6 +5735,108 @@ mod tests {
             );
         }
         assert_eq!(menu, expected);
+    }
+
+    #[test]
+    fn chests_search_for_a_treasure_map_only_when_their_loot_rolls_one() {
+        use std::io::{Cursor, Write};
+
+        use crate::chest::{CHEST, Chest};
+        use crate::inventory::ItemStack;
+        use crate::loot::LootTables;
+        use harpas_core::random::{LegacyRandom, RandomSource};
+        use zip::write::SimpleFileOptions;
+
+        let folder = Folder::new();
+        let pos = BlockPos { x: 8, y: -51, z: 9 };
+        save(&folder, &[(pos.chunk(), DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos.chunk()]);
+        let state = block_states()
+            .state(CHEST, [("facing", "north"), ("type", "single")])
+            .unwrap()
+            .0;
+        world.set_block_state(pos, state).unwrap();
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, json) in [
+            (
+                "loot_table/chests/underwater_ruin_small",
+                r#"{"pools":[{"rolls":1,"entries":[
+                    {"type":"minecraft:item","name":"minecraft:map","functions":[
+                        {"function":"minecraft:exploration_map","decoration":"minecraft:red_x",
+                         "zoom":1,"skip_existing_chunks":false},
+                        {"function":"minecraft:set_name","target":"item_name",
+                         "name":{"translate":"filled_map.buried_treasure"}}]},
+                    {"type":"minecraft:empty"}]}]}"#,
+            ),
+            (
+                "tags/enchantment/on_random_loot",
+                r#"{"values":["minecraft:sharpness"]}"#,
+            ),
+            ("enchantment/sharpness", r#"{"max_level":5}"#),
+        ] {
+            zip.start_file(
+                format!("data/minecraft/{path}.json"),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(json.as_bytes()).unwrap();
+        }
+        let loot = LootTables::from_zip_reader(zip.finish().unwrap()).unwrap();
+        world.set_loot_tables(Arc::new(loot));
+        world.set_item_codec(Arc::new(crate::item_data::ItemCodec::new(&[
+            "minecraft:item_name".to_owned(),
+        ])));
+
+        // The pool's only draw picks the map, the first entry, on 0.
+        let seed = |rolls_map: bool| {
+            (1..)
+                .find(|&seed| (LegacyRandom::new(seed).next_int_bounded(2) == 0) == rolls_map)
+                .unwrap()
+        };
+        for rolls_map in [false, true] {
+            let tag = Compound::from_iter([
+                ("id", Nbt::from(CHEST)),
+                ("x", Nbt::Int(pos.x)),
+                ("y", Nbt::Int(pos.y)),
+                ("z", Nbt::Int(pos.z)),
+                (
+                    "LootTable",
+                    Nbt::from("minecraft:chests/underwater_ruin_small"),
+                ),
+                ("LootTableSeed", Nbt::Long(seed(rolls_map))),
+            ]);
+            world.chunk_contents_mut(pos.chunk()).unwrap().rest.insert(
+                "block_entities",
+                Nbt::List(harpas_core::nbt::List::Compound(vec![tag.clone()])),
+            );
+            let chest = Chest::at(&world, pos).unwrap();
+            let opened = world.open_chest_menu(chest, false);
+            if !rolls_map {
+                let (menu, _) = opened.unwrap();
+                assert!(menu.iter().all(ItemStack::is_empty));
+                continue;
+            }
+            // The search must finish before the chest publishes its items. This world has no
+            // generator, so it finds nothing and the chest keeps the named empty map.
+            assert_eq!(opened.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+            assert_eq!(world.chest_tag(pos).unwrap(), Some(&tag));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let menu = loop {
+                match world.open_chest_menu(chest, false) {
+                    Ok((menu, _)) => break menu,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            let maps: Vec<_> = menu.iter().filter(|stack| !stack.is_empty()).collect();
+            assert_eq!(maps.len(), 1);
+            assert_eq!(maps[0].name(), Some("minecraft:map"));
+        }
     }
 
     #[test]

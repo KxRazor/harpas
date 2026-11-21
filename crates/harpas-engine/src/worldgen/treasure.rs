@@ -1,4 +1,5 @@
-//! The 26.1 shipwreck map looks for a buried treasure start and samples biomes around it.
+//! Buried treasure maps, from shipwreck and ocean ruin chests, look for a buried treasure start and sample
+//! biomes around it.
 
 use std::collections::HashMap;
 use std::io;

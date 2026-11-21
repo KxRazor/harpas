@@ -29,7 +29,7 @@ use serde_json::Value;
 use crate::inventory::ItemStack;
 use crate::item_data::{ItemCodec, STEW_EFFECTS};
 
-mod chest;
+pub(crate) mod chest;
 
 /// A number provider (`NumberProvider`).
 #[derive(Debug, Clone, PartialEq)]
@@ -442,10 +442,12 @@ impl Function {
             }
             Self::TreasureMap => {
                 if let Some((_, codec)) = context.chest
-                    && let Some(map) = context.treasure_map
                     && stack.name() == Some("minecraft:map")
                 {
-                    map.apply(stack, codec)?;
+                    context.treasure_requested = true;
+                    if let Some(map) = context.treasure_map {
+                        map.apply(stack, codec)?;
+                    }
                 }
             }
             Self::SetTranslatedItemName(translation) => {
@@ -620,6 +622,8 @@ struct Context<'a> {
     random: &'a mut dyn RandomSource,
     chest: Option<(&'a chest::LootEnchantments, &'a ItemCodec)>,
     treasure_map: Option<crate::maps::TreasureMap>,
+    /// Whether an `exploration_map` function was applied to an empty map, which searches for its target.
+    treasure_requested: bool,
 }
 
 impl LootTable {
@@ -667,19 +671,43 @@ impl LootTable {
         tool: &ItemStack,
         random: &mut dyn RandomSource,
     ) -> io::Result<Vec<ItemStack>> {
-        self.roll(Context {
+        self.roll(&mut Context {
             state,
             tool,
             random,
             chest: None,
             treasure_map: None,
+            treasure_requested: false,
         })
     }
 
-    fn roll(&self, mut context: Context<'_>) -> io::Result<Vec<ItemStack>> {
+    /// Whether any entry, pool or the table itself can turn an empty map into an exploration map.
+    pub(crate) fn has_treasure_map(&self) -> bool {
+        fn in_functions(functions: &[(Function, Vec<Condition>)]) -> bool {
+            functions
+                .iter()
+                .any(|(function, _)| *function == Function::TreasureMap)
+        }
+        fn in_entry(entry: &Entry) -> bool {
+            match entry {
+                Entry::Item { functions, .. } => in_functions(functions),
+                Entry::Alternatives(children, _)
+                | Entry::Group(children, _)
+                | Entry::Sequence(children, _) => children.iter().any(in_entry),
+                Entry::Empty { .. } | Entry::Unsupported => false,
+            }
+        }
+        in_functions(&self.functions)
+            || self
+                .pools
+                .iter()
+                .any(|pool| in_functions(&pool.functions) || pool.entries.iter().any(in_entry))
+    }
+
+    fn roll(&self, context: &mut Context<'_>) -> io::Result<Vec<ItemStack>> {
         let mut stacks = Vec::new();
         for pool in &self.pools {
-            if !all(&pool.conditions, &mut context) {
+            if !all(&pool.conditions, context) {
                 continue;
             }
             // Luck is 0, but the bonus rolls are still drawn.
@@ -688,7 +716,7 @@ impl LootTable {
             for _ in 0..rolls {
                 let mut offered = Vec::new();
                 for entry in &pool.entries {
-                    entry.expand(&mut context, &mut offered);
+                    entry.expand(context, &mut offered);
                 }
                 let offered: Vec<_> = offered.into_iter().filter(|e| e.weight() > 0).collect();
                 let total: i32 = offered.iter().map(|e| e.weight()).sum();
@@ -720,9 +748,9 @@ impl LootTable {
                     count: 1,
                     components: Default::default(),
                 };
-                decorate(functions, &mut stack, &mut context)?;
-                decorate(&pool.functions, &mut stack, &mut context)?;
-                decorate(&self.functions, &mut stack, &mut context)?;
+                decorate(functions, &mut stack, context)?;
+                decorate(&pool.functions, &mut stack, context)?;
+                decorate(&self.functions, &mut stack, context)?;
                 stacks.push(stack);
             }
         }

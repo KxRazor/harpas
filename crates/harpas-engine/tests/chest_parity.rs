@@ -285,6 +285,33 @@ fn shipwreck_map_chest_keeps_the_named_empty_map_when_there_is_no_target() {
     check_chest_loot("shipwreck_map_empty", &[0, -1], &["minecraft:map"]);
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn small_ocean_ruin_chest_loot_matches_vanilla_on_open_and_break() {
+    // A fishing rod comes from the map's pool, so its seeds also check that no map is searched for.
+    check_chest_loot(
+        "underwater_ruin_small",
+        &LOOT_SEEDS,
+        &["minecraft:filled_map", "minecraft:fishing_rod"],
+    );
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn big_ocean_ruin_chest_loot_matches_vanilla_on_open_and_break() {
+    check_chest_loot(
+        "underwater_ruin_big",
+        &[0, 1, 2, 5, 8, 16, 23, -1],
+        &[
+            "minecraft:filled_map",
+            "minecraft:enchanted_book",
+            "minecraft:fishing_rod",
+            "minecraft:golden_apple",
+            "minecraft:diamond_nautilus_armor",
+        ],
+    );
+}
+
 /// Supply only the real structure and biome query. The test's playable chunk is the chest fixture.
 struct MapFixtureSource(Arc<dyn ChunkSource>);
 
@@ -365,7 +392,11 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
             .with_mob_effects(&effects.lines().map(str::to_owned).collect::<Vec<_>>()),
     );
     let loot = Arc::new(LootTables::from_zip_path(&reference.server_jar).unwrap());
-    let map_source = (table == "shipwreck_map").then(|| {
+    let searches_treasure = matches!(
+        table,
+        "shipwreck_map" | "underwater_ruin_small" | "underwater_ruin_big"
+    );
+    let map_source = searches_treasure.then(|| {
         let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
         data.structure_sets
             .retain(|name, _| name == "minecraft:buried_treasures");
@@ -409,7 +440,11 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
             None => None,
             _ => panic!("invalid vanilla map data"),
         };
-        assert_eq!(expected_map.is_some(), map_source.is_some());
+        if table == "shipwreck_map" {
+            assert!(expected_map.is_some(), "seed {seed} must find a treasure");
+        } else if map_source.is_none() {
+            assert!(expected_map.is_none());
+        }
         let mut slots = vec![ItemStack::empty(); 27];
         for tag in items {
             let Some(Nbt::Byte(slot)) = tag.get("Slot") else {
@@ -512,7 +547,8 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
                 assert_eq!(icons.len(), 2);
                 assert_eq!(icons[1].kind, MapIconKind::RedX);
                 assert_eq!(icons[1].direction, 8);
-            } else if table == "shipwreck_map_empty" {
+            } else if searches_treasure || table == "shipwreck_map_empty" {
+                // A chest that does not roll the map must not search or take a map ID.
                 check_map_file(&world, None);
             }
             drop(engine);

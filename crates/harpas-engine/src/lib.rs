@@ -15,6 +15,7 @@ pub mod item_data;
 pub mod light;
 pub mod loot;
 mod menu;
+pub mod mining;
 pub mod neighbor;
 mod place;
 pub mod player;
@@ -210,6 +211,8 @@ pub struct GameData {
     pub loot: Option<Arc<loot::LootTables>>,
     /// The crafting recipes; without them, nothing is crafted.
     pub recipes: Option<Arc<recipe::Recipes>>,
+    /// Mining speed and harvest rules for pickaxes, resolved from the installed block tags.
+    pub mining: Option<Arc<mining::MiningRules>>,
     /// Saved item component codecs, using the owner's generated component registry.
     pub items: Option<Arc<item_data::ItemCodec>>,
 }
@@ -249,6 +252,7 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
         world.set_loot_tables(loot);
     }
     world.recipes = data.recipes;
+    world.mining = data.mining;
     if let Some(items) = data.items {
         world.set_item_codec(items);
     }
@@ -1104,11 +1108,21 @@ impl Game {
     /// How much of `state` the player breaks each tick (`BlockState.getDestroyProgress`).
     fn destroy_progress(&self, index: usize, state: u32) -> f32 {
         let player = &self.players[index];
+        let inventory = &player.inventory;
+        let tool = &inventory.slots[inventory.hand_slot(false)];
+        let mining = self.world.as_ref().map_or_else(
+            || mining::Mining::by_hand(state),
+            |world| world.mining(state, tool),
+        );
         let eye_in_water = self
             .world
             .as_ref()
             .is_some_and(|world| world.eye_in_water(player.eye_position()));
-        block::destroy_progress(state, player.destroy_speed(eye_in_water))
+        block::destroy_progress(
+            state,
+            player.destroy_speed(mining.speed, eye_in_water),
+            mining.can_harvest,
+        )
     }
 
     /// Shows the other players within 32 blocks the cracks of a block a player is breaking, or removes them for
@@ -1189,13 +1203,30 @@ impl Game {
         }
         // A player in Survival who may harvest the block gets its drops (`playerDestroy`); in Creative, none.
         let mode = self.players[index].player.profile.game_mode;
-        let tool = {
-            let inventory = &self.players[index].inventory;
-            inventory.slots[inventory.hand_slot(false)].clone()
-        };
-        let harvests = !harpas_core::block::block_states().requires_correct_tool(state);
-        if mode != player::GameMode::Creative && harvests {
-            world.drop_resources(state, pos, &tool);
+        if mode != player::GameMode::Creative {
+            let inventory = &mut self.players[index].inventory;
+            let slot = inventory.hand_slot(false);
+            let tool = inventory.slots[slot].clone();
+            let mining = world.mining(state, &tool);
+            if mining.can_harvest {
+                world.drop_resources(state, pos, &tool);
+            }
+            if mode == player::GameMode::Survival {
+                match mining.wear(world.block_item_codec(), &mut inventory.slots[slot]) {
+                    Ok(true) => {
+                        for player in &self.players {
+                            if !player.disconnecting
+                                && (player.player.entity_id == breaker
+                                    || player.tracked.contains(&breaker))
+                            {
+                                player.send(player::Output::MainHandItemBroken(breaker));
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(error) => log::warn!("Cannot apply mining wear to item {slot}: {error}"),
+                }
+            }
         }
         // The particles and sound of the blocks that broke with it, for every player nearby.
         let events = world.take_level_events();

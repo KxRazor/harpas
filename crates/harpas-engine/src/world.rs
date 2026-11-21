@@ -496,6 +496,7 @@ pub struct World {
     pub(crate) seed: i64,
     /// The crafting recipes, smelting recipes and furnace fuels.
     pub(crate) recipes: Option<Arc<crate::recipe::Recipes>>,
+    pub(crate) mining: Option<Arc<crate::mining::MiningRules>>,
     pub(crate) player_store: Option<crate::player_data::PlayerStore>,
     /// The world's named random sequences (`RandomSequences`), which loot tables draw from.
     pub(crate) random_sequences: HashMap<String, harpas_core::random::RandomSequence>,
@@ -687,6 +688,7 @@ impl World {
             loot: None,
             seed,
             recipes: None,
+            mining: None,
             player_store: Some(crate::player_data::PlayerStore::start(world_dir, spawn)?),
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
@@ -1924,6 +1926,7 @@ mod tests {
             loot: None,
             seed: 0,
             recipes: None,
+            mining: None,
             player_store: None,
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
@@ -3479,6 +3482,258 @@ mod tests {
             from_miner
                 .try_iter()
                 .all(|output| !matches!(output, Output::BlockUpdate { .. }))
+        );
+    }
+
+    #[test]
+    fn survival_pickaxes_mine_materials_for_the_next_tool_and_furnace() {
+        use crate::inventory::{HOTBAR, ItemStack};
+        use harpas_core::block_behavior::Face;
+        use harpas_core::item::items;
+        use harpas_worldgen::{BlockTagDef, BlockTagEntry, WorldgenData};
+        use serde_json::json;
+
+        let folder = Folder::new();
+        let target = BlockPos { x: 8, y: -51, z: 9 };
+        let table = BlockPos {
+            x: 7,
+            z: 8,
+            ..target
+        };
+        let furnace = BlockPos {
+            x: 9,
+            z: 8,
+            ..target
+        };
+        save(&folder, &[(target.chunk(), DATA_VERSION)]);
+        let mut rules = WorldgenData::default();
+        for (tag, blocks) in [
+            ("mineable/pickaxe", &["stone", "coal_ore", "iron_ore"][..]),
+            ("needs_stone_tool", &["iron_ore"][..]),
+            ("incorrect_for_wooden_tool", &["#needs_stone_tool"][..]),
+            ("incorrect_for_stone_tool", &[][..]),
+        ] {
+            rules.block_tags.insert(
+                format!("minecraft:{tag}"),
+                BlockTagDef {
+                    replace: false,
+                    values: blocks
+                        .iter()
+                        .map(|name| BlockTagEntry {
+                            id: name.strip_prefix('#').map_or_else(
+                                || format!("minecraft:{name}"),
+                                |tag| format!("#minecraft:{tag}"),
+                            ),
+                            required: true,
+                        })
+                        .collect(),
+                },
+            );
+        }
+        let pickaxe_recipe = |material, pickaxe| {
+            json!({
+                "type": "minecraft:crafting_shaped", "pattern": ["MMM", " S ", " S "],
+                "key": {"M": material, "S": "minecraft:stick"}, "result": {"id": pickaxe},
+            })
+        };
+        let mut loot = crate::loot::LootTables::default();
+        for (block, item) in [
+            ("stone", "cobblestone"),
+            ("coal_ore", "coal"),
+            ("iron_ore", "raw_iron"),
+        ] {
+            loot.insert(
+                &format!("minecraft:{block}"),
+                &json!({"pools": [{"rolls": 1,
+                    "entries": [{"type": "minecraft:item", "name": format!("minecraft:{item}")}]
+                }]}),
+            );
+        }
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        world.mining = Some(Arc::new(crate::mining::MiningRules::new(&rules).unwrap()));
+        world.loot = Some(Arc::new(loot));
+        world.recipes = Some(Arc::new(crate::recipe::Recipes::from_json(
+            &HashMap::new(),
+            &[
+                pickaxe_recipe("minecraft:oak_planks", "minecraft:wooden_pickaxe"),
+                pickaxe_recipe("minecraft:cobblestone", "minecraft:stone_pickaxe"),
+                json!({"type": "minecraft:smelting", "ingredient": "minecraft:raw_iron", "result": {"id": "minecraft:iron_ingot"}}),
+            ],
+        )));
+        let (sender, received) = crate::player::output_channel();
+        let mut game = Game {
+            pending: Vec::new(),
+            players: Vec::new(),
+            online_players: Arc::default(),
+            world: Some(world),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.join(
+            1,
+            Profile {
+                game_mode: GameMode::Survival,
+                ..profile()
+            },
+            2,
+            2,
+            false,
+            sender,
+        );
+        wait_until(|| {
+            game.players[0].awaiting_chunk_batch = false;
+            tick(&mut game, 1);
+            game.players[0].sent_chunks.contains(&target.chunk())
+        });
+        let position = crate::player::Position {
+            x: 8.5,
+            y: -51.0,
+            z: 7.5,
+            on_ground: true,
+            ..Default::default()
+        };
+        game.players[0].awaiting_teleport = None;
+        game.players[0].player.position = position;
+        let state = |name: &str| {
+            block_states()
+                .default_state(&format!("minecraft:{name}"))
+                .unwrap()
+        };
+        let stack = |name: &str, count| ItemStack {
+            item: items().id(name).unwrap(),
+            count,
+            ..Default::default()
+        };
+        let world = game.world.as_mut().unwrap();
+        world.set_block_state(table, state("crafting_table"));
+        world.set_block_state(furnace, state("furnace"));
+        game.players[0].inventory.slots[HOTBAR] = stack("minecraft:oak_planks", 3);
+        game.players[0].inventory.slots[HOTBAR + 1] = stack("minecraft:stick", 4);
+
+        let hotbar = |game: &Game, name| {
+            game.players[0].inventory.slots[HOTBAR..HOTBAR + 9]
+                .iter()
+                .position(|stack| stack.name() == Some(name))
+        };
+        let click = |game: &mut Game, slot, button, mode| {
+            game.click_container(
+                0,
+                game.players[0].container_id(),
+                -1,
+                slot,
+                button,
+                mode,
+                Vec::new(),
+                None,
+            );
+        };
+        let craft = |game: &mut Game, material, product| {
+            game.use_item_on(0, false, table, Face::Up, [0.5; 3], 1);
+            assert_ne!(game.players[0].container_id(), 0);
+            click(game, 37 + hotbar(game, material).unwrap() as i16, 0, 0);
+            for slot in 1..=3 {
+                click(game, slot, 1, 0);
+            }
+            let sticks = 37 + hotbar(game, "minecraft:stick").unwrap() as i16;
+            click(game, sticks, 0, 0);
+            click(game, 5, 1, 0);
+            click(game, 8, 1, 0);
+            click(game, sticks, 0, 0);
+            click(game, 0, 0, 1);
+            game.close_container(0, game.players[0].container_id());
+            game.players[0].inventory.selected = hotbar(game, product).unwrap();
+        };
+        let mine = |game: &mut Game, block, ticks, drop| {
+            let old = state(block);
+            game.world.as_mut().unwrap().set_block_state(target, old);
+            game.dig(0, block::DigAction::Start, target, 1);
+            game.dig(0, block::DigAction::Finish, target, 2);
+            for _ in 1..ticks {
+                assert_eq!(game.block_at(target), old);
+                game.tick_digging();
+            }
+            assert_eq!(game.block_at(target), state("air"));
+            let world = game.world.as_mut().unwrap();
+            if let Some(name) = drop {
+                let [handle] = world.entities.order[..] else {
+                    panic!("expected one drop")
+                };
+                assert_eq!(world.entities.item(handle).unwrap().stack, stack(name, 1));
+                for _ in 0..10 {
+                    world.tick_entities();
+                }
+                let [x, y, z] = world.entities.position[world.entities.slot(handle)];
+                game.players[0].player.position = crate::player::Position {
+                    x,
+                    y,
+                    z,
+                    ..position
+                };
+                game.pick_up_items();
+                game.players[0].player.position = position;
+            }
+            assert!(game.world.as_ref().unwrap().entities.order.is_empty());
+        };
+        let damage = |game: &Game| {
+            let inventory = &game.players[0].inventory;
+            let stack = &inventory.slots[inventory.hand_slot(false)];
+            let tag = ItemCodec::default().write(stack).unwrap();
+            let Some(Nbt::Compound(components)) = tag.get("components") else {
+                panic!("missing tool components")
+            };
+            components.get("minecraft:damage").cloned()
+        };
+
+        craft(
+            &mut game,
+            "minecraft:oak_planks",
+            "minecraft:wooden_pickaxe",
+        );
+        for _ in 0..3 {
+            mine(&mut game, "stone", 23, Some("minecraft:cobblestone"));
+        }
+        mine(&mut game, "coal_ore", 45, Some("minecraft:coal"));
+        mine(&mut game, "iron_ore", 150, None);
+        assert_eq!(damage(&game), Some(Nbt::Int(5)));
+        assert_eq!(hotbar(&game, "minecraft:raw_iron"), None);
+        let inventory = &mut game.players[0].inventory;
+        let slot = inventory.hand_slot(false);
+        inventory.slots[slot] = ItemCodec::default()
+            .read(&Compound::from_iter([
+                ("id", Nbt::from("minecraft:wooden_pickaxe")),
+                (
+                    "components",
+                    Nbt::from(Compound::from_iter([("minecraft:damage", 58)])),
+                ),
+            ]))
+            .unwrap();
+        mine(&mut game, "stone", 23, Some("minecraft:cobblestone"));
+        assert_eq!(hotbar(&game, "minecraft:wooden_pickaxe"), None);
+        assert!(
+            received
+                .try_iter()
+                .any(|output| output == Output::MainHandItemBroken(1))
+        );
+
+        craft(
+            &mut game,
+            "minecraft:cobblestone",
+            "minecraft:stone_pickaxe",
+        );
+        mine(&mut game, "iron_ore", 23, Some("minecraft:raw_iron"));
+        assert_eq!(damage(&game), Some(Nbt::Int(1)));
+        game.use_item_on(0, false, furnace, Face::Up, [0.5; 3], 3);
+        for name in ["minecraft:raw_iron", "minecraft:coal"] {
+            let slot = 30 + hotbar(&game, name).unwrap() as i16;
+            click(&mut game, slot, 0, 1);
+        }
+        let world = game.world.as_mut().unwrap();
+        for _ in 0..200 {
+            world.tick_furnaces();
+        }
+        assert_eq!(
+            world.furnace(furnace).unwrap().slots[2],
+            stack("minecraft:iron_ingot", 1)
         );
     }
 

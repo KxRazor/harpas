@@ -7,7 +7,7 @@ the tick. Modded mode uses Mojang's server instead and is covered in [mod-suppor
 Status: in progress. The logic thread, tick skeleton, players, chunk sections, loading and sending existing
 overworld chunks, asynchronous chunk saving, and vanilla's deterministic random generators, Java math helpers
 and gradient/simplex noise samplers are implemented. World generation, live block changes (players break blocks in
-Creative and, with an empty hand, in Survival, the neighbors of a changed block are updated and update their
+Creative and Survival, the neighbors of a changed block are updated and update their
 shapes, the chunks around it are lit again, water and lava flow on scheduled fluid ticks, players place
 blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their
 loot, players pick items up, and they move items in their inventory and craft in its 2x2 grid or at a crafting
@@ -88,6 +88,10 @@ collision, vehicle and elytra movement, velocity effects and their flight exempt
 gameplay work. The logic thread publishes chat sessions before messages and gives late joiners the current
 sessions; verification and each recipient's acknowledgement window stay on the connection thread
 ([java-connection.md](java-connection.md#chat-signing)).
+
+Wooden and stone pickaxes use the installed block tags for mining speed and harvest eligibility. The server
+uses the held tool for break progress and block loot. A completed break updates the tool's saved damage
+and notifies its owner when the tool wears out.
 
 The inventory and crafting table menus share click rules and the data pack's shaped and shapeless recipes.
 Each opened table has its own grid, window ID and synchronization state; its main inventory and hotbar slots

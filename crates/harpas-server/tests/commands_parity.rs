@@ -1095,3 +1095,221 @@ fn uuid(name: &str) -> String {
         &text[20..]
     )
 }
+
+fn play_packet(client: &mut Client, packet: impl Into<play::serverbound::Packet>) {
+    let packet = packet.into();
+    client.send(|buf| packet.encode(buf));
+}
+
+fn confirm_position(client: &mut Client) -> [f64; 3] {
+    let position = client.matching("position synchronization", |packet| match packet {
+        Packet::SynchronizePlayerPosition(position) => Some(position),
+        _ => None,
+    });
+    play_packet(
+        client,
+        play::serverbound::ConfirmTeleportation {
+            teleport_id: position.teleport_id,
+        },
+    );
+    play_packet(client, play::serverbound::PlayerLoaded);
+    [position.x, position.y, position.z]
+}
+
+fn move_player(client: &mut Client, [x, y, z]: [f64; 3], on_ground: bool) {
+    play_packet(
+        client,
+        play::serverbound::SetPlayerPosition {
+            x,
+            y,
+            z,
+            flags: play::MovementFlags {
+                on_ground,
+                ..Default::default()
+            },
+        },
+    );
+}
+
+fn fall(client: &mut Client, [x, ground, z]: [f64; 3], height: i32) {
+    for y in 1..=height {
+        move_player(client, [x, ground + f64::from(y), z], false);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for y in (1..height).rev() {
+        move_player(client, [x, ground + f64::from(y), z], false);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    move_player(client, [x, ground, z], true);
+    std::thread::sleep(Duration::from_millis(100));
+}
+
+fn fall_without_damage(client: &mut Client, ground: [f64; 3], height: i32) {
+    fall(client, ground, height);
+    client.send_command("list");
+    client.matching("list reply after the landing", |packet| match packet {
+        Packet::SetHealth(health) => panic!("unexpected health after the landing: {health:?}"),
+        Packet::DamageEvent(event) => panic!("unexpected damage after the landing: {event:?}"),
+        Packet::SystemChatMessage(reply)
+            if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+        {
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+fn health(client: &mut Client) -> play::clientbound::SetHealth {
+    client.matching("health", |packet| match packet {
+        Packet::SetHealth(health) => Some(health),
+        _ => None,
+    })
+}
+
+fn exercise_falls(
+    server: &mut Server,
+    port: u16,
+) -> (
+    [play::clientbound::SetHealth; 4],
+    play::clientbound::Respawn,
+    harpas_protocol_java::codec::Nbt,
+) {
+    let mut client = Client::join(port, "Falling");
+    client.stream.set_nodelay(true).unwrap();
+    let spawn = confirm_position(&mut client);
+    let initial = health(&mut client);
+    fall_without_damage(&mut client, spawn, 3);
+    fall(&mut client, spawn, 7);
+    client.matching("fall damage source", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            let types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+            assert_eq!(types[event.source_type as usize], "minecraft:fall");
+            Some(())
+        }
+        _ => None,
+    });
+    let injured = health(&mut client);
+    drop(client);
+    server.wait_for("Falling left the game");
+    let mut client = Client::join(port, "Falling");
+    client.stream.set_nodelay(true).unwrap();
+    assert_eq!(confirm_position(&mut client), spawn);
+    assert_eq!(health(&mut client), injured);
+    let [x, y, z] = spawn;
+    let landing = [x + 2.0, y, z];
+    move_player(&mut client, landing, true);
+    fall(&mut client, landing, 28);
+    let death = client.matching("CombatDeath", |packet| match packet {
+        Packet::CombatDeath(death) => Some(death),
+        _ => None,
+    });
+    let dead = health(&mut client);
+    play_packet(
+        &mut client,
+        play::serverbound::ClientStatus {
+            action: play::ClientStatusAction::PerformRespawn,
+        },
+    );
+    let respawn = client.matching("Respawn", |packet| match packet {
+        Packet::Respawn(respawn) => Some(respawn),
+        _ => None,
+    });
+    assert_ne!(
+        respawn.spawn.death_location.as_ref().unwrap().position.x as f64,
+        x.floor()
+    );
+    assert_eq!(confirm_position(&mut client), spawn);
+    let restored = health(&mut client);
+    writeln!(
+        server.child.stdin.as_mut().unwrap(),
+        "gamemode creative Falling"
+    )
+    .unwrap();
+    client.matching("Creative mode", |packet| match packet {
+        Packet::GameEvent(event) if event.event == play::GameEventKind::ChangeGameMode => Some(()),
+        _ => None,
+    });
+    fall_without_damage(&mut client, spawn, 28);
+    ([initial, injured, dead, restored], respawn, death.message)
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn fall_damage_and_respawn_match_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("fall-damage");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
+    let [port, other] = sockets
+        .each_ref()
+        .map(|socket| socket.local_addr().unwrap().port());
+    drop(sockets);
+    for (dir, port) in [(&vanilla, port), (&harpas, other)] {
+        fs::create_dir(dir).unwrap();
+        fs::write(dir.join("eula.txt"), &eula).unwrap();
+        fs::write(
+            dir.join("server.properties"),
+            format!(
+                "server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nnetwork-compression-threshold=-1\n\
+                 view-distance=2\nsimulation-distance=2\nlevel-type=minecraft:flat\nlevel-seed=42\n\
+                 generate-structures=false\nmax-tick-time=-1\nallow-flight=true\n"
+            ),
+        )
+        .unwrap();
+    }
+    let mut reference = Server::start(
+        OsStr::new("java"),
+        &[
+            OsStr::new("-Xmx1G"),
+            OsStr::new("-jar"),
+            jar.as_os_str(),
+            OsStr::new("nogui"),
+        ],
+        &vanilla,
+    );
+    reference.wait_for("Done (");
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "gamerule minecraft:respawn_radius 0\ngamerule minecraft:spawn_mobs false\ngamerule minecraft:natural_health_regeneration false\nsetworldspawn 0 -60 0\nsave-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Saved the game");
+    let expected = exercise_falls(&mut reference, port);
+    assert_eq!(
+        expected.0.each_ref().map(|health| health.health),
+        [20.0, 16.0, 0.0, 20.0]
+    );
+
+    let binary = env!("CARGO_BIN_EXE_harpas");
+    let install = Command::new(binary)
+        .current_dir(&harpas)
+        .args(["vanilla-data", "install", "--from"])
+        .arg(&jar)
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let settings = "world/data/minecraft/world_gen_settings.dat";
+    fs::create_dir_all(harpas.join(settings).parent().unwrap()).unwrap();
+    for path in [
+        "world/level.dat",
+        "world/data/minecraft/game_rules.dat",
+        settings,
+    ] {
+        fs::copy(vanilla.join(path), harpas.join(path)).unwrap();
+    }
+    let region = "world/dimensions/minecraft/overworld/region";
+    fs::create_dir_all(harpas.join(region)).unwrap();
+    for entry in fs::read_dir(vanilla.join(region)).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), harpas.join(region).join(entry.file_name())).unwrap();
+    }
+    let mut server = Server::start(OsStr::new(binary), &[], &harpas);
+    server.wait_for("Done (");
+    assert_eq!(exercise_falls(&mut server, other), expected);
+}

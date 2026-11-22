@@ -157,6 +157,8 @@ pub enum Input {
     Movement(Movement),
     /// The client acknowledged a position synchronization.
     ConfirmTeleport(i32),
+    /// The player requested a respawn from the death screen.
+    Respawn,
     /// The client started or stopped flying.
     Flying(bool),
     /// The client's requested view distance in chunks.
@@ -334,6 +336,43 @@ pub enum Output {
     },
     /// The player's own accepted position changed; update the visible chunks if necessary.
     OwnPosition(Position),
+    /// Update the local player's hearts and food display.
+    Health {
+        /// Health in half-hearts.
+        health: f32,
+        /// Food level.
+        food: i32,
+        /// Food saturation.
+        saturation: f32,
+    },
+    /// A fall damaged the given entity.
+    FallDamage(i32),
+    /// A player died from a fall.
+    FallDeath {
+        /// The player who died.
+        entity_id: i32,
+        /// The player's persistent identity, carried in the displayed name.
+        uuid: u128,
+        /// The name displayed in the death message.
+        name: String,
+        /// Whether to broadcast the message and display it on the death screen.
+        show_message: bool,
+    },
+    /// Play the death animation for a tracked player.
+    PlayerDied(i32),
+    /// Recreate the local player at the world's spawn after a death.
+    Respawn {
+        /// Teleport sequence ID.
+        teleport_id: i32,
+        /// Position and rotation at spawn.
+        position: Position,
+        /// Current game mode.
+        mode: GameMode,
+        /// Previous game mode, if the player switched modes.
+        previous: Option<GameMode>,
+        /// Position of the death in the Overworld.
+        death_location: Option<BlockPos>,
+    },
     /// Apply an accepted client view distance in connection order.
     ViewDistance(u8),
     /// Send these ready chunks as one batch. At most one batch per player is in flight.
@@ -646,6 +685,11 @@ pub(crate) struct PlayerState {
     pub(crate) next_teleport: i32,
     pub(crate) flying: bool,
     pub(crate) previous_game_mode: Option<GameMode>,
+    pub(crate) vitals: crate::survival::Vitals,
+    pub(crate) fall_distance: f64,
+    pub(crate) last_fall_damage: f32,
+    pub(crate) fall_hurt_cooldown: u8,
+    pub(crate) death_location: Option<BlockPos>,
     pub(crate) force_game_mode_on_login: Option<bool>,
     pub(crate) tick_start: Position,
     pub(crate) disconnecting: bool,
@@ -736,6 +780,11 @@ impl PlayerState {
             next_teleport: 2,
             flying,
             previous_game_mode: None,
+            vitals: crate::survival::Vitals::default(),
+            fall_distance: 0.0,
+            last_fall_damage: 0.0,
+            fall_hurt_cooldown: 0,
+            death_location: None,
             force_game_mode_on_login: None,
             tick_start: position,
             disconnecting: false,
@@ -767,7 +816,7 @@ impl PlayerState {
     /// Applies a movement packet and returns whether the player moved. `world` tells whether the player is
     /// next to a block, which is not floating; without a world there are no blocks.
     pub(crate) fn accepts(&mut self, movement: Movement, world: Option<&World>) -> bool {
-        if self.disconnecting {
+        if self.disconnecting || self.is_dead() {
             return false;
         }
         if movement
@@ -794,9 +843,7 @@ impl PlayerState {
             let dy = next.y - self.tick_start.y;
             let dz = next.z - self.tick_start.z;
             if dx * dx + dy * dy + dz * dz > 100.0 {
-                let teleport_id = self.next_teleport;
-                self.next_teleport = self.next_teleport.checked_add(1).unwrap_or(1);
-                self.awaiting_teleport = Some(teleport_id);
+                let teleport_id = self.begin_teleport();
                 self.send(Output::Teleport {
                     teleport_id,
                     position: self.player.position,
@@ -826,12 +873,20 @@ impl PlayerState {
         true
     }
 
+    pub(crate) fn begin_teleport(&mut self) -> i32 {
+        let id = self.next_teleport;
+        self.next_teleport = id.checked_add(1).unwrap_or(1);
+        self.awaiting_teleport = Some(id);
+        self.fall_distance = 0.0;
+        id
+    }
+
     pub(crate) fn check_flight(&mut self) {
         let may_fly = matches!(
             self.player.profile.game_mode,
             GameMode::Creative | GameMode::Spectator
         );
-        if self.disconnecting || self.awaiting_teleport.is_some() {
+        if self.disconnecting || self.is_dead() || self.awaiting_teleport.is_some() {
             return;
         }
         if self.allow_flight || may_fly || !self.client_floating {

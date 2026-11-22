@@ -1378,7 +1378,8 @@ mod tests {
             let mut chunks = Vec::new();
             let mut received_batch = false;
             let mut received_commands = false;
-            while !received_batch || !received_commands {
+            let mut received_health = false;
+            while !received_batch || !received_commands || !received_health {
                 match play::clientbound::Packet::decode(&self.next_frame()).unwrap() {
                     play::clientbound::Packet::ChunkDataAndUpdateLight(chunk) => chunks.push(chunk),
                     play::clientbound::Packet::ChunkBatchFinished(_) => {
@@ -1391,6 +1392,13 @@ mod tests {
                             commands::tree(commands::Source::Player { level: 0, uuid: 0 })
                         );
                         received_commands = true;
+                    }
+                    play::clientbound::Packet::SetHealth(health) => {
+                        assert_eq!(
+                            (health.health, health.food, health.saturation),
+                            (20.0, 20, 5.0)
+                        );
+                        received_health = true;
                     }
                     _ => {}
                 }

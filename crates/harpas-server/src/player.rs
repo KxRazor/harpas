@@ -3,6 +3,7 @@
 use std::io;
 
 use harpas_core::block_behavior::Face;
+use harpas_core::nbt::List;
 use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
 use harpas_engine::inventory::{ComponentPatch, HashedStack, ItemStack};
@@ -95,6 +96,9 @@ pub(crate) fn receive(
                     continue;
                 }
                 Packet::ConfirmTeleportation(p) => Input::ConfirmTeleport(p.teleport_id),
+                Packet::ClientStatus(p) if p.action == play::ClientStatusAction::PerformRespawn => {
+                    Input::Respawn
+                }
                 Packet::ChunkBatchReceived(p) => Input::ChunkBatchReceived(p.chunks_per_tick),
                 Packet::SetPlayerPosition(p) => Input::Movement(Movement {
                     position: Some([p.x, p.y, p.z]),
@@ -568,6 +572,71 @@ pub(crate) fn send(
             }
             Output::OwnPosition(position) => {
                 connection.update_view(position.x, position.z, None);
+                continue;
+            }
+            Output::Health {
+                health,
+                food,
+                saturation,
+            } => clientbound::SetHealth {
+                health,
+                food,
+                saturation,
+            }
+            .into(),
+            Output::FallDamage(entity_id) => {
+                connection.send_fall_damage(entity_id);
+                continue;
+            }
+            Output::FallDeath {
+                entity_id,
+                uuid,
+                name,
+                show_message,
+            } => {
+                let message = Nbt::Compound(
+                    [
+                        ("translate", Nbt::from("death.fell.accident.generic")),
+                        (
+                            "with",
+                            Nbt::List(List::Compound(vec![commands::player_name(uuid, name)])),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                );
+                if connection.entity_id() == entity_id {
+                    clientbound::CombatDeath {
+                        player_id: entity_id,
+                        message: if show_message { message } else { Nbt::from("") },
+                    }
+                    .into()
+                } else {
+                    clientbound::SystemChatMessage {
+                        content: message,
+                        overlay: false,
+                    }
+                    .into()
+                }
+            }
+            Output::PlayerDied(entity_id) => clientbound::EntityEvent {
+                entity_id,
+                event: 3,
+            }
+            .into(),
+            Output::Respawn {
+                teleport_id,
+                position,
+                mode,
+                previous,
+                death_location,
+            } => {
+                connection.send_respawn(
+                    java_game_mode(mode),
+                    previous.map(java_game_mode),
+                    death_location.map(block_pos),
+                    sync(position, teleport_id),
+                );
                 continue;
             }
             Output::ViewDistance(distance) => {

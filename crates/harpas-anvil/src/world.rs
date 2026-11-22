@@ -34,6 +34,21 @@ pub fn read_level(world: &Path) -> io::Result<Option<(Compound, Source)>> {
     }
 }
 
+/// Reads the saved game rule values from the world data directory.
+pub fn read_game_rules(world: &Path) -> io::Result<Option<Compound>> {
+    let path = world.join("data").join("minecraft").join("game_rules.dat");
+    let Some((mut root, _)) = file::read_with_backup(&path)? else {
+        return Ok(None);
+    };
+    match root.remove("data") {
+        Some(Nbt::Compound(rules)) => Ok(Some(rules)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "game_rules.dat has no data compound",
+        )),
+    }
+}
+
 /// Returns the saved Overworld spawn block position, when present in a 26.1 `level.dat` Data compound.
 pub fn overworld_spawn(data: &Compound) -> Option<[i32; 3]> {
     let Nbt::Compound(spawn) = data.get("spawn")? else {

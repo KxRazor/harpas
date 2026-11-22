@@ -461,6 +461,7 @@ type Save = dyn Fn(&SaveJob) -> io::Result<()> + Send + Sync;
 pub struct World {
     region_dir: PathBuf,
     spawn: [i32; 3],
+    pub(crate) death_rules: crate::survival::DeathRules,
     generates: bool,
     chunks: HashMap<ChunkPos, ChunkState>,
     /// The chunks to keep loaded, most wanted first and each once, as [`World::want`] left them.
@@ -556,6 +557,12 @@ impl World {
         generator: Option<Arc<dyn ChunkSource>>,
     ) -> io::Result<Self> {
         let level = read_level(world_dir)?;
+        let death_rules = harpas_anvil::read_game_rules(world_dir)?
+            .as_ref()
+            .map_or_else(
+                crate::survival::DeathRules::default,
+                crate::survival::DeathRules::read,
+            );
         let spawn = level
             .as_ref()
             .and_then(|(data, _)| overworld_spawn(data))
@@ -673,6 +680,7 @@ impl World {
         Ok(Self {
             region_dir,
             spawn,
+            death_rules,
             generates,
             chunks: HashMap::new(),
             wanted: Vec::new(),
@@ -849,7 +857,10 @@ impl World {
     /// Whether eyes at `eye` are under water, as vanilla's `Entity.updateFluidOnEyes`: the water of the block a
     /// ninth of a block below them reaches above that point.
     pub(crate) fn eye_in_water(&self, [x, y, z]: [f64; 3]) -> bool {
-        let y = y - f64::from(0.111_111_11_f32);
+        self.point_in_water([x, y - f64::from(0.111_111_11_f32), z])
+    }
+
+    pub(crate) fn point_in_water(&self, [x, y, z]: [f64; 3]) -> bool {
         let pos = BlockPos {
             x: x.floor() as i32,
             y: y.floor() as i32,
@@ -1919,6 +1930,7 @@ mod tests {
         World {
             region_dir: PathBuf::from("test"),
             spawn: [0, 65, 0],
+            death_rules: Default::default(),
             generates: false,
             chunks: HashMap::new(),
             wanted: Vec::new(),
@@ -2071,6 +2083,39 @@ mod tests {
     }
 
     #[test]
+    fn fall_distance_keeps_accumulating_until_the_player_reaches_a_surface() {
+        let pos = ChunkPos { x: 0, z: 0 };
+        let mut world = fake_world(1, Arc::new(|_| Ok((None, None))));
+        world
+            .chunks
+            .insert(pos, ChunkState::Loaded(Arc::new(chunk(pos, DATA_VERSION))));
+        let (output, received) = crate::player::output_channel();
+        let mut profile = profile();
+        profile.game_mode = GameMode::Survival;
+        let player = crate::player::PlayerState::new(1, profile, 2, false, output);
+        let mut game = Game {
+            pending: Vec::new(),
+            players: vec![player],
+            online_players: Arc::new(std::sync::atomic::AtomicU32::new(1)),
+            world: Some(world),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        let at = |y, on_ground| crate::player::Position {
+            x: 8.5,
+            y,
+            z: 8.5,
+            on_ground,
+            ..Default::default()
+        };
+        game.check_fall(0, at(-41.0, false), at(-45.0, true));
+        assert_eq!(game.players[0].vitals.health, 20.0);
+        game.check_fall(0, at(-45.0, true), at(-48.0, true));
+        assert_eq!(game.players[0].vitals.health, 16.0);
+        assert!(matches!(received.try_recv(), Ok(Output::FallDamage(1))));
+    }
+
+    #[test]
     fn view_is_a_nearest_first_square_even_at_negative_coordinates() {
         let center = ChunkPos { x: -1, z: -2 };
         let view = center.view(2);
@@ -2135,6 +2180,12 @@ mod tests {
             stopped: false,
         };
         let mut number = 0;
+        // The connection sends Play Login and its initial teleport after player data has loaded.
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].data_ready
+        });
         let mut move_to = |game: &mut Game, x: f64| {
             game.pending.push(Event::Input {
                 entity_id: 1,

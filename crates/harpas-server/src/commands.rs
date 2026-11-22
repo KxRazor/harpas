@@ -1653,7 +1653,7 @@ pub(crate) fn game_mode_message(key: &str, mode: GameMode) -> Nbt {
     translate(key, vec![game_mode_component(mode)])
 }
 
-fn player_name(uuid: u128, name: String) -> Compound {
+pub(crate) fn player_name(uuid: u128, name: String) -> Compound {
     let id = [96, 64, 32, 0].map(|shift| (uuid >> shift) as i32);
     Compound::from_iter([
         (

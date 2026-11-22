@@ -232,6 +232,7 @@ pub struct Connection {
     biome: i32,
     external_chunks: bool,
     defer_play_login: bool,
+    spawn_info: Option<play::SpawnInfo>,
 }
 
 /// Where a connection gets its player's entity ID when it enters Play.
@@ -301,6 +302,7 @@ impl Connection {
             biome: 0,
             external_chunks: false,
             defer_play_login: false,
+            spawn_info: None,
         }
     }
 
@@ -450,6 +452,64 @@ impl Connection {
         }
     }
 
+    /// Sends the damage source for a falling player, using the synchronized damage registry.
+    pub fn send_fall_damage(&mut self, entity_id: i32) {
+        let source_type = registries::entry_id("minecraft:damage_type", "minecraft:fall")
+            .expect("the fall damage type is synchronized");
+        self.send_play_packet(
+            play::clientbound::DamageEvent {
+                entity_id,
+                source_type,
+                source_cause: 0,
+                source_direct: 0,
+                source_position: None,
+            }
+            .into(),
+        );
+    }
+
+    /// Recreates the local player in the Overworld and starts loading the chunks at spawn.
+    pub fn send_respawn(
+        &mut self,
+        game_mode: play::GameMode,
+        previous_game_mode: Option<play::GameMode>,
+        death_location: Option<play::BlockPos>,
+        position: play::clientbound::SynchronizePlayerPosition,
+    ) {
+        let mut spawn = self
+            .spawn_info
+            .clone()
+            .expect("Play Login set the spawn info");
+        spawn.game_mode = game_mode;
+        spawn.previous_game_mode = previous_game_mode.map_or(-1, |mode| game_mode_id(mode) as i8);
+        spawn.death_location = death_location.map(|position| play::GlobalPos {
+            dimension: spawn.dimension.clone(),
+            position,
+        });
+        self.send_play_packet(
+            play::clientbound::Respawn {
+                spawn,
+                data_kept: 0,
+            }
+            .into(),
+        );
+        self.send_game_mode_abilities(game_mode);
+        let (x, z) = (position.x, position.z);
+        self.send_play_packet(position.into());
+        self.send_play_packet(
+            play::clientbound::GameEvent {
+                event: play::GameEventKind::StartWaitingForChunks,
+                value: 0.0,
+            }
+            .into(),
+        );
+        let previous_center = self.center_chunk;
+        self.update_view(x, z, None);
+        if self.center_chunk == previous_center {
+            self.send_chunk_center();
+        }
+    }
+
     /// Sends the standard player abilities for this game mode.
     pub fn send_game_mode_abilities(&mut self, game_mode: play::GameMode) {
         self.send_abilities(abilities(game_mode));
@@ -546,13 +606,7 @@ impl Connection {
         let old_distance = self.view_distance;
         self.center_chunk = center;
         self.view_distance = distance;
-        self.send_play(
-            play::clientbound::SetCenterChunk {
-                x: center.0,
-                z: center.1,
-            }
-            .into(),
-        );
+        self.send_chunk_center();
         for chunk_x in old_x - old_distance..=old_x + old_distance {
             for chunk_z in old_z - old_distance..=old_z + old_distance {
                 if (chunk_x - center.0).abs() > distance || (chunk_z - center.1).abs() > distance {
@@ -596,6 +650,11 @@ impl Connection {
     pub fn update_view_distance(&mut self, distance: u8) {
         let (x, z) = self.center_chunk;
         self.update_view(f64::from(x) * 16.0, f64::from(z) * 16.0, Some(distance));
+    }
+
+    fn send_chunk_center(&mut self) {
+        let (x, z) = self.center_chunk;
+        self.send_play(play::clientbound::SetCenterChunk { x, z }.into());
     }
 
     /// Makes a handshake that asks to log in wait for [`admit`](Self::admit) or [`refuse`](Self::refuse), so that
@@ -1070,6 +1129,19 @@ impl Connection {
             });
         self.view_distance = view_distance;
         let simulation_distance = info.simulation_distance.clamp(2, 32) as i32;
+        let spawn = play::SpawnInfo {
+            dimension_type,
+            dimension: "minecraft:overworld".to_owned(),
+            hashed_seed: info.hashed_seed,
+            game_mode: info.game_mode,
+            previous_game_mode: previous_game_mode.map_or(-1, |mode| game_mode_id(mode) as i8),
+            is_debug: false,
+            is_flat: info.is_flat,
+            death_location: None,
+            portal_cooldown: 0,
+            sea_level: if info.is_flat { -63 } else { 63 },
+        };
+        self.spawn_info = Some(spawn.clone());
 
         self.send_play(
             play::clientbound::Login {
@@ -1082,19 +1154,7 @@ impl Connection {
                 reduced_debug_info: false,
                 enable_respawn_screen: true,
                 do_limited_crafting: false,
-                spawn: play::SpawnInfo {
-                    dimension_type,
-                    dimension: "minecraft:overworld".to_owned(),
-                    hashed_seed: info.hashed_seed,
-                    game_mode: info.game_mode,
-                    previous_game_mode: previous_game_mode
-                        .map_or(-1, |mode| game_mode_id(mode) as i8),
-                    is_debug: false,
-                    is_flat: info.is_flat,
-                    death_location: None,
-                    portal_cooldown: 0,
-                    sea_level: 63,
-                },
+                spawn,
                 enforces_secure_chat: info.enforces_secure_chat,
             }
             .into(),
@@ -1186,13 +1246,7 @@ impl Connection {
         // the player does not move, and so does not correct it, until the chunk it stands in has arrived.
         let center = (spawn_x.div_euclid(16), spawn_z.div_euclid(16));
         self.center_chunk = center;
-        self.send_play(
-            play::clientbound::SetCenterChunk {
-                x: center.0,
-                z: center.1,
-            }
-            .into(),
-        );
+        self.send_chunk_center();
         if self.external_chunks {
             return;
         }
@@ -1276,6 +1330,7 @@ impl Connection {
                 self.play_input.push(PlayEvent::Packet(Box::new(packet)));
             }
             Packet::ConfirmTeleportation(_)
+            | Packet::ClientStatus(_)
             | Packet::ChunkBatchReceived(_)
             | Packet::SetPlayerPosition(_)
             | Packet::SetPlayerPositionAndRotation(_)

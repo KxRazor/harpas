@@ -22,6 +22,7 @@ mod place;
 pub mod player;
 pub mod player_data;
 pub mod recipe;
+mod survival;
 pub(crate) mod ticks;
 mod tracking;
 pub mod world;
@@ -647,6 +648,9 @@ impl TickWork for Game {
         self.track_entities(&removed);
         // Players tick with the entities (`ServerPlayer.tick`), and pick up the items they touch (`aiStep`).
         self.tick_digging();
+        for player in &mut self.players {
+            player.fall_hurt_cooldown = player.fall_hurt_cooldown.saturating_sub(1);
+        }
         self.retry_map_chests();
         self.pick_up_items();
         // Block entities tick after entities. A furnace's lit block state is broadcast on the next tick.
@@ -770,23 +774,6 @@ impl TickWork for Game {
                     self.stopped = true;
                 }
                 Event::Input { entity_id, input } => {
-                    if self
-                        .players
-                        .iter()
-                        .any(|p| p.player.entity_id == entity_id && !p.data_ready)
-                        && matches!(
-                            &input,
-                            player::Input::SetCreativeSlot { .. }
-                                | player::Input::SelectHotbarSlot(_)
-                                | player::Input::UseItemOn { .. }
-                                | player::Input::ClickContainer { .. }
-                                | player::Input::CloseContainer(_)
-                                | player::Input::DropSelected { .. }
-                                | player::Input::Dig { .. }
-                        )
-                    {
-                        continue;
-                    }
                     match input {
                         player::Input::ChatSessionEnded => {
                             if let Some(state) = self
@@ -824,12 +811,34 @@ impl TickWork for Game {
                             position,
                             sequence,
                         } => {
-                            if let Some(index) = self
-                                .players
-                                .iter()
-                                .position(|p| p.player.entity_id == entity_id && !p.disconnecting)
-                            {
+                            if let Some(index) = self.active(entity_id) {
                                 self.dig(index, action, position, sequence);
+                            }
+                            continue;
+                        }
+                        player::Input::Respawn => {
+                            if let Some(index) = self.players.iter().position(|p| {
+                                p.player.entity_id == entity_id && !p.disconnecting && p.is_dead()
+                            }) {
+                                self.respawn(index);
+                                tracking_changed = true;
+                            }
+                            continue;
+                        }
+                        player::Input::Movement(movement) => {
+                            if let Some(index) = self.active(entity_id) {
+                                let state = &mut self.players[index];
+                                let before = state.player.position;
+                                if state.accepts(movement, self.world.as_ref()) {
+                                    let after = state.player.position;
+                                    let center = world::ChunkPos::at(after.x, after.z);
+                                    state
+                                        .sent_chunks
+                                        .retain(|pos| pos.within(center, state.view_distance));
+                                    self.check_fall(index, before, after);
+                                    moved.insert(entity_id);
+                                    tracking_changed = true;
+                                }
                             }
                             continue;
                         }
@@ -928,6 +937,8 @@ impl TickWork for Game {
                             player::Input::ChatSession(_)
                             | player::Input::ChatSessionEnded
                             | player::Input::ChatMessage(_)
+                            | player::Input::Respawn
+                            | player::Input::Movement(_)
                             | player::Input::Dig { .. }
                             | player::Input::SetCreativeSlot { .. }
                             | player::Input::SelectHotbarSlot(_)
@@ -938,19 +949,6 @@ impl TickWork for Game {
                                 unreachable!()
                             }
                             player::Input::SecondaryUse(held) => state.secondary_use = held,
-                            player::Input::Movement(movement) => {
-                                if state.accepts(movement, self.world.as_ref()) {
-                                    let center = world::ChunkPos::at(
-                                        state.player.position.x,
-                                        state.player.position.z,
-                                    );
-                                    state
-                                        .sent_chunks
-                                        .retain(|pos| pos.within(center, state.view_distance));
-                                    moved.insert(entity_id);
-                                    tracking_changed = true;
-                                }
-                            }
                             player::Input::ConfirmTeleport(id) => {
                                 if state.awaiting_teleport == Some(id) {
                                     state.awaiting_teleport = None;
@@ -1093,6 +1091,15 @@ impl Game {
                 previous: player.previous_game_mode,
                 flying: player.flying,
             });
+            player.send(player.vitals.update());
+            if player.is_dead() {
+                player.send(player::Output::FallDeath {
+                    entity_id: player.player.entity_id,
+                    uuid: player.player.profile.uuid,
+                    name: player.player.profile.name.clone(),
+                    show_message: false,
+                });
+            }
         }
         let contents = place::initial_contents(&mut player.inventory);
         let player = &self.players[index];
@@ -1149,11 +1156,11 @@ impl Game {
         }
     }
 
-    /// The index of a player who is not leaving.
+    /// The index of a living player whose data has loaded and who is not leaving.
     fn active(&self, entity_id: i32) -> Option<usize> {
-        self.players
-            .iter()
-            .position(|p| p.player.entity_id == entity_id && !p.disconnecting)
+        self.players.iter().position(|p| {
+            p.player.entity_id == entity_id && p.data_ready && !p.disconnecting && !p.is_dead()
+        })
     }
 
     fn set_game_mode(&mut self, index: usize, mode: player::GameMode, notify: bool) -> bool {
@@ -1166,17 +1173,9 @@ impl Game {
         state.flying = mode == player::GameMode::Spectator;
         state.client_floating = false;
         state.floating_ticks = 0;
+        state.fall_distance = 0.0;
         let uuid = state.player.profile.uuid;
-        let digging = &mut state.digging;
-        let destroying = digging.is_destroying.then_some(digging.destroy_pos);
-        let delayed = digging
-            .has_delayed_destroy
-            .then_some(digging.delayed_destroy_pos);
-        digging.is_destroying = false;
-        digging.has_delayed_destroy = false;
-        for position in destroying.into_iter().chain(delayed) {
-            self.destroy_block_progress(index, position, -1);
-        }
+        self.stop_digging(index);
         if mode == player::GameMode::Spectator && self.players[index].block_menu.is_some() {
             self.close_block_menu(index);
         }
@@ -1188,6 +1187,16 @@ impl Game {
             });
         }
         true
+    }
+
+    fn stop_digging(&mut self, index: usize) {
+        let digging = &mut self.players[index].digging;
+        let active = std::mem::take(&mut digging.is_destroying).then_some(digging.destroy_pos);
+        let delayed =
+            std::mem::take(&mut digging.has_delayed_destroy).then_some(digging.delayed_destroy_pos);
+        for position in active.into_iter().chain(delayed) {
+            self.destroy_block_progress(index, position, -1);
+        }
     }
 
     /// A player's Start, Abort or Finish of breaking a block, as vanilla's `handlePlayerAction` and

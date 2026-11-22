@@ -485,6 +485,9 @@ as shown by the parity report.
   - [ ] The other entity types and their persistence.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.
+  - [x] Java Survival fall damage on ordinary terrain, saved health on reconnect, and death and respawn at the
+        Overworld spawn. Safe, damaging and lethal falls and Creative immunity are compared with vanilla
+        (`fall_damage_and_respawn_match_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

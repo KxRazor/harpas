@@ -539,7 +539,7 @@ impl World {
     }
 
     /// Whether any collision box of the blocks overlaps the box (`Level.noCollision`, negated).
-    fn collides(&self, area: Aabb) -> bool {
+    pub(crate) fn collides(&self, area: Aabb) -> bool {
         !self.block_boxes(area).is_empty()
     }
 

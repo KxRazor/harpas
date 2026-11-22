@@ -12,7 +12,7 @@ data checked against vanilla. Generated chunks receive sky and block light from 
 sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
 feature definitions are loaded from the datapack, and ores, simple vegetation and the first trees are placed and
 compared with vanilla, but generation through the complete feature stage, live block changes and saving other
-world and player data during play remain in progress. The server persists player inventories, game modes and
+world and player data during play remain in progress. The server persists player inventories, game modes, health and
 dropped items. See [Player inventories](#player-inventories) and [Dropped items](#dropped-items).
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
@@ -148,9 +148,10 @@ and preserve the saved data. The existing `_old` recovery applies to damaged or 
 
 The main inventory and hotbar use the `Inventory` list and its byte `Slot` numbers, 0 to 35. Armor and the
 offhand use the `equipment` compound [9], and `SelectedItemSlot` keeps the selected hotbar slot. Unrelated
-player fields, including position, health and experience, unmodeled slots and equipment, and unknown fields on
+player fields, including position and experience, unmodeled slots and equipment, and unknown fields on
 supported item records are retained. The current and previous modes use `playerGameType` and
 `previousPlayerGameType`. Play Login, the player list and the starting abilities use the resolved mode.
+The first health packet uses the saved `Health`, `foodLevel` and `foodSaturationLevel`.
 
 Autosave every 6,000 ticks, departure and shutdown take immutable player snapshots on the logic thread.
 The worker encodes NBT, compresses and writes them through the Anvil backup writer. Its job queue is bounded

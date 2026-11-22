@@ -13,6 +13,7 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use crate::inventory::{Inventory, ItemStack, SLOTS};
 use crate::item_data::{ItemCodec, invalid};
 use crate::player::{GameMode, PlayerState};
+use crate::survival::Vitals;
 
 const CAPACITY: usize = 64;
 const EQUIPMENT: [(&str, usize); 5] = [
@@ -32,6 +33,7 @@ pub struct PlayerInventory {
     pub selected: usize,
     root: Arc<Compound>,
     mode: Option<SavedGameMode>,
+    vitals: Option<Vitals>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +88,7 @@ impl PlayerInventory {
             selected,
             root: Arc::new(root),
             mode: None,
+            vitals: None,
         })
     }
 
@@ -150,6 +153,11 @@ impl PlayerInventory {
                 root.insert("abilities", abilities);
             }
         }
+        if let Some(vitals) = self.vitals {
+            root.insert("Health", Nbt::Float(vitals.health));
+            root.insert("foodLevel", Nbt::Int(vitals.food));
+            root.insert("foodSaturationLevel", Nbt::Float(vitals.saturation));
+        }
         Ok(root)
     }
 
@@ -163,6 +171,7 @@ impl PlayerInventory {
                 previous: player.previous_game_mode,
                 flying: player.flying,
             }),
+            vitals: Some(player.vitals),
         }
     }
 
@@ -194,6 +203,26 @@ impl PlayerInventory {
             GameMode::Creative => flying,
             _ => false,
         };
+    }
+
+    fn restore_vitals(&self, player: &mut PlayerState) {
+        if let Some(vitals) = self.vitals {
+            player.vitals = vitals;
+            return;
+        }
+        if let Some(Nbt::Float(health)) = self.root.get("Health")
+            && health.is_finite()
+        {
+            player.vitals.health = health.clamp(0.0, 20.0);
+        }
+        if let Some(Nbt::Int(food)) = self.root.get("foodLevel") {
+            player.vitals.food = *food;
+        }
+        if let Some(Nbt::Float(saturation)) = self.root.get("foodSaturationLevel")
+            && saturation.is_finite()
+        {
+            player.vitals.saturation = *saturation;
+        }
     }
 }
 
@@ -487,6 +516,7 @@ impl crate::Game {
         data: Arc<PlayerInventory>,
     ) {
         data.restore_game_mode(player);
+        data.restore_vitals(player);
         player.inventory.slots = data.slots.clone();
         player.inventory.selected = data.selected;
         player.data_ready = true;
@@ -789,6 +819,7 @@ mod autosave_tests {
             ..Default::default()
         };
         player.inventory.selected = 4;
+        player.vitals.health = 16.0;
         let mut game = crate::Game {
             pending: Vec::new(),
             players: vec![player],
@@ -799,6 +830,7 @@ mod autosave_tests {
         };
         game.autosave();
         game.players[0].inventory.slots[36].count = 15;
+        game.players[0].vitals.health = 9.0;
         game.world
             .as_mut()
             .unwrap()
@@ -808,6 +840,7 @@ mod autosave_tests {
             .flush()
             .unwrap();
         let snapshot = writes.lock().unwrap()[0].clone();
+        assert_eq!(snapshot.get("Health"), Some(&Nbt::Float(16.0)));
         let inventory = PlayerInventory::read(snapshot, &ItemCodec::default()).unwrap();
         assert_eq!(inventory.slots[36].count, 16);
         assert_eq!(inventory.selected, 4);

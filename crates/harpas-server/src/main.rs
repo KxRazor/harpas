@@ -708,6 +708,8 @@ fn play(
                 Some(BANNED)
             } else if !access.allows_whitelist(player.uuid) {
                 Some(NOT_WHITELISTED)
+            } else if access.is_ip_banned(peer) {
+                Some(access::IP_BANNED)
             } else {
                 None
             };
@@ -733,6 +735,9 @@ fn play(
                 level: access.operator_level(player.uuid),
                 uuid: player.uuid,
             };
+            let peer = environment
+                .commands
+                .track_peer(player.uuid, connection.entity_id(), peer);
             drop(access);
             environment
                 .commands
@@ -743,9 +748,9 @@ fn play(
             if let Some(permit) = permit.as_deref_mut() {
                 permit.entered_play();
             }
-            player_session = Some((session, command_source));
+            player_session = Some((session, command_source, peer));
         }
-        if let Some((session, source)) = &player_session {
+        if let Some((session, source, _peer)) = &player_session {
             // The logic thread's output first: once it disconnects the player, there is nothing left to
             // forward, and forwarding to a stopped logic thread would hide its reason.
             departure.kick =

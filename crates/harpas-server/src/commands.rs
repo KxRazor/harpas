@@ -1,7 +1,8 @@
 //! The shared Brigadier tree for console input and Java Play commands.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Mutex, MutexGuard};
 
 use harpas_core::nbt::{Compound, List, Nbt};
@@ -12,8 +13,8 @@ use harpas_protocol_java::v26_1::play::{
 use harpas_protocol_java::v26_1::play::{clientbound, serverbound};
 
 use crate::access::{
-    AccessLists, BANNED, BANNED_TEXT, DEFAULT_BAN_REASON, DEFAULT_BAN_REASON_KEY, NOT_WHITELISTED,
-    NOT_WHITELISTED_TEXT, Profile,
+    AccessLists, BANNED, BANNED_TEXT, DEFAULT_BAN_REASON, DEFAULT_BAN_REASON_KEY, IP_BANNED,
+    IP_BANNED_TEXT, NOT_WHITELISTED, NOT_WHITELISTED_TEXT, Profile,
 };
 use crate::profiles::Profiles;
 use crate::session::format_uuid;
@@ -37,12 +38,23 @@ enum Action {
     ReloadWhitelist,
     Ban,
     Pardon,
+    BanIp,
+    PardonIp,
+    BanList(BanList),
+}
+
+#[derive(Clone, Copy)]
+enum BanList {
+    All,
+    Ips,
+    Players,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Word {
     Literal(&'static str),
     Profiles,
+    Ip,
     Reason,
 }
 
@@ -76,6 +88,47 @@ const ROOTS: &[Node] = &[
         }],
     },
     Node {
+        word: Word::Literal("ban-ip"),
+        level: Some(3),
+        allows_restricted: true,
+        action: None,
+        children: &[Node {
+            word: Word::Ip,
+            level: Some(3),
+            allows_restricted: false,
+            action: Some(Action::BanIp),
+            children: &[Node {
+                word: Word::Reason,
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::BanIp),
+                children: &[],
+            }],
+        }],
+    },
+    Node {
+        word: Word::Literal("banlist"),
+        level: Some(3),
+        allows_restricted: true,
+        action: Some(Action::BanList(BanList::All)),
+        children: &[
+            Node {
+                word: Word::Literal("ips"),
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::BanList(BanList::Ips)),
+                children: &[],
+            },
+            Node {
+                word: Word::Literal("players"),
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::BanList(BanList::Players)),
+                children: &[],
+            },
+        ],
+    },
+    Node {
         word: Word::Literal("help"),
         level: None,
         allows_restricted: false,
@@ -105,6 +158,19 @@ const ROOTS: &[Node] = &[
             level: Some(3),
             allows_restricted: false,
             action: Some(Action::Pardon),
+            children: &[],
+        }],
+    },
+    Node {
+        word: Word::Literal("pardon-ip"),
+        level: Some(3),
+        allows_restricted: true,
+        action: None,
+        children: &[Node {
+            word: Word::Ip,
+            level: Some(3),
+            allows_restricted: false,
+            action: Some(Action::PardonIp),
             children: &[],
         }],
     },
@@ -195,7 +261,7 @@ impl Node {
 pub fn names() -> impl Iterator<Item = &'static str> {
     ROOTS.iter().filter_map(|node| match node.word {
         Word::Literal(name) => Some(name),
-        Word::Profiles | Word::Reason => None,
+        Word::Profiles | Word::Ip | Word::Reason => None,
     })
 }
 
@@ -227,6 +293,13 @@ fn add_children(nodes: &mut Vec<CommandNode>, parent: usize, children: &[Node], 
                     parser: 7, // minecraft:game_profile
                     properties: Vec::new(),
                     suggestions: (!matches!(node.action, Some(Action::Ban)))
+                        .then(|| "minecraft:ask_server".into()),
+                },
+                Word::Ip => CommandNodeKind::Argument {
+                    name: "target".into(),
+                    parser: 5,           // brigadier:string
+                    properties: vec![0], // single word
+                    suggestions: matches!(node.action, Some(Action::PardonIp))
                         .then(|| "minecraft:ask_server".into()),
                 },
                 Word::Reason => CommandNodeKind::Argument {
@@ -277,9 +350,16 @@ fn parse(
         let (word, tail) = remaining.split_once(' ').unwrap_or((remaining, ""));
         if let Some(node) = children
             .iter()
-            .find(|node| node.word == Word::Profiles && node.available(source))
+            .find(|node| matches!(node.word, Word::Profiles | Word::Ip) && node.available(source))
             && !word.is_empty()
         {
+            if node.word == Word::Ip
+                && let Some(index) = word.find(|c: char| {
+                    !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-' | '.' | '+')
+                })
+            {
+                return Err((start + index, "command.expected.separator"));
+            }
             let reason = if word.len() == remaining.len() {
                 None
             } else if !tail.is_empty() && node.children.iter().any(|node| node.word == Word::Reason)
@@ -289,7 +369,7 @@ fn parse(
                 return Err((start + word.len(), "command.unknown.argument"));
             };
             return Ok((
-                node.action.expect("a profile argument executes"),
+                node.action.expect("a target argument executes"),
                 word,
                 reason,
             ));
@@ -323,8 +403,27 @@ pub struct Commands {
     seed: i64,
     max_players: u32,
     access: Mutex<AccessLists>,
+    peers: Mutex<HashMap<u128, (i32, IpAddr)>>,
     profiles: Profiles,
     spawn: [f64; 3],
+}
+
+pub struct ConnectedPeer<'a> {
+    commands: &'a Commands,
+    uuid: u128,
+    entity_id: i32,
+}
+
+impl Drop for ConnectedPeer<'_> {
+    fn drop(&mut self) {
+        let mut peers = self.commands.peers();
+        if peers
+            .get(&self.uuid)
+            .is_some_and(|(id, _)| *id == self.entity_id)
+        {
+            peers.remove(&self.uuid);
+        }
+    }
 }
 
 pub type Disconnect = (&'static str, &'static str);
@@ -354,6 +453,7 @@ impl Commands {
             seed,
             max_players,
             access: Mutex::new(access),
+            peers: Mutex::default(),
             profiles,
             spawn,
         }
@@ -367,6 +467,20 @@ impl Commands {
 
     pub fn record_profile(&self, uuid: u128, name: String) {
         self.profiles.record(Profile { uuid, name });
+    }
+
+    fn peers(&self) -> MutexGuard<'_, HashMap<u128, (i32, IpAddr)>> {
+        self.peers.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// Registers the peer in the same access-list critical section as the engine join.
+    pub fn track_peer(&self, uuid: u128, entity_id: i32, ip: IpAddr) -> ConnectedPeer<'_> {
+        self.peers().insert(uuid, (entity_id, ip.to_canonical()));
+        ConnectedPeer {
+            commands: self,
+            uuid,
+            entity_id,
+        }
     }
 
     pub fn complete(&self, logic: &Handle, input: &str, source: Source) -> (usize, Vec<String>) {
@@ -399,8 +513,11 @@ impl Commands {
                 (Word::Profiles, Some(Action::Pardon)) => {
                     matches.extend(self.access().banned_names().map(str::to_owned));
                 }
+                (Word::Ip, Some(Action::PardonIp)) => {
+                    matches.extend(self.access().banned_ips().map(str::to_owned));
+                }
                 (Word::Profiles, _) => unreachable!("a profile argument executes"),
-                (Word::Reason, _) => {}
+                (Word::Ip | Word::Reason, _) => {}
             }
         }
         matches.retain(|name| name.to_lowercase().starts_with(&prefix));
@@ -417,6 +534,18 @@ impl Commands {
     ) -> Option<clientbound::CommandSuggestionsResponse> {
         let (start, matches) = self.complete(logic, &request.text, source);
         if matches.is_empty() {
+            let command = request.text.strip_prefix('/').unwrap_or(&request.text);
+            let (root, _) = command.split_once(' ')?;
+            if matches!(root, "ban-ip" | "pardon-ip" | "banlist")
+                && find(ROOTS, root, source).is_some()
+            {
+                return Some(clientbound::CommandSuggestionsResponse {
+                    id: request.id,
+                    start: 0,
+                    length: 0,
+                    suggestions: Vec::new(),
+                });
+            }
             return None;
         }
         Some(clientbound::CommandSuggestionsResponse {
@@ -466,6 +595,15 @@ impl Commands {
                 self.change_whitelist(logic, source, argument, add, input.len() - argument.len())?
             }
             Action::ReloadWhitelist => self.reload_whitelist(logic, source)?,
+            Action::BanList(list) => self.list_bans(list),
+            Action::PardonIp => self.pardon_ip(argument),
+            Action::BanIp => {
+                let reason = match self.command_reason(logic, source, reason, input.len())? {
+                    Ok(reason) => reason,
+                    Err(outcome) => return Ok(outcome),
+                };
+                self.ban_ip(logic, source, argument, reason.as_deref())?
+            }
             Action::Ban | Action::Pardon => {
                 let cursor =
                     input.len() - argument.len() - reason.map_or(0, |reason| reason.len() + 1);
@@ -473,17 +611,9 @@ impl Commands {
                     Ok(profiles) => profiles,
                     Err(outcome) => return Ok(outcome),
                 };
-                let reason = match reason {
-                    Some(reason) => match self.resolve_reason(logic, source, reason)? {
-                        Ok(reason) => Some(reason),
-                        Err((offset, reason)) => {
-                            return Ok(Outcome::Syntax {
-                                cursor: cursor + argument.len() + 1 + offset,
-                                reason,
-                            });
-                        }
-                    },
-                    None => None,
+                let reason = match self.command_reason(logic, source, reason, input.len())? {
+                    Ok(reason) => reason,
+                    Err(outcome) => return Ok(outcome),
                 };
                 self.change_bans(
                     logic,
@@ -722,28 +852,177 @@ impl Commands {
         };
         let replies = changed
             .into_iter()
-            .map(|Profile { name, .. }| match (ban, reason) {
-                (true, Some(reason)) => (
-                    format!("Banned {name}: {reason}"),
-                    translate_strings("commands.ban.success", vec![name, reason.into()]),
-                ),
-                (true, None) => (
-                    format!("Banned {name}: {DEFAULT_BAN_REASON}"),
-                    translate(
-                        "commands.ban.success",
-                        vec![name.into(), translate(DEFAULT_BAN_REASON_KEY, vec![])],
-                    ),
-                ),
-                (false, _) => (
-                    format!("Unbanned {name}"),
-                    translate_strings("commands.pardon.success", vec![name]),
-                ),
+            .map(|Profile { name, .. }| {
+                if ban {
+                    (
+                        format!("Banned {name}: {}", reason.unwrap_or(DEFAULT_BAN_REASON)),
+                        translate_ban("commands.ban.success", vec![name], reason),
+                    )
+                } else {
+                    (
+                        format!("Unbanned {name}"),
+                        translate_strings("commands.pardon.success", vec![name]),
+                    )
+                }
             })
             .collect();
         Ok(Outcome::Feedback {
             replies,
             disconnect,
         })
+    }
+
+    fn list_bans(&self, list: BanList) -> Outcome {
+        let access = self.access();
+        let entries = match list {
+            BanList::All => access
+                .player_ban_entries()
+                .chain(access.ip_ban_entries())
+                .collect::<Vec<_>>(),
+            BanList::Ips => access.ip_ban_entries().collect(),
+            BanList::Players => access.player_ban_entries().collect(),
+        };
+        if entries.is_empty() {
+            return feedback(
+                "There are no bans".into(),
+                translate("commands.banlist.none", vec![]),
+            );
+        }
+        let count = entries.len();
+        let mut replies = vec![(
+            format!("There are {count} ban(s):"),
+            Compound::from_iter([
+                ("translate", Nbt::from("commands.banlist.list")),
+                ("with", List::Int(vec![count as i32]).into()),
+            ])
+            .into(),
+        )];
+        replies.extend(entries.into_iter().map(|(target, author, reason)| {
+            (
+                format!(
+                    "{target} was banned by {author}: {}",
+                    reason.unwrap_or(DEFAULT_BAN_REASON)
+                ),
+                translate_ban(
+                    "commands.banlist.entry",
+                    vec![target.into(), author.into()],
+                    reason,
+                ),
+            )
+        }));
+        Outcome::Feedback {
+            replies,
+            disconnect: None,
+        }
+    }
+
+    fn ban_ip(
+        &self,
+        logic: &Handle,
+        source: Source,
+        target: &str,
+        reason: Option<&str>,
+    ) -> io::Result<Outcome> {
+        let mut access = self.access();
+        let players = logic.players().map_err(io::Error::other)?;
+        let (ip, affected) = {
+            let peers = self.peers();
+            let player_ip = |uuid: &u128| peers.get(uuid).map(|(_, ip)| *ip);
+            let ip = target
+                .parse::<Ipv4Addr>()
+                .map(IpAddr::from)
+                .ok()
+                .or_else(|| {
+                    players
+                        .iter()
+                        .find(|(_, name)| name.eq_ignore_ascii_case(target))
+                        .and_then(|(uuid, _)| player_ip(uuid))
+                });
+            let Some(ip) = ip else {
+                return Ok(failure(
+                    "Invalid IP address or unknown player".into(),
+                    "commands.banip.invalid",
+                ));
+            };
+            let affected = players
+                .iter()
+                .filter(|(uuid, _)| player_ip(uuid) == Some(ip))
+                .collect::<Vec<_>>();
+            (ip, affected)
+        };
+        let author = match source {
+            Source::Console => "Server",
+            Source::Player { uuid, .. } => players
+                .iter()
+                .find(|(id, _)| *id == uuid)
+                .map(|(_, name)| name.as_str())
+                .ok_or_else(|| io::Error::other("ban-ip command sender left"))?,
+        };
+        let ip = ip.to_string();
+        match access.change_ip_ban(&ip, Some((author, reason))) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(failure(
+                    "Nothing changed. That IP is already banned".into(),
+                    "commands.banip.failed",
+                ));
+            }
+            Err(error) => return Ok(ip_ban_write_failed(error)),
+        }
+        let mut replies = vec![(
+            format!("Banned IP {ip}: {}", reason.unwrap_or(DEFAULT_BAN_REASON)),
+            translate_ban("commands.banip.success", vec![ip], reason),
+        )];
+        let mut disconnect = None;
+        if !affected.is_empty() {
+            let uuids: HashSet<_> = affected.iter().map(|(uuid, _)| *uuid).collect();
+            if matches!(source, Source::Player { uuid, .. } if uuids.contains(&uuid)) {
+                disconnect = Some((IP_BANNED, IP_BANNED_TEXT));
+            }
+            logic
+                .disconnect_players(uuids, IP_BANNED, IP_BANNED_TEXT)
+                .map_err(io::Error::other)?;
+            let names = affected
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            replies.push((
+                format!("This ban affects {} player(s): {names}", affected.len()),
+                translate(
+                    "commands.banip.info",
+                    vec![
+                        (affected.len() as i32).into(),
+                        join_names(
+                            affected
+                                .into_iter()
+                                .map(|(uuid, name)| player_name(*uuid, name.clone())),
+                        ),
+                    ],
+                ),
+            ));
+        }
+        Ok(Outcome::Feedback {
+            replies,
+            disconnect,
+        })
+    }
+
+    fn pardon_ip(&self, target: &str) -> Outcome {
+        if target.parse::<Ipv4Addr>().is_err() {
+            return failure("Invalid IP address".into(), "commands.pardonip.invalid");
+        }
+        match self.access().change_ip_ban(target, None) {
+            Ok(true) => feedback(
+                format!("Unbanned IP {target}"),
+                translate_strings("commands.pardonip.success", vec![target.into()]),
+            ),
+            Ok(false) => failure(
+                "Nothing changed. That IP isn't banned".into(),
+                "commands.pardonip.failed",
+            ),
+            Err(error) => ip_ban_write_failed(error),
+        }
     }
 
     fn resolve_targets(
@@ -769,6 +1048,25 @@ impl Commands {
                 "That player does not exist".into(),
                 "argument.player.unknown",
             ))
+        })
+    }
+
+    fn command_reason(
+        &self,
+        logic: &Handle,
+        source: Source,
+        reason: Option<&str>,
+        input_len: usize,
+    ) -> io::Result<Result<Option<String>, Outcome>> {
+        let Some(reason) = reason else {
+            return Ok(Ok(None));
+        };
+        Ok(match self.resolve_reason(logic, source, reason)? {
+            Ok(reason) => Ok(Some(reason)),
+            Err((offset, error)) => Err(Outcome::Syntax {
+                cursor: input_len - reason.len() + offset,
+                reason: error,
+            }),
         })
     }
 
@@ -1037,6 +1335,22 @@ fn translate_strings(key: &str, args: Vec<String>) -> Nbt {
         ("with", List::String(args).into()),
     ])
     .into()
+}
+
+fn translate_ban(key: &str, mut args: Vec<String>, reason: Option<&str>) -> Nbt {
+    if let Some(reason) = reason {
+        args.push(reason.into());
+        translate_strings(key, args)
+    } else {
+        let mut args: Vec<_> = args.into_iter().map(Nbt::from).collect();
+        args.push(translate(DEFAULT_BAN_REASON_KEY, vec![]));
+        translate(key, args)
+    }
+}
+
+fn ip_ban_write_failed(error: io::Error) -> Outcome {
+    log::warn!("Failed to save the IP ban list: {error}");
+    failure("Could not save the IP ban list".into(), "command.failed")
 }
 
 fn suggest_command(command: String) -> Compound {

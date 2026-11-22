@@ -118,10 +118,15 @@ Player inventories, game modes and health load before Play Login, inventory sync
 worker reads and writes vanilla player documents. The logic thread takes immutable player snapshots on autosave,
 departure and shutdown. A reconnect uses the latest pending snapshot, and one write per UUID is outstanding,
 so an older save cannot overwrite newer progress. The main inventory, hotbar, armor, offhand, selected slot,
-current and previous game modes, health, food level and saturation persist. The supported item
+current and previous game modes, health, food level, saturation, exhaustion and the food tick timer persist. The supported item
 component codecs are checked against vanilla, and unsupported values refuse loading or accepting the item
 instead of removing its components. Details and limits are in [world.md](world.md#player-inventories).
 
+Accepted sprint movement adds exhaustion. In the player tick, exhaustion spends saturation before food.
+Holding use with an apple in either hand consumes one apple after 32 ticks and restores food and saturation.
+Releasing use or changing away from the active hotbar slot cancels the action. The
+`minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
+can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 
 ### 2. Parallel only where it cannot be observed
 

@@ -488,6 +488,10 @@ as shown by the parity report.
   - [x] Java Survival fall damage on ordinary terrain, saved health on reconnect, and death and respawn at the
         Overworld spawn. Safe, damaging and lethal falls and Creative immunity are compared with vanilla
         (`fall_damage_and_respawn_match_vanilla`).
+  - [x] Java Survival sprinting spends saturation and food, apples can be eaten from either hand, and natural
+        regeneration uses the saved world rule. Hunger, saturation, exhaustion and the regeneration timer persist.
+        Sprinting, cancelled and completed apple use, reconnects and both food-based regeneration rates are
+        compared with vanilla (`food_and_natural_regeneration_match_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

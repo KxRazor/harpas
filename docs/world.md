@@ -151,7 +151,8 @@ offhand use the `equipment` compound [9], and `SelectedItemSlot` keeps the selec
 player fields, including position and experience, unmodeled slots and equipment, and unknown fields on
 supported item records are retained. The current and previous modes use `playerGameType` and
 `previousPlayerGameType`. Play Login, the player list and the starting abilities use the resolved mode.
-The first health packet uses the saved `Health`, `foodLevel` and `foodSaturationLevel`.
+The first health packet uses the saved `Health`, `foodLevel` and `foodSaturationLevel`. The food tick also
+resumes with `foodExhaustionLevel` and `foodTickTimer`. Missing values use zero for exhaustion and the timer.
 
 Autosave every 6,000 ticks, departure and shutdown take immutable player snapshots on the logic thread.
 The worker encodes NBT, compresses and writes them through the Anvil backup writer. Its job queue is bounded

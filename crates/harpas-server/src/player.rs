@@ -127,6 +127,11 @@ pub(crate) fn receive(
                 },
                 Packet::SetHeldItem(p) => Input::SelectHotbarSlot(p.slot),
                 Packet::PlayerInput(p) => Input::SecondaryUse(p.inputs.sneak),
+                Packet::PlayerCommand(p) => match p.action {
+                    play::PlayerCommandAction::StartSprinting => Input::Sprinting(true),
+                    play::PlayerCommandAction::StopSprinting => Input::Sprinting(false),
+                    _ => continue,
+                },
                 Packet::ClickContainer(p) => Input::ClickContainer {
                     container_id: p.container_id,
                     state_id: p.state_id,
@@ -141,6 +146,10 @@ pub(crate) fn receive(
                     carried: p.carried.map(engine_hashed),
                 },
                 Packet::CloseContainer(p) => Input::CloseContainer(p.container_id),
+                Packet::UseItem(p) => Input::UseItem {
+                    off_hand: p.hand == play::Hand::OffHand,
+                    sequence: p.sequence,
+                },
                 Packet::UseItemOn(p) => Input::UseItemOn {
                     off_hand: p.hand == play::Hand::OffHand,
                     position: BlockPos {
@@ -176,7 +185,12 @@ pub(crate) fn receive(
                                 .map_err(io::Error::other)?;
                             continue;
                         }
-                        // Using and swapping items come later.
+                        play::PlayerActionStatus::FinishUsingItem => {
+                            session
+                                .send(Input::StopUsingItem)
+                                .map_err(io::Error::other)?;
+                            continue;
+                        }
                         _ => continue,
                     };
                     Input::Dig {
@@ -582,6 +596,27 @@ pub(crate) fn send(
                 health,
                 food,
                 saturation,
+            }
+            .into(),
+            Output::UsingItem {
+                entity_id,
+                off_hand,
+            } => clientbound::SetEntityMetadata {
+                entity_id,
+                metadata: play::EntityMetadata {
+                    // Living entity flags: bit 0 is using an item, bit 1 selects the off hand.
+                    entries: vec![(
+                        8,
+                        play::MetadataValue::Byte(
+                            off_hand.map_or(0, |off_hand| 1 + 2 * i8::from(off_hand)),
+                        ),
+                    )],
+                },
+            }
+            .into(),
+            Output::FinishUsingItem(entity_id) => clientbound::EntityEvent {
+                entity_id,
+                event: 9,
             }
             .into(),
             Output::FallDamage(entity_id) => {

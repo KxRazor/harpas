@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use harpas_core::nbt::{Compound, Nbt};
 use harpas_java::{FrameReader, offline_uuid, write_frame};
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::{PROTOCOL, configuration, handshaking, login, play};
@@ -45,7 +46,7 @@ impl Client {
         });
         client.send(|buf| handshake.encode(buf));
         client.send(|buf| start.encode(buf));
-        let reply = login::clientbound::Packet::decode(&client.next()).unwrap();
+        let reply = login::clientbound::Packet::decode(&client.next("login reply")).unwrap();
         (client, reply)
     }
 
@@ -63,7 +64,7 @@ impl Client {
             buf.extend_from_slice(&[2, 0, 1, 127, 1, 0, 1, 0]);
         });
         loop {
-            let bytes = client.next();
+            let bytes = client.next("configuration packet");
             match codec::read_varint(&mut bytes.as_slice()).unwrap() {
                 0x0e => {
                     let packs = configuration::serverbound::Packet::from(
@@ -95,7 +96,7 @@ impl Client {
         self.stream.write_all(&frame).unwrap();
     }
 
-    fn next(&mut self) -> Vec<u8> {
+    fn next(&mut self, expected: &str) -> Vec<u8> {
         loop {
             if let Some(frame) = self.frames.next_frame().unwrap() {
                 return frame;
@@ -104,15 +105,18 @@ impl Client {
             let count = self
                 .stream
                 .read(&mut buf)
-                .expect("waiting for server packet");
-            assert!(count > 0, "server disconnected");
+                .unwrap_or_else(|error| panic!("waiting for {expected}: {error}"));
+            assert!(
+                count > 0,
+                "server disconnected while waiting for {expected}"
+            );
             self.frames.push(&buf[..count]);
         }
     }
 
     fn matching<T>(&mut self, name: &str, mut get: impl FnMut(Packet) -> Option<T>) -> T {
         for _ in 0..1000 {
-            let bytes = self.next();
+            let bytes = self.next(name);
             match Packet::decode(&bytes) {
                 Ok(packet) => {
                     if let Some(value) = get(packet) {
@@ -1241,6 +1245,18 @@ fn fall_damage_and_respawn_match_vanilla() {
     let folder = Folder::new("fall-damage");
     let vanilla = folder.0.join("vanilla");
     let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula);
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let expected = exercise_falls(&mut reference, port);
+    assert_eq!(
+        expected.0.each_ref().map(|health| health.health),
+        [20.0, 16.0, 0.0, 20.0]
+    );
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_falls(&mut server, other), expected);
+}
+
+fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets
         .each_ref()
@@ -1248,17 +1264,21 @@ fn fall_damage_and_respawn_match_vanilla() {
     drop(sockets);
     for (dir, port) in [(&vanilla, port), (&harpas, other)] {
         fs::create_dir(dir).unwrap();
-        fs::write(dir.join("eula.txt"), &eula).unwrap();
+        fs::write(dir.join("eula.txt"), eula).unwrap();
         fs::write(
             dir.join("server.properties"),
             format!(
                 "server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nnetwork-compression-threshold=-1\n\
                  view-distance=2\nsimulation-distance=2\nlevel-type=minecraft:flat\nlevel-seed=42\n\
-                 generate-structures=false\nmax-tick-time=-1\nallow-flight=true\n"
+                 generate-structures=false\nmax-tick-time=-1\nallow-flight=true\ndifficulty=normal\n"
             ),
         )
         .unwrap();
     }
+    [port, other]
+}
+
+fn start_flat_vanilla(jar: &Path, vanilla: &Path, natural_regeneration: bool) -> Server {
     let mut reference = Server::start(
         OsStr::new("java"),
         &[
@@ -1267,26 +1287,25 @@ fn fall_damage_and_respawn_match_vanilla() {
             jar.as_os_str(),
             OsStr::new("nogui"),
         ],
-        &vanilla,
+        vanilla,
     );
     reference.wait_for("Done (");
     writeln!(
         reference.child.stdin.as_mut().unwrap(),
-        "gamerule minecraft:respawn_radius 0\ngamerule minecraft:spawn_mobs false\ngamerule minecraft:natural_health_regeneration false\nsetworldspawn 0 -60 0\nsave-all flush"
+        "gamerule minecraft:respawn_radius 0\ngamerule minecraft:spawn_mobs false\n\
+         gamerule minecraft:natural_health_regeneration {natural_regeneration}\nsetworldspawn 0 -60 0\nsave-all flush"
     )
     .unwrap();
     reference.wait_for("Saved the game");
-    let expected = exercise_falls(&mut reference, port);
-    assert_eq!(
-        expected.0.each_ref().map(|health| health.health),
-        [20.0, 16.0, 0.0, 20.0]
-    );
+    reference
+}
 
+fn start_flat_harpas(jar: &Path, vanilla: &Path, harpas: &Path) -> Server {
     let binary = env!("CARGO_BIN_EXE_harpas");
     let install = Command::new(binary)
-        .current_dir(&harpas)
+        .current_dir(harpas)
         .args(["vanilla-data", "install", "--from"])
-        .arg(&jar)
+        .arg(jar)
         .output()
         .unwrap();
     assert!(
@@ -1309,7 +1328,196 @@ fn fall_damage_and_respawn_match_vanilla() {
         let entry = entry.unwrap();
         fs::copy(entry.path(), harpas.join(region).join(entry.file_name())).unwrap();
     }
-    let mut server = Server::start(OsStr::new(binary), &[], &harpas);
+    let mut server = Server::start(OsStr::new(binary), &[], harpas);
     server.wait_for("Done (");
-    assert_eq!(exercise_falls(&mut server, other), expected);
+    server
+}
+
+fn use_apple(client: &mut Client, sequence: i32) {
+    play_packet(
+        client,
+        play::serverbound::UseItem {
+            hand: play::Hand::OffHand,
+            sequence,
+            rotation: play::Vec2f { x: 0.0, y: 0.0 },
+        },
+    );
+    client.matching("item use acknowledgement", |packet| match packet {
+        Packet::AcknowledgeBlockChange(ack) if ack.sequence == sequence => Some(()),
+        _ => None,
+    });
+}
+
+fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHealth> {
+    let mut client = Client::join(port, "Runner");
+    client.stream.set_nodelay(true).unwrap();
+    let entity_id = client.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    let [x, y, z] = confirm_position(&mut client);
+    let initial = health(&mut client);
+    assert_eq!(initial.food, 17);
+    move_player(&mut client, [x + 2.0, y, z], true);
+    play_packet(
+        &mut client,
+        play::serverbound::PlayerCommand {
+            entity_id,
+            action: play::PlayerCommandAction::StartSprinting,
+            data: 0,
+        },
+    );
+    move_player(&mut client, [x, y, z], true);
+    let after_sprint = health(&mut client);
+    assert_eq!(after_sprint.food, 16);
+    play_packet(
+        &mut client,
+        play::serverbound::PlayerCommand {
+            entity_id,
+            action: play::PlayerCommandAction::StopSprinting,
+            data: 0,
+        },
+    );
+    use_apple(&mut client, 1);
+    play_packet(
+        &mut client,
+        play::serverbound::PlayerAction {
+            status: play::PlayerActionStatus::FinishUsingItem,
+            position: play::BlockPos { x: 0, y: 0, z: 0 },
+            face: 0,
+            sequence: 0,
+        },
+    );
+    // The first apple neither changes food nor consumes a stack, even after a full use duration.
+    std::thread::sleep(Duration::from_millis(1800));
+    client.send_command("list");
+    client.matching(
+        "list after releasing the use button",
+        |packet| match packet {
+            Packet::SetHealth(health) => panic!("cancelled apple use changed health: {health:?}"),
+            Packet::EntityEvent(event) if event.entity_id == entity_id && event.event == 9 => {
+                panic!("cancelled apple use finished")
+            }
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+            {
+                Some(())
+            }
+            _ => None,
+        },
+    );
+    use_apple(&mut client, 2);
+    let mut finished = false;
+    let after_apple = client.matching(
+        "completed apple use and food update",
+        |packet| match packet {
+            Packet::EntityEvent(event) if event.entity_id == entity_id && event.event == 9 => {
+                finished = true;
+                None
+            }
+            Packet::SetHealth(health) => {
+                assert!(
+                    finished,
+                    "food changed before the client was told item use finished"
+                );
+                Some(health)
+            }
+            _ => None,
+        },
+    );
+    assert_eq!(after_apple.food, 20);
+    assert_eq!(after_apple.saturation, 2.4);
+    drop(client);
+    server.wait_for("Runner left the game");
+    let mut client = Client::join(port, "Runner");
+    confirm_position(&mut client);
+    assert_eq!(health(&mut client), after_apple);
+    drop(client);
+
+    let mut fast = Client::join(port, "FastHealing");
+    confirm_position(&mut fast);
+    let fast_health = std::array::from_fn::<_, 3, _>(|_| health(&mut fast));
+    assert_eq!(
+        fast_health.each_ref().map(|health| health.health),
+        [16.0, 17.0, 17.0 + 5.0 / 6.0]
+    );
+    drop(fast);
+    let mut slow = Client::join(port, "SlowHealing");
+    confirm_position(&mut slow);
+    let slow_health = [health(&mut slow), health(&mut slow)];
+    assert_eq!(
+        slow_health.each_ref().map(|health| health.health),
+        [19.0, 20.0]
+    );
+    [initial, after_sprint, after_apple]
+        .into_iter()
+        .chain(fast_health)
+        .chain(slow_health)
+        .collect()
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_and_natural_regeneration_match_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula);
+    let mut reference = start_flat_vanilla(&jar, &vanilla, true);
+    for dir in [&vanilla, &harpas] {
+        let world = dir.join("world");
+        for (name, health, food, saturation, exhaustion) in [
+            ("Runner", 20.0_f32, 17, 0.0_f32, 3.9_f32),
+            ("FastHealing", 16.0, 20, 6.0, 0.0),
+            ("SlowHealing", 19.0, 18, 0.0, 0.0),
+        ] {
+            let mut data = Compound::new();
+            data.insert("DataVersion", harpas_anvil::DATA_VERSION);
+            data.insert("Health", health);
+            data.insert("foodLevel", food);
+            data.insert("foodSaturationLevel", saturation);
+            data.insert("foodExhaustionLevel", exhaustion);
+            data.insert("foodTickTimer", 0_i32);
+            if name == "Runner" {
+                let apple = Compound::from_iter([
+                    ("id", Nbt::from("minecraft:apple")),
+                    ("count", Nbt::Int(2)),
+                ]);
+                data.insert("equipment", Compound::from_iter([("offhand", apple)]));
+            }
+            harpas_anvil::write_player(&world, offline_uuid(name), &data).unwrap();
+        }
+    }
+    let expected = exercise_food(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_food(&mut server, other), expected);
+    stop(&mut server);
+    let [expected, actual] = [&vanilla, &harpas].map(|dir| {
+        harpas_anvil::read_player(&dir.join("world"), offline_uuid("Runner"))
+            .unwrap()
+            .unwrap()
+            .0
+    });
+    for field in [
+        "foodLevel",
+        "foodSaturationLevel",
+        "foodExhaustionLevel",
+        "foodTickTimer",
+    ] {
+        assert_eq!(actual.get(field), expected.get(field), "{field}");
+    }
+    let apple_count = |data: &Compound| -> Nbt {
+        let Some(Nbt::Compound(equipment)) = data.get("equipment") else {
+            panic!("missing equipment")
+        };
+        let Some(Nbt::Compound(apple)) = equipment.get("offhand") else {
+            panic!("missing offhand")
+        };
+        apple.get("count").cloned().unwrap_or(Nbt::Int(1))
+    };
+    assert_eq!(apple_count(&actual), apple_count(&expected));
+    assert_eq!(apple_count(&actual), Nbt::Int(1));
 }

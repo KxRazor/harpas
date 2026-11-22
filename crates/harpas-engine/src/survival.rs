@@ -1,10 +1,10 @@
-//! Player health, food, landing damage and the Overworld respawn after a fall.
+//! Player health, food, damage and respawning in the Overworld.
 
 use crate::Game;
 use crate::block::BlockPos;
 use crate::inventory::ItemStack;
-use crate::player::{GameMode, Output, PlayerState, Position};
-use crate::world::{ChunkState, World};
+use crate::player::{DamageKind, GameMode, Output, PlayerState, Position};
+use crate::world::{ChunkPos, ChunkState, World};
 use harpas_core::nbt::{Compound, Nbt};
 
 const MAX_HEALTH: f32 = 20.0;
@@ -55,32 +55,59 @@ impl Vitals {
         self.saturation = (self.saturation + 2.4).min(self.food as f32);
     }
 
-    fn tick_food(&mut self, rules: SurvivalRules) {
+    /// Returns whether this tick should deal starvation damage.
+    fn tick_food(&mut self, rules: SurvivalRules) -> bool {
         if self.exhaustion > 4.0 {
             self.exhaustion -= 4.0;
             if self.saturation > 0.0 {
                 self.saturation = (self.saturation - 1.0).max(0.0);
-            } else if !rules.peaceful {
+            } else if rules.difficulty != Difficulty::Peaceful {
                 self.food = (self.food - 1).max(0);
             }
         }
 
-        if !rules.natural_regeneration || self.health >= MAX_HEALTH || self.food < 18 {
+        let regenerating =
+            rules.natural_regeneration && self.health < MAX_HEALTH && self.food >= 18;
+        let starving = self.food == 0;
+        if !regenerating && !starving {
             self.food_timer = 0;
-            return;
+            return false;
         }
-        let saturated = self.saturation > 0.0 && self.food == MAX_FOOD;
+        let saturated = regenerating && self.saturation > 0.0 && self.food == MAX_FOOD;
         self.food_timer = self.food_timer.saturating_add(1);
         let interval = if saturated { 10 } else { 80 };
-        if self.food_timer >= interval {
-            let exhaustion = if saturated {
-                self.saturation.min(6.0)
-            } else {
-                6.0
-            };
-            self.heal(exhaustion / 6.0);
-            self.exhaust(exhaustion);
-            self.food_timer = 0;
+        if self.food_timer < interval {
+            return false;
+        }
+        self.food_timer = 0;
+        if starving {
+            return self.health > rules.difficulty.starvation_floor();
+        }
+        let exhaustion = if saturated {
+            self.saturation.min(6.0)
+        } else {
+            6.0
+        };
+        self.heal(exhaustion / 6.0);
+        self.exhaust(exhaustion);
+        false
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Difficulty {
+    Peaceful,
+    Easy,
+    Normal,
+    Hard,
+}
+
+impl Difficulty {
+    fn starvation_floor(self) -> f32 {
+        match self {
+            Self::Peaceful | Self::Easy => 10.0,
+            Self::Normal => 1.0,
+            Self::Hard => 0.0,
         }
     }
 }
@@ -91,7 +118,7 @@ pub(crate) struct SurvivalRules {
     keep_inventory: bool,
     show_death_messages: bool,
     natural_regeneration: bool,
-    peaceful: bool,
+    difficulty: Difficulty,
 }
 
 impl Default for SurvivalRules {
@@ -106,17 +133,21 @@ impl SurvivalRules {
             Some(Nbt::Byte(value)) => *value != 0,
             _ => default,
         };
-        let peaceful = matches!(
-            level.and_then(|level| level.get("difficulty_settings")),
-            Some(Nbt::Compound(settings))
-                if settings.get("difficulty") == Some(&Nbt::from("peaceful"))
-        );
+        let difficulty = match level.and_then(|level| level.get("difficulty_settings")) {
+            Some(Nbt::Compound(settings)) => match settings.get("difficulty") {
+                Some(Nbt::String(name)) if name == "peaceful" => Difficulty::Peaceful,
+                Some(Nbt::String(name)) if name == "normal" => Difficulty::Normal,
+                Some(Nbt::String(name)) if name == "hard" => Difficulty::Hard,
+                _ => Difficulty::Easy,
+            },
+            _ => Difficulty::Easy,
+        };
         Self {
             fall_damage: boolean("minecraft:fall_damage", true),
             keep_inventory: boolean("minecraft:keep_inventory", false),
             show_death_messages: boolean("minecraft:show_death_messages", true),
             natural_regeneration: boolean("minecraft:natural_health_regeneration", true),
-            peaceful,
+            difficulty,
         }
     }
 }
@@ -225,7 +256,7 @@ impl Game {
     pub(crate) fn tick_survival(&mut self, rules: SurvivalRules) {
         for index in 0..self.players.len() {
             let player = &mut self.players[index];
-            player.fall_hurt_cooldown = player.fall_hurt_cooldown.saturating_sub(1);
+            player.hurt_cooldown = player.hurt_cooldown.saturating_sub(1);
             if !player.data_ready || player.disconnecting || player.is_dead() || !player.uses_food()
             {
                 continue;
@@ -233,7 +264,20 @@ impl Game {
             let before = player.vitals;
             self.tick_apple_use(index);
             let player = &mut self.players[index];
-            player.vitals.tick_food(rules);
+            // On Peaceful, natural regeneration restores food before the starvation check.
+            if rules.difficulty == Difficulty::Peaceful && rules.natural_regeneration {
+                player.peaceful_food_ticks += 1;
+                if player.peaceful_food_ticks == 10 {
+                    player.peaceful_food_ticks = 0;
+                    player.vitals.food = (player.vitals.food + 1).min(MAX_FOOD);
+                }
+            }
+            if player.vitals.tick_food(rules)
+                && self.hurt_player(index, 1.0, DamageKind::Starvation, rules)
+            {
+                continue;
+            }
+            let player = &self.players[index];
             if player.vitals.health != before.health
                 || player.vitals.food != before.food
                 || (player.vitals.saturation == 0.0) != (before.saturation == 0.0)
@@ -251,17 +295,15 @@ impl Game {
         if player.fall_distance == 0.0 && down == 0.0 {
             return;
         }
-        let at = BlockPos {
-            x: after.x.floor() as i32,
-            y: after.y.floor() as i32,
-            z: after.z.floor() as i32,
-        };
         if !rules.fall_damage
             || matches!(
                 player.player.profile.game_mode,
                 GameMode::Creative | GameMode::Spectator
             )
-            || !matches!(world.chunk(at.chunk()), Some(ChunkState::Loaded(_)))
+            || !matches!(
+                world.chunk(ChunkPos::at(after.x, after.z)),
+                Some(ChunkState::Loaded(_))
+            )
             || world.point_in_water([after.x, after.y, after.z])
         {
             player.fall_distance = 0.0;
@@ -271,41 +313,48 @@ impl Game {
             let distance = std::mem::take(&mut player.fall_distance) + down;
             let damage = (distance - SAFE_FALL_DISTANCE).ceil().max(0.0) as f32;
             if damage > 0.0 {
-                self.hurt_by_falling(index, damage, at, rules);
+                self.hurt_player(index, damage, DamageKind::Fall, rules);
             }
         } else {
             player.fall_distance += down;
         }
     }
 
-    fn hurt_by_falling(&mut self, index: usize, damage: f32, at: BlockPos, rules: SurvivalRules) {
+    fn hurt_player(
+        &mut self,
+        index: usize,
+        damage: f32,
+        kind: DamageKind,
+        rules: SurvivalRules,
+    ) -> bool {
         let player = &mut self.players[index];
         // Only the part above the previous hit applies during the first ten ticks of damage immunity.
-        let taken = if player.fall_hurt_cooldown > 10 {
-            damage - player.last_fall_damage
+        let taken = if player.hurt_cooldown > 10 {
+            damage - player.last_damage
         } else {
-            player.fall_hurt_cooldown = 20;
+            player.hurt_cooldown = 20;
             damage
         };
         if taken <= 0.0 {
-            return;
+            return false;
         }
-        player.last_fall_damage = damage;
+        player.last_damage = damage;
         player.vitals.health = (player.vitals.health - taken).max(0.0);
         let entity_id = player.player.entity_id;
         for viewer in &self.players {
             if viewer.player.entity_id == entity_id || viewer.tracked.contains(&entity_id) {
-                viewer.send(Output::FallDamage(entity_id));
+                viewer.send(Output::Damage { entity_id, kind });
             }
         }
         if self.players[index].is_dead() {
-            self.die_from_fall(index, at, rules);
+            self.die(index, kind, rules);
         }
         let player = &self.players[index];
         player.send(player.vitals.update());
+        true
     }
 
-    fn die_from_fall(&mut self, index: usize, at: BlockPos, rules: SurvivalRules) {
+    fn die(&mut self, index: usize, kind: DamageKind, rules: SurvivalRules) {
         self.stop_using_item(index);
         self.stop_digging(index);
         if self.players[index].block_menu.is_some() {
@@ -318,17 +367,22 @@ impl Game {
             drops.extend(std::mem::take(&mut player.inventory).slots);
         }
         player.pending_map_chest = None;
-        player.death_location = Some(at);
+        let Position { x, y, z, .. } = player.player.position;
+        player.death_location = Some(BlockPos {
+            x: x.floor() as i32,
+            y: y.floor() as i32,
+            z: z.floor() as i32,
+        });
         let entity_id = player.player.entity_id;
         let uuid = player.player.profile.uuid;
         let name = player.player.profile.name.clone();
         for viewer in &self.players {
             if rules.show_death_messages || viewer.player.entity_id == entity_id {
-                viewer.send(Output::FallDeath {
+                viewer.send(Output::Death {
                     entity_id,
                     uuid,
                     name: name.clone(),
-                    show_message: rules.show_death_messages,
+                    kind: rules.show_death_messages.then_some(kind),
                 });
             }
             if viewer.tracked.contains(&entity_id) {
@@ -354,8 +408,10 @@ impl Game {
         player.floating_ticks = 0;
         player.secondary_use = false;
         player.sprinting = false;
-        player.fall_hurt_cooldown = 0;
-        player.last_fall_damage = 0.0;
+        player.fall_distance = 0.0;
+        player.hurt_cooldown = 0;
+        player.last_damage = 0.0;
+        player.peaceful_food_ticks = 0;
         player.vitals = Vitals::default();
         player.digging = Default::default();
         player.sent_chunks.clear();
@@ -454,5 +510,30 @@ mod tests {
             (vitals.health, vitals.exhaustion, vitals.food_timer),
             (16.0, 0.0, 0)
         );
+    }
+
+    #[test]
+    fn starvation_uses_the_food_timer_and_resets_when_the_player_eats() {
+        let disabled_rules = Compound::from_iter([("minecraft:natural_health_regeneration", 0_i8)]);
+        let rules = SurvivalRules::read(Some(&disabled_rules), None);
+        let mut vitals = Vitals {
+            food: 0,
+            saturation: 0.0,
+            food_timer: 40,
+            ..Vitals::default()
+        };
+        for _ in 0..39 {
+            assert!(!vitals.tick_food(rules));
+        }
+        assert!(vitals.tick_food(rules));
+        assert_eq!(vitals.food_timer, 0);
+        for _ in 0..79 {
+            assert!(!vitals.tick_food(rules));
+        }
+        assert!(vitals.tick_food(rules));
+        vitals.food_timer = 79;
+        vitals.eat_apple();
+        assert!(!vitals.tick_food(rules));
+        assert_eq!(vitals.food_timer, 0);
     }
 }

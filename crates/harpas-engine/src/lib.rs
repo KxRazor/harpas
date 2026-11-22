@@ -1124,11 +1124,11 @@ impl Game {
             });
             player.send(player.vitals.update());
             if player.is_dead() {
-                player.send(player::Output::FallDeath {
+                player.send(player::Output::Death {
                     entity_id: player.player.entity_id,
                     uuid: player.player.profile.uuid,
                     name: player.player.profile.name.clone(),
-                    show_message: false,
+                    kind: None,
                 });
             }
         }
@@ -1775,6 +1775,33 @@ mod tests {
         );
         game.connections();
         assert!(game.players[0].apple_use.is_none());
+    }
+
+    #[test]
+    fn starvation_death_clears_fall_distance_on_respawn() {
+        use harpas_core::nbt::Compound;
+
+        let mut game = game();
+        let _received = join(&mut game, 1, "Hungry", 2);
+        game.connections();
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.fall_distance = 8.0;
+        player.vitals.health = 1.0;
+        player.vitals.food = 0;
+        player.vitals.saturation = 0.0;
+        player.vitals.food_timer = 79;
+        let level = Compound::from_iter([(
+            "difficulty_settings",
+            Compound::from_iter([("difficulty", "hard")]),
+        )]);
+        game.tick_survival(survival::SurvivalRules::read(None, Some(&level)));
+        assert!(game.players[0].is_dead());
+
+        input(&mut game, 1, Input::Respawn);
+        game.connections();
+        assert_eq!(game.players[0].vitals.health, 20.0);
+        assert_eq!(game.players[0].fall_distance, 0.0);
     }
 
     #[test]

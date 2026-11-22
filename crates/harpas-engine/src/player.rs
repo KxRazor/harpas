@@ -60,6 +60,15 @@ impl GameMode {
     }
 }
 
+/// A damage source the engine can apply to a player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageKind {
+    /// Landing after a fall.
+    Fall,
+    /// Running out of food.
+    Starvation,
+}
+
 /// A player's identity and game mode. The identity is verified in online mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
@@ -365,18 +374,23 @@ pub enum Output {
     },
     /// The local player finished using an item.
     FinishUsingItem(i32),
-    /// A fall damaged the given entity.
-    FallDamage(i32),
-    /// A player died from a fall.
-    FallDeath {
+    /// A player took damage.
+    Damage {
+        /// The player who was hurt.
+        entity_id: i32,
+        /// The source of the damage.
+        kind: DamageKind,
+    },
+    /// A player died or joined while dead.
+    Death {
         /// The player who died.
         entity_id: i32,
         /// The player's persistent identity, carried in the displayed name.
         uuid: u128,
         /// The name displayed in the death message.
         name: String,
-        /// Whether to broadcast the message and display it on the death screen.
-        show_message: bool,
+        /// The cause for the death message, if shown.
+        kind: Option<DamageKind>,
     },
     /// Play the death animation for a tracked player.
     PlayerDied(i32),
@@ -706,11 +720,12 @@ pub(crate) struct PlayerState {
     pub(crate) flying: bool,
     pub(crate) previous_game_mode: Option<GameMode>,
     pub(crate) vitals: crate::survival::Vitals,
+    pub(crate) peaceful_food_ticks: u8,
     pub(crate) sprinting: bool,
     pub(crate) apple_use: Option<crate::survival::AppleUse>,
     pub(crate) fall_distance: f64,
-    pub(crate) last_fall_damage: f32,
-    pub(crate) fall_hurt_cooldown: u8,
+    pub(crate) last_damage: f32,
+    pub(crate) hurt_cooldown: u8,
     pub(crate) death_location: Option<BlockPos>,
     pub(crate) force_game_mode_on_login: Option<bool>,
     pub(crate) tick_start: Position,
@@ -803,11 +818,12 @@ impl PlayerState {
             flying,
             previous_game_mode: None,
             vitals: crate::survival::Vitals::default(),
+            peaceful_food_ticks: 0,
             sprinting: false,
             apple_use: None,
             fall_distance: 0.0,
-            last_fall_damage: 0.0,
-            fall_hurt_cooldown: 0,
+            last_damage: 0.0,
+            hurt_cooldown: 0,
             death_location: None,
             force_game_mode_on_login: None,
             tick_start: position,

@@ -7,7 +7,7 @@ use harpas_core::nbt::List;
 use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
 use harpas_engine::inventory::{ComponentPatch, HashedStack, ItemStack};
-use harpas_engine::player::{self, Input, Movement, Output, Position, Profile};
+use harpas_engine::player::{self, DamageKind, Input, Movement, Output, Position, Profile};
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
@@ -619,39 +619,51 @@ pub(crate) fn send(
                 event: 9,
             }
             .into(),
-            Output::FallDamage(entity_id) => {
-                connection.send_fall_damage(entity_id);
+            Output::Damage { entity_id, kind } => {
+                let source = match kind {
+                    DamageKind::Fall => "minecraft:fall",
+                    DamageKind::Starvation => "minecraft:starve",
+                };
+                connection.send_environmental_damage(entity_id, source);
                 continue;
             }
-            Output::FallDeath {
+            Output::Death {
                 entity_id,
                 uuid,
                 name,
-                show_message,
+                kind,
             } => {
-                let message = Nbt::Compound(
-                    [
-                        ("translate", Nbt::from("death.fell.accident.generic")),
-                        (
-                            "with",
-                            Nbt::List(List::Compound(vec![commands::player_name(uuid, name)])),
-                        ),
-                    ]
-                    .into_iter()
-                    .collect(),
-                );
+                let message = kind.map(|kind| {
+                    let translation = match kind {
+                        DamageKind::Fall => "death.fell.accident.generic",
+                        DamageKind::Starvation => "death.attack.starve",
+                    };
+                    Nbt::Compound(
+                        [
+                            ("translate", Nbt::from(translation)),
+                            (
+                                "with",
+                                Nbt::List(List::Compound(vec![commands::player_name(uuid, name)])),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )
+                });
                 if connection.entity_id() == entity_id {
                     clientbound::CombatDeath {
                         player_id: entity_id,
-                        message: if show_message { message } else { Nbt::from("") },
+                        message: message.unwrap_or_else(|| Nbt::from("")),
                     }
                     .into()
-                } else {
+                } else if let Some(content) = message {
                     clientbound::SystemChatMessage {
-                        content: message,
+                        content,
                         overlay: false,
                     }
                     .into()
+                } else {
+                    continue;
                 }
             }
             Output::PlayerDied(entity_id) => clientbound::EntityEvent {

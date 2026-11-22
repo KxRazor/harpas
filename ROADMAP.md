@@ -492,6 +492,9 @@ as shown by the parity report.
         regeneration uses the saved world rule. Hunger, saturation, exhaustion and the regeneration timer persist.
         Sprinting, cancelled and completed apple use, reconnects and both food-based regeneration rates are
         compared with vanilla (`food_and_natural_regeneration_match_vanilla`).
+  - [x] Java Survival starvation uses the saved food timer and the world's difficulty. The first hit after a
+        reconnect, the health thresholds, Peaceful food recovery and death and respawn on Hard are compared with
+        vanilla (`starvation_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

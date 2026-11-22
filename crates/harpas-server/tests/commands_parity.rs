@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_java::{FrameReader, offline_uuid, write_frame};
@@ -1150,10 +1150,14 @@ fn fall(client: &mut Client, [x, ground, z]: [f64; 3], height: i32) {
 
 fn fall_without_damage(client: &mut Client, ground: [f64; 3], height: i32) {
     fall(client, ground, height);
+    assert_no_damage_until_list_reply(client, "after landing");
+}
+
+fn assert_no_damage_until_list_reply(client: &mut Client, context: &str) {
     client.send_command("list");
-    client.matching("list reply after the landing", |packet| match packet {
-        Packet::SetHealth(health) => panic!("unexpected health after the landing: {health:?}"),
-        Packet::DamageEvent(event) => panic!("unexpected damage after the landing: {event:?}"),
+    client.matching("list reply", |packet| match packet {
+        Packet::SetHealth(health) => panic!("unexpected health {context}: {health:?}"),
+        Packet::DamageEvent(event) => panic!("unexpected damage {context}: {event:?}"),
         Packet::SystemChatMessage(reply)
             if matches!(&reply.content, codec::Nbt::Compound(text)
                 if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
@@ -1245,7 +1249,7 @@ fn fall_damage_and_respawn_match_vanilla() {
     let folder = Folder::new("fall-damage");
     let vanilla = folder.0.join("vanilla");
     let harpas = folder.0.join("harpas");
-    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula);
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
     let mut reference = start_flat_vanilla(&jar, &vanilla, false);
     let expected = exercise_falls(&mut reference, port);
     assert_eq!(
@@ -1256,7 +1260,7 @@ fn fall_damage_and_respawn_match_vanilla() {
     assert_eq!(exercise_falls(&mut server, other), expected);
 }
 
-fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str) -> [u16; 2] {
+fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets
         .each_ref()
@@ -1270,7 +1274,7 @@ fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str) -> [u16; 2] 
             format!(
                 "server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nnetwork-compression-threshold=-1\n\
                  view-distance=2\nsimulation-distance=2\nlevel-type=minecraft:flat\nlevel-seed=42\n\
-                 generate-structures=false\nmax-tick-time=-1\nallow-flight=true\ndifficulty=normal\n"
+                 generate-structures=false\nmax-tick-time=-1\nallow-flight=true\ndifficulty={difficulty}\n"
             ),
         )
         .unwrap();
@@ -1464,7 +1468,7 @@ fn food_and_natural_regeneration_match_vanilla() {
     let folder = Folder::new("food");
     let vanilla = folder.0.join("vanilla");
     let harpas = folder.0.join("harpas");
-    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula);
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
     let mut reference = start_flat_vanilla(&jar, &vanilla, true);
     for dir in [&vanilla, &harpas] {
         let world = dir.join("world");
@@ -1520,4 +1524,159 @@ fn food_and_natural_regeneration_match_vanilla() {
     };
     assert_eq!(apple_count(&actual), apple_count(&expected));
     assert_eq!(apple_count(&actual), Nbt::Int(1));
+}
+
+fn starvation_damage(client: &mut Client) {
+    client.matching("starvation damage", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            let types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+            assert_eq!(types[event.source_type as usize], "minecraft:starve");
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+fn exercise_starvation(
+    server: &mut Server,
+    dir: &Path,
+    port: u16,
+    difficulty: &str,
+    initial_health: f32,
+    natural_regeneration: bool,
+) -> Option<(play::clientbound::Respawn, Nbt)> {
+    let name = "Hungry";
+    let world = dir.join("world");
+    let uuid = offline_uuid(name);
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Health", Nbt::Float(initial_health)),
+        ("foodLevel", Nbt::Int(0)),
+        ("foodSaturationLevel", Nbt::Float(0.0)),
+        ("foodTickTimer", Nbt::Int(40)),
+    ]);
+    harpas_anvil::write_player(&world, uuid, &data).unwrap();
+    let join = || {
+        let mut client = Client::join(port, name);
+        let spawn = confirm_position(&mut client);
+        assert_eq!(
+            health(&mut client),
+            play::clientbound::SetHealth {
+                health: initial_health,
+                food: 0,
+                saturation: 0.0,
+            },
+            "{difficulty} on login"
+        );
+        (client, spawn)
+    };
+    let (mut client, mut spawn) = join();
+    if difficulty == "peaceful" && natural_regeneration {
+        client.matching("food recovery on Peaceful", |packet| match packet {
+            Packet::DamageEvent(event) => panic!("starved before recovering food: {event:?}"),
+            Packet::SetHealth(health) => {
+                assert_eq!((health.health, health.food), (20.0, 1));
+                Some(())
+            }
+            _ => None,
+        });
+        return None;
+    }
+    if difficulty == "hard" {
+        std::thread::sleep(Duration::from_millis(650));
+        drop(client);
+        server.wait_for("Hungry left the game");
+        // Harpas writes on a worker. Wait for the saved timer to advance beyond the fixture.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (saved, _) = harpas_anvil::read_player(&world, uuid).unwrap().unwrap();
+            if let Some(Nbt::Int(timer)) = saved.get("foodTickTimer")
+                && *timer > 40
+            {
+                assert!(*timer < 80, "{timer}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "starvation timer was not saved");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        (client, spawn) = join();
+    }
+
+    let first_hit = Instant::now();
+    starvation_damage(&mut client);
+    assert!(
+        first_hit.elapsed() < Duration::from_millis(3500),
+        "{difficulty} restarted the saved timer"
+    );
+    if difficulty == "hard" {
+        let death = client.matching("starvation death", |packet| match packet {
+            Packet::CombatDeath(death) => Some(death.message),
+            _ => None,
+        });
+        assert_eq!(health(&mut client).health, 0.0);
+        play_packet(
+            &mut client,
+            play::serverbound::ClientStatus {
+                action: play::ClientStatusAction::PerformRespawn,
+            },
+        );
+        let respawn = client.matching("respawn after starvation", |packet| match packet {
+            Packet::Respawn(respawn) => Some(respawn),
+            _ => None,
+        });
+        assert_eq!(confirm_position(&mut client), spawn);
+        let restored = health(&mut client);
+        assert_eq!(
+            (restored.health, restored.food, restored.saturation),
+            (20.0, 20, 5.0)
+        );
+        assert_eq!(respawn.spawn.game_mode, play::GameMode::Survival);
+        return Some((respawn, death));
+    }
+
+    assert_eq!(health(&mut client).health, initial_health - 1.0);
+    std::thread::sleep(Duration::from_millis(4250));
+    assert_no_damage_until_list_reply(&mut client, &format!("below the {difficulty} threshold"));
+    None
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn starvation_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    for (difficulty, initial_health, natural_regeneration) in [
+        ("peaceful", 11.0, false),
+        ("peaceful", 20.0, true),
+        ("easy", 11.0, false),
+        ("normal", 2.0, false),
+        ("hard", 1.0, false),
+    ] {
+        let folder = Folder::new(difficulty);
+        let vanilla = folder.0.join("vanilla");
+        let harpas = folder.0.join("harpas");
+        let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, difficulty);
+        let mut reference = start_flat_vanilla(&jar, &vanilla, natural_regeneration);
+        let expected = exercise_starvation(
+            &mut reference,
+            &vanilla,
+            port,
+            difficulty,
+            initial_health,
+            natural_regeneration,
+        );
+        stop(&mut reference);
+        let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+        assert_eq!(
+            exercise_starvation(
+                &mut server,
+                &harpas,
+                other,
+                difficulty,
+                initial_health,
+                natural_regeneration
+            ),
+            expected
+        );
+        stop(&mut server);
+    }
 }

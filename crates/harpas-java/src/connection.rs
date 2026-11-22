@@ -452,10 +452,10 @@ impl Connection {
         }
     }
 
-    /// Sends the damage source for a falling player, using the synchronized damage registry.
-    pub fn send_fall_damage(&mut self, entity_id: i32) {
-        let source_type = registries::entry_id("minecraft:damage_type", "minecraft:fall")
-            .expect("the fall damage type is synchronized");
+    /// Sends damage without an attacker, using a name from the synchronized damage registry.
+    pub fn send_environmental_damage(&mut self, entity_id: i32, source: &str) {
+        let source_type = registries::entry_id("minecraft:damage_type", source)
+            .expect("the damage type is synchronized");
         self.send_play_packet(
             play::clientbound::DamageEvent {
                 entity_id,

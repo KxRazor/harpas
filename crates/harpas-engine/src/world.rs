@@ -2111,7 +2111,13 @@ mod tests {
         assert_eq!(game.players[0].vitals.health, 20.0);
         game.check_fall(0, at(-45.0, true), at(-48.0, true));
         assert_eq!(game.players[0].vitals.health, 16.0);
-        assert!(matches!(received.try_recv(), Ok(Output::FallDamage(1))));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(Output::Damage {
+                entity_id: 1,
+                kind: crate::player::DamageKind::Fall,
+            })
+        ));
     }
 
     #[test]

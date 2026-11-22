@@ -127,6 +127,10 @@ Holding use with an apple in either hand consumes one apple after 32 ticks and r
 Releasing use or changing away from the active hotbar slot cancels the action. The
 `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
+At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is
+above 10 health on Easy or Peaceful, or above 1 on Normal. On Hard the damage can be lethal. On Peaceful,
+natural regeneration restores one food point every 10 player ticks, before the starvation check. Falls and
+starvation share the damage cooldown and death handling, with messages specific to the cause.
 
 ### 2. Parallel only where it cannot be observed
 

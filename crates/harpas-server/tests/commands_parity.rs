@@ -177,7 +177,7 @@ impl Client {
 
     fn command(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
         self.send_command(command);
-        self.replies(command, replies)
+        self.replies(replies)
     }
 
     fn send_command(&mut self, command: &str) {
@@ -204,12 +204,12 @@ impl Client {
         self.send(|buf| request.encode(buf));
     }
 
-    fn replies(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
+    fn replies(&mut self, replies: usize) -> Vec<SystemChatMessage> {
         (0..replies).map(|_| self.matching("command reply", |packet| match packet {
             Packet::SystemChatMessage(reply) if !matches!(&reply.content,
                 codec::Nbt::Compound(text) if matches!(text.get("translate"), Some(codec::Nbt::String(key))
                     if matches!(key.as_str(), "multiplayer.player.joined" | "multiplayer.player.left" | "chat.type.admin"))) => Some(reply),
-            Packet::Disconnect(packet) => panic!("disconnected during /{command}: {:?}", packet.reason),
+            Packet::Disconnect(packet) => panic!("disconnected while waiting for a command reply: {:?}", packet.reason),
             _ => None,
         })).collect()
     }
@@ -778,7 +778,7 @@ fn exercise_operators(server: &mut Server, dir: &Path, port: u16) -> Operators {
     operator.send_command("deop NewOperator");
     let demoted = tree_nodes(&operator.permission_tree(0));
     assert_eq!(demoted, initial);
-    replies.extend(operator.replies("deop NewOperator", 1));
+    replies.extend(operator.replies(1));
     replies.extend(operator.command("seed", 2));
     replies.extend(admin.command("deop NewOperator", 1));
     assert_eq!(fs::read_to_string(&path).unwrap(), original);

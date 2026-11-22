@@ -3,6 +3,7 @@
 use crate::Game;
 use crate::block::BlockPos;
 use crate::inventory::ItemStack;
+use crate::item_data::{FoodProperties, ItemCodec};
 use crate::player::{DamageKind, GameMode, Output, PlayerState, Position};
 use crate::world::{ChunkPos, ChunkState, World};
 use harpas_core::nbt::{Compound, Nbt};
@@ -10,7 +11,6 @@ use harpas_core::nbt::{Compound, Nbt};
 const MAX_HEALTH: f32 = 20.0;
 const MAX_FOOD: i32 = 20;
 const SAFE_FALL_DISTANCE: f64 = 3.0;
-const APPLE_USE_TICKS: u8 = 32;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Vitals {
@@ -50,9 +50,9 @@ impl Vitals {
         self.health = (self.health + amount).min(MAX_HEALTH);
     }
 
-    fn eat_apple(&mut self) {
-        self.food = (self.food + 4).min(MAX_FOOD);
-        self.saturation = (self.saturation + 2.4).min(self.food as f32);
+    fn eat(&mut self, food: FoodProperties) {
+        self.food = self.food.saturating_add(food.nutrition).min(MAX_FOOD);
+        self.saturation = (self.saturation + food.saturation).min(self.food as f32);
     }
 
     /// Returns whether this tick should deal starvation damage.
@@ -152,9 +152,11 @@ impl SurvivalRules {
     }
 }
 
-pub(crate) struct AppleUse {
+pub(crate) struct FoodUse {
     pub(crate) off_hand: bool,
-    ticks_left: u8,
+    ticks_left: u32,
+    stack: ItemStack,
+    food: FoodProperties,
 }
 
 impl PlayerState {
@@ -196,24 +198,33 @@ impl Game {
         if !player.acknowledge_block_changes(sequence)
             || player.awaiting_teleport.is_some()
             || !player.uses_food()
-            || player.vitals.food >= MAX_FOOD
-            || player.apple_use.is_some()
+            || player.food_use.is_some()
         {
             return;
         }
         let slot = player.inventory.hand_slot(off_hand);
-        if !is_edible_apple(&player.inventory.slots[slot], self.world.as_ref()) {
+        let stack = &player.inventory.slots[slot];
+        let codec = self
+            .world
+            .as_ref()
+            .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+        let Some(food) = codec.food(stack) else {
+            return;
+        };
+        if player.vitals.food >= MAX_FOOD && !food.can_always_eat {
             return;
         }
-        player.apple_use = Some(AppleUse {
+        player.food_use = Some(FoodUse {
             off_hand,
-            ticks_left: APPLE_USE_TICKS,
+            ticks_left: food.use_ticks,
+            stack: stack.clone(),
+            food,
         });
         self.send_using_item(index, Some(off_hand));
     }
 
     pub(crate) fn stop_using_item(&mut self, index: usize) {
-        if self.players[index].apple_use.take().is_some() {
+        if self.players[index].food_use.take().is_some() {
             self.send_using_item(index, None);
         }
     }
@@ -230,24 +241,27 @@ impl Game {
         }
     }
 
-    fn tick_apple_use(&mut self, index: usize) {
+    fn tick_food_use(&mut self, index: usize) {
         let player = &mut self.players[index];
-        let Some(using) = &mut player.apple_use else {
+        let Some(using) = &mut player.food_use else {
             return;
         };
         let slot = player.inventory.hand_slot(using.off_hand);
         let held = &mut player.inventory.slots[slot];
-        if !is_edible_apple(held, self.world.as_ref()) {
+        if held.is_empty()
+            || held.item != using.stack.item
+            || held.components != using.stack.components
+        {
             self.stop_using_item(index);
             return;
         }
-        using.ticks_left -= 1;
+        using.ticks_left = using.ticks_left.saturating_sub(1);
         if using.ticks_left == 0 {
             held.count -= 1;
             if held.is_empty() {
                 *held = ItemStack::empty();
             }
-            player.vitals.eat_apple();
+            player.vitals.eat(using.food);
             player.send(Output::FinishUsingItem(player.player.entity_id));
             self.stop_using_item(index);
         }
@@ -262,7 +276,7 @@ impl Game {
                 continue;
             }
             let before = player.vitals;
-            self.tick_apple_use(index);
+            self.tick_food_use(index);
             let player = &mut self.players[index];
             // On Peaceful, natural regeneration restores food before the starvation check.
             if rules.difficulty == Difficulty::Peaceful && rules.natural_regeneration {
@@ -436,16 +450,6 @@ impl Game {
     }
 }
 
-fn is_edible_apple(stack: &ItemStack, world: Option<&World>) -> bool {
-    !stack.is_empty()
-        && stack.name() == Some("minecraft:apple")
-        && world.is_none_or(|world| {
-            let codec = world.block_item_codec();
-            !codec.component_removed(stack, "minecraft:food")
-                && !codec.component_removed(stack, "minecraft:consumable")
-        })
-}
-
 fn supports(world: &World, position: Position) -> bool {
     let Position { x, y, z, .. } = position;
     world.collides([[x - 0.3, y - 1.0e-5, z - 0.3], [x + 0.3, y, z + 0.3]])
@@ -532,7 +536,12 @@ mod tests {
         }
         assert!(vitals.tick_food(rules));
         vitals.food_timer = 79;
-        vitals.eat_apple();
+        vitals.eat(FoodProperties {
+            nutrition: 1,
+            saturation: 0.0,
+            can_always_eat: false,
+            use_ticks: 1,
+        });
         assert!(!vitals.tick_food(rules));
         assert_eq!(vitals.food_timer, 0);
     }

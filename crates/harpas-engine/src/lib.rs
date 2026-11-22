@@ -855,7 +855,7 @@ impl TickWork for Game {
                                     let player = &self.players[index];
                                     if player.inventory.selected != selected
                                         && player
-                                            .apple_use
+                                            .food_use
                                             .as_ref()
                                             .is_some_and(|using| !using.off_hand)
                                     {
@@ -1556,7 +1556,7 @@ impl Game {
                     (true, false) => {
                         let spawned = self.players[target].player.clone();
                         let using = self.players[target]
-                            .apple_use
+                            .food_use
                             .as_ref()
                             .map(|using| using.off_hand);
                         let viewer = &mut self.players[viewer];
@@ -1744,7 +1744,7 @@ mod tests {
         input(&mut game, 1, Input::SelectHotbarSlot(1));
         input(&mut game, 1, Input::SelectHotbarSlot(0));
         game.connections();
-        assert!(game.players[0].apple_use.is_none());
+        assert!(game.players[0].food_use.is_none());
 
         input(
             &mut game,
@@ -1774,7 +1774,64 @@ mod tests {
             },
         );
         game.connections();
-        assert!(game.players[0].apple_use.is_none());
+        assert!(game.players[0].food_use.is_none());
+    }
+
+    #[test]
+    fn food_use_honors_the_configured_duration_and_cancels_on_item_replacement() {
+        use inventory::{ItemStack, OFF_HAND};
+        use item_data::{FoodProperties, ItemCodec};
+
+        let mut game = game();
+        let _received = join(&mut game, 1, "Eating", 2);
+        game.connections();
+        let kelp = harpas_core::item::items()
+            .id("minecraft:dried_kelp")
+            .unwrap();
+        let path = std::env::temp_dir().join(format!("harpas-food-use-{}", std::process::id()));
+        let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
+        world.set_item_codec(Arc::new(ItemCodec::default().with_foods(
+            std::collections::HashMap::from([(
+                kelp,
+                FoodProperties {
+                    nutrition: 3,
+                    saturation: 4.0,
+                    can_always_eat: false,
+                    use_ticks: 16,
+                },
+            )]),
+        )));
+        game.world = Some(world);
+
+        let stack = ItemStack {
+            item: kelp,
+            count: 2,
+            ..ItemStack::empty()
+        };
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.awaiting_teleport = None;
+        player.vitals.food = 19;
+        player.vitals.saturation = 18.0;
+        player.inventory.slots[OFF_HAND] = stack.clone();
+
+        game.use_item(0, true, 1);
+        game.players[0].inventory.slots[OFF_HAND] = ItemStack::empty();
+        let rules = survival::SurvivalRules::default();
+        game.tick_survival(rules);
+        assert!(game.players[0].food_use.is_none());
+
+        game.players[0].inventory.slots[OFF_HAND] = stack;
+        game.use_item(0, true, 2);
+        for _ in 0..15 {
+            game.tick_survival(rules);
+        }
+        assert_eq!(game.players[0].inventory.slots[OFF_HAND].count, 2);
+        assert_eq!(game.players[0].vitals.food, 19);
+        game.tick_survival(rules);
+        assert_eq!(game.players[0].inventory.slots[OFF_HAND].count, 1);
+        assert_eq!(game.players[0].vitals.food, 20);
+        assert_eq!(game.players[0].vitals.saturation, 20.0);
     }
 
     #[test]

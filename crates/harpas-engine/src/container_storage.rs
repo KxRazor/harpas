@@ -1,7 +1,6 @@
 //! Saved inventory slots and block entity NBT shared by persistent menus.
 
 use std::io;
-use std::sync::OnceLock;
 
 use harpas_core::nbt::{Compound, List, Nbt};
 
@@ -81,11 +80,9 @@ pub(crate) fn new_tag(pos: BlockPos, kind: &str) -> Compound {
 
 impl World {
     pub(crate) fn block_item_codec(&self) -> &ItemCodec {
-        static DEFAULT: OnceLock<ItemCodec> = OnceLock::new();
-        self.player_store.as_ref().map_or_else(
-            || DEFAULT.get_or_init(ItemCodec::default),
-            |store| store.codec.as_ref(),
-        )
+        self.player_store
+            .as_ref()
+            .map_or_else(|| ItemCodec::fallback(), |store| store.codec.as_ref())
     }
 
     pub(crate) fn container_tag(&self, pos: BlockPos, kind: &str) -> io::Result<Option<&Compound>> {

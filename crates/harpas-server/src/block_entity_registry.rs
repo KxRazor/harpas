@@ -1,5 +1,4 @@
-//! Block entity type IDs, and the entries of every built-in registry, generated locally from the owner's verified
-//! Minecraft server jar.
+//! Built-in registries and basic food defaults generated locally from the owner's verified Minecraft server jar.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -8,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use serde_json::{Value, json};
+use harpas_core::item::items;
+use harpas_engine::item_data::FoodProperties;
+use serde_json::{Map, Value, json};
 
 use crate::vanilla_data::{SERVER_JAR_SHA1, VERSION};
 
@@ -78,15 +79,20 @@ fn builtin_path(server: &Path) -> PathBuf {
         .join(format!("{VERSION}-registries.json"))
 }
 
-/// The entries of each built-in registry, such as `minecraft:block`, in the order of their numeric IDs.
-pub(crate) type Builtin = HashMap<String, Vec<String>>;
+#[derive(Default)]
+pub(crate) struct Builtin {
+    /// The entries of each built-in registry in the order of their numeric IDs.
+    pub(crate) registries: HashMap<String, Vec<String>>,
+    /// Absent in installations generated before the item component reports were read.
+    pub(crate) foods: Option<HashMap<u32, FoodProperties>>,
+}
 
 /// The built-in registries of the data generator's report, each entry at its `protocol_id`.
-fn builtin_from_report(report: &Value) -> io::Result<Builtin> {
+fn builtin_from_report(report: &Value) -> io::Result<HashMap<String, Vec<String>>> {
     let registries = report
         .as_object()
         .ok_or_else(|| invalid("the report is not an object"))?;
-    let mut result = Builtin::with_capacity(registries.len());
+    let mut result = HashMap::with_capacity(registries.len());
     for (registry, value) in registries {
         let entries = value["entries"]
             .as_object()
@@ -123,9 +129,86 @@ pub(crate) fn load_builtin(server: &Path) -> io::Result<Option<Builtin>> {
             "built-in registries are for a different server jar",
         ));
     }
-    serde_json::from_value(data["registries"].clone())
-        .map(Some)
-        .map_err(invalid)
+    Ok(Some(Builtin {
+        registries: serde_json::from_value(data["registries"].clone()).map_err(invalid)?,
+        foods: data.get("foods").map(food_defaults).transpose()?,
+    }))
+}
+
+fn food_reports(directory: &Path) -> io::Result<Map<String, Value>> {
+    let mut foods = Map::new();
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let report: Value = serde_json::from_reader(File::open(&path)?).map_err(invalid)?;
+        let components = &report["components"];
+        let (food, consumable) = (
+            &components["minecraft:food"],
+            &components["minecraft:consumable"],
+        );
+        if food.is_object()
+            && consumable.is_object()
+            && consumable
+                .get("on_consume_effects")
+                .is_none_or(|effects| effects.as_array().is_some_and(Vec::is_empty))
+            && components.get("minecraft:use_remainder").is_none()
+            && components.get("minecraft:use_cooldown").is_none()
+        {
+            foods.insert(
+                format!("minecraft:{name}"),
+                json!({"food": food, "consumable": consumable}),
+            );
+        }
+    }
+    if !foods.contains_key("minecraft:apple") {
+        return Err(invalid("the item reports have no apple food defaults"));
+    }
+    Ok(foods)
+}
+
+fn food_defaults(value: &Value) -> io::Result<HashMap<u32, FoodProperties>> {
+    value
+        .as_object()
+        .ok_or_else(|| invalid("food defaults are not an object"))?
+        .iter()
+        .map(|(name, entry)| {
+            let bad = || invalid(format!("invalid food defaults for {name}"));
+            let id = items().id(name).ok_or_else(bad)?;
+            let food = &entry["food"];
+            let nutrition = food["nutrition"]
+                .as_u64()
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(bad)?;
+            let saturation = food["saturation"].as_f64().ok_or_else(bad)? as f32;
+            let can_always_eat = food
+                .get("can_always_eat")
+                .map_or(Some(false), Value::as_bool)
+                .ok_or_else(bad)?;
+            let consumable = entry["consumable"].as_object().ok_or_else(bad)?;
+            let seconds = consumable
+                .get("consume_seconds")
+                .map_or(Some(1.6), Value::as_f64)
+                .ok_or_else(bad)? as f32;
+            let ticks = seconds * 20.0;
+            if !saturation.is_finite()
+                || saturation < 0.0
+                || !(0.0..u32::MAX as f32).contains(&ticks)
+            {
+                return Err(bad());
+            }
+            Ok((
+                id,
+                FoodProperties {
+                    nutrition,
+                    saturation,
+                    can_always_eat,
+                    use_ticks: ticks as u32,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Returns None for an installation made without a local Java runtime.
@@ -145,8 +228,7 @@ pub(crate) fn load(server: &Path) -> io::Result<Option<Registry>> {
     Registry::entries(&data["entries"]).map(Some)
 }
 
-/// Runs Mojang's data generator, storing only the block entity registry and the entries of the built-in
-/// registries on this machine.
+/// Runs Mojang's data generator, storing the registries and supported food defaults on this machine.
 /// The caller must verify the jar before calling this function.
 pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
     let path = registry_path(server);
@@ -174,6 +256,11 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
     let report: Value = serde_json::from_slice(&report).map_err(invalid)?;
     let registry = Registry::from_report(&report)?;
     let builtin = builtin_from_report(&report)?;
+    let foods = food_reports(
+        &scratch
+            .0
+            .join("generated/reports/minecraft/components/item"),
+    )?;
     write(
         &scratch,
         &builtin_path(server),
@@ -181,6 +268,7 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
             "version": VERSION,
             "server_sha1": SERVER_JAR_SHA1,
             "registries": builtin,
+            "foods": foods,
         }),
     )?;
     write(
@@ -299,10 +387,9 @@ mod tests {
             "registries": {"minecraft:fluid": ["minecraft:empty"]}
         });
         fs::write(&builtin, data.to_string()).unwrap();
-        assert_eq!(
-            load_builtin(&scratch.0).unwrap().unwrap()["minecraft:fluid"],
-            ["minecraft:empty"]
-        );
+        let loaded = load_builtin(&scratch.0).unwrap().unwrap();
+        assert_eq!(loaded.registries["minecraft:fluid"], ["minecraft:empty"]);
+        assert!(loaded.foods.is_none());
         data["server_sha1"] = json!("other");
         fs::write(&builtin, data.to_string()).unwrap();
         assert!(load_builtin(&scratch.0).is_err());

@@ -223,12 +223,30 @@ fn run() -> io::Result<()> {
         }
     };
     let items = {
-        let registries = block_entity_registry::load_builtin(Path::new(""))?.unwrap_or_default();
-        let entries = |name| registries.get(name).map(Vec::as_slice).unwrap_or_default();
-        harpas_engine::item_data::ItemCodec::new(entries("minecraft:data_component_type"))
-            .with_enchantments(harpas_java::registry_names("minecraft:enchantment").unwrap_or(&[]))
-            .with_potions(entries("minecraft:potion"))
-            .with_mob_effects(entries("minecraft:mob_effect"))
+        let builtin = block_entity_registry::load_builtin(Path::new(""))?.unwrap_or_default();
+        let entries = |name| {
+            builtin
+                .registries
+                .get(name)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+        };
+        let codec =
+            harpas_engine::item_data::ItemCodec::new(entries("minecraft:data_component_type"))
+                .with_enchantments(
+                    harpas_java::registry_names("minecraft:enchantment").unwrap_or(&[]),
+                )
+                .with_potions(entries("minecraft:potion"))
+                .with_mob_effects(entries("minecraft:mob_effect"));
+        match builtin.foods {
+            Some(foods) => codec.with_foods(foods),
+            None => {
+                warn!(
+                    "Only apples can be eaten until the food defaults are generated. Install Java 25 and run `harpas vanilla-data generate-registry`"
+                );
+                codec
+            }
+        }
     };
     let game_data = harpas_engine::GameData {
         shapes,

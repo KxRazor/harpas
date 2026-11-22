@@ -495,6 +495,9 @@ as shown by the parity report.
   - [x] Java Survival starvation uses the saved food timer and the world's difficulty. The first hit after a
         reconnect, the health thresholds, Peaceful food recovery and death and respawn on Hard are compared with
         vanilla (`starvation_matches_vanilla`).
+  - [x] Basic foods use the locally generated item defaults for nutrition, saturation and use duration. Bread,
+        steak and dried kelp are compared with vanilla, including the inventory on reconnect
+        (`food_and_natural_regeneration_match_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

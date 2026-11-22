@@ -1337,11 +1337,11 @@ fn start_flat_harpas(jar: &Path, vanilla: &Path, harpas: &Path) -> Server {
     server
 }
 
-fn use_apple(client: &mut Client, sequence: i32) {
+fn use_food(client: &mut Client, hand: play::Hand, sequence: i32) {
     play_packet(
         client,
         play::serverbound::UseItem {
-            hand: play::Hand::OffHand,
+            hand,
             sequence,
             rotation: play::Vec2f { x: 0.0, y: 0.0 },
         },
@@ -1382,7 +1382,7 @@ fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHe
             data: 0,
         },
     );
-    use_apple(&mut client, 1);
+    use_food(&mut client, play::Hand::OffHand, 1);
     play_packet(
         &mut client,
         play::serverbound::PlayerAction {
@@ -1411,7 +1411,7 @@ fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHe
             _ => None,
         },
     );
-    use_apple(&mut client, 2);
+    use_food(&mut client, play::Hand::OffHand, 2);
     let mut finished = false;
     let after_apple = client.matching(
         "completed apple use and food update",
@@ -1461,6 +1461,67 @@ fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHe
         .collect()
 }
 
+const BASIC_FOODS: [(&str, &str, play::Hand, u32); 3] = [
+    ("BreadEater", "minecraft:bread", play::Hand::MainHand, 32),
+    (
+        "SteakEater",
+        "minecraft:cooked_beef",
+        play::Hand::OffHand,
+        32,
+    ),
+    (
+        "KelpEater",
+        "minecraft:dried_kelp",
+        play::Hand::MainHand,
+        16,
+    ),
+];
+
+fn exercise_basic_foods(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHealth> {
+    BASIC_FOODS
+        .into_iter()
+        .map(|(name, item, hand, ticks)| {
+            let mut client = Client::join(port, name);
+            client.stream.set_nodelay(true).unwrap();
+            confirm_position(&mut client);
+            assert_eq!(health(&mut client).food, 16);
+            let started = Instant::now();
+            use_food(&mut client, hand, 1);
+            let after = health(&mut client);
+            let elapsed = started.elapsed();
+            let expected = Duration::from_millis(u64::from(ticks) * 50);
+            // The exact ticks are checked in the engine. Allow for network and scheduling delays here.
+            assert!(
+                elapsed.abs_diff(expected) < Duration::from_millis(400),
+                "{item} took {elapsed:?}, expected about {expected:?}"
+            );
+            drop(client);
+            server.wait_for(&format!("{name} left the game"));
+
+            let slot = if hand == play::Hand::MainHand { 36 } else { 45 };
+            let (mut saved_health, mut saved_stack) = (None, None);
+            Client::join(port, name).matching("food and inventory after reconnect", |packet| {
+                match packet {
+                    Packet::SetHealth(health) => saved_health = Some(health),
+                    Packet::SetContainerContent(contents) if contents.window_id == 0 => {
+                        saved_stack = Some(contents.slots[slot].clone());
+                    }
+                    _ => {}
+                }
+                (saved_health.is_some() && saved_stack.is_some()).then_some(())
+            });
+            assert_eq!(saved_health.unwrap(), after);
+            let stack = saved_stack.unwrap();
+            assert_eq!(
+                stack.item as u32,
+                harpas_core::item::items().id(item).unwrap()
+            );
+            assert_eq!(stack.count, 1, "one {item} should have been eaten");
+            after
+        })
+        .collect()
+}
+
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn food_and_natural_regeneration_match_vanilla() {
@@ -1493,11 +1554,32 @@ fn food_and_natural_regeneration_match_vanilla() {
             }
             harpas_anvil::write_player(&world, offline_uuid(name), &data).unwrap();
         }
+        for (name, item, hand, _) in BASIC_FOODS {
+            let mut data = Compound::from_iter([
+                ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+                ("Health", Nbt::Float(20.0)),
+                ("foodLevel", Nbt::Int(16)),
+                ("foodSaturationLevel", Nbt::Float(10.0)),
+            ]);
+            let mut stack = Compound::from_iter([("id", Nbt::from(item)), ("count", Nbt::Int(2))]);
+            if hand == play::Hand::MainHand {
+                stack.insert("Slot", 0_i8);
+                data.insert(
+                    "Inventory",
+                    Nbt::List(harpas_core::nbt::List::Compound(vec![stack])),
+                );
+            } else {
+                data.insert("equipment", Compound::from_iter([("offhand", stack)]));
+            }
+            harpas_anvil::write_player(&world, offline_uuid(name), &data).unwrap();
+        }
     }
     let expected = exercise_food(&mut reference, port);
+    let expected_basic = exercise_basic_foods(&mut reference, port);
     stop(&mut reference);
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
     assert_eq!(exercise_food(&mut server, other), expected);
+    assert_eq!(exercise_basic_foods(&mut server, other), expected_basic);
     stop(&mut server);
     let [expected, actual] = [&vanilla, &harpas].map(|dir| {
         harpas_anvil::read_player(&dir.join("world"), offline_uuid("Runner"))

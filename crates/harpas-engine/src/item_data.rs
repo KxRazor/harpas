@@ -1,10 +1,10 @@
 //! Item stacks in vanilla's saved NBT. The owner's generated registry supplies component IDs, with the pinned
-//! Java 26.1 IDs used by mining available when the registry is absent. A saved item is never loaded with its data
+//! Java 26.1 IDs used by mining and eating available when the registry is absent. A saved item is never loaded with its data
 //! stripped, and a new Creative stack must be serializable before it is accepted.
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use harpas_core::item::items;
 use harpas_core::nbt::{Compound, List, Nbt};
@@ -17,6 +17,21 @@ const DEFAULT_STEW_DURATION: i32 = 160;
 const DAMAGE: &str = "minecraft:damage";
 const MAX_DAMAGE: &str = "minecraft:max_damage";
 const UNBREAKABLE: &str = "minecraft:unbreakable";
+const FOOD: &str = "minecraft:food";
+const CONSUMABLE: &str = "minecraft:consumable";
+
+/// The default components of a food with no consumption effects or leftover item.
+#[derive(Debug, Clone, Copy)]
+pub struct FoodProperties {
+    /// Food points restored by one item.
+    pub nutrition: i32,
+    /// Saturation points added before clamping to the new food level.
+    pub saturation: f32,
+    /// Whether this food can be eaten with a full food bar.
+    pub can_always_eat: bool,
+    /// Number of ticks use must be held.
+    pub use_ticks: u32,
+}
 
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
 #[derive(Debug)]
@@ -26,6 +41,7 @@ pub struct ItemCodec {
     enchantments: Vec<String>,
     potions: Vec<String>,
     mob_effects: Vec<String>,
+    foods: HashMap<u32, FoodProperties>,
 }
 
 impl Default for ItemCodec {
@@ -36,7 +52,7 @@ impl Default for ItemCodec {
 
 impl ItemCodec {
     /// Component names in the numeric order of the locally generated `minecraft:data_component_type` registry.
-    /// An empty registry uses the Java 26.1 IDs needed for basic mining tools.
+    /// An empty registry uses the Java 26.1 IDs needed for basic mining tools and food component removals.
     pub fn new(names: &[String]) -> Self {
         let names = if names.is_empty() {
             let mut names = vec![String::new(); 29];
@@ -45,6 +61,8 @@ impl ItemCodec {
                 (2, MAX_DAMAGE),
                 (3, DAMAGE),
                 (4, UNBREAKABLE),
+                (23, FOOD),
+                (24, CONSUMABLE),
                 (28, "minecraft:tool"),
             ] {
                 names[index] = name.to_owned();
@@ -64,7 +82,35 @@ impl ItemCodec {
             enchantments: Vec::new(),
             potions: Vec::new(),
             mob_effects: Vec::new(),
+            foods: HashMap::from([(
+                items().id("minecraft:apple").expect("registered apple"),
+                FoodProperties {
+                    nutrition: 4,
+                    saturation: 2.4,
+                    can_always_eat: false,
+                    use_ticks: 32,
+                },
+            )]),
         }
+    }
+
+    pub(crate) fn fallback() -> &'static Self {
+        static DEFAULT: OnceLock<ItemCodec> = OnceLock::new();
+        DEFAULT.get_or_init(Self::default)
+    }
+
+    /// Loads the defaults of basic foods generated locally from the owner's server jar, keyed by item ID.
+    pub fn with_foods(mut self, foods: HashMap<u32, FoodProperties>) -> Self {
+        self.foods = foods;
+        self
+    }
+
+    pub(crate) fn food(&self, stack: &ItemStack) -> Option<FoodProperties> {
+        let food = *self.foods.get(&stack.item)?;
+        (!stack.is_empty()
+            && !self.component_removed(stack, FOOD)
+            && !self.component_removed(stack, CONSUMABLE))
+        .then_some(food)
     }
 
     /// Adds the enchantment registry in the same numeric order sent to clients during Configuration.

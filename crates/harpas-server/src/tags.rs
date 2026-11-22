@@ -31,7 +31,7 @@ pub(crate) fn load(server: &Path, pack: &Path) -> io::Result<Tags> {
         files
             .iter()
             .map(|(path, contents)| (path.as_str(), contents.as_slice())),
-        &builtin,
+        &builtin.registries,
     );
     for error in errors {
         warn!("Couldn't load {error}");

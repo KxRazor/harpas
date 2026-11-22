@@ -1,6 +1,7 @@
 //! Players, movement checks, and what each player can see.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, RandomState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -14,6 +15,7 @@ use crate::inventory::{HashedStack, Inventory, ItemStack};
 use crate::light::Light;
 use crate::world::{ChunkPos, World};
 use harpas_core::block_behavior::Face;
+use harpas_core::random::LegacyRandom;
 
 /// A signed profile property, such as a Java player's skin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +69,21 @@ pub enum DamageKind {
     Fall,
     /// Running out of food.
     Starvation,
+}
+
+/// The visible state of a player's status effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Effect {
+    /// Remaining ticks, or -1 for an infinite effect.
+    pub duration: i32,
+    /// Level of the effect, starting at zero.
+    pub amplifier: u8,
+    /// Whether the effect is ambient.
+    pub ambient: bool,
+    /// Whether to display particles.
+    pub show_particles: bool,
+    /// Whether to display the effect icon.
+    pub show_icon: bool,
 }
 
 /// A player's identity and game mode. The identity is verified in online mode.
@@ -364,6 +381,17 @@ pub enum Output {
         food: i32,
         /// Food saturation.
         saturation: f32,
+    },
+    /// Add, refresh or remove a status effect on the local player.
+    EntityEffect {
+        /// The player affected.
+        entity_id: i32,
+        /// Numeric ID in the mob effect registry.
+        effect_id: i32,
+        /// The new state, or none when it expires.
+        effect: Option<Effect>,
+        /// Whether the client should blend in the effect.
+        blend: bool,
     },
     /// The entity started or stopped using an item.
     UsingItem {
@@ -723,6 +751,8 @@ pub(crate) struct PlayerState {
     pub(crate) peaceful_food_ticks: u8,
     pub(crate) sprinting: bool,
     pub(crate) food_use: Option<crate::survival::FoodUse>,
+    pub(crate) hunger_effect: Option<crate::survival::HungerEffect>,
+    pub(crate) random: LegacyRandom,
     pub(crate) fall_distance: f64,
     pub(crate) last_damage: f32,
     pub(crate) hurt_cooldown: u8,
@@ -793,6 +823,7 @@ impl PlayerState {
     ) -> Self {
         let position = Position::default();
         let flying = profile.game_mode == GameMode::Spectator;
+        let seed = RandomState::new().hash_one((profile.uuid, entity_id)) as i64;
         Self {
             player: Player {
                 entity_id,
@@ -821,6 +852,8 @@ impl PlayerState {
             peaceful_food_ticks: 0,
             sprinting: false,
             food_use: None,
+            hunger_effect: None,
+            random: LegacyRandom::new(seed),
             fall_distance: 0.0,
             last_damage: 0.0,
             hurt_cooldown: 0,

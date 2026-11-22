@@ -225,6 +225,7 @@ fn run() -> io::Result<()> {
     let items = {
         let builtin = block_entity_registry::load_builtin(Path::new(""))?.unwrap_or_default();
         let has_food_remainders = builtin.has_food_remainders();
+        let has_food_effects = builtin.has_food_effects();
         let entries = |name| {
             builtin
                 .registries
@@ -244,6 +245,11 @@ fn run() -> io::Result<()> {
                 if !has_food_remainders {
                     warn!(
                         "Update the food defaults with `harpas vanilla-data generate-registry` to enable foods that return containers"
+                    );
+                }
+                if !has_food_effects {
+                    warn!(
+                        "Update the food defaults with `harpas vanilla-data generate-registry` to enable foods that apply Hunger"
                     );
                 }
                 codec.with_foods(foods)

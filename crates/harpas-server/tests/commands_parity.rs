@@ -1695,6 +1695,155 @@ fn food_and_natural_regeneration_match_vanilla() {
     assert_eq!(apple_count(&actual), Nbt::Int(1));
 }
 
+fn hunger_packet(client: &mut Client) -> play::clientbound::EntityEffect {
+    client.matching("Hunger effect", |packet| match packet {
+        Packet::EntityEffect(effect) => Some(effect),
+        _ => None,
+    })
+}
+
+fn exercise_hunger(server: &mut Server, port: u16) -> play::clientbound::EntityEffect {
+    for name in ["FleshEater", "FleshEater2", "FleshEater3"] {
+        let mut client = Client::join(port, name);
+        let entity_id = client.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        confirm_position(&mut client);
+        assert_eq!(health(&mut client).food, 1);
+        use_food(&mut client, play::Hand::OffHand, 1);
+        cancel_food(&mut client, entity_id);
+        for attempt in 1..=5 {
+            let mut effect = None;
+            use_food(&mut client, play::Hand::OffHand, attempt + 1);
+            let fed = client.matching("eating rotten flesh", |packet| match packet {
+                Packet::EntityEffect(applied) => {
+                    effect = Some(applied);
+                    None
+                }
+                Packet::SetHealth(health) if health.food == (1 + 4 * attempt).min(20) => {
+                    Some(health)
+                }
+                _ => None,
+            });
+            if let Some(mut effect) = effect {
+                assert_eq!(effect.entity_id, entity_id);
+                assert_eq!(effect.duration, 600);
+                assert_eq!(effect.amplifier, 0);
+                assert!(effect.flags.show_icon);
+                assert!(effect.flags.blend);
+                let expected_saturation = 0.8 * attempt as f32;
+                assert!(
+                    (fed.saturation - expected_saturation).abs() < 0.000001,
+                    "{fed:?}"
+                );
+                if attempt == 1 {
+                    assert_eq!(health(&mut client).saturation, 0.0);
+                } else {
+                    // Leave enough time for the saved duration to advance after applying the effect.
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                drop(client);
+                server.wait_for(&format!("{name} left the game"));
+                let mut client = Client::join(port, name);
+                confirm_position(&mut client);
+                let resumed = hunger_packet(&mut client);
+                assert_eq!(resumed.effect, effect.effect);
+                assert_eq!(
+                    resumed.flags,
+                    play::EffectFlags {
+                        blend: false,
+                        ..effect.flags
+                    }
+                );
+                assert!((500..600).contains(&resumed.duration), "{resumed:?}");
+                effect.entity_id = 0;
+                return effect;
+            }
+        }
+    }
+    panic!("no Hunger effect in fifteen completed uses");
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_hunger_effect_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food-hunger");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let expiring = offline_uuid("Expiring");
+    for dir in [&vanilla, &harpas] {
+        let world = dir.join("world");
+        let flesh = Compound::from_iter([
+            ("id", Nbt::from("minecraft:rotten_flesh")),
+            ("count", Nbt::Int(5)),
+        ]);
+        let data = Compound::from_iter([
+            ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+            ("foodLevel", Nbt::Int(1)),
+            ("foodSaturationLevel", Nbt::Float(0.0)),
+            ("foodExhaustionLevel", Nbt::Float(3.999)),
+            (
+                "equipment",
+                Compound::from_iter([("offhand", flesh)]).into(),
+            ),
+        ]);
+        for name in ["FleshEater", "FleshEater2", "FleshEater3"] {
+            harpas_anvil::write_player(&world, offline_uuid(name), &data).unwrap();
+        }
+        let effect = Compound::from_iter([
+            ("id", Nbt::from("minecraft:hunger")),
+            ("duration", Nbt::Int(20)),
+        ]);
+        let data = Compound::from_iter([
+            ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+            (
+                "active_effects",
+                Nbt::List(harpas_core::nbt::List::Compound(vec![effect])),
+            ),
+        ]);
+        harpas_anvil::write_player(&world, expiring, &data).unwrap();
+    }
+    let expires = |port, expected: &play::clientbound::EntityEffect| {
+        let mut client = Client::join(port, "Expiring");
+        confirm_position(&mut client);
+        let effect = hunger_packet(&mut client);
+        assert_eq!(effect.effect, expected.effect);
+        assert!((1..=20).contains(&effect.duration), "{effect:?}");
+        client.matching("Hunger expiry", |packet| match packet {
+            Packet::RemoveEntityEffect(removed) => {
+                assert_eq!(removed.entity_id, effect.entity_id);
+                assert_eq!(removed.effect, effect.effect);
+                Some(())
+            }
+            _ => None,
+        });
+    };
+    let expected = exercise_hunger(&mut reference, port);
+    expires(port, &expected);
+    reference.wait_for("Expiring left the game");
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_hunger(&mut server, other), expected);
+    expires(other, &expected);
+    server.wait_for("Expiring left the game");
+    stop(&mut server);
+    let exhaustion = (0..20).fold(0.0_f32, |sum, _| sum + 0.005);
+    for dir in [&vanilla, &harpas] {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), expiring)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            saved.get("foodExhaustionLevel"),
+            Some(&Nbt::Float(exhaustion))
+        );
+        assert!(saved.get("active_effects").is_none());
+    }
+}
+
 fn starvation_damage(client: &mut Client) {
     client.matching("starvation damage", |packet| match packet {
         Packet::DamageEvent(event) => {

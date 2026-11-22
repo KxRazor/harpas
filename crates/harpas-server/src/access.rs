@@ -21,6 +21,8 @@ pub const NOT_WHITELISTED: &str = "multiplayer.disconnect.not_whitelisted";
 pub const NOT_WHITELISTED_TEXT: &str = "You are not white-listed on this server!";
 pub const BANNED: &str = "multiplayer.disconnect.banned";
 pub const BANNED_TEXT: &str = "You are banned from this server.";
+pub const IP_BANNED: &str = "multiplayer.disconnect.ip_banned";
+pub const IP_BANNED_TEXT: &str = "You have been IP banned from this server";
 pub const DEFAULT_BAN_REASON: &str = "Banned by an operator.";
 pub const DEFAULT_BAN_REASON_KEY: &str = "multiplayer.disconnect.banned.reason.default";
 
@@ -151,6 +153,55 @@ impl AccessLists {
             .map(|(profile, _)| profile.name.as_str())
     }
 
+    pub fn banned_ips(&self) -> impl Iterator<Item = &str> {
+        self.ip_bans.entries.keys().map(String::as_str)
+    }
+
+    pub fn is_ip_banned(&self, ip: IpAddr) -> bool {
+        self.ip_bans.entries.contains_key(&ip_key(ip))
+    }
+
+    pub fn player_ban_entries(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+        self.bans
+            .java_order()
+            .into_iter()
+            .map(|(_, (profile, ban))| {
+                (
+                    profile.name.as_str(),
+                    ban.source.as_str(),
+                    ban.reason.as_deref(),
+                )
+            })
+    }
+
+    pub fn ip_ban_entries(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+        self.ip_bans
+            .java_order()
+            .into_iter()
+            .map(|(ip, ban)| (ip.as_str(), ban.source.as_str(), ban.reason.as_deref()))
+    }
+
+    /// Saves the IP ban list before making the change visible to logins.
+    pub fn change_ip_ban(
+        &mut self,
+        ip: &str,
+        ban: Option<(&str, Option<&str>)>,
+    ) -> io::Result<bool> {
+        let exists = self.ip_bans.entries.contains_key(ip);
+        if exists == ban.is_some() {
+            return Ok(false);
+        }
+        let mut updated = self.ip_bans.clone();
+        if let Some((source, reason)) = ban {
+            updated.insert(ip.into(), Ban::permanent(source, reason));
+        } else {
+            updated.entries.shift_remove(ip);
+        }
+        updated.write(&self.zone)?;
+        self.ip_bans = updated;
+        Ok(true)
+    }
+
     /// Saves the changed bans together before publishing them to logins.
     pub fn change_bans(
         &mut self,
@@ -159,12 +210,7 @@ impl AccessLists {
     ) -> io::Result<Vec<Profile>> {
         let mut updated = self.bans.clone();
         let mut changed = Vec::new();
-        let ban = ban.map(|(source, reason)| Ban {
-            created: Timestamp::now(),
-            source: source.into(),
-            expires: None,
-            reason: reason.map(str::to_owned),
-        });
+        let ban = ban.map(|(source, reason)| Ban::permanent(source, reason));
         for profile in profiles {
             let key = uuid_key(profile.uuid);
             if let Some(ban) = &ban {
@@ -413,6 +459,15 @@ impl Entry for Ban {
 }
 
 impl Ban {
+    fn permanent(source: &str, reason: Option<&str>) -> Self {
+        Self {
+            created: Timestamp::now(),
+            source: source.into(),
+            expires: None,
+            reason: reason.map(str::to_owned),
+        }
+    }
+
     /// `BanListEntry`'s fields: an unreadable creation date is now, an unreadable expiry date never comes.
     fn read(object: &Map<String, Value>, now: Timestamp) -> Result<Self, String> {
         let created = text(object, "created")?;
@@ -1109,6 +1164,35 @@ mod tests {
             [profile]
         );
         assert!(!reopened.is_banned(LISTED));
+        assert_eq!(fs::read_to_string(path).unwrap(), "[]");
+    }
+
+    #[test]
+    fn ip_bans_and_pardons_keep_the_active_list_on_write_failure() {
+        let folder = Folder::new("ip-ban-commands");
+        let mut lists = AccessLists::load_at(&folder.0, false, bogota(), now());
+        let path = folder.0.join("banned-ips.json");
+        let blocked = path.with_extension("json.tmp");
+        let ip = LOOPBACK.to_string();
+        let ban = Some(("Admin", Some("Test reason")));
+
+        fs::create_dir(&blocked).unwrap();
+        assert!(lists.change_ip_ban(&ip, ban).is_err());
+        assert!(!lists.is_ip_banned(LOOPBACK));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[]");
+        fs::remove_dir(&blocked).unwrap();
+        assert!(lists.change_ip_ban(&ip, ban).unwrap());
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!lists.change_ip_ban(&ip, Some(("Server", None))).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+
+        fs::create_dir(&blocked).unwrap();
+        assert!(lists.change_ip_ban(&ip, None).is_err());
+        assert!(lists.is_ip_banned(LOOPBACK));
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+        fs::remove_dir(blocked).unwrap();
+        assert!(lists.change_ip_ban(&ip, None).unwrap());
+        assert!(!lists.is_ip_banned(LOOPBACK));
         assert_eq!(fs::read_to_string(path).unwrap(), "[]");
     }
 

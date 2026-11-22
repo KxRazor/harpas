@@ -167,6 +167,7 @@ impl Client {
     fn command(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
         let request = if command
             .strip_prefix("ban ")
+            .or_else(|| command.strip_prefix("ban-ip "))
             .is_some_and(|args| args.contains(' '))
         {
             play::serverbound::SignedChatCommand {
@@ -227,7 +228,14 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
                     if !prefix.is_empty()
                         || matches!(
                             name.as_str(),
-                            "ban" | "list" | "pardon" | "seed" | "whitelist"
+                            "ban"
+                                | "ban-ip"
+                                | "banlist"
+                                | "list"
+                                | "pardon"
+                                | "pardon-ip"
+                                | "seed"
+                                | "whitelist"
                         ) =>
                 {
                     name.clone()
@@ -266,7 +274,7 @@ fn compare(port: u16, other: u16) {
             expected.iter().any(|(name, _, _)| name == "whitelist"),
             can_whitelist
         );
-        for command in ["ban", "pardon"] {
+        for command in ["ban", "ban-ip", "banlist", "pardon", "pardon-ip"] {
             assert_eq!(
                 expected.iter().any(|(name, _, _)| name == command),
                 can_whitelist
@@ -325,6 +333,12 @@ fn compare(port: u16, other: u16) {
         connected.push((vanilla, harpas));
     }
     assert!(errors.is_empty(), "{}", errors.join("\n"));
+
+    let mut vanilla = Client::join(port, "IpGuest");
+    let mut harpas = Client::join(other, "IpGuest");
+    for command in ["ban-ip Builder", "pardon-ip 192.0.2.7", "banlist"] {
+        assert_eq!(harpas.command(command, 2), vanilla.command(command, 2));
+    }
 }
 
 fn assert_whitelist_file(dir: &Path, enabled: bool) {
@@ -350,6 +364,10 @@ fn assert_login(port: u16, name: &str, allowed: bool) {
 }
 
 fn assert_banned(port: u16, name: &str, reason: Option<&str>) {
+    assert_ban(port, name, "multiplayer.disconnect.banned.reason", reason);
+}
+
+fn assert_ban(port: u16, name: &str, translation: &str, reason: Option<&str>) {
     let login::clientbound::Packet::LoginDisconnect(packet) = Client::login(port, name).1 else {
         panic!("{name} was allowed to log in");
     };
@@ -360,10 +378,86 @@ fn assert_banned(port: u16, name: &str, reason: Option<&str>) {
     assert_eq!(
         packet.reason,
         serde_json::json!({
-            "translate": "multiplayer.disconnect.banned.reason", "with": [reason],
+            "translate": translation, "with": [reason],
         })
         .to_string()
     );
+}
+
+fn exercise_ip_bans(server: &mut Server, dir: &Path, port: u16) -> (Bans, codec::Nbt) {
+    let mut admin = Client::join(port, "Admin");
+    let mut target = Client::join(port, "IpTarget");
+    admin.tree();
+    target.tree();
+    let mut completions = vec![admin.suggestions("/banlist i")];
+    completions.extend(admin.optional_suggestions("/ban-ip ipt"));
+    let mut replies = admin.command("banlist", 1);
+    for command in ["ban-ip ::1", "pardon-ip ::1", "ban-ip 192.0.2.9/24"] {
+        replies.extend(admin.command(command, 2));
+    }
+    for command in [
+        "banlist ips",
+        "banlist players",
+        "ban-ip MissingPlayer",
+        "pardon-ip MissingPlayer",
+        "pardon-ip 192.0.2.7",
+        "ban-ip 192.0.2.7",
+        "ban-ip 192.0.2.7",
+        "ban-ip 192.0.2.9 Explicit reason",
+        "ban IpTarget Player ban",
+    ] {
+        replies.extend(admin.command(command, 1));
+    }
+    target.disconnect();
+    completions.push(admin.suggestions("/pardon-ip 192.0.2."));
+    replies.extend(admin.command("banlist", 4));
+    replies.extend(admin.command("banlist ips", 3));
+    replies.extend(admin.command("banlist players", 2));
+    for command in [
+        "pardon IpTarget",
+        "pardon-ip 192.0.2.7",
+        "pardon-ip 192.0.2.9",
+    ] {
+        replies.extend(admin.command(command, 1));
+    }
+    let mut target = Client::join(port, "IpTarget");
+    target.tree();
+    let reason = "Shared address (by Admin)";
+    replies.extend(admin.command("ban-ip iptarget Shared address (by @s)", 2));
+    let disconnect = target.disconnect();
+    let sender_disconnect = admin.disconnect();
+    assert_ban(
+        port,
+        "NewGuest",
+        "multiplayer.disconnect.banned_ip.reason",
+        Some(reason),
+    );
+
+    let path = dir.join("banned-ips.json");
+    let mut saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved[0]["ip"], "127.0.0.1");
+    assert_eq!(saved[0]["reason"], reason);
+    assert!(
+        saved[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("created")
+            .unwrap()
+            .is_string()
+    );
+    writeln!(server.child.stdin.as_mut().unwrap(), "pardon-ip 127.0.0.1").unwrap();
+    server.wait_for("Unbanned IP 127.0.0.1");
+    assert_login(port, "NewGuest", true);
+    assert_eq!(fs::read_to_string(path).unwrap(), "[]");
+    (
+        Bans {
+            completions,
+            replies,
+            disconnect,
+            saved,
+        },
+        sender_disconnect,
+    )
 }
 
 #[derive(Debug, PartialEq)]
@@ -611,6 +705,17 @@ fn commands_match_vanilla() {
     assert_eq!(actual.disconnect, expected.disconnect);
     assert_eq!(actual.saved, expected.saved);
 
+    let (expected, expected_sender_disconnect) = exercise_ip_bans(&mut reference, &vanilla, port);
+    let (actual, actual_sender_disconnect) = exercise_ip_bans(&mut server, &harpas, other);
+    assert_eq!(actual.completions, expected.completions);
+    assert_eq!(actual.disconnect, expected.disconnect);
+    assert_eq!(actual_sender_disconnect, expected_sender_disconnect);
+    assert_eq!(actual.replies.len(), expected.replies.len());
+    for (index, (actual, expected)) in actual.replies.iter().zip(&expected.replies).enumerate() {
+        assert_eq!(actual, expected, "IP ban scenario reply {index}");
+    }
+    assert_eq!(actual.saved, expected.saved);
+
     for (server, port) in [(&mut reference, port), (&mut server, other)] {
         writeln!(server.child.stdin.as_mut().unwrap(), "ban persistentguest").unwrap();
         server.wait_for("Banned persistentguest: Banned by an operator.");
@@ -623,6 +728,10 @@ fn commands_match_vanilla() {
 
     // Keep the whitelist enabled across the restart and exercise enforcement on connected players.
     for (server, dir) in [(&mut reference, &vanilla), (&mut server, &harpas)] {
+        writeln!(server.child.stdin.as_mut().unwrap(), "ban-ip 127.0.0.1").unwrap();
+        server.wait_for("Banned IP 127.0.0.1: Banned by an operator.");
+        writeln!(server.child.stdin.as_mut().unwrap(), "banlist ips").unwrap();
+        server.wait_for("127.0.0.1 was banned by Server: Banned by an operator.");
         stop(server);
         let path = dir.join("server.properties");
         let properties = fs::read_to_string(&path).unwrap();
@@ -641,6 +750,14 @@ fn commands_match_vanilla() {
         (&mut server, &harpas, other),
     ] {
         server.wait_for("Done (");
+        assert_ban(
+            port,
+            "Admin",
+            "multiplayer.disconnect.banned_ip.reason",
+            None,
+        );
+        writeln!(server.child.stdin.as_mut().unwrap(), "pardon-ip 127.0.0.1").unwrap();
+        server.wait_for("Unbanned IP 127.0.0.1");
         assert_login(port, "Visitor", false);
         console_whitelist(server, dir, false);
         console_whitelist(server, dir, true);

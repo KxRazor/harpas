@@ -505,7 +505,11 @@ as shown by the parity report.
   - [x] `ban` and `pardon` manage `banned-players.json` from the console and Java clients. Bans disconnect
         connected targets and survive restarts. Commands, saved entries and new logins are compared with
         vanilla (`commands_parity`, `access_list_parity`).
-  - [ ] `ban-ip`, `banlist`, `pardon-ip`, `op` and `deop`.
+  - [x] `ban-ip` and `pardon-ip` manage `banned-ips.json` from the console and Java clients. IP bans
+        disconnect players at the address and survive restarts. `banlist` shows player and IP bans together
+        or by type. The tree, replies, saved entries and login results are compared with vanilla
+        (`commands_parity`).
+  - [ ] `op` and `deop`.
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).

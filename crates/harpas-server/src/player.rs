@@ -57,7 +57,10 @@ pub(crate) fn receive(
             let command = match packet.as_ref() {
                 Packet::ChatCommand(packet) => Some(packet.command.as_str()),
                 // The reason is administrative input, never relayed as signed player chat.
-                Packet::SignedChatCommand(packet) if packet.command.starts_with("ban ") => {
+                Packet::SignedChatCommand(packet)
+                    if packet.command.starts_with("ban ")
+                        || packet.command.starts_with("ban-ip ") =>
+                {
                     Some(packet.command.as_str())
                 }
                 _ => None,

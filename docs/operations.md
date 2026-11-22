@@ -5,7 +5,7 @@ metrics, profiling, shutdown, hosting, and telemetry.
 
 Status: partly implemented. Harpas supports `server.properties` with every 26.1 key, `harpas.toml` checking
 and its `eula` setting, and `HARPAS_*` overrides. The console provides `help`, `list`, `list uuids`, `seed`,
-`stop`, and the whitelist commands below. The server writes `logs/latest.log` and its archives, and
+`stop`, and the access list commands below. The server writes `logs/latest.log` and its archives, and
 stops on SIGTERM and SIGINT. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -85,6 +85,16 @@ The console and Java operators at level 3 or higher can use `ban <targets> [reas
 The commands save `banned-players.json` before the change takes effect. A ban is permanent until pardoned,
 defaults to `Banned by an operator.`, and disconnects any connected target. Later login refusals include the
 saved reason. The target may be a resolved name or a supported player selector.
+
+The console and Java operators at level 3 or higher can also use `ban-ip <target> [reason]` and
+`pardon-ip <ip>`. The ban target is an IPv4 address or the name of a connected player. The commands save
+`banned-ips.json` before the change takes effect. A new IP ban disconnects connected players at that
+address. `banlist` shows the target, author and reason of each ban. Use `banlist ips` or `banlist players`
+to filter by type.
+
+With an IPv6 connection, banning by player name disconnects players at the address and saves the full
+IPv6 address, as in vanilla 26.1. Its login check uses the shortened key described above, so players can
+reconnect. The command argument only accepts an IPv4 literal for `pardon-ip`.
 
 ---
 

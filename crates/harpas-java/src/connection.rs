@@ -1329,6 +1329,12 @@ impl Connection {
                     .enabled(matches!(settings.chat_mode, play::ChatMode::Enabled));
                 self.play_input.push(PlayEvent::Packet(Box::new(packet)));
             }
+            // The protocol names this action Finish Using Item. The client sends it on release.
+            Packet::PlayerAction(ref action)
+                if action.status == play::PlayerActionStatus::FinishUsingItem =>
+            {
+                self.play_input.push(PlayEvent::Packet(Box::new(packet)));
+            }
             Packet::ConfirmTeleportation(_)
             | Packet::ClientStatus(_)
             | Packet::ChunkBatchReceived(_)
@@ -1336,6 +1342,9 @@ impl Connection {
             | Packet::SetPlayerPositionAndRotation(_)
             | Packet::SetPlayerRotation(_)
             | Packet::SetPlayerMovementFlags(_)
+            | Packet::PlayerCommand(_)
+            | Packet::SetHeldItem(_)
+            | Packet::UseItem(_)
             | Packet::ChatCommand(_)
             | Packet::CommandSuggestionsRequest(_)
             | Packet::PlayerAbilities(_) => {

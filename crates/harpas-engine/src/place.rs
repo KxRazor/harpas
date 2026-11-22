@@ -244,17 +244,7 @@ impl Game {
                 );
             }
         }
-        let state = &mut self.players[index];
-        if sequence < 0 {
-            state.disconnecting = true;
-            state.send(player::Output::Disconnect("Network Protocol Error"));
-            return;
-        }
-        state.acknowledge_block_changes = Some(
-            state
-                .acknowledge_block_changes
-                .map_or(sequence, |acknowledged| acknowledged.max(sequence)),
-        );
+        self.players[index].acknowledge_block_changes(sequence);
     }
 
     /// `ServerPlayerGameMode.useItemOn`.

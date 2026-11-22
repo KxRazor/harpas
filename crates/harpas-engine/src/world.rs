@@ -461,7 +461,7 @@ type Save = dyn Fn(&SaveJob) -> io::Result<()> + Send + Sync;
 pub struct World {
     region_dir: PathBuf,
     spawn: [i32; 3],
-    pub(crate) death_rules: crate::survival::DeathRules,
+    pub(crate) survival_rules: crate::survival::SurvivalRules,
     generates: bool,
     chunks: HashMap<ChunkPos, ChunkState>,
     /// The chunks to keep loaded, most wanted first and each once, as [`World::want`] left them.
@@ -557,12 +557,11 @@ impl World {
         generator: Option<Arc<dyn ChunkSource>>,
     ) -> io::Result<Self> {
         let level = read_level(world_dir)?;
-        let death_rules = harpas_anvil::read_game_rules(world_dir)?
-            .as_ref()
-            .map_or_else(
-                crate::survival::DeathRules::default,
-                crate::survival::DeathRules::read,
-            );
+        let game_rules = harpas_anvil::read_game_rules(world_dir)?;
+        let survival_rules = crate::survival::SurvivalRules::read(
+            game_rules.as_ref(),
+            level.as_ref().map(|(data, _)| data),
+        );
         let spawn = level
             .as_ref()
             .and_then(|(data, _)| overworld_spawn(data))
@@ -680,7 +679,7 @@ impl World {
         Ok(Self {
             region_dir,
             spawn,
-            death_rules,
+            survival_rules,
             generates,
             chunks: HashMap::new(),
             wanted: Vec::new(),
@@ -1930,7 +1929,7 @@ mod tests {
         World {
             region_dir: PathBuf::from("test"),
             spawn: [0, 65, 0],
-            death_rules: Default::default(),
+            survival_rules: Default::default(),
             generates: false,
             chunks: HashMap::new(),
             wanted: Vec::new(),

@@ -176,6 +176,17 @@ pub enum Input {
     SelectHotbarSlot(i16),
     /// Whether the player is holding the secondary-use (sneak) input.
     SecondaryUse(bool),
+    /// Whether the player is sprinting.
+    Sprinting(bool),
+    /// The player tried to use the item in a hand.
+    UseItem {
+        /// Whether the item is in the off hand.
+        off_hand: bool,
+        /// The client's sequence number for its prediction.
+        sequence: i32,
+    },
+    /// The player released the use button.
+    StopUsingItem,
     /// The player used the item in a hand on a block.
     UseItemOn {
         /// Whether the off hand's item was used.
@@ -345,6 +356,15 @@ pub enum Output {
         /// Food saturation.
         saturation: f32,
     },
+    /// The entity started or stopped using an item.
+    UsingItem {
+        /// The entity using the item.
+        entity_id: i32,
+        /// The hand in use, or none when use stops.
+        off_hand: Option<bool>,
+    },
+    /// The local player finished using an item.
+    FinishUsingItem(i32),
     /// A fall damaged the given entity.
     FallDamage(i32),
     /// A player died from a fall.
@@ -686,6 +706,8 @@ pub(crate) struct PlayerState {
     pub(crate) flying: bool,
     pub(crate) previous_game_mode: Option<GameMode>,
     pub(crate) vitals: crate::survival::Vitals,
+    pub(crate) sprinting: bool,
+    pub(crate) apple_use: Option<crate::survival::AppleUse>,
     pub(crate) fall_distance: f64,
     pub(crate) last_fall_damage: f32,
     pub(crate) fall_hurt_cooldown: u8,
@@ -781,6 +803,8 @@ impl PlayerState {
             flying,
             previous_game_mode: None,
             vitals: crate::survival::Vitals::default(),
+            sprinting: false,
+            apple_use: None,
             fall_distance: 0.0,
             last_fall_damage: 0.0,
             fall_hurt_cooldown: 0,
@@ -870,6 +894,20 @@ impl PlayerState {
         }
         self.player.position = next;
         self.send(Output::OwnPosition(next));
+        true
+    }
+
+    pub(crate) fn acknowledge_block_changes(&mut self, sequence: i32) -> bool {
+        if sequence < 0 {
+            // Vanilla's ackBlockChangesUpTo throws on a negative sequence.
+            self.disconnecting = true;
+            self.send(Output::Disconnect("Network Protocol Error"));
+            return false;
+        }
+        self.acknowledge_block_changes = Some(
+            self.acknowledge_block_changes
+                .map_or(sequence, |acknowledged| acknowledged.max(sequence)),
+        );
         true
     }
 

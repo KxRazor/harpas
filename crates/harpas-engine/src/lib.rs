@@ -641,6 +641,7 @@ impl TickWork for Game {
             }
         }
         // The entities tick, after the block changes are sent, and their viewers are sent their changes.
+        let survival_rules = world.survival_rules;
         let removed = self
             .world
             .as_mut()
@@ -648,9 +649,7 @@ impl TickWork for Game {
         self.track_entities(&removed);
         // Players tick with the entities (`ServerPlayer.tick`), and pick up the items they touch (`aiStep`).
         self.tick_digging();
-        for player in &mut self.players {
-            player.fall_hurt_cooldown = player.fall_hurt_cooldown.saturating_sub(1);
-        }
+        self.tick_survival(survival_rules);
         self.retry_map_chests();
         self.pick_up_items();
         // Block entities tick after entities. A furnace's lit block state is broadcast on the next tick.
@@ -835,6 +834,7 @@ impl TickWork for Game {
                                     state
                                         .sent_chunks
                                         .retain(|pos| pos.within(center, state.view_distance));
+                                    self.sprint_exhaustion(index, before, after);
                                     self.check_fall(index, before, after);
                                     moved.insert(entity_id);
                                     tracking_changed = true;
@@ -851,7 +851,17 @@ impl TickWork for Game {
                         player::Input::SelectHotbarSlot(slot) => {
                             if let Some(index) = self.active(entity_id) {
                                 if (0..9).contains(&slot) {
-                                    self.players[index].inventory.selected = slot as usize;
+                                    let selected = slot as usize;
+                                    let player = &self.players[index];
+                                    if player.inventory.selected != selected
+                                        && player
+                                            .apple_use
+                                            .as_ref()
+                                            .is_some_and(|using| !using.off_hand)
+                                    {
+                                        self.stop_using_item(index);
+                                    }
+                                    self.players[index].inventory.selected = selected;
                                 } else {
                                     log::warn!(
                                         "{} tried to set an invalid carried item",
@@ -893,6 +903,24 @@ impl TickWork for Game {
                         player::Input::DropSelected { all } => {
                             if let Some(index) = self.active(entity_id) {
                                 self.drop_selected(index, all);
+                            }
+                            continue;
+                        }
+                        player::Input::Sprinting(sprinting) => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.players[index].sprinting = sprinting;
+                            }
+                            continue;
+                        }
+                        player::Input::UseItem { off_hand, sequence } => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.use_item(index, off_hand, sequence);
+                            }
+                            continue;
+                        }
+                        player::Input::StopUsingItem => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.stop_using_item(index);
                             }
                             continue;
                         }
@@ -942,6 +970,9 @@ impl TickWork for Game {
                             | player::Input::Dig { .. }
                             | player::Input::SetCreativeSlot { .. }
                             | player::Input::SelectHotbarSlot(_)
+                            | player::Input::Sprinting(_)
+                            | player::Input::UseItem { .. }
+                            | player::Input::StopUsingItem
                             | player::Input::UseItemOn { .. }
                             | player::Input::DropSelected { .. }
                             | player::Input::ClickContainer { .. }
@@ -1174,7 +1205,9 @@ impl Game {
         state.client_floating = false;
         state.floating_ticks = 0;
         state.fall_distance = 0.0;
+        state.sprinting = false;
         let uuid = state.player.profile.uuid;
+        self.stop_using_item(index);
         self.stop_digging(index);
         if mode == player::GameMode::Spectator && self.players[index].block_menu.is_some() {
             self.close_block_menu(index);
@@ -1221,18 +1254,7 @@ impl Game {
                 block::DigAction::Abort => self.abort_digging(index, pos),
             }
         }
-        let state = &mut self.players[index];
-        if sequence < 0 {
-            // Vanilla's `ackBlockChangesUpTo` throws, which disconnects the client.
-            state.disconnecting = true;
-            state.send(player::Output::Disconnect("Network Protocol Error"));
-            return;
-        }
-        state.acknowledge_block_changes = Some(
-            state
-                .acknowledge_block_changes
-                .map_or(sequence, |acknowledged| acknowledged.max(sequence)),
-        );
+        self.players[index].acknowledge_block_changes(sequence);
     }
 
     fn start_digging(&mut self, index: usize, mode: player::GameMode, pos: block::BlockPos) {
@@ -1533,9 +1555,19 @@ impl Game {
                 match (visible, tracked) {
                     (true, false) => {
                         let spawned = self.players[target].player.clone();
+                        let using = self.players[target]
+                            .apple_use
+                            .as_ref()
+                            .map(|using| using.off_hand);
                         let viewer = &mut self.players[viewer];
                         viewer.tracked.insert(entity_id);
                         viewer.send(player::Output::Spawn(spawned));
+                        if using.is_some() {
+                            viewer.send(player::Output::UsingItem {
+                                entity_id,
+                                off_hand: using,
+                            });
+                        }
                     }
                     (false, true) => {
                         let viewer = &mut self.players[viewer];
@@ -1682,6 +1714,67 @@ mod tests {
             rotation: Some([yaw, 0.0]),
             on_ground: false,
         })
+    }
+
+    #[test]
+    fn eating_an_apple_takes_32_ticks_and_changing_slots_cancels_it() {
+        use inventory::{HOTBAR, ItemStack};
+
+        let mut game = game();
+        let _received = join(&mut game, 1, "Eating", 2);
+        game.connections();
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.awaiting_teleport = None;
+        player.vitals.food = 16;
+        player.inventory.slots[HOTBAR] = ItemStack {
+            item: harpas_core::item::items().id("minecraft:apple").unwrap(),
+            count: 2,
+            ..ItemStack::empty()
+        };
+
+        input(
+            &mut game,
+            1,
+            Input::UseItem {
+                off_hand: false,
+                sequence: 1,
+            },
+        );
+        input(&mut game, 1, Input::SelectHotbarSlot(1));
+        input(&mut game, 1, Input::SelectHotbarSlot(0));
+        game.connections();
+        assert!(game.players[0].apple_use.is_none());
+
+        input(
+            &mut game,
+            1,
+            Input::UseItem {
+                off_hand: false,
+                sequence: 2,
+            },
+        );
+        game.connections();
+        for _ in 0..31 {
+            game.tick_survival(survival::SurvivalRules::default());
+        }
+        assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 2);
+        assert_eq!(game.players[0].vitals.food, 16);
+        game.tick_survival(survival::SurvivalRules::default());
+        assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 1);
+        assert_eq!(game.players[0].vitals.food, 20);
+        assert_eq!(game.players[0].vitals.saturation, 7.4);
+
+        input(
+            &mut game,
+            1,
+            Input::UseItem {
+                off_hand: false,
+                sequence: 3,
+            },
+        );
+        game.connections();
+        assert!(game.players[0].apple_use.is_none());
     }
 
     #[test]

@@ -157,6 +157,8 @@ impl PlayerInventory {
             root.insert("Health", Nbt::Float(vitals.health));
             root.insert("foodLevel", Nbt::Int(vitals.food));
             root.insert("foodSaturationLevel", Nbt::Float(vitals.saturation));
+            root.insert("foodExhaustionLevel", Nbt::Float(vitals.exhaustion));
+            root.insert("foodTickTimer", Nbt::Int(vitals.food_timer));
         }
         Ok(root)
     }
@@ -216,12 +218,20 @@ impl PlayerInventory {
             player.vitals.health = health.clamp(0.0, 20.0);
         }
         if let Some(Nbt::Int(food)) = self.root.get("foodLevel") {
-            player.vitals.food = *food;
+            player.vitals.food = (*food).clamp(0, 20);
         }
         if let Some(Nbt::Float(saturation)) = self.root.get("foodSaturationLevel")
             && saturation.is_finite()
         {
             player.vitals.saturation = *saturation;
+        }
+        if let Some(Nbt::Float(exhaustion)) = self.root.get("foodExhaustionLevel")
+            && exhaustion.is_finite()
+        {
+            player.vitals.exhaustion = *exhaustion;
+        }
+        if let Some(Nbt::Int(timer)) = self.root.get("foodTickTimer") {
+            player.vitals.food_timer = *timer;
         }
     }
 }
@@ -820,6 +830,8 @@ mod autosave_tests {
         };
         player.inventory.selected = 4;
         player.vitals.health = 16.0;
+        player.vitals.exhaustion = 3.5;
+        player.vitals.food_timer = 9;
         let mut game = crate::Game {
             pending: Vec::new(),
             players: vec![player],
@@ -831,6 +843,8 @@ mod autosave_tests {
         game.autosave();
         game.players[0].inventory.slots[36].count = 15;
         game.players[0].vitals.health = 9.0;
+        game.players[0].vitals.exhaustion = 0.0;
+        game.players[0].vitals.food_timer = 0;
         game.world
             .as_mut()
             .unwrap()
@@ -842,6 +856,9 @@ mod autosave_tests {
         let snapshot = writes.lock().unwrap()[0].clone();
         assert_eq!(snapshot.get("Health"), Some(&Nbt::Float(16.0)));
         let inventory = PlayerInventory::read(snapshot, &ItemCodec::default()).unwrap();
+        inventory.restore_vitals(&mut game.players[0]);
+        assert_eq!(game.players[0].vitals.exhaustion, 3.5);
+        assert_eq!(game.players[0].vitals.food_timer, 9);
         assert_eq!(inventory.slots[36].count, 16);
         assert_eq!(inventory.selected, 4);
         assert!(inventory.slots[1].is_empty());

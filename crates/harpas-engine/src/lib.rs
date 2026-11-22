@@ -104,6 +104,46 @@ impl Handle {
         initial_view_distance: u8,
         allow_flight: bool,
     ) -> Result<PlayerSession, LogicStopped> {
+        self.queue_join(
+            entity_id,
+            profile,
+            max_view_distance,
+            initial_view_distance,
+            allow_flight,
+            None,
+        )
+    }
+
+    /// Registers a player whose connection waits for the loaded game mode before sending Play Login.
+    /// The first output is the initial mode or the reason the player could not join.
+    pub fn player_joined_for_login(
+        &self,
+        entity_id: i32,
+        profile: player::Profile,
+        max_view_distance: u8,
+        initial_view_distance: u8,
+        allow_flight: bool,
+        force_game_mode: bool,
+    ) -> Result<PlayerSession, LogicStopped> {
+        self.queue_join(
+            entity_id,
+            profile,
+            max_view_distance,
+            initial_view_distance,
+            allow_flight,
+            Some(force_game_mode),
+        )
+    }
+
+    fn queue_join(
+        &self,
+        entity_id: i32,
+        profile: player::Profile,
+        max_view_distance: u8,
+        initial_view_distance: u8,
+        allow_flight: bool,
+        force_game_mode_on_login: Option<bool>,
+    ) -> Result<PlayerSession, LogicStopped> {
         let (output, receiver) = player::output_channel_waking(thread::current());
         self.events
             .send(Event::Joined {
@@ -113,6 +153,7 @@ impl Handle {
                 initial_view_distance,
                 allow_flight,
                 output,
+                force_game_mode_on_login,
             })
             .map_err(|_| LogicStopped)?;
         Ok(PlayerSession {
@@ -244,6 +285,11 @@ impl PlayerSession {
     pub fn try_recv(&self) -> Option<player::Output> {
         self.output.try_recv().ok()
     }
+
+    /// Waits for a message from the logic thread, up to `timeout`.
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<player::Output, RecvTimeoutError> {
+        self.output.recv_timeout(timeout)
+    }
 }
 
 impl Drop for PlayerSession {
@@ -362,6 +408,7 @@ enum Event {
         initial_view_distance: u8,
         allow_flight: bool,
         output: player::OutputSender,
+        force_game_mode_on_login: Option<bool>,
     },
     Input {
         entity_id: i32,
@@ -618,7 +665,7 @@ impl TickWork for Game {
         if self.stopped {
             return;
         }
-        self.poll_player_data();
+        let joined = self.poll_player_data();
         if self.stopped {
             return;
         }
@@ -629,7 +676,7 @@ impl TickWork for Game {
             .filter(|p| p.output.overflowed())
             .map(|p| p.player.entity_id)
             .collect();
-        let mut tracking_changed = !overflowed.is_empty();
+        let mut tracking_changed = joined || !overflowed.is_empty();
         for entity_id in overflowed {
             self.leave(entity_id);
         }
@@ -646,14 +693,15 @@ impl TickWork for Game {
                     initial_view_distance,
                     allow_flight,
                     output,
+                    force_game_mode_on_login,
                 } => {
                     self.join(
                         entity_id,
                         profile,
-                        view_distance,
-                        initial_view_distance,
+                        (view_distance, initial_view_distance),
                         allow_flight,
                         output,
+                        force_game_mode_on_login,
                     );
                     tracking_changed = true;
                 }
@@ -662,7 +710,7 @@ impl TickWork for Game {
                     let players = self
                         .players
                         .iter()
-                        .filter(|p| !p.disconnecting)
+                        .filter(|p| p.data_ready && !p.disconnecting)
                         .map(|p| PlayerListEntry {
                             uuid: p.player.profile.uuid,
                             name: p.player.profile.name.clone(),
@@ -684,7 +732,9 @@ impl TickWork for Game {
                     let mut changed = Vec::new();
                     for uuid in targets {
                         if let Some(index) = self.players.iter().position(|state| {
-                            !state.disconnecting && state.player.profile.uuid == uuid
+                            state.data_ready
+                                && !state.disconnecting
+                                && state.player.profile.uuid == uuid
                         }) && self.set_game_mode(index, mode, source != Some(uuid))
                         {
                             changed.push((uuid, self.players[index].player.profile.name.clone()));
@@ -956,7 +1006,7 @@ impl TickWork for Game {
             self.update_tracking(&moved);
         }
         self.online_players.store(
-            u32::try_from(self.players.len()).unwrap_or(u32::MAX),
+            u32::try_from(self.players.iter().filter(|p| p.data_ready).count()).unwrap_or(u32::MAX),
             Ordering::Relaxed,
         );
     }
@@ -985,10 +1035,10 @@ impl Game {
         &mut self,
         id: i32,
         profile: player::Profile,
-        view_distance: u8,
-        initial_view_distance: u8,
+        (view_distance, initial_view_distance): (u8, u8),
         allow_flight: bool,
         output: player::OutputSender,
+        force_game_mode_on_login: Option<bool>,
     ) {
         if let Some(old) = self
             .players
@@ -1002,13 +1052,54 @@ impl Game {
             self.leave(old_id);
         }
         let mut player = player::PlayerState::new(id, profile, view_distance, allow_flight, output);
+        player.force_game_mode_on_login = force_game_mode_on_login;
         if let Some(world) = &self.world {
             let position = world.spawn_position();
             player.player.position = position;
             player.tick_start = position;
         }
         player.view_distance = initial_view_distance.clamp(2, player.max_view_distance);
-        for existing in &self.players {
+        self.players.push(player);
+        let index = self.players.len() - 1;
+        let store = self
+            .world
+            .as_mut()
+            .and_then(|world| world.player_store.as_mut());
+        if let Some(store) = store {
+            let player = &mut self.players[index];
+            player.data_ready = false;
+            match store.load(id, player.player.profile.uuid) {
+                Ok(Some(data)) => self.finish_join(index, Some(data)),
+                Ok(None) => {}
+                Err(error) => {
+                    log::error!("Cannot load player {}: {error}", player.player.profile.name);
+                    player.disconnecting = true;
+                    player.send(player::Output::Disconnect("Cannot load player data"));
+                }
+            }
+        } else {
+            self.finish_join(index, None);
+        }
+    }
+
+    fn finish_join(&mut self, index: usize, data: Option<Arc<player_data::PlayerInventory>>) {
+        let player = &mut self.players[index];
+        if let Some(data) = data {
+            Self::restore_inventory(player, data);
+        }
+        if player.force_game_mode_on_login.take().is_some() {
+            player.send(player::Output::Login {
+                mode: player.player.profile.game_mode,
+                previous: player.previous_game_mode,
+                flying: player.flying,
+            });
+        }
+        let contents = place::initial_contents(&mut player.inventory);
+        let player = &self.players[index];
+        for (i, existing) in self.players.iter().enumerate() {
+            if i == index || !existing.data_ready || existing.disconnecting {
+                continue;
+            }
             player.send(player::Output::AddPlayer(existing.player.profile.clone()));
             if let Some(session) = &existing.chat_session {
                 player.send(player::Output::ChatSession {
@@ -1018,26 +1109,12 @@ impl Game {
             }
             existing.send(player::Output::AddPlayer(player.player.profile.clone()));
         }
-        let store = self
-            .world
-            .as_mut()
-            .and_then(|world| world.player_store.as_mut());
-        if let Some(store) = store {
-            player.data_ready = false;
-            match store.load(id, player.player.profile.uuid) {
-                Ok(Some(data)) => Self::restore_inventory(&mut player, data),
-                Ok(None) => {}
-                Err(error) => {
-                    log::error!("Cannot load player {}: {error}", player.player.profile.name);
-                    player.disconnecting = true;
-                    player.send(player::Output::Disconnect("Cannot load player data"));
-                }
-            }
-        } else {
-            let contents = place::initial_contents(&mut player.inventory);
-            player.send(contents);
+        player.send(contents);
+        if player.inventory.selected != 0 {
+            player.send(player::Output::SelectedHotbarSlot(
+                player.inventory.selected as i32,
+            ));
         }
-        self.players.push(player);
     }
 
     fn leave(&mut self, entity_id: i32) {
@@ -1066,7 +1143,9 @@ impl Game {
             if player.tracked.remove(&entity_id) {
                 player.send(player::Output::RemoveEntity(entity_id));
             }
-            player.send(player::Output::RemovePlayer(left.player.profile.uuid));
+            if left.data_ready {
+                player.send(player::Output::RemovePlayer(left.player.profile.uuid));
+            }
         }
     }
 
@@ -1082,6 +1161,7 @@ impl Game {
         if state.player.profile.game_mode == mode {
             return false;
         }
+        state.previous_game_mode = Some(state.player.profile.game_mode);
         state.player.profile.game_mode = mode;
         state.flying = mode == player::GameMode::Spectator;
         state.client_floating = false;
@@ -1430,12 +1510,13 @@ impl Game {
                     p.player.entity_id,
                     p.player.profile.game_mode,
                     p.player.position,
+                    p.data_ready,
                 )
             })
             .collect();
         for viewer in 0..self.players.len() {
-            for (target, &(entity_id, mode, position)) in targets.iter().enumerate() {
-                if viewer == target {
+            for (target, &(entity_id, mode, position, ready)) in targets.iter().enumerate() {
+                if viewer == target || !ready || !self.players[viewer].data_ready {
                     continue;
                 }
                 let visible = self.players[viewer].can_see(mode, position);
@@ -1577,6 +1658,7 @@ mod tests {
             initial_view_distance: distance,
             allow_flight: false,
             output,
+            force_game_mode_on_login: None,
         });
         receiver
     }
@@ -1643,6 +1725,7 @@ mod tests {
                     initial_view_distance: 10,
                     allow_flight: false,
                     output,
+                    force_game_mode_on_login: None,
                 })
                 .unwrap();
             received
@@ -2047,6 +2130,7 @@ mod tests {
             initial_view_distance: 10,
             allow_flight: false,
             output,
+            force_game_mode_on_login: None,
         });
         tick(&mut game, 7);
         assert!(
@@ -2167,6 +2251,7 @@ mod tests {
                 initial_view_distance: 10,
                 allow_flight,
                 output,
+                force_game_mode_on_login: None,
             });
             input(&mut game, 1, Input::ConfirmTeleport(1));
             input(&mut game, 1, movement(0.5, 0.0));
@@ -2202,6 +2287,7 @@ mod tests {
             initial_view_distance: 10,
             allow_flight: false,
             output,
+            force_game_mode_on_login: None,
         });
         tick(&mut game, 2);
         assert_eq!(

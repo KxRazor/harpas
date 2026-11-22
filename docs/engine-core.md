@@ -114,11 +114,11 @@ Normal furnaces use the installed data pack's smelting recipes and item tags. Th
 and timers are held in the furnace block entity in Anvil. A loaded furnace ticks while burning, cooling or
 able to cook. Each viewer receives changes to the shared slots and the four burn and cooking properties.
 
-Player inventories now load before their first inventory synchronization and before gameplay can change
-items. A dedicated worker reads and writes their vanilla player documents; the logic thread takes immutable
-inventory snapshots on autosave, departure and shutdown. A reconnect uses the latest pending snapshot, and
-one write per UUID is outstanding, so an older save cannot overwrite newer progress. Main inventory, hotbar,
-armor, offhand and selected slot persist; the rest of the player document is retained. The supported item
+Player inventories and game modes load before Play Login, inventory synchronization and gameplay. A dedicated
+worker reads and writes vanilla player documents. The logic thread takes immutable player snapshots on autosave,
+departure and shutdown. A reconnect uses the latest pending snapshot, and one write per UUID is outstanding,
+so an older save cannot overwrite newer progress. The main inventory, hotbar, armor, offhand, selected slot,
+and current and previous game modes persist. The supported item
 component codecs are checked against vanilla, and unsupported values refuse loading or accepting the item
 instead of removing its components. Details and limits are in [world.md](world.md#player-inventories).
 

@@ -231,6 +231,7 @@ pub struct Connection {
     center_chunk: (i32, i32),
     biome: i32,
     external_chunks: bool,
+    defer_play_login: bool,
 }
 
 /// Where a connection gets its player's entity ID when it enters Play.
@@ -299,6 +300,7 @@ impl Connection {
             center_chunk: (0, 0),
             biome: 0,
             external_chunks: false,
+            defer_play_login: false,
         }
     }
 
@@ -310,6 +312,29 @@ impl Connection {
     /// Whether the connection is over.
     pub fn is_closed(&self) -> bool {
         self.state == State::Closed
+    }
+
+    /// Lets the caller supply the player's saved mode before the initial Play packets.
+    pub fn defer_play_login(&mut self) {
+        self.defer_play_login = true;
+    }
+
+    /// Sends the initial Play packets and handles any buffered Play input.
+    pub fn finish_play_login(
+        &mut self,
+        info: &ServerInfo,
+        previous_game_mode: Option<play::GameMode>,
+        flying: bool,
+    ) -> Result<(), ConnectionError> {
+        debug_assert_eq!(self.state, State::Play);
+        debug_assert!(self.defer_play_login);
+        self.defer_play_login = false;
+        self.join(info, previous_game_mode, flying);
+        let result = self.handle_frames(info);
+        if result.is_err() {
+            self.state = State::Closed;
+        }
+        result
     }
 
     /// The player, once Login succeeds.
@@ -427,9 +452,13 @@ impl Connection {
 
     /// Sends the standard player abilities for this game mode.
     pub fn send_game_mode_abilities(&mut self, game_mode: play::GameMode) {
+        self.send_abilities(abilities(game_mode));
+    }
+
+    fn send_abilities(&mut self, flags: play::AbilityFlags) {
         self.send_play_packet(
             play::clientbound::PlayerAbilities {
-                flags: abilities(game_mode),
+                flags,
                 flying_speed: 0.05,
                 field_of_view_modifier: 0.1,
             }
@@ -649,7 +678,9 @@ impl Connection {
             self.state = State::Closed;
             return Err(ConnectionError::TimedOut);
         }
-        if !matches!(self.state, State::Configuration | State::Play) {
+        if !matches!(self.state, State::Configuration | State::Play)
+            || (self.state == State::Play && self.defer_play_login)
+        {
             return Ok(());
         }
         if let Some(pending) = self.pending_keepalive {
@@ -686,7 +717,11 @@ impl Connection {
     }
 
     fn handle_frames(&mut self, info: &ServerInfo) -> Result<(), ConnectionError> {
-        while !self.is_closed() && !self.awaiting_admission && self.login != LoginStep::Checking {
+        while !self.is_closed()
+            && !self.awaiting_admission
+            && self.login != LoginStep::Checking
+            && !(self.state == State::Play && self.defer_play_login)
+        {
             let limit = packet_limit(self.state);
             let Some(frame) = self
                 .frames
@@ -981,8 +1016,17 @@ impl Connection {
                 self.send_configuration(configuration::clientbound::FinishConfiguration.into());
             }
             Packet::AcknowledgeFinishConfiguration(_) => {
+                if let Some(EntityIds(next)) = self.entity_ids.take() {
+                    let Some(entity_id) = next() else {
+                        self.state = State::Closed;
+                        return Ok(());
+                    };
+                    self.entity_id = entity_id;
+                }
                 self.state = State::Play;
-                self.join(info);
+                if !self.defer_play_login {
+                    self.join(info, None, info.game_mode == play::GameMode::Spectator);
+                }
             }
             Packet::KeepAlive(keepalive) => self.keepalive_answered(keepalive.id)?,
             Packet::ClientInformation(settings) => {
@@ -1004,16 +1048,14 @@ impl Connection {
     }
 
     /// Brings the player into Play.
-    fn join(&mut self, info: &ServerInfo) {
+    fn join(
+        &mut self,
+        info: &ServerInfo,
+        previous_game_mode: Option<play::GameMode>,
+        flying: bool,
+    ) {
         let player = self.player.clone().expect("Login set the player");
         debug_assert_eq!(self.login, LoginStep::Done);
-        if let Some(EntityIds(next)) = self.entity_ids.take() {
-            let Some(entity_id) = next() else {
-                self.state = State::Closed;
-                return;
-            };
-            self.entity_id = entity_id;
-        }
         let dimension_type =
             registries::entry_id("minecraft:dimension_type", "minecraft:overworld")
                 .expect("the overworld dimension type is synchronized");
@@ -1045,7 +1087,8 @@ impl Connection {
                     dimension: "minecraft:overworld".to_owned(),
                     hashed_seed: info.hashed_seed,
                     game_mode: info.game_mode,
-                    previous_game_mode: -1,
+                    previous_game_mode: previous_game_mode
+                        .map_or(-1, |mode| game_mode_id(mode) as i8),
                     is_debug: false,
                     is_flat: info.is_flat,
                     death_location: None,
@@ -1056,7 +1099,10 @@ impl Connection {
             }
             .into(),
         );
-        self.send_game_mode_abilities(info.game_mode);
+        self.send_abilities(play::AbilityFlags {
+            flying,
+            ..abilities(info.game_mode)
+        });
         self.send_play(
             play::clientbound::PlayerInfoUpdate {
                 updates: play::PlayerInfoUpdates {

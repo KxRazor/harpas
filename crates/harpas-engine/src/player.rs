@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::Thread;
+use std::time::Duration;
 
 use harpas_anvil::Chunk;
 
@@ -36,6 +37,27 @@ pub enum GameMode {
     Adventure,
     /// Spectator mode.
     Spectator,
+}
+
+impl GameMode {
+    pub(crate) fn from_id(id: i32) -> Option<Self> {
+        match id {
+            0 => Some(Self::Survival),
+            1 => Some(Self::Creative),
+            2 => Some(Self::Adventure),
+            3 => Some(Self::Spectator),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn id(self) -> i32 {
+        match self {
+            Self::Survival => 0,
+            Self::Creative => 1,
+            Self::Adventure => 2,
+            Self::Spectator => 3,
+        }
+    }
 }
 
 /// A player's identity and game mode. The identity is verified in online mode.
@@ -238,6 +260,15 @@ pub struct Player {
 /// A message for a player's connection to translate into edition-specific packets.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
+    /// The loaded game mode for the initial Play packets.
+    Login {
+        /// The mode to send in Play Login and the player list.
+        mode: GameMode,
+        /// The mode before the last change, if the player has one.
+        previous: Option<GameMode>,
+        /// Whether the player is already flying.
+        flying: bool,
+    },
     /// Update the image and decorations of a map in one of the player's hands.
     MapUpdate {
         /// The item's saved map ID.
@@ -570,6 +601,15 @@ impl OutputReceiver {
         Ok(output)
     }
 
+    pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<Output, mpsc::RecvTimeoutError> {
+        if self.queue.overflowed.load(Ordering::Relaxed) {
+            return Ok(Output::Disconnect(TOO_SLOW));
+        }
+        let output = self.receiver.recv_timeout(timeout)?;
+        self.queue.len.fetch_sub(1, Ordering::Relaxed);
+        Ok(output)
+    }
+
     /// Takes the messages that are ready.
     #[cfg(test)]
     pub(crate) fn try_iter(&self) -> impl Iterator<Item = Output> + '_ {
@@ -605,6 +645,8 @@ pub(crate) struct PlayerState {
     pub(crate) awaiting_teleport: Option<i32>,
     pub(crate) next_teleport: i32,
     pub(crate) flying: bool,
+    pub(crate) previous_game_mode: Option<GameMode>,
+    pub(crate) force_game_mode_on_login: Option<bool>,
     pub(crate) tick_start: Position,
     pub(crate) disconnecting: bool,
     /// Vanilla's chat spam counter: each message adds 20, and each tick takes one away.
@@ -693,6 +735,8 @@ impl PlayerState {
             awaiting_teleport: Some(1),
             next_teleport: 2,
             flying,
+            previous_game_mode: None,
+            force_game_mode_on_login: None,
             tick_start: position,
             disconnecting: false,
             chat_spam: 0,
@@ -710,7 +754,14 @@ impl PlayerState {
     }
 
     pub(crate) fn send(&self, output: Output) {
-        self.output.send(output);
+        if self.data_ready
+            || matches!(
+                output,
+                Output::Disconnect(_) | Output::DisconnectTranslated { .. }
+            )
+        {
+            self.output.send(output);
+        }
     }
 
     /// Applies a movement packet and returns whether the player moved. `world` tells whether the player is

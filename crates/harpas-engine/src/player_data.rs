@@ -1,5 +1,5 @@
-//! The persistent part of a player's inventory and its asynchronous, ordered `playerdata` I/O. The input
-//! grids and cursor are transient menus, not additional saved inventory slots.
+//! Player inventory and game mode snapshots and their asynchronous, ordered `playerdata` I/O.
+//! The input grids and cursor are transient menus, not additional saved inventory slots.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -12,6 +12,7 @@ use harpas_core::nbt::{Compound, List, Nbt};
 
 use crate::inventory::{Inventory, ItemStack, SLOTS};
 use crate::item_data::{ItemCodec, invalid};
+use crate::player::{GameMode, PlayerState};
 
 const CAPACITY: usize = 64;
 const EQUIPMENT: [(&str, usize); 5] = [
@@ -30,6 +31,14 @@ pub struct PlayerInventory {
     /// The selected hotbar slot, from 0 to 8.
     pub selected: usize,
     root: Arc<Compound>,
+    mode: Option<SavedGameMode>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SavedGameMode {
+    current: GameMode,
+    previous: Option<GameMode>,
+    flying: bool,
 }
 
 impl PlayerInventory {
@@ -76,6 +85,7 @@ impl PlayerInventory {
             slots,
             selected,
             root: Arc::new(root),
+            mode: None,
         })
     }
 
@@ -124,15 +134,66 @@ impl PlayerInventory {
             root.insert("equipment", equipment);
         }
         root.insert("SelectedItemSlot", self.selected as i32);
+        if let Some(mode) = self.mode {
+            root.insert("playerGameType", mode.current.id());
+            if let Some(previous) = mode.previous {
+                root.insert("previousPlayerGameType", previous.id());
+            } else {
+                root.remove("previousPlayerGameType");
+            }
+            if mode.flying || root.get("abilities").is_some() {
+                let mut abilities = match root.remove("abilities") {
+                    Some(Nbt::Compound(abilities)) => abilities,
+                    _ => Compound::new(),
+                };
+                abilities.insert("flying", Nbt::Byte(i8::from(mode.flying)));
+                root.insert("abilities", abilities);
+            }
+        }
         Ok(root)
     }
 
-    pub(crate) fn snapshot(&self, inventory: &Inventory) -> Self {
+    fn snapshot(&self, player: &PlayerState) -> Self {
         Self {
-            slots: inventory.slots.clone(),
-            selected: inventory.selected,
+            slots: player.inventory.slots.clone(),
+            selected: player.inventory.selected,
             root: Arc::clone(&self.root),
+            mode: Some(SavedGameMode {
+                current: player.player.profile.game_mode,
+                previous: player.previous_game_mode,
+                flying: player.flying,
+            }),
         }
+    }
+
+    fn restore_game_mode(&self, player: &mut PlayerState) {
+        let read_mode = |key| match self.root.get(key) {
+            Some(Nbt::Int(id)) => GameMode::from_id(*id),
+            _ => None,
+        };
+        let (current, previous, flying) = self.mode.map_or_else(
+            || {
+                let flying = matches!(self.root.get("abilities"), Some(Nbt::Compound(abilities))
+                    if matches!(abilities.get("flying"), Some(Nbt::Byte(value)) if *value != 0));
+                (
+                    read_mode("playerGameType"),
+                    read_mode("previousPlayerGameType"),
+                    flying,
+                )
+            },
+            |mode| (Some(mode.current), mode.previous, mode.flying),
+        );
+        if player.force_game_mode_on_login != Some(true)
+            && let Some(current) = current
+        {
+            player.player.profile.game_mode = current;
+        }
+        player.previous_game_mode = previous;
+        player.flying = match player.player.profile.game_mode {
+            GameMode::Spectator => true,
+            GameMode::Creative => flying,
+            _ => false,
+        };
     }
 }
 
@@ -425,20 +486,15 @@ impl crate::Game {
         player: &mut crate::player::PlayerState,
         data: Arc<PlayerInventory>,
     ) {
+        data.restore_game_mode(player);
         player.inventory.slots = data.slots.clone();
         player.inventory.selected = data.selected;
         player.data_ready = true;
         player.saved_inventory = Some(data);
-        let contents = crate::place::initial_contents(&mut player.inventory);
-        player.send(contents);
-        if player.inventory.selected != 0 {
-            player.send(crate::player::Output::SelectedHotbarSlot(
-                player.inventory.selected as i32,
-            ));
-        }
     }
 
-    pub(crate) fn poll_player_data(&mut self) {
+    pub(crate) fn poll_player_data(&mut self) -> bool {
+        let mut joined = false;
         let result = self
             .world
             .as_mut()
@@ -447,7 +503,7 @@ impl crate::Game {
         match result {
             Some(Ok(loaded)) => {
                 for loaded in loaded {
-                    let Some(player) = self.players.iter_mut().find(|p| {
+                    let Some(index) = self.players.iter().position(|p| {
                         p.player.entity_id == loaded.entity_id
                             && p.player.profile.uuid == loaded.uuid
                             && !p.data_ready
@@ -456,8 +512,12 @@ impl crate::Game {
                         continue;
                     };
                     match loaded.result {
-                        Ok(data) => Self::restore_inventory(player, data),
+                        Ok(data) => {
+                            self.finish_join(index, Some(data));
+                            joined = true;
+                        }
                         Err(error) => {
+                            let player = &mut self.players[index];
                             log::error!(
                                 "Cannot load player {}: {error}",
                                 player.player.profile.name
@@ -472,6 +532,7 @@ impl crate::Game {
             Some(Err(error)) => self.fail_world(error),
             None => {}
         }
+        joined
     }
 
     pub(crate) fn save_player_inventory(&mut self, index: usize) {
@@ -482,7 +543,7 @@ impl crate::Game {
                 .as_mut()
                 .and_then(|world| world.player_store.as_mut())
         {
-            store.save(player.player.profile.uuid, data.snapshot(&player.inventory));
+            store.save(player.player.profile.uuid, data.snapshot(player));
         }
     }
 

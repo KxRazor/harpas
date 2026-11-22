@@ -12,8 +12,8 @@ data checked against vanilla. Generated chunks receive sky and block light from 
 sent, and that light is compared with vanilla's own saved chunks. Changed chunks can be saved asynchronously;
 feature definitions are loaded from the datapack, and ores, simple vegetation and the first trees are placed and
 compared with vanilla, but generation through the complete feature stage, live block changes and saving other
-world and player data during play remain in progress. Player inventory and dropped item persistence are
-implemented, as described under [Player inventories](#player-inventories) and [Dropped items](#dropped-items).
+world and player data during play remain in progress. The server persists player inventories, game modes and
+dropped items. See [Player inventories](#player-inventories) and [Dropped items](#dropped-items).
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -141,18 +141,18 @@ block changes are part of gameplay work.
 
 ### Player inventories
 
-The engine loads `players/data/<uuid>.dat` on a dedicated worker before sending the player's first inventory
-or accepting inventory changes, item use, breaking or pickups. A missing document starts a new inventory;
-an unreadable document or unsupported item refuses the connection and is never replaced with an empty
-inventory. The existing `_old` recovery applies to damaged or missing compressed files.
+The engine loads `players/data/<uuid>.dat` on a dedicated worker before sending Play Login or the player's
+first inventory, and before accepting inventory changes, item use, breaking or pickups. A missing document
+starts a new inventory. Unreadable documents and unsupported items cause the server to refuse the connection
+and preserve the saved data. The existing `_old` recovery applies to damaged or missing compressed files.
 
 The main inventory and hotbar use the `Inventory` list and its byte `Slot` numbers, 0 to 35. Armor and the
 offhand use the `equipment` compound [9], and `SelectedItemSlot` keeps the selected hotbar slot. Unrelated
-player fields, unmodeled slots and equipment, and unknown fields on supported item records are retained.
-This task does not apply saved position, game mode, health, experience or the other player state to gameplay;
-existing values in those fields stay intact.
+player fields, including position, health and experience, unmodeled slots and equipment, and unknown fields on
+supported item records are retained. The current and previous modes use `playerGameType` and
+`previousPlayerGameType`. Play Login, the player list and the starting abilities use the resolved mode.
 
-Autosave every 6,000 ticks, departure and shutdown take immutable inventory snapshots on the logic thread.
+Autosave every 6,000 ticks, departure and shutdown take immutable player snapshots on the logic thread.
 The worker encodes NBT, compresses and writes them through the Anvil backup writer. Its job queue is bounded
 at 64; pending saves coalesce by UUID, and there is one outstanding write per UUID. A rapid reconnect uses
 the newest pending snapshot, including when its older save is still being written. New snapshots remain

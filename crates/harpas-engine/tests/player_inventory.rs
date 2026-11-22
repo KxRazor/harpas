@@ -68,6 +68,87 @@ impl Drop for Engine {
     }
 }
 
+#[test]
+fn the_initial_mode_uses_the_saved_snapshot_unless_the_server_forces_its_default() {
+    let folder = Folder::new();
+    let mut original = root();
+    original.insert("playerGameType", 1);
+    original.insert("previousPlayerGameType", 0);
+    original.insert(
+        "abilities",
+        Compound::from_iter([("flying", Nbt::Byte(1)), ("flySpeed", Nbt::Float(0.05))]),
+    );
+    write_player(&folder.0, 1, &original).unwrap();
+    let engine = Engine::start(&folder, GameData::default());
+    let join = |force| {
+        let session = engine
+            .handle
+            .player_joined_for_login(
+                engine.handle.next_entity_id().unwrap(),
+                Profile {
+                    uuid: 1,
+                    name: "Crafter".to_owned(),
+                    properties: Vec::new(),
+                    game_mode: GameMode::Adventure,
+                },
+                2,
+                2,
+                true,
+                force,
+            )
+            .unwrap();
+        let login = session.recv_timeout(Duration::from_secs(10)).unwrap();
+        (session, login)
+    };
+    let (session, login) = join(false);
+    assert_eq!(
+        login,
+        Output::Login {
+            mode: GameMode::Creative,
+            previous: Some(GameMode::Survival),
+            flying: true,
+        }
+    );
+    assert_eq!(
+        engine
+            .handle
+            .set_game_mode(vec![1], GameMode::Spectator, None)
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(session);
+    let (session, login) = join(false);
+    assert_eq!(
+        login,
+        Output::Login {
+            mode: GameMode::Spectator,
+            previous: Some(GameMode::Creative),
+            flying: true,
+        }
+    );
+    drop(session);
+    let (session, login) = join(true);
+    assert_eq!(
+        login,
+        Output::Login {
+            mode: GameMode::Adventure,
+            previous: Some(GameMode::Creative),
+            flying: false,
+        }
+    );
+    drop(engine);
+    drop(session);
+    let (saved, _) = read_player(&folder.0, 1).unwrap().unwrap();
+    assert_eq!(saved.get("playerGameType"), Some(&Nbt::Int(2)));
+    assert_eq!(saved.get("previousPlayerGameType"), Some(&Nbt::Int(1)));
+    let Some(Nbt::Compound(abilities)) = saved.get("abilities") else {
+        panic!("missing saved abilities");
+    };
+    assert_eq!(abilities.get("flying"), Some(&Nbt::Byte(0)));
+    assert_eq!(abilities.get("flySpeed"), Some(&Nbt::Float(0.05)));
+}
+
 fn wait(session: &PlayerSession, mut matches: impl FnMut(&Output) -> bool) -> Output {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

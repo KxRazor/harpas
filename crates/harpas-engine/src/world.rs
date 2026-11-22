@@ -2180,6 +2180,12 @@ mod tests {
             stopped: false,
         };
         let mut number = 0;
+        // The connection sends Play Login and its initial teleport after player data has loaded.
+        wait_until(|| {
+            number += 1;
+            tick(&mut game, number);
+            game.players[0].data_ready
+        });
         let mut move_to = |game: &mut Game, x: f64| {
             game.pending.push(Event::Input {
                 entity_id: 1,

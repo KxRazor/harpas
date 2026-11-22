@@ -15,6 +15,11 @@ use jiff::{Span, Timestamp, ZonedDateTime};
 use log::warn;
 use serde_json::{Map, Value};
 
+use crate::properties::Properties;
+
+pub const NOT_WHITELISTED: &str = "multiplayer.disconnect.not_whitelisted";
+pub const NOT_WHITELISTED_TEXT: &str = "You are not white-listed on this server!";
+
 /// What a player who logs in gets, before the player limit is checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
@@ -34,6 +39,7 @@ pub enum Verdict {
 pub struct AccessLists {
     /// `white-list` in `server.properties`.
     white_list: bool,
+    enforce_whitelist: bool,
     bans: StoredList<(Profile, Ban)>,
     ip_bans: StoredList<Ban>,
     ops: StoredList<(Profile, Operator)>,
@@ -52,6 +58,7 @@ impl AccessLists {
     fn new(dir: &Path, white_list: bool, zone: TimeZone) -> Self {
         Self {
             white_list,
+            enforce_whitelist: false,
             bans: StoredList::new(dir.join("banned-players.json")),
             ip_bans: StoredList::new(dir.join("banned-ips.json")),
             ops: StoredList::new(dir.join("ops.json")),
@@ -63,8 +70,15 @@ impl AccessLists {
     /// Loads the lists from `dir` and writes them back in vanilla's order: the bans and operators always,
     /// the whitelist only if it has no file yet. Unlike vanilla, a file that cannot be read is left as it is
     /// instead of being overwritten with what could be read of it.
-    pub fn load(dir: &Path, white_list: bool) -> Self {
-        Self::load_at(dir, white_list, TimeZone::system(), Timestamp::now())
+    pub fn load(dir: &Path, properties: &Properties) -> Self {
+        let mut lists = Self::load_at(
+            dir,
+            properties.parsed("white-list", false),
+            TimeZone::system(),
+            Timestamp::now(),
+        );
+        lists.enforce_whitelist = properties.parsed("enforce-whitelist", false);
+        lists
     }
 
     fn load_at(dir: &Path, white_list: bool, zone: TimeZone, now: Timestamp) -> Self {
@@ -95,6 +109,44 @@ impl AccessLists {
             .map_or(0, |(_, op)| op.level)
     }
 
+    /// Persists a whitelist change and reports whether the setting changed.
+    pub fn set_whitelist(&mut self, enabled: bool) -> io::Result<bool> {
+        if self.white_list == enabled {
+            return Ok(false);
+        }
+        let path = self.whitelist.path.with_file_name("server.properties");
+        Properties::store_whitelist(&path, enabled)?;
+        self.white_list = enabled;
+        Ok(true)
+    }
+
+    pub fn whitelist_enforced(&self) -> bool {
+        self.white_list && self.enforce_whitelist
+    }
+
+    pub fn whitelist_names(&self) -> Vec<&str> {
+        self.whitelist
+            .java_order()
+            .into_iter()
+            .map(|(_, profile)| profile.name.as_str())
+            .collect()
+    }
+
+    /// Enforcement checks list membership, including for operators who bypass the whitelist at login.
+    pub fn whitelisted_players(&self) -> impl Iterator<Item = u128> {
+        self.whitelist.entries.values().map(|profile| profile.uuid)
+    }
+
+    pub fn allows_whitelist(&self, uuid: u128) -> bool {
+        self.allows_whitelist_key(&uuid_key(uuid))
+    }
+
+    fn allows_whitelist_key(&self, key: &str) -> bool {
+        !self.white_list
+            || self.ops.entries.contains_key(key)
+            || self.whitelist.entries.contains_key(key)
+    }
+
     /// Checks a player who logs in from `ip`, in vanilla's order: player bans, the whitelist (which operators
     /// skip), IP bans. The player limit, checked last, is the connection's.
     pub fn check(&mut self, uuid: u128, ip: IpAddr, now: Timestamp) -> Verdict {
@@ -106,13 +158,14 @@ impl AccessLists {
                 None => Verdict::Fail,
             };
         }
-        let op = self.ops.entries.get(&key);
-        if self.white_list && op.is_none() && !self.whitelist.entries.contains_key(&key) {
-            return Verdict::Refuse(
-                r#"{"translate":"multiplayer.disconnect.not_whitelisted"}"#.into(),
-            );
+        if !self.allows_whitelist_key(&key) {
+            return Verdict::Refuse(format!(r#"{{"translate":"{NOT_WHITELISTED}"}}"#));
         }
-        let bypasses_player_limit = op.is_some_and(|(_, op)| op.bypasses_player_limit);
+        let bypasses_player_limit = self
+            .ops
+            .entries
+            .get(&key)
+            .is_some_and(|(_, op)| op.bypasses_player_limit);
         let ip = ip_key(ip);
         if self.ip_bans.entries.contains_key(&ip) {
             self.ip_bans.remove_expired(now);
@@ -889,6 +942,34 @@ mod tests {
             fs::read_to_string(folder.0.join("whitelist.json")).unwrap(),
             "[]"
         );
+    }
+
+    #[test]
+    fn whitelist_changes_take_effect_after_saving_and_can_be_retried() {
+        let folder = Folder::new("whitelist-setting");
+        let path = folder.0.join("server.properties");
+        let original = "white-list=false\nenforce-whitelist=true\ncustom-setting=keep\n";
+        fs::write(&path, original).unwrap();
+        let mut lists = AccessLists::load(&folder.0, &Properties::load(&path).unwrap());
+        let blocked = path.with_extension("properties.tmp");
+        fs::create_dir(&blocked).unwrap();
+        assert!(lists.set_whitelist(true).is_err());
+        assert!(lists.allows_whitelist(STRANGER));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        fs::remove_dir(blocked).unwrap();
+
+        assert!(lists.set_whitelist(true).unwrap());
+        assert!(lists.whitelist_enforced());
+        assert!(!lists.allows_whitelist(STRANGER));
+        assert!(!lists.set_whitelist(true).unwrap());
+        let saved = Properties::load(&path).unwrap();
+        assert_eq!(saved.get("custom-setting"), Some("keep"));
+        assert!(saved.parsed("white-list", false));
+        assert!(saved.parsed("enforce-whitelist", false));
+        assert!(lists.set_whitelist(false).unwrap());
+        assert!(!lists.whitelist_enforced());
+        assert!(lists.allows_whitelist(STRANGER));
+        assert!(!Properties::load(&path).unwrap().parsed("white-list", true));
     }
 
     #[test]

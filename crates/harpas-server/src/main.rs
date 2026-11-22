@@ -28,12 +28,12 @@ mod tags;
 mod vanilla_data;
 mod world_generation;
 
-use access::{AccessLists, Verdict};
+use access::{AccessLists, NOT_WHITELISTED, Verdict};
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
@@ -191,7 +191,7 @@ fn run() -> io::Result<()> {
             block_entity_registry::Registry::default()
         }
     };
-    let access = AccessLists::load(Path::new(""), properties.parsed("white-list", false));
+    let access = AccessLists::load(Path::new(""), &properties);
     let world_dir = PathBuf::from(properties.string("level-name", "world"));
     check_world(&world_dir)?;
     let worldgen_data = Arc::new(
@@ -256,13 +256,13 @@ fn run() -> io::Result<()> {
         server_info.is_flat = false;
     }
     let environment = Arc::new(ConnectionEnvironment {
-        commands: commands::Commands {
-            seed: seed.unwrap_or_default(),
-            max_players: server_info.max_players,
-        },
+        commands: Arc::new(commands::Commands::new(
+            seed.unwrap_or_default(),
+            server_info.max_players,
+            access,
+        )),
         info: server_info,
         chunks: chunks::Cache::new(block_entities),
-        access: Mutex::new(access),
     });
     let info = &environment.info;
     info!("Default game type: {:?}", info.game_mode);
@@ -298,7 +298,7 @@ fn run() -> io::Result<()> {
     }
     console::start(console::Server {
         logic: logic.clone(),
-        commands: environment.commands,
+        commands: Arc::clone(&environment.commands),
         shutdown: Arc::clone(&shutdown),
     })?;
     info!(
@@ -429,12 +429,7 @@ fn generate_registry(jar: Option<&Path>) -> io::Result<()> {
 fn load_properties(path: &Path) -> io::Result<Properties> {
     let mut properties = Properties::load(path)?;
     properties.complete();
-    // Java's `Date.toString`, which vanilla writes as the second comment.
-    // Keep the numeric offset previously printed by Chrono's %Z.
-    let timestamp = jiff::ZonedDateTime::now()
-        .strftime("%a %b %d %H:%M:%S %:z %Y")
-        .to_string();
-    if let Err(e) = properties.store(path, &timestamp) {
+    if let Err(e) = properties.store(path) {
         warn!("Failed to save {}: {e}", path.display());
     }
     for name in properties.apply_env(std::env::vars()) {
@@ -509,9 +504,7 @@ fn load_icon(path: &Path) -> Option<String> {
 struct ConnectionEnvironment {
     info: ServerInfo,
     chunks: chunks::Cache,
-    commands: commands::Commands,
-    /// Bans, the whitelist and operators, checked when players log in.
-    access: Mutex<AccessLists>,
+    commands: Arc<commands::Commands>,
 }
 
 fn serve(
@@ -623,7 +616,6 @@ fn play(
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
     let mut player_session = None;
-    let mut command_source = commands::Source::Player(0);
     let mut uuid_logged = false;
     while !connection.is_closed() {
         if permit.as_ref().is_some_and(|p| p.evicted()) {
@@ -669,11 +661,11 @@ fn play(
             stream.write_all(&connection.take_output())?;
         }
         if let Some(player) = connection.login_check() {
-            let verdict = environment
-                .access
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .check(player.uuid, peer, jiff::Timestamp::now());
+            let verdict =
+                environment
+                    .commands
+                    .access()
+                    .check(player.uuid, peer, jiff::Timestamp::now());
             let verdict = match verdict {
                 Verdict::Allow {
                     bypasses_player_limit,
@@ -705,6 +697,14 @@ fn play(
             let player = connection
                 .player()
                 .ok_or_else(|| io::Error::other("Play without a player"))?;
+            // A whitelist change and a join must queue their engine events in the same order.
+            let access = environment.commands.access();
+            if !access.allows_whitelist(player.uuid) {
+                drop(access);
+                connection.disconnect_play_translated(NOT_WHITELISTED);
+                stream.write_all(&connection.take_output())?;
+                break;
+            }
             let max_view_distance = info.view_distance.clamp(2, 32) as u8;
             let session = logic
                 .player_joined_with_view(
@@ -717,22 +717,20 @@ fn play(
                     info.allow_flight,
                 )
                 .map_err(io::Error::other)?;
+            let command_source = commands::Source::Player {
+                level: access.operator_level(player.uuid),
+                uuid: player.uuid,
+            };
+            drop(access);
             info!("{} joined the game", player.name);
             departure.name = Some(player.name.clone());
-            command_source = commands::Source::Player(
-                environment
-                    .access
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .operator_level(player.uuid),
-            );
             connection.send_play_packet(commands::tree(command_source).into());
             if let Some(permit) = permit.as_deref_mut() {
                 permit.entered_play();
             }
-            player_session = Some(session);
+            player_session = Some((session, command_source));
         }
-        if let Some(session) = &player_session {
+        if let Some((session, source)) = &player_session {
             // The logic thread's output first: once it disconnects the player, there is nothing left to
             // forward, and forwarding to a stopped logic thread would hide its reason.
             departure.kick =
@@ -740,12 +738,12 @@ fn play(
                     .kick
                     .or(player::send(&mut connection, session, &environment.chunks));
             if !connection.is_closed() {
-                player::receive(
+                departure.kick = player::receive(
                     &mut connection,
                     session,
                     logic,
-                    environment.commands,
-                    command_source,
+                    &environment.commands,
+                    *source,
                 )?;
             }
             stream.write_all(&connection.take_output())?;
@@ -880,11 +878,11 @@ mod tests {
         ConnectionEnvironment {
             info: info.clone(),
             chunks: chunks::Cache::new(block_entity_registry::Registry::default()),
-            commands: commands::Commands {
-                seed: 0,
-                max_players: info.max_players,
-            },
-            access: Mutex::new(AccessLists::none()),
+            commands: Arc::new(commands::Commands::new(
+                0,
+                info.max_players,
+                AccessLists::none(),
+            )),
         }
     }
 
@@ -1337,7 +1335,10 @@ mod tests {
                         received_batch = true;
                     }
                     play::clientbound::Packet::Commands(packet) => {
-                        assert_eq!(packet, commands::tree(commands::Source::Player(0)));
+                        assert_eq!(
+                            packet,
+                            commands::tree(commands::Source::Player { level: 0, uuid: 0 })
+                        );
                         received_commands = true;
                     }
                     _ => {}

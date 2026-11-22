@@ -163,8 +163,45 @@ impl Properties {
     }
 
     /// Writes the file as vanilla does: a header, then every key in alphabetical order, in UTF-8.
-    pub fn store(&self, path: &Path, timestamp: &str) -> io::Result<()> {
-        fs::write(path, self.to_file(timestamp))
+    pub fn store(&self, path: &Path) -> io::Result<()> {
+        fs::write(path, self.file_text())
+    }
+
+    /// Updates the on-disk whitelist setting without writing any environment overrides to the file.
+    pub fn store_whitelist(path: &Path, enabled: bool) -> io::Result<()> {
+        use std::io::Write as _;
+
+        let path = match fs::canonicalize(path) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+            Err(error) => return Err(error),
+        };
+        let mut properties = Self::load(&path)?;
+        properties.complete();
+        properties
+            .values
+            .insert("white-list".into(), enabled.to_string());
+        let temporary = path.with_extension("properties.tmp");
+        let result = (|| {
+            let mut file = fs::File::create(&temporary)?;
+            if let Ok(metadata) = fs::metadata(&path) {
+                file.set_permissions(metadata.permissions())?;
+            }
+            file.write_all(properties.file_text().as_bytes())?;
+            drop(file);
+            fs::rename(&temporary, &path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+
+    fn file_text(&self) -> String {
+        let timestamp = jiff::ZonedDateTime::now()
+            .strftime("%a %b %d %H:%M:%S %:z %Y")
+            .to_string();
+        self.to_file(&timestamp)
     }
 
     fn to_file(&self, timestamp: &str) -> String {

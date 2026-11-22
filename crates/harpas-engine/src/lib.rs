@@ -141,6 +141,18 @@ impl Handle {
         receiver.recv().map_err(|_| LogicStopped)
     }
 
+    /// Disconnects players outside the allowed UUIDs at the next connection phase, using a translated reason.
+    pub fn disconnect_players_except(
+        &self,
+        allowed: HashSet<u128>,
+        key: &'static str,
+        text: &'static str,
+    ) -> Result<(), LogicStopped> {
+        self.events
+            .send(Event::DisconnectPlayersExcept { allowed, key, text })
+            .map_err(|_| LogicStopped)
+    }
+
     /// Stops the logic thread at the next connection phase, disconnecting every player with `reason`.
     pub fn shutdown(&self, reason: &'static str) -> Result<(), LogicStopped> {
         self.events
@@ -297,6 +309,11 @@ enum Event {
     },
     Left(i32),
     ListPlayers(Sender<Vec<(u128, String)>>),
+    DisconnectPlayersExcept {
+        allowed: HashSet<u128>,
+        key: &'static str,
+        text: &'static str,
+    },
     Shutdown(&'static str),
     #[cfg(test)]
     Panic,
@@ -582,6 +599,14 @@ impl TickWork for Game {
                         .map(|p| (p.player.profile.uuid, p.player.profile.name.clone()))
                         .collect();
                     let _ = reply.send(players);
+                }
+                Event::DisconnectPlayersExcept { allowed, key, text } => {
+                    for state in &mut self.players {
+                        if !state.disconnecting && !allowed.contains(&state.player.profile.uuid) {
+                            state.disconnecting = true;
+                            state.send(player::Output::DisconnectTranslated { key, text });
+                        }
+                    }
                 }
                 #[cfg(test)]
                 Event::Panic => panic!("a test asked the logic thread to panic"),

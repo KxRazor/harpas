@@ -26,7 +26,7 @@ pub struct Server {
     /// The logic thread, for the player list.
     pub logic: harpas_engine::Handle,
     /// The shared command dispatcher.
-    pub commands: Commands,
+    pub commands: Arc<Commands>,
     /// For `stop`.
     pub shutdown: Arc<Shutdown>,
 }
@@ -120,6 +120,7 @@ fn run(server: &Server, line: &str) {
         }
         Ok(Outcome::Feedback { text, .. }) => info!("{text}"),
         Ok(Outcome::Stop) => server.shutdown.stop(),
+        Ok(Outcome::NotWhitelisted { .. }) => unreachable!("the console is not a player"),
         Ok(Outcome::Syntax { reason, .. }) => {
             let message = if reason == "command.unknown.argument" {
                 "Incorrect argument for command"
@@ -174,12 +175,22 @@ mod tests {
             complete(""),
             (
                 0,
-                vec!["help".into(), "list".into(), "seed".into(), "stop".into()]
+                vec![
+                    "help".into(),
+                    "list".into(),
+                    "seed".into(),
+                    "stop".into(),
+                    "whitelist".into()
+                ]
             )
         );
         assert_eq!(complete("st"), (0, vec!["stop".into()]));
         assert_eq!(complete("/l"), (1, vec!["list".into()]));
         assert_eq!(complete("list "), (5, vec!["uuids".into()]));
+        assert_eq!(
+            complete("/whitelist o"),
+            (11, vec!["off".into(), "on".into()])
+        );
         assert_eq!(complete("x"), (0, Vec::new()));
     }
 }

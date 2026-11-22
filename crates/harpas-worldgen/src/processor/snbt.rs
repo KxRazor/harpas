@@ -381,6 +381,7 @@ mod tests {
             "{a:unknown(1)}",
             r#"{a:'\q'}"#,
             r#"{a:'\N{not a character}'}"#,
+            r#"{a:'\N{DISTORTED FACE}'}"#, // Unicode 17, beyond Java 25's character data.
             r#"{a:'\U00110000'}"#,
         ] {
             assert!(compound(&mut &*text).is_none(), "{text}");

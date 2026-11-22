@@ -27,6 +27,45 @@ fn f64s(values: &[f64]) -> Vec<u8> {
 }
 
 #[test]
+fn commands_encode_node_flags_and_indices() {
+    let bytes = vec![0x10, 2, 0, 1, 1, 5, 0, 4, b'l', b'i', b's', b't', 0];
+    round_trip!(
+        clientbound::Packet,
+        bytes.clone(),
+        clientbound::Commands {
+            tree: play::CommandTree {
+                root: 0,
+                nodes: vec![
+                    play::CommandNode {
+                        kind: play::CommandNodeKind::Root,
+                        children: vec![1],
+                        redirect: None,
+                        executable: false,
+                        allows_restricted: false,
+                    },
+                    play::CommandNode {
+                        kind: play::CommandNodeKind::Literal("list".into()),
+                        children: vec![],
+                        redirect: None,
+                        executable: true,
+                        allows_restricted: false,
+                    },
+                ],
+            },
+        }
+    );
+    let mut invalid = bytes;
+    invalid[4] = 2;
+    assert!(matches!(
+        clientbound::Packet::decode(&invalid),
+        Err(DecodeError::UnknownEnumValue {
+            name: "command node index",
+            value: 2
+        })
+    ));
+}
+
+#[test]
 fn block_positions_match_the_documented_example() {
     // minecraft.wiki's example: x 18357644, y 831, z -20882616.
     let position = play::BlockPos {

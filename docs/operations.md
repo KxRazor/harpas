@@ -4,7 +4,7 @@ Scope: where Harpas' settings live, and how a server is operated: console, logs,
 metrics, profiling, shutdown, hosting, and telemetry.
 
 Status: partly implemented. `server.properties` with every 26.1 key, `harpas.toml` checking and its `eula` setting, `HARPAS_*`
-overrides, the console (`help`, `list`, `stop`), `logs/latest.log` with its archives, and stopping on SIGTERM and SIGINT
+overrides, the console (`help`, `list`, `list uuids`, `seed`, `stop`), `logs/latest.log` with its archives, and stopping on SIGTERM and SIGINT
 are built; the rest is design. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -66,9 +66,9 @@ messages:
 4. `max-players`: operators with `bypassesPlayerLimit` skip it.
 
 A ban whose end has passed still matches at first, as in vanilla: the login that finds it fails without a message,
-and the expired bans of that list are dropped until the server restarts, so the player's next login goes on. The
-commands that change the lists come with the command tree ([commands.md](commands.md)); until then the files are
-edited while the server is stopped.
+and the expired bans of that list are dropped until the server restarts, so the player's next login goes on.
+Edit the files while the server is stopped until the list-management commands are implemented
+([commands.md](commands.md)).
 
 ---
 

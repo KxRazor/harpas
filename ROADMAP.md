@@ -472,7 +472,8 @@ as shown by the parity report.
   - [x] Saved-NBT/network conversion for 29 item component values, including damage, names, lore, custom
         data, enchantments, stored enchantments, potion contents without custom effects and suspicious stew
         effects, map decorations, and removed components. Unsupported values are refused without overwriting the player's data.
-  - [ ] The remaining data component values, the other serializers, and the other 15 packets.
+  - [x] The Commands packet encodes the permission-filtered Brigadier tree sent to Java players.
+  - [ ] The remaining data component values, the other serializers, and the other 14 packets.
 - [ ] Entity physics and collisions, ported one to one.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,
         floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by
@@ -485,6 +486,8 @@ as shown by the parity report.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
+  - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
+        suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).
 - [ ] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
       `banned-ips.json` and `ops.json`: checked at login in vanilla's order, managed by their commands, and
       operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).

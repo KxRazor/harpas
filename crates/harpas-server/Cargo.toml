@@ -37,4 +37,4 @@ zip.workspace = true
 workspace = true
 
 [target."cfg(unix)".dependencies]
-nix = { version = "0.31.3", default-features = false, features = ["term"] }
+nix = { version = "0.32.0", default-features = false, features = ["term"] }

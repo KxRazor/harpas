@@ -7,6 +7,10 @@ updates:
     labels: [dependencies, "area: workspace"]
     commit-message:
       prefix: deps
+    ignore:
+      # Starting at 3.1.0, the crate uses Unicode 17 instead of Java 25's Unicode 16.
+      - dependency-name: unicode_names2
+        versions: [">=3.1.0"]
     groups:
       minor-and-patch:
         update-types: [minor, patch]

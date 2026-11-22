@@ -495,8 +495,11 @@ as shown by the parity report.
         order with its messages: player bans, the whitelist that operators skip, IP bans, then `max-players`,
         which operators with `bypassesPlayerLimit` skip. Logins and files are compared with vanilla on the
         network (`access_list_parity`).
-  - [ ] The `whitelist`, `ban`, `ban-ip`, `banlist`, `pardon`, `pardon-ip`, `op` and `deop` commands, with
-        `enforce-whitelist` and the profile lookups they need.
+  - [x] `whitelist list`, `whitelist on` and `whitelist off` run from the console and Java clients with operator
+        level 3. The setting persists across restarts and `enforce-whitelist` disconnects unlisted players
+        when the whitelist is enabled (`commands_parity`).
+  - [ ] `whitelist add`, `whitelist remove`, `whitelist reload`, `ban`, `ban-ip`,
+        `banlist`, `pardon`, `pardon-ip`, `op` and `deop`, and their profile lookups.
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).

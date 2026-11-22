@@ -469,7 +469,7 @@ impl Connection {
     }
 
     /// Disconnects a player in Play with a reason the client translates, as vanilla's are.
-    fn disconnect_play_translated(&mut self, key: &'static str) {
+    pub fn disconnect_play_translated(&mut self, key: &'static str) {
         if self.state == State::Play {
             self.send_play(
                 play::clientbound::Disconnect {

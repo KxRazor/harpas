@@ -1,6 +1,8 @@
 //! The shared Brigadier tree for console input and Java Play commands.
 
+use std::collections::HashSet;
 use std::io;
+use std::sync::{Mutex, MutexGuard};
 
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::Handle;
@@ -9,12 +11,13 @@ use harpas_protocol_java::v26_1::play::{
 };
 use harpas_protocol_java::v26_1::play::{clientbound, serverbound};
 
+use crate::access::{AccessLists, NOT_WHITELISTED, NOT_WHITELISTED_TEXT};
 use crate::session::format_uuid;
 
 #[derive(Clone, Copy)]
 pub enum Source {
     Console,
-    Player(i32),
+    Player { level: i32, uuid: u128 },
 }
 
 #[derive(Clone, Copy)]
@@ -24,6 +27,8 @@ enum Action {
     ListUuids,
     Seed,
     Stop,
+    WhitelistList,
+    SetWhitelist(bool),
 }
 
 struct Node {
@@ -31,7 +36,7 @@ struct Node {
     /// `None` is console-only. Player permissions use the levels from `ops.json`.
     level: Option<i32>,
     allows_restricted: bool,
-    action: Action,
+    action: Option<Action>,
     children: &'static [Node],
 }
 
@@ -40,19 +45,19 @@ const ROOTS: &[Node] = &[
         literal: "help",
         level: None,
         allows_restricted: false,
-        action: Action::Help,
+        action: Some(Action::Help),
         children: &[],
     },
     Node {
         literal: "list",
         level: Some(0),
         allows_restricted: false,
-        action: Action::List,
+        action: Some(Action::List),
         children: &[Node {
             literal: "uuids",
             level: Some(0),
             allows_restricted: false,
-            action: Action::ListUuids,
+            action: Some(Action::ListUuids),
             children: &[],
         }],
     },
@@ -60,15 +65,44 @@ const ROOTS: &[Node] = &[
         literal: "seed",
         level: Some(2),
         allows_restricted: true,
-        action: Action::Seed,
+        action: Some(Action::Seed),
         children: &[],
     },
     Node {
         literal: "stop",
         level: None,
         allows_restricted: false,
-        action: Action::Stop,
+        action: Some(Action::Stop),
         children: &[],
+    },
+    Node {
+        literal: "whitelist",
+        level: Some(3),
+        allows_restricted: true,
+        action: None,
+        children: &[
+            Node {
+                literal: "list",
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::WhitelistList),
+                children: &[],
+            },
+            Node {
+                literal: "off",
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::SetWhitelist(false)),
+                children: &[],
+            },
+            Node {
+                literal: "on",
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::SetWhitelist(true)),
+                children: &[],
+            },
+        ],
     },
 ];
 
@@ -76,7 +110,7 @@ impl Node {
     fn available(&self, source: Source) -> bool {
         match source {
             Source::Console => true,
-            Source::Player(level) => self.level.is_some_and(|required| level >= required),
+            Source::Player { level, .. } => self.level.is_some_and(|required| level >= required),
         }
     }
 }
@@ -109,7 +143,7 @@ fn add_children(nodes: &mut Vec<CommandNode>, parent: usize, children: &[Node], 
             kind: CommandNodeKind::Literal(node.literal.into()),
             children: Vec::new(),
             redirect: None,
-            executable: true,
+            executable: node.action.is_some(),
             allows_restricted: node.allows_restricted,
         });
         add_children(nodes, index, node.children, source);
@@ -183,7 +217,7 @@ fn parse(input: &str, source: Source) -> Result<Action, (usize, &'static str)> {
             ));
         };
         if word.len() == remaining.len() {
-            return Ok(node.action);
+            return node.action.ok_or((input.len(), "command.unknown.command"));
         }
         if tail.is_empty() || node.children.is_empty() {
             return Err((start + word.len(), "command.unknown.argument"));
@@ -194,21 +228,36 @@ fn parse(input: &str, source: Source) -> Result<Action, (usize, &'static str)> {
     }
 }
 
-#[derive(Clone, Copy)]
 pub struct Commands {
-    pub seed: i64,
-    pub max_players: u32,
+    seed: i64,
+    max_players: u32,
+    access: Mutex<AccessLists>,
 }
 
 pub enum Outcome {
     Help,
     Stop,
+    NotWhitelisted { component: Nbt },
     Feedback { text: String, component: Nbt },
     Syntax { cursor: usize, reason: &'static str },
 }
 
 impl Commands {
-    pub fn run(self, logic: &Handle, input: &str, source: Source) -> io::Result<Outcome> {
+    pub fn new(seed: i64, max_players: u32, access: AccessLists) -> Self {
+        Self {
+            seed,
+            max_players,
+            access: Mutex::new(access),
+        }
+    }
+
+    pub fn access(&self) -> MutexGuard<'_, AccessLists> {
+        self.access
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub fn run(&self, logic: &Handle, input: &str, source: Source) -> io::Result<Outcome> {
         let action = match parse(input, source) {
             Ok(action) => action,
             Err((cursor, reason)) => return Ok(Outcome::Syntax { cursor, reason }),
@@ -216,6 +265,27 @@ impl Commands {
         Ok(match action {
             Action::Help => Outcome::Help,
             Action::Stop => Outcome::Stop,
+            Action::WhitelistList => {
+                let access = self.access();
+                let names = access.whitelist_names();
+                let count = names.len();
+                if names.is_empty() {
+                    Outcome::Feedback {
+                        text: "There are no whitelisted players".into(),
+                        component: translate("commands.whitelist.none", vec![]),
+                    }
+                } else {
+                    let names = names.join(", ");
+                    Outcome::Feedback {
+                        text: format!("There are {count} whitelisted player(s): {names}"),
+                        component: translate(
+                            "commands.whitelist.list",
+                            vec![(count as i32).into(), names.into()],
+                        ),
+                    }
+                }
+            }
+            Action::SetWhitelist(enabled) => self.set_whitelist(logic, enabled, source)?,
             Action::Seed => {
                 let seed = self.seed.to_string();
                 let styled = Compound::from_iter([
@@ -290,27 +360,84 @@ impl Commands {
         })
     }
 
+    fn set_whitelist(&self, logic: &Handle, enabled: bool, source: Source) -> io::Result<Outcome> {
+        let mut access = self.access();
+        let (state, key, already) = if enabled {
+            (
+                "on",
+                "commands.whitelist.enabled",
+                "commands.whitelist.alreadyOn",
+            )
+        } else {
+            (
+                "off",
+                "commands.whitelist.disabled",
+                "commands.whitelist.alreadyOff",
+            )
+        };
+        match access.set_whitelist(enabled) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(failure(
+                    format!("Whitelist is already turned {state}"),
+                    already,
+                ));
+            }
+            Err(error) => {
+                log::warn!("Failed to save the whitelist setting: {error}");
+                return Ok(failure(
+                    "Could not save the whitelist setting".into(),
+                    "command.failed",
+                ));
+            }
+        }
+        let component = translate(key, vec![]);
+        if access.whitelist_enforced() {
+            let allowed: HashSet<_> = access.whitelisted_players().collect();
+            let kick_source =
+                matches!(source, Source::Player { uuid, .. } if !allowed.contains(&uuid));
+            logic
+                .disconnect_players_except(allowed, NOT_WHITELISTED, NOT_WHITELISTED_TEXT)
+                .map_err(io::Error::other)?;
+            if kick_source {
+                return Ok(Outcome::NotWhitelisted { component });
+            }
+        }
+        Ok(Outcome::Feedback {
+            text: format!("Whitelist is now turned {state}"),
+            component,
+        })
+    }
+
+    /// Returns the feedback and whether to disconnect the sender for whitelist enforcement.
     pub fn player_reply(
-        self,
+        &self,
         logic: &Handle,
         input: &str,
         source: Source,
-    ) -> io::Result<Vec<clientbound::SystemChatMessage>> {
-        let components = match self.run(logic, input, source)? {
-            Outcome::Feedback { component, .. } => vec![component],
-            Outcome::Syntax { cursor, reason } => vec![
-                command_failure(Compound::from_iter([("translate", reason)])),
-                command_failure(error_context(input, cursor)),
-            ],
+    ) -> io::Result<(Vec<clientbound::SystemChatMessage>, bool)> {
+        let (components, not_whitelisted) = match self.run(logic, input, source)? {
+            Outcome::Feedback { component, .. } => (vec![component], false),
+            Outcome::Syntax { cursor, reason } => (
+                vec![
+                    command_failure(Compound::from_iter([("translate", reason)])),
+                    command_failure(error_context(input, cursor)),
+                ],
+                false,
+            ),
+            Outcome::NotWhitelisted { component } => (vec![component], true),
             Outcome::Help | Outcome::Stop => unreachable!("console-only commands were filtered"),
         };
-        Ok(components
-            .into_iter()
-            .map(|content| clientbound::SystemChatMessage {
-                content,
-                overlay: false,
-            })
-            .collect())
+        Ok((
+            components
+                .into_iter()
+                .map(|content| clientbound::SystemChatMessage {
+                    content,
+                    overlay: false,
+                })
+                .collect(),
+            not_whitelisted,
+        ))
     }
 }
 
@@ -384,6 +511,13 @@ fn command_failure(message: Compound) -> Nbt {
         ("extra", List::Compound(vec![message]).into()),
     ])
     .into()
+}
+
+fn failure(text: String, key: &str) -> Outcome {
+    Outcome::Feedback {
+        text,
+        component: command_failure(Compound::from_iter([("translate", key)])),
+    }
 }
 
 fn error_context(input: &str, cursor: usize) -> Compound {

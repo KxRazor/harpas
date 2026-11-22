@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ struct Client {
 }
 
 impl Client {
-    fn join(port: u16, name: &str) -> Self {
+    fn login(port: u16, name: &str) -> (Self, login::clientbound::Packet) {
         let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(15)))
@@ -44,11 +45,13 @@ impl Client {
         });
         client.send(|buf| handshake.encode(buf));
         client.send(|buf| start.encode(buf));
-        let first = client.next();
-        assert!(matches!(
-            login::clientbound::Packet::decode(&first),
-            Ok(login::clientbound::Packet::LoginSuccess(_))
-        ));
+        let reply = login::clientbound::Packet::decode(&client.next()).unwrap();
+        (client, reply)
+    }
+
+    fn join(port: u16, name: &str) -> Self {
+        let (mut client, reply) = Self::login(port, name);
+        assert!(matches!(reply, login::clientbound::Packet::LoginSuccess(_)));
         let ack = login::serverbound::Packet::from(login::serverbound::LoginAcknowledged);
         client.send(|buf| ack.encode(buf));
         client.send(|buf| {
@@ -168,9 +171,26 @@ impl Client {
         self.send(|buf| request.encode(buf));
         (0..replies).map(|_| self.matching("command reply", |packet| match packet {
             Packet::SystemChatMessage(reply) if !matches!(&reply.content,
-                codec::Nbt::Compound(text) if text.get("translate") == Some(&"multiplayer.player.joined".into())) => Some(reply),
+                codec::Nbt::Compound(text) if matches!(text.get("translate"), Some(codec::Nbt::String(key))
+                    if matches!(key.as_str(), "multiplayer.player.joined" | "multiplayer.player.left"))) => Some(reply),
+            Packet::Disconnect(packet) => panic!("disconnected during /{command}: {:?}", packet.reason),
             _ => None,
         })).collect()
+    }
+
+    fn whitelist_disconnect(&mut self) {
+        let reason = self.matching("whitelist disconnect", |packet| match packet {
+            Packet::Disconnect(disconnect) => Some(disconnect.reason),
+            _ => None,
+        });
+        assert_eq!(
+            reason,
+            codec::Nbt::Compound(
+                [("translate", "multiplayer.disconnect.not_whitelisted")]
+                    .into_iter()
+                    .collect()
+            )
+        );
     }
 }
 
@@ -184,7 +204,11 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
         for &id in &tree.nodes[parent as usize].children {
             let node = &tree.nodes[id as usize];
             if let CommandNodeKind::Literal(name) = &node.kind
-                && (!prefix.is_empty() || matches!(name.as_str(), "list" | "seed"))
+                && match prefix {
+                    "" => matches!(name.as_str(), "list" | "seed" | "whitelist"),
+                    "whitelist " => matches!(name.as_str(), "list" | "on" | "off"),
+                    _ => true,
+                }
             {
                 let path = format!("{prefix}{name}");
                 out.push((path.clone(), node.executable, node.allows_restricted));
@@ -201,10 +225,16 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
 fn compare(port: u16, other: u16) {
     let mut errors = Vec::new();
     let mut connected = Vec::new();
-    for (name, can_seed) in [("Builder", false), ("LowOp", false), ("Op", true)] {
+    for (name, level) in [("Builder", 0), ("LowOp", 1), ("Op", 2), ("Admin", 3)] {
+        let can_seed = level >= 2;
+        let can_whitelist = level >= 3;
         let mut vanilla = Client::join(port, name);
         let expected = tree_nodes(&vanilla.tree());
         assert_eq!(expected.iter().any(|(name, _, _)| name == "seed"), can_seed);
+        assert_eq!(
+            expected.iter().any(|(name, _, _)| name == "whitelist"),
+            can_whitelist
+        );
         let mut harpas = Client::join(other, name);
         let actual = tree_nodes(&harpas.tree());
         if actual != expected {
@@ -215,6 +245,7 @@ fn compare(port: u16, other: u16) {
         for text in ["/li", "/list u"]
             .into_iter()
             .chain(can_seed.then_some("/see"))
+            .chain(can_whitelist.then_some("/whitelist o"))
         {
             let expected = vanilla.suggestions(text);
             let actual = harpas.suggestions(text);
@@ -237,6 +268,8 @@ fn compare(port: u16, other: u16) {
             ("list", 1),
             ("list uuids", 1),
             ("seed", if can_seed { 1 } else { 2 }),
+            ("whitelist list", if can_whitelist { 1 } else { 2 }),
+            ("whitelist", 2),
             ("list unexpected", 2),
             ("list ", 2),
         ] {
@@ -253,6 +286,76 @@ fn compare(port: u16, other: u16) {
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
+fn assert_whitelist_file(dir: &Path, enabled: bool) {
+    let properties = fs::read_to_string(dir.join("server.properties")).unwrap();
+    let setting = format!("white-list={enabled}");
+    assert!(properties.lines().any(|line| line == setting));
+}
+
+fn assert_login(port: u16, name: &str, allowed: bool) {
+    use login::clientbound::Packet::*;
+    match Client::login(port, name).1 {
+        LoginSuccess(_) if allowed => {}
+        LoginDisconnect(packet) if !allowed => assert_eq!(
+            packet.reason,
+            r#"{"translate":"multiplayer.disconnect.not_whitelisted"}"#
+        ),
+        packet => panic!("unexpected login reply for {name}: {packet:?}"),
+    }
+}
+
+fn exercise_whitelist(dir: &Path, port: u16, enforce: bool) -> Vec<SystemChatMessage> {
+    let mut visitor = Client::join(port, "Visitor");
+    let mut listed = Client::join(port, "Listed");
+    let mut admin = Client::join(port, "Admin");
+    let mut operator = enforce.then(|| Client::join(port, "LowOp"));
+    for client in [&mut visitor, &mut listed, &mut admin] {
+        client.tree();
+    }
+    if let Some(operator) = &mut operator {
+        operator.tree();
+    }
+    let mut replies = admin.command("whitelist on", 1);
+    assert_whitelist_file(dir, true);
+    assert_login(port, "AnotherVisitor", false);
+    assert_login(port, "OtherListed", true);
+    if let Some(operator) = &mut operator {
+        visitor.whitelist_disconnect();
+        operator.whitelist_disconnect();
+    } else {
+        visitor.command("list", 1);
+    }
+    assert_login(port, "LowOp", true);
+    listed.command("list", 1);
+    for command in ["whitelist on", "whitelist off", "whitelist off"] {
+        replies.extend(admin.command(command, 1));
+    }
+    assert_whitelist_file(dir, false);
+    assert_login(port, "AnotherVisitor", true);
+    if enforce {
+        let mut unlisted_admin = Client::join(port, "UnlistedAdmin");
+        unlisted_admin.tree();
+        replies.extend(unlisted_admin.command("whitelist on", 1));
+        unlisted_admin.whitelist_disconnect();
+    } else {
+        replies.extend(admin.command("whitelist on", 1));
+    }
+    assert_whitelist_file(dir, true);
+    replies
+}
+
+fn console_whitelist(server: &mut Server, dir: &Path, enabled: bool) {
+    let state = if enabled { "on" } else { "off" };
+    writeln!(server.child.stdin.as_mut().unwrap(), "whitelist {state}").unwrap();
+    server.wait_for(&format!("Whitelist is now turned {state}"));
+    assert_whitelist_file(dir, enabled);
+}
+
+fn stop(server: &mut Server) {
+    writeln!(server.child.stdin.as_mut().unwrap(), "stop").unwrap();
+    assert!(server.child.wait().unwrap().success());
+}
+
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn commands_match_vanilla() {
@@ -265,17 +368,23 @@ fn commands_match_vanilla() {
         .each_ref()
         .map(|socket| socket.local_addr().unwrap().port());
     drop(sockets);
-    let ops = serde_json::to_vec(&[("LowOp", 1), ("Op", 2)].map(|(name, level)| {
+    let ops = serde_json::to_vec(&[("LowOp", 1), ("Op", 2), ("Admin", 3), ("UnlistedAdmin", 3)].map(|(name, level)| {
         serde_json::json!({"name": name, "uuid": uuid(name), "level": level, "bypassesPlayerLimit": false})
     })).unwrap();
+    let whitelist = serde_json::to_vec(
+        &["Listed", "OtherListed", "Admin"]
+            .map(|name| serde_json::json!({"name": name, "uuid": uuid(name)})),
+    )
+    .unwrap();
     for (dir, port, seed) in [(&vanilla, port, -12345), (&harpas, other, 0)] {
         fs::create_dir_all(dir).unwrap();
         fs::write(dir.join("eula.txt"), &eula).unwrap();
         fs::write(dir.join("ops.json"), &ops).unwrap();
+        fs::write(dir.join("whitelist.json"), &whitelist).unwrap();
         fs::write(dir.join("server.properties"), format!(
             "server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nnetwork-compression-threshold=-1\n\
              view-distance=2\nsimulation-distance=2\nlevel-type=minecraft:flat\nlevel-seed={seed}\n\
-             generate-structures=false\nmax-players=12\nmax-tick-time=-1\n"
+             generate-structures=false\nmax-players=12\nmax-tick-time=-1\nallow-flight=true\n"
         )).unwrap();
     }
     let binary = env!("CARGO_BIN_EXE_harpas");
@@ -290,16 +399,20 @@ fn commands_match_vanilla() {
         "could not install vanilla data: {}",
         String::from_utf8_lossy(&install.stderr)
     );
-    let mut reference = Server::start(
-        OsStr::new("java"),
-        &[
-            OsStr::new("-Xmx1G"),
-            OsStr::new("-jar"),
-            jar.as_os_str(),
-            OsStr::new("nogui"),
-        ],
-        &vanilla,
-    );
+    let start_vanilla = || {
+        Server::start(
+            OsStr::new("java"),
+            &[
+                OsStr::new("-Xmx1G"),
+                OsStr::new("-jar"),
+                jar.as_os_str(),
+                OsStr::new("nogui"),
+            ],
+            &vanilla,
+        )
+    };
+    let start_harpas = || Server::start(OsStr::new(binary), &[], &harpas);
+    let mut reference = start_vanilla();
     reference.wait_for("Done (");
     writeln!(reference.child.stdin.as_mut().unwrap(), "save-all flush").unwrap();
     reference.wait_for("Saved the game");
@@ -309,15 +422,51 @@ fn commands_match_vanilla() {
     for path in ["world/level.dat", settings] {
         fs::copy(vanilla.join(path), harpas.join(path)).unwrap();
     }
-    let mut server = Server::start(OsStr::new(binary), &[], &harpas);
+    let mut server = start_harpas();
     server.wait_for("Done (");
     for server in [&mut reference, &mut server] {
         let stdin = server.child.stdin.as_mut().unwrap();
         writeln!(stdin, "list\nseed").unwrap();
         server.wait_for("There are 0 of a max of 12 players online:");
         server.wait_for("Seed: [-12345]");
+        writeln!(server.child.stdin.as_mut().unwrap(), "whitelist list").unwrap();
+        server.wait_for("There are 3 whitelisted player(s):");
     }
     compare(port, other);
+    assert_eq!(
+        exercise_whitelist(&vanilla, port, false),
+        exercise_whitelist(&harpas, other, false),
+    );
+
+    // Keep the whitelist enabled across the restart and exercise enforcement on connected players.
+    for (server, dir) in [(&mut reference, &vanilla), (&mut server, &harpas)] {
+        stop(server);
+        let path = dir.join("server.properties");
+        let properties = fs::read_to_string(&path).unwrap();
+        assert!(properties.contains("enforce-whitelist=false"));
+        fs::write(
+            path,
+            properties.replace("enforce-whitelist=false", "enforce-whitelist=true"),
+        )
+        .unwrap();
+        assert_eq!(fs::read(dir.join("whitelist.json")).unwrap(), whitelist);
+    }
+    let mut reference = start_vanilla();
+    let mut server = start_harpas();
+    for (server, dir, port) in [
+        (&mut reference, &vanilla, port),
+        (&mut server, &harpas, other),
+    ] {
+        server.wait_for("Done (");
+        assert_login(port, "Visitor", false);
+        console_whitelist(server, dir, false);
+        console_whitelist(server, dir, true);
+        console_whitelist(server, dir, false);
+    }
+    assert_eq!(
+        exercise_whitelist(&vanilla, port, true),
+        exercise_whitelist(&harpas, other, true),
+    );
 }
 
 fn uuid(name: &str) -> String {

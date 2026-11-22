@@ -3,9 +3,10 @@
 Scope: where Harpas' settings live, and how a server is operated: console, logs, remote administration,
 metrics, profiling, shutdown, hosting, and telemetry.
 
-Status: partly implemented. `server.properties` with every 26.1 key, `harpas.toml` checking and its `eula` setting, `HARPAS_*`
-overrides, the console (`help`, `list`, `list uuids`, `seed`, `stop`), `logs/latest.log` with its archives, and stopping on SIGTERM and SIGINT
-are built; the rest is design. Facts about vanilla cite their source in
+Status: partly implemented. Harpas supports `server.properties` with every 26.1 key, `harpas.toml` checking
+and its `eula` setting, and `HARPAS_*` overrides. The console provides `help`, `list`, `list uuids`, `seed`,
+`stop`, and the three whitelist commands below. The server writes `logs/latest.log` and its archives, and
+stops on SIGTERM and SIGINT. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
 ---
@@ -67,8 +68,12 @@ messages:
 
 A ban whose end has passed still matches at first, as in vanilla: the login that finds it fails without a message,
 and the expired bans of that list are dropped until the server restarts, so the player's next login goes on.
-Edit the files while the server is stopped until the list-management commands are implemented
-([commands.md](commands.md)).
+
+`whitelist list`, `whitelist on` and `whitelist off` are available from the console and to Java operators at
+level 3 or higher. The on and off commands save `white-list` in `server.properties`. With
+`enforce-whitelist=true`, turning the whitelist on disconnects every connected player outside the list,
+including operators. Operators can still log in while the whitelist is enabled. Edit access-list entries while
+the server is stopped.
 
 ---
 

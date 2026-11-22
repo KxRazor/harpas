@@ -449,6 +449,13 @@ pub enum Output {
     },
     /// Disconnect this player with a reason.
     Disconnect(&'static str),
+    /// Disconnect this player with a translated reason.
+    DisconnectTranslated {
+        /// Translation key to send to the client.
+        key: &'static str,
+        /// Plain reason to log on the server.
+        text: &'static str,
+    },
 }
 
 /// The most messages that may wait for a player's connection to take them.

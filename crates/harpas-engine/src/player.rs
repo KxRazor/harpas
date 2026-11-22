@@ -272,6 +272,22 @@ pub enum Output {
     },
     /// Add a profile to the player list before spawning its entity.
     AddPlayer(Profile),
+    /// Synchronize the local player's mode, abilities and player list entry.
+    GameModeChanged {
+        /// The local player's UUID.
+        uuid: u128,
+        /// The mode the player switched to.
+        mode: GameMode,
+        /// Whether the change came from another command source.
+        notify: bool,
+    },
+    /// Update another player's game mode in the player list.
+    PlayerGameMode {
+        /// The other player's UUID.
+        uuid: u128,
+        /// The mode the other player switched to.
+        mode: GameMode,
+    },
     /// Remove a profile from the player list.
     RemovePlayer(u128),
     /// Spawn another player's entity.

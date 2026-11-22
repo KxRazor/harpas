@@ -488,6 +488,9 @@ as shown by the parity report.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).
+  - [x] `gamemode` changes a connected player's mode from the console or Java. Level 2 permissions, player
+        selectors, live abilities and player list updates are compared with vanilla (`commands_parity`).
+  - [ ] Persist the player's game mode across reconnects.
 - [x] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
       `banned-ips.json` and `ops.json`: checked at login in vanilla's order, managed by their commands, and
       operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).

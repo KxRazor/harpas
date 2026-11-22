@@ -177,7 +177,7 @@ impl Client {
 
     fn command(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
         self.send_command(command);
-        self.replies(command, replies)
+        self.replies(replies)
     }
 
     fn send_command(&mut self, command: &str) {
@@ -204,12 +204,12 @@ impl Client {
         self.send(|buf| request.encode(buf));
     }
 
-    fn replies(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
+    fn replies(&mut self, replies: usize) -> Vec<SystemChatMessage> {
         (0..replies).map(|_| self.matching("command reply", |packet| match packet {
             Packet::SystemChatMessage(reply) if !matches!(&reply.content,
                 codec::Nbt::Compound(text) if matches!(text.get("translate"), Some(codec::Nbt::String(key))
                     if matches!(key.as_str(), "multiplayer.player.joined" | "multiplayer.player.left" | "chat.type.admin"))) => Some(reply),
-            Packet::Disconnect(packet) => panic!("disconnected during /{command}: {:?}", packet.reason),
+            Packet::Disconnect(packet) => panic!("disconnected while waiting for a command reply: {:?}", packet.reason),
             _ => None,
         })).collect()
     }
@@ -251,6 +251,7 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
                                 | "ban-ip"
                                 | "banlist"
                                 | "deop"
+                                | "gamemode"
                                 | "list"
                                 | "op"
                                 | "pardon"
@@ -290,7 +291,12 @@ fn compare(port: u16, other: u16) {
         let can_whitelist = level >= 3;
         let mut vanilla = Client::join(port, name);
         let expected = tree_nodes(&vanilla.tree());
-        assert_eq!(expected.iter().any(|(name, _, _)| name == "seed"), can_seed);
+        for command in ["seed", "gamemode"] {
+            assert_eq!(
+                expected.iter().any(|(name, _, _)| name == command),
+                can_seed
+            );
+        }
         assert_eq!(
             expected.iter().any(|(name, _, _)| name == "whitelist"),
             can_whitelist
@@ -350,6 +356,7 @@ fn compare(port: u16, other: u16) {
         ]
         .into_iter()
         .chain((!can_whitelist).then_some(("ban Builder", 2)))
+        .chain((!can_seed).then_some(("gamemode creative", 2)))
         {
             let expected = vanilla.command(command, replies);
             let actual = harpas.command(command, replies);
@@ -650,6 +657,97 @@ fn stop(server: &mut Server) {
     assert!(server.child.wait().unwrap().success());
 }
 
+fn mode_feedback(client: &mut Client, name: &str) -> Vec<Packet> {
+    let uuid = offline_uuid(name);
+    let mut packets = Vec::new();
+    let reply = client.matching("game mode feedback", |packet| {
+        match &packet {
+            Packet::PlayerAbilities(_) => {}
+            Packet::GameEvent(event) if event.event == play::GameEventKind::ChangeGameMode => {}
+            Packet::PlayerInfoUpdate(update)
+                if update.updates.actions.update_game_mode
+                    && !update.updates.actions.add_player
+                    && update.updates.entries.iter().any(|entry| entry.uuid == uuid) => {}
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                    if matches!(text.get("translate"), Some(codec::Nbt::String(key))
+                        if key.starts_with("commands.gamemode.success.") || key == "gameMode.changed")) =>
+            {
+                return Some(packet);
+            }
+            _ => return None,
+        }
+        packets.push(packet);
+        None
+    });
+    packets.push(reply);
+    packets
+}
+
+fn exercise_game_modes(server: &mut Server, port: u16) -> Vec<Packet> {
+    let mut op = Client::join(port, "Op");
+    let mut target = Client::join(port, "ModeTarget");
+    op.tree();
+    target.tree();
+    let mut packets = Vec::new();
+    for query in [
+        "/gamemode ",
+        "/gamemode creative Mo",
+        "/gamemode creative @",
+    ] {
+        packets.push(op.suggestions(query).into());
+    }
+    for (command, replies) in [
+        ("gamemode Creative", 2),
+        ("gamemode creative Nobody", 1),
+        ("gamemode creative @e", 2),
+    ] {
+        packets.extend(op.command(command, replies).into_iter().map(Packet::from));
+    }
+    let uuid_target = format!("gamemode creative {}", uuid("ModeTarget"));
+    packets.extend(op.command(&uuid_target, 2).into_iter().map(Packet::from));
+
+    op.send_command("gamemode creative");
+    packets.extend(mode_feedback(&mut op, "Op"));
+    let fly = play::serverbound::Packet::from(play::serverbound::PlayerAbilities {
+        flags: play::AbilityFlags {
+            flying: true,
+            ..Default::default()
+        },
+    });
+    op.send(|buf| fly.encode(buf));
+    op.send_command("gamemode survival");
+    packets.extend(mode_feedback(&mut op, "Op"));
+    op.send_command("gamemode survival");
+    let [list] = op.command("list", 1).try_into().unwrap();
+    assert!(matches!(&list.content, codec::Nbt::Compound(text)
+        if matches!(text.get("translate"), Some(codec::Nbt::String(key)) if key == "commands.list.players")));
+
+    for command in [
+        "gamemode adventure @s",
+        "gamemode spectator ModeTarget",
+        "gamemode creative @a[name=ModeTarget]",
+    ] {
+        op.send_command(command);
+        let self_target = command.ends_with("@s");
+        let name = if self_target { "Op" } else { "ModeTarget" };
+        packets.extend(mode_feedback(&mut op, name));
+        if !self_target {
+            packets.extend(mode_feedback(&mut target, name));
+        }
+    }
+    writeln!(
+        server.child.stdin.as_mut().unwrap(),
+        "gamemode survival ModeTarget"
+    )
+    .unwrap();
+    server.wait_for("Set ModeTarget's game mode to Survival Mode");
+    packets.extend(mode_feedback(&mut target, "ModeTarget"));
+    writeln!(server.child.stdin.as_mut().unwrap(), "gamemode creative").unwrap();
+    server.wait_for("A player is required to run this command here");
+    packets
+}
+
 #[derive(Debug, PartialEq)]
 struct Operators {
     completions: Vec<CommandSuggestionsResponse>,
@@ -680,7 +778,7 @@ fn exercise_operators(server: &mut Server, dir: &Path, port: u16) -> Operators {
     operator.send_command("deop NewOperator");
     let demoted = tree_nodes(&operator.permission_tree(0));
     assert_eq!(demoted, initial);
-    replies.extend(operator.replies("deop NewOperator", 1));
+    replies.extend(operator.replies(1));
     replies.extend(operator.command("seed", 2));
     replies.extend(admin.command("deop NewOperator", 1));
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
@@ -774,6 +872,12 @@ fn commands_match_vanilla() {
         server.wait_for("There are 3 whitelisted player(s):");
     }
     compare(port, other);
+    let expected_modes = exercise_game_modes(&mut reference, port);
+    let actual_modes = exercise_game_modes(&mut server, other);
+    assert_eq!(actual_modes.len(), expected_modes.len());
+    for (index, (actual, expected)) in actual_modes.iter().zip(&expected_modes).enumerate() {
+        assert_eq!(actual, expected, "game mode packet {index}");
+    }
     assert_eq!(
         exercise_operators(&mut reference, &vanilla, port),
         exercise_operators(&mut server, &harpas, other)

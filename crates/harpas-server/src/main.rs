@@ -757,8 +757,14 @@ fn play(
                     .kick
                     .or(player::send(&mut connection, session, &environment.chunks));
             if !connection.is_closed() {
-                departure.kick =
-                    player::receive(&mut connection, session, logic, &environment.commands, peer)?;
+                departure.kick = player::receive(
+                    &mut connection,
+                    session,
+                    logic,
+                    &environment.commands,
+                    peer,
+                    &environment.chunks,
+                )?;
             }
             stream.write_all(&connection.take_output())?;
         }

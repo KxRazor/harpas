@@ -8,6 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_engine::Handle;
+use harpas_engine::player::GameMode;
 use harpas_protocol_java::v26_1::play::{
     CommandNode, CommandNodeKind, CommandSuggestion, CommandTree,
 };
@@ -15,7 +16,7 @@ use harpas_protocol_java::v26_1::play::{clientbound, serverbound};
 
 use crate::access::{
     AccessLists, BANNED, BANNED_TEXT, DEFAULT_BAN_REASON, DEFAULT_BAN_REASON_KEY, IP_BANNED,
-    IP_BANNED_TEXT, NOT_WHITELISTED, NOT_WHITELISTED_TEXT, Profile,
+    IP_BANNED_TEXT, NOT_WHITELISTED, NOT_WHITELISTED_TEXT, Profile, java_uuid,
 };
 use crate::profiles::Profiles;
 use crate::session::format_uuid;
@@ -43,6 +44,7 @@ enum Action {
     PardonIp,
     BanList(BanList),
     ChangeOperator(bool),
+    GameMode,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +57,8 @@ enum BanList {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Word {
     Literal(&'static str),
+    GameMode,
+    Players,
     Profiles,
     Ip,
     Reason,
@@ -70,6 +74,28 @@ struct Node {
 }
 
 const OP_COMMAND_LEVEL: i32 = 3;
+const GAME_MODE_LEVEL: i32 = 2;
+const GAME_MODES: [(&str, &str, GameMode); 4] = [
+    ("adventure", "Adventure Mode", GameMode::Adventure),
+    ("creative", "Creative Mode", GameMode::Creative),
+    ("spectator", "Spectator Mode", GameMode::Spectator),
+    ("survival", "Survival Mode", GameMode::Survival),
+];
+const SELECTOR_SUGGESTIONS: [(&str, &str); 6] = [
+    ("@a", "argument.entity.selector.allPlayers"),
+    ("@e", "argument.entity.selector.allEntities"),
+    ("@n", "argument.entity.selector.nearestEntity"),
+    ("@p", "argument.entity.selector.nearestPlayer"),
+    ("@r", "argument.entity.selector.randomPlayer"),
+    ("@s", "argument.entity.selector.self"),
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Selection {
+    Profiles,
+    Players,
+    Entities,
+}
 
 const ROOTS: &[Node] = &[
     Node {
@@ -138,6 +164,25 @@ const ROOTS: &[Node] = &[
         allows_restricted: true,
         action: None,
         children: &[operator_target(false)],
+    },
+    Node {
+        word: Word::Literal("gamemode"),
+        level: Some(GAME_MODE_LEVEL),
+        allows_restricted: true,
+        action: None,
+        children: &[Node {
+            word: Word::GameMode,
+            level: Some(GAME_MODE_LEVEL),
+            allows_restricted: false,
+            action: Some(Action::GameMode),
+            children: &[Node {
+                word: Word::Players,
+                level: Some(GAME_MODE_LEVEL),
+                allows_restricted: false,
+                action: Some(Action::GameMode),
+                children: &[],
+            }],
+        }],
     },
     Node {
         word: Word::Literal("help"),
@@ -289,7 +334,7 @@ impl Node {
 pub fn names() -> impl Iterator<Item = &'static str> {
     ROOTS.iter().filter_map(|node| match node.word {
         Word::Literal(name) => Some(name),
-        Word::Profiles | Word::Ip | Word::Reason => None,
+        _ => None,
     })
 }
 
@@ -316,6 +361,18 @@ fn add_children(nodes: &mut Vec<CommandNode>, parent: usize, children: &[Node], 
         nodes.push(CommandNode {
             kind: match node.word {
                 Word::Literal(name) => CommandNodeKind::Literal(name.into()),
+                Word::GameMode => CommandNodeKind::Argument {
+                    name: "gamemode".into(),
+                    parser: 42, // minecraft:game_mode
+                    properties: Vec::new(),
+                    suggestions: None,
+                },
+                Word::Players => CommandNodeKind::Argument {
+                    name: "target".into(),
+                    parser: 6,           // minecraft:entity
+                    properties: vec![2], // players only, multiple allowed
+                    suggestions: None,
+                },
                 Word::Profiles => CommandNodeKind::Argument {
                     name: "targets".into(),
                     parser: 7, // minecraft:game_profile
@@ -351,7 +408,14 @@ fn completion_nodes(input: &str, source: Source) -> (usize, &'static [Node]) {
     let mut remaining = &input[start..];
     let mut children = ROOTS;
     while let Some((word, tail)) = remaining.split_once(' ') {
-        let Some(node) = find(children, word, source) else {
+        let Some(node) = children.iter().find(|node| {
+            node.available(source)
+                && match node.word {
+                    Word::Literal(name) => name == word,
+                    Word::GameMode => GAME_MODES.iter().any(|(name, _, _)| *name == word),
+                    _ => false,
+                }
+        }) else {
             return (start, &[]);
         };
         start += word.len() + 1;
@@ -367,6 +431,11 @@ fn find<'a>(nodes: &'a [Node], literal: &str, source: Source) -> Option<&'a Node
     })
 }
 
+fn unquoted_end(word: &str) -> usize {
+    word.find(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-' | '.' | '+'))
+        .unwrap_or(word.len())
+}
+
 fn parse(
     input: &str,
     source: Source,
@@ -376,17 +445,24 @@ fn parse(
     let mut children = ROOTS;
     loop {
         let (word, tail) = remaining.split_once(' ').unwrap_or((remaining, ""));
+        if !word.is_empty()
+            && let Some(node) = children
+                .iter()
+                .find(|node| node.word == Word::GameMode && node.available(source))
+        {
+            return Ok((
+                node.action.expect("a game mode argument executes"),
+                word,
+                (word.len() < remaining.len()).then_some(tail),
+            ));
+        }
         if let Some(node) = children
             .iter()
             .find(|node| matches!(node.word, Word::Profiles | Word::Ip) && node.available(source))
             && !word.is_empty()
         {
-            if node.word == Word::Ip
-                && let Some(index) = word.find(|c: char| {
-                    !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-' | '.' | '+')
-                })
-            {
-                return Err((start + index, "command.expected.separator"));
+            if node.word == Word::Ip && unquoted_end(word) < word.len() {
+                return Err((start + unquoted_end(word), "command.expected.separator"));
             }
             let reason = if word.len() == remaining.len() {
                 None
@@ -483,6 +559,7 @@ pub enum Outcome {
     Syntax {
         cursor: usize,
         reason: &'static str,
+        argument: Option<String>,
     },
 }
 
@@ -551,6 +628,15 @@ impl Commands {
         for node in children.iter().filter(|node| node.available(source)) {
             match (node.word, node.action) {
                 (Word::Literal(name), _) => matches.push(name.into()),
+                (Word::GameMode, _) => {
+                    matches.extend(GAME_MODES.iter().map(|(name, _, _)| (*name).into()));
+                }
+                (Word::Players, _) => {
+                    if let Ok(players) = logic.player_names() {
+                        matches.extend(players);
+                    }
+                    matches.extend(SELECTOR_SUGGESTIONS.map(|(selector, _)| selector.to_owned()));
+                }
                 (
                     Word::Profiles,
                     Some(
@@ -606,8 +692,10 @@ impl Commands {
         if matches.is_empty() {
             let command = request.text.strip_prefix('/').unwrap_or(&request.text);
             let (root, _) = command.split_once(' ')?;
-            if matches!(root, "ban-ip" | "pardon-ip" | "banlist" | "op" | "deop")
-                && find(ROOTS, root, source).is_some()
+            if matches!(
+                root,
+                "ban-ip" | "pardon-ip" | "banlist" | "op" | "deop" | "gamemode"
+            ) && find(ROOTS, root, source).is_some()
             {
                 return Some(clientbound::CommandSuggestionsResponse {
                     id: request.id,
@@ -624,9 +712,12 @@ impl Commands {
             length: request.text[start..].encode_utf16().count() as i32,
             suggestions: matches
                 .into_iter()
-                .map(|text| CommandSuggestion {
-                    text,
-                    tooltip: None,
+                .map(|text| {
+                    let tooltip = SELECTOR_SUGGESTIONS
+                        .iter()
+                        .find(|(selector, _)| *selector == text)
+                        .map(|(_, key)| translate(key, vec![]));
+                    CommandSuggestion { text, tooltip }
                 })
                 .collect(),
         })
@@ -635,11 +726,12 @@ impl Commands {
     pub fn run(&self, logic: &Handle, input: &str, source: Source) -> io::Result<Outcome> {
         let (action, argument, reason) = match parse(input, source) {
             Ok(action) => action,
-            Err((cursor, reason)) => return Ok(Outcome::Syntax { cursor, reason }),
+            Err((cursor, reason)) => return Ok(syntax(cursor, reason)),
         };
         Ok(match action {
             Action::Help => Outcome::Help,
             Action::Stop => Outcome::Stop,
+            Action::GameMode => self.change_game_mode(logic, source, input, argument, reason)?,
             Action::WhitelistList => {
                 let access = self.access();
                 let names = access.whitelist_names();
@@ -772,6 +864,115 @@ impl Commands {
                     ),
                 )
             }
+        })
+    }
+
+    fn change_game_mode(
+        &self,
+        logic: &Handle,
+        source: Source,
+        input: &str,
+        argument: &str,
+        target: Option<&str>,
+    ) -> io::Result<Outcome> {
+        let end = input.len() - target.map_or(0, |target| target.len() + 1);
+        let word = &argument[..unquoted_end(argument)];
+        let cursor = end - argument.len() + word.len();
+        let Some(&(_, title, mode)) = GAME_MODES.iter().find(|(name, _, _)| *name == word) else {
+            return Ok(Outcome::Syntax {
+                cursor,
+                reason: "argument.gamemode.invalid",
+                argument: Some(word.into()),
+            });
+        };
+        if cursor != end {
+            return Ok(syntax(cursor, "command.expected.separator"));
+        }
+        let sender = match source {
+            Source::Player { uuid, .. } => Some(uuid),
+            Source::Console => None,
+        };
+        let targets = if let Some(target) = target {
+            if target.is_empty() {
+                return Ok(syntax(end, "command.unknown.argument"));
+            }
+            if let Some((word, _)) = target.split_once(' ') {
+                return Ok(syntax(end + 1 + word.len(), "command.unknown.argument"));
+            }
+            if let Some(selector) = target.strip_prefix('@') {
+                match self.select_players(logic, source, selector, Selection::Players)? {
+                    Ok(players) => players.into_iter().map(|player| player.uuid).collect(),
+                    Err(reason) => {
+                        return Ok(syntax(
+                            if reason == "argument.player.entities" {
+                                0
+                            } else {
+                                end + 1
+                            },
+                            reason,
+                        ));
+                    }
+                }
+            } else {
+                let target = target
+                    .strip_prefix('"')
+                    .and_then(|name| name.strip_suffix('"'))
+                    .unwrap_or(target);
+                if java_uuid(target).is_some() {
+                    return Ok(syntax(0, "argument.player.entities"));
+                }
+                logic
+                    .players()
+                    .map_err(io::Error::other)?
+                    .into_iter()
+                    .filter(|(_, name)| name.eq_ignore_ascii_case(target))
+                    .map(|(id, _)| id)
+                    .collect()
+            }
+        } else if let Some(uuid) = sender {
+            vec![uuid]
+        } else {
+            return Ok(failure(
+                "A player is required to run this command here".into(),
+                "permissions.requires.player",
+            ));
+        };
+        if targets.is_empty() {
+            return Ok(failure(
+                "No player was found".into(),
+                "argument.entity.notfound.player",
+            ));
+        }
+        let access = self.access();
+        if sender.is_some_and(|uuid| access.operator_level(uuid) < GAME_MODE_LEVEL) {
+            return Ok(syntax(0, "command.unknown.command"));
+        }
+        let changed = logic
+            .set_game_mode(targets, mode, sender)
+            .map_err(io::Error::other)?;
+        drop(access);
+        let replies = changed
+            .into_iter()
+            .map(|(uuid, name)| {
+                if sender == Some(uuid) {
+                    (
+                        format!("Set own game mode to {title}"),
+                        game_mode_message("commands.gamemode.success.self", mode),
+                    )
+                } else {
+                    (
+                        format!("Set {name}'s game mode to {title}"),
+                        translate(
+                            "commands.gamemode.success.other",
+                            vec![player_name(uuid, name).into(), game_mode_component(mode)],
+                        ),
+                    )
+                }
+            })
+            .collect();
+        Ok(Outcome::Feedback {
+            replies,
+            disconnect: None,
         })
     }
 
@@ -962,10 +1163,7 @@ impl Commands {
         if let Source::Player { uuid, .. } = source
             && access.operator_level(uuid) < OP_COMMAND_LEVEL
         {
-            return Ok(Outcome::Syntax {
-                cursor: 0,
-                reason: "command.unknown.command",
-            });
+            return Ok(syntax(0, "command.unknown.command"));
         }
         let changed = match access.change_operators(profiles, grant) {
             Ok(changed) => changed,
@@ -1184,13 +1382,13 @@ impl Commands {
         cursor: usize,
     ) -> io::Result<Result<Vec<Profile>, Outcome>> {
         Ok(if let Some(selector) = target.strip_prefix('@') {
-            match self.select_players(logic, source, selector, true)? {
+            match self.select_players(logic, source, selector, Selection::Profiles)? {
                 Ok(profiles) if profiles.is_empty() => Err(failure(
                     "No player was found".into(),
                     "argument.entity.notfound.player",
                 )),
                 Ok(profiles) => Ok(profiles),
-                Err(reason) => Err(Outcome::Syntax { cursor, reason }),
+                Err(reason) => Err(syntax(cursor, reason)),
             }
         } else if let Some(profile) = self.profiles.resolve(target) {
             Ok(vec![profile])
@@ -1214,10 +1412,7 @@ impl Commands {
         };
         Ok(match self.resolve_reason(logic, source, reason)? {
             Ok(reason) => Ok(Some(reason)),
-            Err((offset, error)) => Err(Outcome::Syntax {
-                cursor: input_len - reason.len() + offset,
-                reason: error,
-            }),
+            Err((offset, error)) => Err(syntax(input_len - reason.len() + offset, error)),
         })
     }
 
@@ -1248,10 +1443,11 @@ impl Commands {
             } else {
                 1
             };
-            let players = match self.select_players(logic, source, &candidate[..end], false)? {
-                Ok(players) => players,
-                Err(error) => return Ok(Err((offset, error))),
-            };
+            let players =
+                match self.select_players(logic, source, &candidate[..end], Selection::Entities)? {
+                    Ok(players) => players,
+                    Err(error) => return Ok(Err((offset, error))),
+                };
             for (index, profile) in players.into_iter().enumerate() {
                 if index != 0 {
                     text.push_str(", ");
@@ -1269,7 +1465,7 @@ impl Commands {
         logic: &Handle,
         source: Source,
         selector: &str,
-        profiles_only: bool,
+        selection: Selection,
     ) -> io::Result<Result<Vec<Profile>, &'static str>> {
         let kind = match selector.as_bytes().first().copied() {
             Some(kind @ (b'a' | b'p' | b'r' | b's' | b'e' | b'n')) => kind,
@@ -1298,7 +1494,13 @@ impl Commands {
                 }
             }
         }
-        if profiles_only && matches!(kind, b's' | b'e' | b'n') && !player_type {
+        if !player_type
+            && match selection {
+                Selection::Profiles => matches!(kind, b's' | b'e' | b'n'),
+                Selection::Players => matches!(kind, b'e' | b'n'),
+                Selection::Entities => false,
+            }
+        {
             return Ok(Err("argument.player.entities"));
         }
 
@@ -1399,13 +1601,23 @@ impl Commands {
                     .collect(),
                 disconnect,
             ),
-            Outcome::Syntax { cursor, reason } => (
-                vec![
-                    command_failure(Compound::from_iter([("translate", reason)])),
-                    command_failure(error_context(input, cursor)),
-                ],
-                None,
-            ),
+            Outcome::Syntax {
+                cursor,
+                reason,
+                argument,
+            } => {
+                let mut message = Compound::from_iter([("translate", reason)]);
+                if let Some(argument) = argument {
+                    message.insert("with", List::String(vec![argument]));
+                }
+                (
+                    vec![
+                        command_failure(message),
+                        command_failure(error_context(input, cursor)),
+                    ],
+                    None,
+                )
+            }
             Outcome::Help | Outcome::Stop => unreachable!("console-only commands were filtered"),
         };
         Ok((
@@ -1419,6 +1631,26 @@ impl Commands {
             disconnect,
         ))
     }
+}
+
+fn syntax(cursor: usize, reason: &'static str) -> Outcome {
+    Outcome::Syntax {
+        cursor,
+        reason,
+        argument: None,
+    }
+}
+
+fn game_mode_component(mode: GameMode) -> Nbt {
+    let &(name, _, _) = GAME_MODES
+        .iter()
+        .find(|(_, _, value)| *value == mode)
+        .expect("every game mode has a name");
+    Compound::from_iter([("translate", format!("gameMode.{name}"))]).into()
+}
+
+pub(crate) fn game_mode_message(key: &str, mode: GameMode) -> Nbt {
+    translate(key, vec![game_mode_component(mode)])
 }
 
 fn player_name(uuid: u128, name: String) -> Compound {

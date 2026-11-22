@@ -10,6 +10,7 @@ use harpas_core::item::items;
 use harpas_core::nbt::{Compound, List, Nbt};
 
 use crate::inventory::{ComponentPatch, ItemStack};
+use crate::player::EffectKind;
 
 const POTION_CONTENTS: &str = "minecraft:potion_contents";
 pub(crate) const STEW_EFFECTS: &str = "minecraft:suspicious_stew_effects";
@@ -34,13 +35,15 @@ pub struct FoodProperties {
     pub use_ticks: u32,
     /// The default stack left after consumption, such as a bowl.
     pub remainder: Option<ItemStack>,
-    /// A chance to apply Hunger when the food is finished.
-    pub hunger: Option<FoodHunger>,
+    /// A chance to apply a status effect when the food is finished.
+    pub effect: Option<FoodEffect>,
 }
 
-/// The Hunger effect configured on a vanilla consumable.
+/// A supported effect configured on a vanilla consumable.
 #[derive(Debug, Clone, Copy)]
-pub struct FoodHunger {
+pub struct FoodEffect {
+    /// The effect applied at level I.
+    pub kind: EffectKind,
     /// Duration in ticks.
     pub duration: i32,
     /// Probability of applying the effect, from zero to one.
@@ -55,7 +58,7 @@ pub struct ItemCodec {
     enchantments: Vec<String>,
     potions: Vec<String>,
     mob_effects: Vec<String>,
-    hunger_effect_id: Option<i32>,
+    effect_ids: [Option<i32>; EffectKind::ALL.len()],
     foods: HashMap<u32, FoodProperties>,
 }
 
@@ -97,7 +100,7 @@ impl ItemCodec {
             enchantments: Vec::new(),
             potions: Vec::new(),
             mob_effects: Vec::new(),
-            hunger_effect_id: None,
+            effect_ids: Default::default(),
             foods: HashMap::from([(
                 items().id("minecraft:apple").expect("registered apple"),
                 FoodProperties {
@@ -106,7 +109,7 @@ impl ItemCodec {
                     can_always_eat: false,
                     use_ticks: 32,
                     remainder: None,
-                    hunger: None,
+                    effect: None,
                 },
             )]),
         }
@@ -152,15 +155,17 @@ impl ItemCodec {
     /// Adds the locally generated built-in mob effect registry in numeric order.
     pub fn with_mob_effects(mut self, names: &[String]) -> Self {
         self.mob_effects = names.to_vec();
-        self.hunger_effect_id = names
-            .iter()
-            .position(|name| name == crate::survival::HungerEffect::ID)
-            .map(|id| id as i32);
+        self.effect_ids = EffectKind::ALL.map(|kind| {
+            names
+                .iter()
+                .position(|name| name == kind.id())
+                .map(|id| id as i32)
+        });
         self
     }
 
-    pub(crate) fn hunger_effect_id(&self) -> Option<i32> {
-        self.hunger_effect_id
+    pub(crate) fn effect_ids(&self) -> [Option<i32>; EffectKind::ALL.len()] {
+        self.effect_ids
     }
 
     pub(crate) fn set_potion(&self, stack: &mut ItemStack, name: &str) -> io::Result<()> {

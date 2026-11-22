@@ -504,6 +504,9 @@ as shown by the parity report.
   - [x] Rotten flesh and raw chicken can apply Hunger from their default item components. Applying the
         effect, reconnecting, expiry and the resulting exhaustion are compared with vanilla
         (`food_hunger_effect_matches_vanilla`).
+  - [x] Spider eyes and poisonous potatoes can apply Poison from their default item components. Effect
+        application, magic damage, reconnecting, expiry and the health limit are compared with vanilla
+        (`food_poison_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

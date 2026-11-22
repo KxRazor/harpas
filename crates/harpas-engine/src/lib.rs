@@ -1112,7 +1112,10 @@ impl Game {
     }
 
     fn finish_join(&mut self, index: usize, data: Option<Arc<player_data::PlayerInventory>>) {
-        let hunger_id = self.world.as_ref().and_then(world::World::hunger_effect_id);
+        let effect_ids = self
+            .world
+            .as_ref()
+            .map_or_else(Default::default, world::World::effect_ids);
         let player = &mut self.players[index];
         if let Some(data) = data {
             Self::restore_inventory(player, data);
@@ -1124,8 +1127,10 @@ impl Game {
                 flying: player.flying,
             });
             player.send(player.vitals.update());
-            if player.hunger_effect.is_some() {
-                player.send_hunger_effect(hunger_id, false);
+            for (kind, effect_id) in player::EffectKind::ALL.into_iter().zip(effect_ids) {
+                if player.effects[kind as usize].is_some() {
+                    player.send_effect(kind, effect_id, false);
+                }
             }
             if player.is_dead() {
                 player.send(player::Output::Death {
@@ -1785,7 +1790,8 @@ mod tests {
     fn hunger_rolls_only_when_food_is_finished_and_exhausts_until_expiry() {
         use harpas_core::random::LegacyRandom;
         use inventory::{HOTBAR, ItemStack};
-        use item_data::{FoodHunger, FoodProperties, ItemCodec};
+        use item_data::{FoodEffect, FoodProperties, ItemCodec};
+        use player::EffectKind::Hunger;
 
         let mut game = game();
         let received = join(&mut game, 1, "Eating", 2);
@@ -1808,7 +1814,8 @@ mod tests {
                             can_always_eat: false,
                             use_ticks: 2,
                             remainder: None,
-                            hunger: Some(FoodHunger {
+                            effect: Some(FoodEffect {
+                                kind: Hunger,
                                 duration: 3,
                                 probability: 0.8,
                             }),
@@ -1836,14 +1843,14 @@ mod tests {
         game.tick_survival(rules);
         game.stop_using_item(0);
         assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 2);
-        assert!(game.players[0].hunger_effect.is_none());
+        assert!(game.players[0].effects[Hunger as usize].is_none());
         game.use_item(0, false, 2);
         for _ in 0..2 {
             game.tick_survival(rules);
         }
         assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 1);
         assert_eq!(game.players[0].vitals.saturation, 0.8);
-        assert!(game.players[0].hunger_effect.is_some());
+        assert!(game.players[0].effects[Hunger as usize].is_some());
         game.use_item(0, false, 3);
         game.tick_survival(rules);
         assert_eq!(game.players[0].vitals.saturation, 0.0);
@@ -1851,7 +1858,7 @@ mod tests {
             game.tick_survival(rules);
         }
         assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 0);
-        assert!(game.players[0].hunger_effect.is_none());
+        assert!(game.players[0].effects[Hunger as usize].is_none());
         assert!((game.players[0].vitals.exhaustion - 0.014).abs() < 0.000001);
         let updates: Vec<_> = std::iter::from_fn(|| received.try_recv().ok())
             .filter_map(|output| match output {
@@ -1862,6 +1869,40 @@ mod tests {
         assert_eq!(updates, [Some(3), None]);
         drop(game);
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn poison_ticks_on_divisible_durations_and_stops_damaging_at_one_health() {
+        use harpas_core::nbt::Compound;
+        use player::{DamageKind, EffectKind::Poison};
+
+        let mut game = game();
+        let received = join(&mut game, 1, "Poisoned", 2);
+        game.connections();
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.effects[Poison as usize] =
+            survival::ActiveEffect::read(&Compound::from_iter([("duration", 76_i32)]));
+        player.vitals.health = 3.0;
+        player.vitals.food = 10;
+        for tick in 1..=76 {
+            game.tick_survival(survival::SurvivalRules::default());
+            let damage = received
+                .try_iter()
+                .filter(|output| {
+                    matches!(
+                        output,
+                        Output::Damage {
+                            kind: DamageKind::Magic,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(damage, usize::from(matches!(tick, 2 | 27)), "tick {tick}");
+        }
+        assert_eq!(game.players[0].vitals.health, 1.0);
+        assert!(game.players[0].effects[Poison as usize].is_none());
     }
 
     #[test]
@@ -1886,7 +1927,7 @@ mod tests {
                     can_always_eat: false,
                     use_ticks: 16,
                     remainder: None,
-                    hunger: None,
+                    effect: None,
                 },
             )]),
         )));
@@ -1950,7 +1991,7 @@ mod tests {
                         can_always_eat: false,
                         use_ticks: 1,
                         remainder: Some(bowl.clone()),
-                        hunger: None,
+                        effect: None,
                     },
                 )]
                 .into(),

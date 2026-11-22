@@ -249,7 +249,7 @@ fn run() -> io::Result<()> {
                 }
                 if !has_food_effects {
                     warn!(
-                        "Update the food defaults with `harpas vanilla-data generate-registry` to enable foods that apply Hunger"
+                        "Update the food defaults with `harpas vanilla-data generate-registry` to enable foods that apply Hunger or Poison"
                     );
                 }
                 codec.with_foods(foods)

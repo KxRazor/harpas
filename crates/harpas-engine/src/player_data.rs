@@ -12,8 +12,8 @@ use harpas_core::nbt::{Compound, List, Nbt};
 
 use crate::inventory::{Inventory, ItemStack, SLOTS};
 use crate::item_data::{ItemCodec, invalid};
-use crate::player::{GameMode, PlayerState};
-use crate::survival::{HungerEffect, Vitals};
+use crate::player::{EffectKind, GameMode, PlayerState};
+use crate::survival::{ActiveEffect, ActiveEffects, Vitals};
 
 const CAPACITY: usize = 64;
 const EQUIPMENT: [(&str, usize); 5] = [
@@ -34,7 +34,7 @@ pub struct PlayerInventory {
     root: Arc<Compound>,
     mode: Option<SavedGameMode>,
     vitals: Option<Vitals>,
-    hunger_effect: Option<HungerEffect>,
+    effects: ActiveEffects,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,7 +90,7 @@ impl PlayerInventory {
             root: Arc::new(root),
             mode: None,
             vitals: None,
-            hunger_effect: None,
+            effects: Default::default(),
         })
     }
 
@@ -162,11 +162,13 @@ impl PlayerInventory {
             root.insert("foodExhaustionLevel", Nbt::Float(vitals.exhaustion));
             root.insert("foodTickTimer", Nbt::Int(vitals.food_timer));
             let mut effects = active_effects(&root).to_vec();
-            effects.retain(|tag| !is_hunger_effect(tag));
-            if let Some(effect) = &self.hunger_effect {
-                let mut tag = effect.write();
-                tag.insert("id", HungerEffect::ID);
-                effects.push(tag);
+            for (kind, active) in EffectKind::ALL.into_iter().zip(&self.effects) {
+                effects.retain(|tag| !is_effect(tag, kind));
+                if let Some(effect) = active {
+                    let mut tag = effect.write();
+                    tag.insert("id", kind.id());
+                    effects.push(tag);
+                }
             }
             if effects.is_empty() {
                 root.remove("active_effects");
@@ -188,7 +190,7 @@ impl PlayerInventory {
                 flying: player.flying,
             }),
             vitals: Some(player.vitals),
-            hunger_effect: player.hunger_effect.clone(),
+            effects: player.effects.clone(),
         }
     }
 
@@ -225,7 +227,7 @@ impl PlayerInventory {
     fn restore_vitals(&self, player: &mut PlayerState) {
         if let Some(vitals) = self.vitals {
             player.vitals = vitals;
-            player.hunger_effect = self.hunger_effect.clone();
+            player.effects.clone_from(&self.effects);
             return;
         }
         if let Some(Nbt::Float(health)) = self.root.get("Health")
@@ -249,10 +251,13 @@ impl PlayerInventory {
         if let Some(Nbt::Int(timer)) = self.root.get("foodTickTimer") {
             player.vitals.food_timer = *timer;
         }
-        player.hunger_effect = active_effects(&self.root)
-            .iter()
-            .find(|tag| is_hunger_effect(tag))
-            .and_then(HungerEffect::read);
+        let effects = active_effects(&self.root);
+        player.effects = EffectKind::ALL.map(|kind| {
+            effects
+                .iter()
+                .find(|tag| is_effect(tag, kind))
+                .and_then(ActiveEffect::read)
+        });
     }
 }
 
@@ -263,8 +268,8 @@ fn active_effects(root: &Compound) -> &[Compound] {
     }
 }
 
-fn is_hunger_effect(tag: &Compound) -> bool {
-    matches!(tag.get("id"), Some(Nbt::String(id)) if id == HungerEffect::ID)
+fn is_effect(tag: &Compound, kind: EffectKind) -> bool {
+    matches!(tag.get("id"), Some(Nbt::String(id)) if id == kind.id())
 }
 
 fn inventory_entries(root: &Compound) -> io::Result<&[Compound]> {
@@ -843,7 +848,7 @@ mod autosave_tests {
         );
         let mut root = new_player(1);
         let hunger = Compound::from_iter([
-            ("id", Nbt::from(HungerEffect::ID)),
+            ("id", Nbt::from(EffectKind::Hunger.id())),
             ("duration", Nbt::Int(15)),
         ]);
         let other = Compound::from_iter([
@@ -888,7 +893,7 @@ mod autosave_tests {
         game.players[0].vitals.health = 9.0;
         game.players[0].vitals.exhaustion = 0.0;
         game.players[0].vitals.food_timer = 0;
-        game.players[0].hunger_effect = None;
+        game.players[0].effects[EffectKind::Hunger as usize] = None;
         game.world
             .as_mut()
             .unwrap()
@@ -905,8 +910,7 @@ mod autosave_tests {
         assert_eq!(game.players[0].vitals.exhaustion, 3.5);
         assert_eq!(game.players[0].vitals.food_timer, 9);
         assert_eq!(
-            game.players[0]
-                .hunger_effect
+            game.players[0].effects[EffectKind::Hunger as usize]
                 .as_ref()
                 .unwrap()
                 .write()

@@ -4,7 +4,7 @@ use crate::Game;
 use crate::block::BlockPos;
 use crate::inventory::ItemStack;
 use crate::item_data::{FoodProperties, ItemCodec};
-use crate::player::{DamageKind, Effect, GameMode, Output, PlayerState, Position};
+use crate::player::{DamageKind, Effect, EffectKind, GameMode, Output, PlayerState, Position};
 use crate::world::{ChunkPos, ChunkState, World};
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_core::random::RandomSource;
@@ -13,15 +13,15 @@ const MAX_HEALTH: f32 = 20.0;
 const MAX_FOOD: i32 = 20;
 const SAFE_FALL_DISTANCE: f64 = 3.0;
 
+pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
+
 #[derive(Debug, Clone)]
-pub(crate) struct HungerEffect {
+pub(crate) struct ActiveEffect {
     visible: Effect,
     hidden: Option<Box<Self>>,
 }
 
-impl HungerEffect {
-    pub(crate) const ID: &str = "minecraft:hunger";
-
+impl ActiveEffect {
     pub(crate) fn read(tag: &Compound) -> Option<Self> {
         let duration = match tag.get("duration") {
             Some(Nbt::Int(duration)) if *duration == -1 || *duration > 0 => *duration,
@@ -104,6 +104,20 @@ impl HungerEffect {
         if let Some(hidden) = &mut self.hidden {
             hidden.count_down();
         }
+    }
+
+    fn tick(slot: &mut Option<Self>) -> bool {
+        let Some(effect) = slot else { return false };
+        effect.count_down();
+        if effect.visible.duration != 0 {
+            return false;
+        }
+        let mut next = effect.hidden.take();
+        while let Some(hidden) = next.as_mut().filter(|hidden| hidden.visible.duration == 0) {
+            next = hidden.hidden.take();
+        }
+        *slot = next.map(|effect| *effect);
+        true
     }
 }
 
@@ -266,34 +280,16 @@ impl PlayerState {
         )
     }
 
-    pub(crate) fn send_hunger_effect(&self, effect_id: Option<i32>, blend: bool) {
+    pub(crate) fn send_effect(&self, kind: EffectKind, effect_id: Option<i32>, blend: bool) {
         if let Some(effect_id) = effect_id {
             self.send(Output::EntityEffect {
                 entity_id: self.player.entity_id,
                 effect_id,
-                effect: self.hunger_effect.as_ref().map(|effect| effect.visible),
+                effect: self.effects[kind as usize]
+                    .as_ref()
+                    .map(|effect| effect.visible),
                 blend,
             });
-        }
-    }
-
-    fn tick_hunger_effect(&mut self, effect_id: Option<i32>) {
-        let uses_food = self.uses_food();
-        let Some(effect) = &mut self.hunger_effect else {
-            return;
-        };
-        if uses_food {
-            self.vitals
-                .exhaust(0.005 * (f32::from(effect.visible.amplifier) + 1.0));
-        }
-        effect.count_down();
-        if effect.visible.duration == 0 {
-            let mut next = effect.hidden.take();
-            while let Some(hidden) = next.as_mut().filter(|hidden| hidden.visible.duration == 0) {
-                next = hidden.hidden.take();
-            }
-            self.hunger_effect = next.map(|effect| *effect);
-            self.send_hunger_effect(effect_id, true);
         }
     }
 }
@@ -367,7 +363,7 @@ impl Game {
         }
     }
 
-    fn tick_food_use(&mut self, index: usize, hunger_id: Option<i32>) {
+    fn tick_food_use(&mut self, index: usize, effect_ids: [Option<i32>; EffectKind::ALL.len()]) {
         let player = &mut self.players[index];
         let Some(using) = &mut player.food_use else {
             return;
@@ -389,17 +385,18 @@ impl Game {
                 *held = std::mem::take(&mut remainder);
             }
             player.vitals.eat(&using.food);
-            if let Some(hunger) = using.food.hunger
-                && player.random.next_float() < hunger.probability
+            if let Some(effect) = using.food.effect
+                && player.random.next_float() < effect.probability
             {
-                let changed = if let Some(effect) = &mut player.hunger_effect {
-                    effect.refresh_from_food(hunger.duration)
+                let slot = &mut player.effects[effect.kind as usize];
+                let changed = if let Some(active) = slot {
+                    active.refresh_from_food(effect.duration)
                 } else {
-                    player.hunger_effect = Some(HungerEffect::from_food(hunger.duration));
+                    *slot = Some(ActiveEffect::from_food(effect.duration));
                     true
                 };
                 if changed {
-                    player.send_hunger_effect(hunger_id, true);
+                    player.send_effect(effect.kind, effect_ids[effect.kind as usize], true);
                 }
             }
             player.inventory.add(&mut remainder, false);
@@ -411,21 +408,66 @@ impl Game {
         }
     }
 
+    fn tick_effects(
+        &mut self,
+        index: usize,
+        effect_ids: [Option<i32>; EffectKind::ALL.len()],
+        rules: SurvivalRules,
+    ) {
+        for (kind, effect_id) in EffectKind::ALL.into_iter().zip(effect_ids) {
+            let player = &mut self.players[index];
+            let Some(active) = &player.effects[kind as usize] else {
+                continue;
+            };
+            let effect = active.visible;
+            match kind {
+                EffectKind::Hunger if player.uses_food() => {
+                    player
+                        .vitals
+                        .exhaust(0.005 * (f32::from(effect.amplifier) + 1.0));
+                }
+                EffectKind::Poison if player.uses_food() && player.vitals.health > 1.0 => {
+                    let interval = 25_i32
+                        .checked_shr(u32::from(effect.amplifier))
+                        .unwrap_or(0)
+                        .max(1);
+                    let tick = if effect.duration == -1 {
+                        player.ticks_alive
+                    } else {
+                        effect.duration
+                    };
+                    if tick % interval == 0 {
+                        self.hurt_player(index, 1.0, DamageKind::Magic, rules);
+                    }
+                }
+                _ => {}
+            }
+            let player = &mut self.players[index];
+            if ActiveEffect::tick(&mut player.effects[kind as usize]) {
+                player.send_effect(kind, effect_id, true);
+            }
+        }
+    }
+
     pub(crate) fn tick_survival(&mut self, rules: SurvivalRules) {
-        let hunger_id = self.world.as_ref().and_then(World::hunger_effect_id);
+        let effect_ids = self
+            .world
+            .as_ref()
+            .map_or_else(Default::default, World::effect_ids);
         for index in 0..self.players.len() {
             let player = &mut self.players[index];
             player.hurt_cooldown = player.hurt_cooldown.saturating_sub(1);
             if !player.data_ready || player.disconnecting || player.is_dead() {
                 continue;
             }
+            player.ticks_alive = player.ticks_alive.wrapping_add(1);
+            self.tick_effects(index, effect_ids, rules);
+            let player = &self.players[index];
             if !player.uses_food() {
-                player.tick_hunger_effect(hunger_id);
                 continue;
             }
             let before = player.vitals;
-            player.tick_hunger_effect(hunger_id);
-            self.tick_food_use(index, hunger_id);
+            self.tick_food_use(index, effect_ids);
             let player = &mut self.players[index];
             // On Peaceful, natural regeneration restores food before the starvation check.
             if rules.difficulty == Difficulty::Peaceful && rules.natural_regeneration {
@@ -575,7 +617,8 @@ impl Game {
         player.hurt_cooldown = 0;
         player.last_damage = 0.0;
         player.peaceful_food_ticks = 0;
-        player.hunger_effect = None;
+        player.effects = Default::default();
+        player.ticks_alive = 0;
         player.vitals = Vitals::default();
         player.digging = Default::default();
         player.sent_chunks.clear();
@@ -692,7 +735,7 @@ mod tests {
             can_always_eat: false,
             use_ticks: 1,
             remainder: None,
-            hunger: None,
+            effect: None,
         });
         assert!(!vitals.tick_food(rules));
         assert_eq!(vitals.food_timer, 0);

@@ -1844,6 +1844,144 @@ fn food_hunger_effect_matches_vanilla() {
     }
 }
 
+fn poison_damage(client: &mut Client, effect: &play::clientbound::EntityEffect) {
+    client.matching("Poison damage", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            let types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+            assert_eq!(event.entity_id, effect.entity_id);
+            assert_eq!(types[event.source_type as usize], "minecraft:magic");
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+fn exercise_poison(server: &mut Server, port: u16) -> [play::clientbound::EntityEffect; 2] {
+    let mut eye = Client::join(port, "SpiderEye");
+    confirm_position(&mut eye);
+    assert_eq!(health(&mut eye).health, 3.0);
+    use_food(&mut eye, play::Hand::OffHand, 1);
+    let mut effect = eye.matching("Poison from a spider eye", |packet| match packet {
+        Packet::EntityEffect(effect) => Some(effect),
+        _ => None,
+    });
+    assert_eq!((effect.amplifier, effect.duration), (0, 100));
+    assert!(effect.flags.blend);
+    poison_damage(&mut eye, &effect);
+    let hurt = health(&mut eye);
+    assert_eq!((hurt.health, hurt.food), (2.0, 3));
+    drop(eye);
+    server.wait_for("SpiderEye left the game");
+
+    let mut eye = Client::join(port, "SpiderEye");
+    confirm_position(&mut eye);
+    let mut joined_health = None;
+    let mut resumed = None;
+    let (joined_health, resumed) = eye.matching("Poison and health on reconnect", |packet| {
+        match packet {
+            Packet::SetHealth(health) => {
+                joined_health.get_or_insert(health.health);
+            }
+            Packet::EntityEffect(effect) => resumed = Some(effect),
+            _ => {}
+        }
+        joined_health.and_then(|health| resumed.take().map(|effect| (health, effect)))
+    });
+    assert_eq!(joined_health, 2.0);
+    assert_eq!((resumed.effect, resumed.amplifier), (effect.effect, 0));
+    assert!((75..100).contains(&resumed.duration), "{resumed:?}");
+    assert_eq!(
+        resumed.flags,
+        play::EffectFlags {
+            blend: false,
+            ..effect.flags
+        }
+    );
+    poison_damage(&mut eye, &resumed);
+    assert_eq!(health(&mut eye).health, 1.0);
+    eye.matching("Poison expiry at one health", |packet| match packet {
+        Packet::DamageEvent(event) => panic!("unexpected damage at one health: {event:?}"),
+        Packet::CombatDeath(death) => panic!("Poison killed the player: {death:?}"),
+        Packet::RemoveEntityEffect(removed) => {
+            assert_eq!(removed.entity_id, resumed.entity_id);
+            assert_eq!(removed.effect, resumed.effect);
+            Some(())
+        }
+        _ => None,
+    });
+    drop(eye);
+    server.wait_for("SpiderEye left the game");
+    effect.entity_id = 0;
+
+    for name in ["PoisonPotato", "PoisonPotato2", "PoisonPotato3"] {
+        let mut potato = Client::join(port, name);
+        confirm_position(&mut potato);
+        assert_eq!(health(&mut potato).food, 1);
+        for attempt in 1..=9 {
+            use_food(&mut potato, play::Hand::OffHand, attempt);
+            let mut applied = None;
+            potato.matching("eating a poisonous potato", |packet| match packet {
+                Packet::EntityEffect(effect) => {
+                    applied = Some(effect);
+                    None
+                }
+                Packet::SetHealth(health) if health.food == 1 + 2 * attempt => Some(()),
+                _ => None,
+            });
+            if let Some(mut applied) = applied {
+                applied.entity_id = 0;
+                assert_eq!(applied.effect, effect.effect);
+                return [effect, applied];
+            }
+        }
+    }
+    panic!("no Poison effect in 27 poisonous potatoes");
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_poison_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food-poison");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    for dir in [&vanilla, &harpas] {
+        for (name, item, count, health) in [
+            ("SpiderEye", "minecraft:spider_eye", 1, 3.0),
+            ("PoisonPotato", "minecraft:poisonous_potato", 9, 1.0),
+            ("PoisonPotato2", "minecraft:poisonous_potato", 9, 1.0),
+            ("PoisonPotato3", "minecraft:poisonous_potato", 9, 1.0),
+        ] {
+            let stack = Compound::from_iter([("id", Nbt::from(item)), ("count", Nbt::Int(count))]);
+            let data = Compound::from_iter([
+                ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+                ("Health", Nbt::Float(health)),
+                ("foodLevel", Nbt::Int(1)),
+                ("foodSaturationLevel", Nbt::Float(0.0)),
+                (
+                    "equipment",
+                    Compound::from_iter([("offhand", stack)]).into(),
+                ),
+            ]);
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), &data).unwrap();
+        }
+    }
+    let expected = exercise_poison(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_poison(&mut server, other), expected);
+    stop(&mut server);
+    for dir in [&vanilla, &harpas] {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid("SpiderEye"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.get("Health"), Some(&Nbt::Float(1.0)));
+        assert!(saved.get("active_effects").is_none());
+    }
+}
+
 fn starvation_damage(client: &mut Client) {
     client.matching("starvation damage", |packet| match packet {
         Packet::DamageEvent(event) => {

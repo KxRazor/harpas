@@ -734,8 +734,8 @@ impl World {
             .clone()
     }
 
-    pub(crate) fn hunger_effect_id(&self) -> Option<i32> {
-        self.block_item_codec().hunger_effect_id()
+    pub(crate) fn effect_ids(&self) -> [Option<i32>; crate::player::EffectKind::ALL.len()] {
+        self.block_item_codec().effect_ids()
     }
 
     /// Incorporates entity mutations before snapshots or eviction. The entity and terrain revisions share

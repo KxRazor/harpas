@@ -29,7 +29,7 @@ mod tags;
 mod vanilla_data;
 mod world_generation;
 
-use access::{AccessLists, NOT_WHITELISTED, Verdict};
+use access::{AccessLists, BANNED, NOT_WHITELISTED, Verdict};
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
@@ -702,11 +702,18 @@ fn play(
             let player = connection
                 .player()
                 .ok_or_else(|| io::Error::other("Play without a player"))?;
-            // A whitelist change and a join must queue their engine events in the same order.
+            // An access-list change and a join must queue their engine events in the same order.
             let access = environment.commands.access();
-            if !access.allows_whitelist(player.uuid) {
+            let denied = if access.is_banned(player.uuid) {
+                Some(BANNED)
+            } else if !access.allows_whitelist(player.uuid) {
+                Some(NOT_WHITELISTED)
+            } else {
+                None
+            };
+            if let Some(reason) = denied {
                 drop(access);
-                connection.disconnect_play_translated(NOT_WHITELISTED);
+                connection.disconnect_play_translated(reason);
                 stream.write_all(&connection.take_output())?;
                 break;
             }

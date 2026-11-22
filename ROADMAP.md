@@ -502,7 +502,10 @@ as shown by the parity report.
         and Java clients. Profile lookups use `usercache.json`, Mojang and the offline UUID fallback.
         Permission-filtered arguments, suggestions, saved entries and enforcement are compared with vanilla
         (`commands_parity`).
-  - [ ] `ban`, `ban-ip`, `banlist`, `pardon`, `pardon-ip`, `op` and `deop`.
+  - [x] `ban` and `pardon` manage `banned-players.json` from the console and Java clients. Bans disconnect
+        connected targets and survive restarts. Commands, saved entries and new logins are compared with
+        vanilla (`commands_parity`, `access_list_parity`).
+  - [ ] `ban-ip`, `banlist`, `pardon-ip`, `op` and `deop`.
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).

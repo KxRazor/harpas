@@ -191,8 +191,10 @@ mod tests {
             (
                 0,
                 vec![
+                    "ban".into(),
                     "help".into(),
                     "list".into(),
+                    "pardon".into(),
                     "seed".into(),
                     "stop".into(),
                     "whitelist".into()
@@ -200,6 +202,7 @@ mod tests {
             )
         );
         assert_eq!(complete("st"), (0, vec!["stop".into()]));
+        assert_eq!(complete("/pa"), (1, vec!["pardon".into()]));
         assert_eq!(complete("/l"), (1, vec!["list".into()]));
         assert_eq!(complete("list "), (5, vec!["uuids".into()]));
         assert_eq!(

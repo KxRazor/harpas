@@ -240,10 +240,10 @@ impl ChatState {
     }
 
     /// Signed command packets still affect the next chat message's acknowledgement and signature indices.
-    /// Their unverified arguments are discarded.
-    pub(crate) fn ignored_command(
+    /// This tracks the chat chain. It does not authenticate the command's text as signed chat.
+    pub(crate) fn command(
         &mut self,
-        packet: serverbound::SignedChatCommand,
+        packet: &serverbound::SignedChatCommand,
     ) -> Result<(), &'static str> {
         self.check_timestamp(packet.timestamp)?;
         self.acknowledge(packet.offset, packet.acknowledged, packet.checksum)?;
@@ -836,12 +836,12 @@ mod tests {
     }
 
     #[test]
-    fn ignored_signed_commands_advance_the_acknowledgement_and_signing_index() {
+    fn signed_commands_advance_the_acknowledgement_and_signing_index() {
         let mut state = connected();
         let previous = [0x42; 256];
         state.outgoing(Some(previous)).unwrap();
         state
-            .ignored_command(serverbound::SignedChatCommand {
+            .command(&serverbound::SignedChatCommand {
                 command: "unsupported message".into(),
                 timestamp: NOW,
                 salt: 5,

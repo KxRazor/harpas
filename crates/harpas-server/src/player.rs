@@ -13,7 +13,7 @@ use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
 use std::sync::Arc;
 
 use crate::access::{NOT_WHITELISTED, NOT_WHITELISTED_TEXT};
-use crate::commands::{self, Commands, Source};
+use crate::commands::{Commands, Source};
 
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
 const PLAYER_ENTITY_TYPE: i32 = 155;
@@ -69,7 +69,7 @@ pub(crate) fn receive(
                     continue;
                 }
                 Packet::CommandSuggestionsRequest(request) => {
-                    if let Some(reply) = commands::suggestions(request, source) {
+                    if let Some(reply) = commands.suggestions(logic, request, source) {
                         connection.send_play_packet(reply.into());
                     }
                     continue;

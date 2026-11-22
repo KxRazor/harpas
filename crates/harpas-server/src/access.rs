@@ -132,6 +132,44 @@ impl AccessLists {
             .collect()
     }
 
+    pub fn is_whitelisted(&self, uuid: u128) -> bool {
+        self.whitelist.entries.contains_key(&uuid_key(uuid))
+    }
+
+    /// Commits the selected membership changes together, keeping the old list if saving fails.
+    pub fn change_whitelist(
+        &mut self,
+        profiles: Vec<Profile>,
+        add: bool,
+    ) -> io::Result<Vec<Profile>> {
+        let mut updated = self.whitelist.clone();
+        let mut changed = Vec::new();
+        for profile in profiles {
+            let key = uuid_key(profile.uuid);
+            if add {
+                if !updated.entries.contains_key(&key) {
+                    updated.insert(key, profile.clone());
+                    changed.push(profile);
+                }
+            } else if updated.entries.shift_remove(&key).is_some() {
+                changed.push(profile);
+            }
+        }
+        if !changed.is_empty() {
+            updated.write(&self.zone)?;
+            self.whitelist = updated;
+        }
+        Ok(changed)
+    }
+
+    /// A missing file leaves the list in memory. A malformed file leaves the last loaded list intact.
+    pub fn reload_whitelist(&mut self) -> Result<(), String> {
+        let mut updated = self.whitelist.clone();
+        updated.read(Timestamp::now())?;
+        self.whitelist = updated;
+        Ok(())
+    }
+
     /// Enforcement checks list membership, including for operators who bypass the whitelist at login.
     pub fn whitelisted_players(&self) -> impl Iterator<Item = u128> {
         self.whitelist.entries.values().map(|profile| profile.uuid)
@@ -208,9 +246,9 @@ impl AccessLists {
 
 /// A player in a list: vanilla's `NameAndId`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Profile {
-    uuid: u128,
-    name: String,
+pub struct Profile {
+    pub uuid: u128,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +422,7 @@ impl Expiring for (Profile, Ban) {
 }
 
 /// One list file, as vanilla's `StoredUserList` keeps it: a `HashMap` from keys to entries.
+#[derive(Clone)]
 struct StoredList<E> {
     path: PathBuf,
     /// In insertion order, from which [`java_order`](Self::java_order) gives the `HashMap`'s.
@@ -449,6 +488,12 @@ impl<E: Entry> StoredList<E> {
     }
 
     fn save(&self, zone: &TimeZone, what: &str) {
+        if let Err(error) = self.write(zone) {
+            warn!("Failed to save {what}: {error}");
+        }
+    }
+
+    fn write(&self, zone: &TimeZone) -> io::Result<()> {
         let entries: Vec<_> = self
             .java_order()
             .into_iter()
@@ -457,9 +502,10 @@ impl<E: Entry> StoredList<E> {
         let temporary = self.path.with_extension("json.tmp");
         let result =
             fs::write(&temporary, gson(&entries)).and_then(|()| fs::rename(&temporary, &self.path));
-        if let Err(error) = result {
-            warn!("Failed to save {what}: {error}");
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
         }
+        result
     }
 
     /// The entries in the order of vanilla's `HashMap`: by bucket of the key's `String.hashCode`, then in
@@ -511,7 +557,7 @@ fn java_int(value: &Value) -> Result<i32, String> {
 }
 
 /// Java's `UUID.fromString`, which also takes groups of other lengths, such as `1-2-3-4-5`.
-fn java_uuid(text: &str) -> Option<u128> {
+pub(crate) fn java_uuid(text: &str) -> Option<u128> {
     if text.len() > 36 {
         return None;
     }
@@ -549,7 +595,7 @@ fn ip_key(ip: IpAddr) -> String {
 
 /// A date of `yyyy-MM-dd HH:mm:ss Z` as Java's lenient `SimpleDateFormat` reads one: fields of any width that
 /// carry into the next, a zone of `+hhmm`, `GMT` or `UTC` with an optional `±h:mm`, and anything after it.
-fn parse_date(text: &str) -> Option<Timestamp> {
+pub(crate) fn parse_date(text: &str) -> Option<Timestamp> {
     let mut rest = text;
     let mut number = |separator: Option<char>| -> Option<i64> {
         let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
@@ -942,6 +988,39 @@ mod tests {
             fs::read_to_string(folder.0.join("whitelist.json")).unwrap(),
             "[]"
         );
+    }
+
+    #[test]
+    fn membership_is_committed_only_after_a_successful_write_or_reload() {
+        let folder = Folder::new("whitelist-membership");
+        let mut lists = AccessLists::load_at(&folder.0, true, bogota(), now());
+        let path = folder.0.join("whitelist.json");
+        let profile = Profile {
+            uuid: LISTED,
+            name: "Listed".into(),
+        };
+        let temporary = path.with_extension("json.tmp");
+        fs::create_dir(&temporary).unwrap();
+        assert!(lists.change_whitelist(vec![profile.clone()], true).is_err());
+        assert!(!lists.is_whitelisted(LISTED));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[]");
+        fs::remove_dir(temporary).unwrap();
+
+        assert_eq!(
+            lists.change_whitelist(vec![profile.clone()], true).unwrap(),
+            [profile]
+        );
+        fs::write(&path, "[{}").unwrap();
+        assert!(lists.reload_whitelist().is_err());
+        assert!(lists.is_whitelisted(LISTED));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[{}");
+
+        fs::remove_file(&path).unwrap();
+        lists.reload_whitelist().unwrap();
+        assert!(lists.is_whitelisted(LISTED));
+        fs::write(&path, "[]").unwrap();
+        lists.reload_whitelist().unwrap();
+        assert!(!lists.is_whitelisted(LISTED));
     }
 
     #[test]

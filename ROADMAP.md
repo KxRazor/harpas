@@ -498,8 +498,11 @@ as shown by the parity report.
   - [x] `whitelist list`, `whitelist on` and `whitelist off` run from the console and Java clients with operator
         level 3. The setting persists across restarts and `enforce-whitelist` disconnects unlisted players
         when the whitelist is enabled (`commands_parity`).
-  - [ ] `whitelist add`, `whitelist remove`, `whitelist reload`, `ban`, `ban-ip`,
-        `banlist`, `pardon`, `pardon-ip`, `op` and `deop`, and their profile lookups.
+  - [x] `whitelist add`, `whitelist remove` and `whitelist reload` manage `whitelist.json` from the console
+        and Java clients. Profile lookups use `usercache.json`, Mojang and the offline UUID fallback.
+        Permission-filtered arguments, suggestions, saved entries and enforcement are compared with vanilla
+        (`commands_parity`).
+  - [ ] `ban`, `ban-ip`, `banlist`, `pardon`, `pardon-ip`, `op` and `deop`.
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).

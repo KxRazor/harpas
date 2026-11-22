@@ -20,6 +20,7 @@ mod http;
 mod limits;
 mod logging;
 mod player;
+mod profiles;
 mod properties;
 mod session;
 mod shutdown;
@@ -260,6 +261,10 @@ fn run() -> io::Result<()> {
             seed.unwrap_or_default(),
             server_info.max_players,
             access,
+            profiles::Profiles::load(Path::new(""), server_info.online_mode),
+            server_info
+                .spawn_position
+                .map(|coordinate| f64::from(coordinate) + 0.5),
         )),
         info: server_info,
         chunks: chunks::Cache::new(block_entities),
@@ -722,6 +727,9 @@ fn play(
                 uuid: player.uuid,
             };
             drop(access);
+            environment
+                .commands
+                .record_profile(player.uuid, player.name.clone());
             info!("{} joined the game", player.name);
             departure.name = Some(player.name.clone());
             connection.send_play_packet(commands::tree(command_source).into());
@@ -882,6 +890,8 @@ mod tests {
                 0,
                 info.max_players,
                 AccessLists::none(),
+                profiles::Profiles::in_memory(info.online_mode),
+                info.spawn_position.map(f64::from),
             )),
         }
     }

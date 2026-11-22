@@ -5,7 +5,7 @@ metrics, profiling, shutdown, hosting, and telemetry.
 
 Status: partly implemented. Harpas supports `server.properties` with every 26.1 key, `harpas.toml` checking
 and its `eula` setting, and `HARPAS_*` overrides. The console provides `help`, `list`, `list uuids`, `seed`,
-`stop`, and the three whitelist commands below. The server writes `logs/latest.log` and its archives, and
+`stop`, and the whitelist commands below. The server writes `logs/latest.log` and its archives, and
 stops on SIGTERM and SIGINT. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -69,11 +69,17 @@ messages:
 A ban whose end has passed still matches at first, as in vanilla: the login that finds it fails without a message,
 and the expired bans of that list are dropped until the server restarts, so the player's next login goes on.
 
-`whitelist list`, `whitelist on` and `whitelist off` are available from the console and to Java operators at
-level 3 or higher. The on and off commands save `white-list` in `server.properties`. With
-`enforce-whitelist=true`, turning the whitelist on disconnects every connected player outside the list,
-including operators. Operators can still log in while the whitelist is enabled. Edit access-list entries while
-the server is stopped.
+The six whitelist commands are available from the console and to Java operators at level 3 or higher.
+`whitelist on` and `whitelist off` save `white-list` in `server.properties`. `whitelist add` and
+`whitelist remove` save membership changes in `whitelist.json`, and `whitelist reload` reads edits to that
+file. A missing file leaves the in-memory list as it was. If reading or writing fails, Harpas reports the
+error and keeps the last active list.
+
+Names are looked up case-insensitively in `usercache.json` and then through Mojang. In offline mode, a name
+that Mojang cannot resolve gets an offline UUID derived from its lowercase spelling. Connected players are
+cached under their login profiles. When the whitelist is on and `enforce-whitelist=true`, enabling it,
+removing a member or reloading it disconnects connected players outside the list, including operators.
+Operators can still log in while the whitelist is enabled.
 
 ---
 

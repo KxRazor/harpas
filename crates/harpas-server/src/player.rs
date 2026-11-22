@@ -50,6 +50,7 @@ pub(crate) fn receive(
     logic: &harpas_engine::Handle,
     commands: &Commands,
     peer: &ConnectedPeer<'_>,
+    chunk_cache: &crate::chunks::Cache,
 ) -> io::Result<Option<&'static str>> {
     use serverbound::Packet;
     for event in connection.take_play_events() {
@@ -69,6 +70,11 @@ pub(crate) fn receive(
                 let source = commands.player_source(peer.uuid());
                 let (replies, disconnect) = commands.player_reply(logic, command, source)?;
                 send_permission_updates(connection, peer);
+                if disconnect.is_none()
+                    && let Some(reason) = send(connection, session, chunk_cache)
+                {
+                    return Ok(Some(reason));
+                }
                 for reply in replies {
                     connection.send_play_packet(reply.into());
                 }
@@ -234,6 +240,22 @@ fn mode_id(mode: player::GameMode) -> i32 {
         player::GameMode::Creative => 1,
         player::GameMode::Adventure => 2,
         player::GameMode::Spectator => 3,
+    }
+}
+
+fn game_mode_update(uuid: u128, mode: player::GameMode) -> clientbound::PlayerInfoUpdate {
+    clientbound::PlayerInfoUpdate {
+        updates: play::PlayerInfoUpdates {
+            actions: play::PlayerInfoActions {
+                update_game_mode: true,
+                ..Default::default()
+            },
+            entries: vec![play::PlayerInfoEntry {
+                uuid,
+                game_mode: mode_id(mode),
+                ..Default::default()
+            }],
+        },
     }
 }
 
@@ -466,6 +488,36 @@ pub(crate) fn send(
                 players: vec![uuid],
             }
             .into(),
+            Output::PlayerGameMode { uuid, mode } => game_mode_update(uuid, mode).into(),
+            Output::GameModeChanged { uuid, mode, notify } => {
+                let java_mode = match mode {
+                    player::GameMode::Survival => play::GameMode::Survival,
+                    player::GameMode::Creative => play::GameMode::Creative,
+                    player::GameMode::Adventure => play::GameMode::Adventure,
+                    player::GameMode::Spectator => play::GameMode::Spectator,
+                };
+                // Vanilla sends the new abilities both before the list update and after the game event.
+                connection.send_game_mode_abilities(java_mode);
+                connection.send_play_packet(game_mode_update(uuid, mode).into());
+                connection.send_play_packet(
+                    clientbound::GameEvent {
+                        event: play::GameEventKind::ChangeGameMode,
+                        value: mode_id(mode) as f32,
+                    }
+                    .into(),
+                );
+                connection.send_game_mode_abilities(java_mode);
+                if notify {
+                    connection.send_play_packet(
+                        clientbound::SystemChatMessage {
+                            content: commands::game_mode_message("gameMode.changed", mode),
+                            overlay: false,
+                        }
+                        .into(),
+                    );
+                }
+                continue;
+            }
             Output::Spawn(player) => clientbound::SpawnEntity {
                 entity_id: player.entity_id,
                 uuid: player.profile.uuid,

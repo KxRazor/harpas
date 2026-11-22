@@ -4,9 +4,9 @@ Scope: how commands from vanilla and from every kind of plugin are registered, e
 Bedrock players, and how permissions decide who may run them.
 
 Status: in progress. The console and Java players share a tree for `list`, `list uuids`, `seed`, `ban`,
-`pardon`, `ban-ip`, `pardon-ip`, `banlist`, `op`, `deop` and the six `whitelist` commands. Java players receive
+`pardon`, `ban-ip`, `pardon-ip`, `banlist`, `op`, `deop`, `gamemode` and the six `whitelist` commands. Java players receive
 the tree filtered by their level in `ops.json` at login and when their operator status changes.
-`seed` requires operator level 2. Operator, ban and whitelist commands require level 3. Profile arguments
+`seed` and `gamemode` require operator level 2. Operator, ban and whitelist commands require level 3. Profile arguments
 support names and player selectors, including `@a`, `@p`, `@r` and the `name` and `type` filters.
 Facts cite their source in [References](#references). Everything else is a design decision of this project.
 
@@ -34,6 +34,11 @@ All commands live in **one command tree**, in the style of vanilla's Brigadier d
 
 The tree is sent to Java clients with suggestions, filtered by the player's permissions, as on Paper. Commands
 from the console, RCON, command blocks and functions run through the same tree.
+
+Use `gamemode <survival|creative|adventure|spectator> [target]` to change a connected player's mode for the
+current session. The target is required from the console and defaults to the sender in Java. A target can be a
+player name or a supported player selector, including `@s` for the sender. The affected player receives the new
+abilities and game mode immediately, and all connected players receive the updated player list entry.
 
 ---
 

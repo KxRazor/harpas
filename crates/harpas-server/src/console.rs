@@ -127,13 +127,14 @@ fn run(server: &Server, line: &str) {
             }
         }
         Ok(Outcome::Stop) => server.shutdown.stop(),
-        Ok(Outcome::Syntax { reason, .. }) => {
-            let message = if reason == "command.unknown.argument" {
-                "Incorrect argument for command"
-            } else {
-                "Unknown or incomplete command. See below for error"
-            };
-            info!("{message}");
+        Ok(Outcome::Syntax {
+            reason, argument, ..
+        }) => {
+            match (reason, argument) {
+                ("argument.gamemode.invalid", Some(mode)) => info!("Invalid game mode: {mode}"),
+                ("command.unknown.argument", _) => info!("Incorrect argument for command"),
+                _ => info!("Unknown or incomplete command. See below for error"),
+            }
             info!("{command}<--[HERE]");
         }
         Err(e) => log::error!("Could not run the command: {e}"),
@@ -195,6 +196,7 @@ mod tests {
                     "ban-ip".into(),
                     "banlist".into(),
                     "deop".into(),
+                    "gamemode".into(),
                     "help".into(),
                     "list".into(),
                     "op".into(),
@@ -215,6 +217,7 @@ mod tests {
             complete("banlist "),
             (8, vec!["ips".into(), "players".into()])
         );
+        assert_eq!(complete("gamemode cr"), (9, vec!["creative".into()]));
         assert_eq!(complete("/l"), (1, vec!["list".into()]));
         assert_eq!(complete("list "), (5, vec!["uuids".into()]));
         assert_eq!(

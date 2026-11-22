@@ -150,6 +150,25 @@ impl Handle {
         receiver.recv().map_err(|_| LogicStopped)
     }
 
+    /// Changes connected players' game modes on the logic thread and returns the players that changed.
+    pub fn set_game_mode(
+        &self,
+        targets: Vec<u128>,
+        mode: player::GameMode,
+        source: Option<u128>,
+    ) -> Result<Vec<(u128, String)>, LogicStopped> {
+        let (sender, receiver) = mpsc::channel();
+        self.events
+            .send(Event::SetGameMode {
+                targets,
+                mode,
+                source,
+                reply: sender,
+            })
+            .map_err(|_| LogicStopped)?;
+        receiver.recv().map_err(|_| LogicStopped)
+    }
+
     /// Disconnects players outside the allowed UUIDs at the next connection phase, using a translated reason.
     pub fn disconnect_players_except(
         &self,
@@ -350,6 +369,12 @@ enum Event {
     },
     Left(i32),
     ListPlayers(Sender<Vec<PlayerListEntry>>),
+    SetGameMode {
+        targets: Vec<u128>,
+        mode: player::GameMode,
+        source: Option<u128>,
+        reply: Sender<Vec<(u128, String)>>,
+    },
     DisconnectPlayers {
         uuids: HashSet<u128>,
         except: bool,
@@ -649,6 +674,24 @@ impl TickWork for Game {
                         })
                         .collect();
                     let _ = reply.send(players);
+                }
+                Event::SetGameMode {
+                    targets,
+                    mode,
+                    source,
+                    reply,
+                } => {
+                    let mut changed = Vec::new();
+                    for uuid in targets {
+                        if let Some(index) = self.players.iter().position(|state| {
+                            !state.disconnecting && state.player.profile.uuid == uuid
+                        }) && self.set_game_mode(index, mode, source != Some(uuid))
+                        {
+                            changed.push((uuid, self.players[index].player.profile.name.clone()));
+                        }
+                    }
+                    tracking_changed |= !changed.is_empty();
+                    let _ = reply.send(changed);
                 }
                 Event::DisconnectPlayers {
                     uuids,
@@ -1032,6 +1075,39 @@ impl Game {
         self.players
             .iter()
             .position(|p| p.player.entity_id == entity_id && !p.disconnecting)
+    }
+
+    fn set_game_mode(&mut self, index: usize, mode: player::GameMode, notify: bool) -> bool {
+        let state = &mut self.players[index];
+        if state.player.profile.game_mode == mode {
+            return false;
+        }
+        state.player.profile.game_mode = mode;
+        state.flying = mode == player::GameMode::Spectator;
+        state.client_floating = false;
+        state.floating_ticks = 0;
+        let uuid = state.player.profile.uuid;
+        let digging = &mut state.digging;
+        let destroying = digging.is_destroying.then_some(digging.destroy_pos);
+        let delayed = digging
+            .has_delayed_destroy
+            .then_some(digging.delayed_destroy_pos);
+        digging.is_destroying = false;
+        digging.has_delayed_destroy = false;
+        for position in destroying.into_iter().chain(delayed) {
+            self.destroy_block_progress(index, position, -1);
+        }
+        if mode == player::GameMode::Spectator && self.players[index].block_menu.is_some() {
+            self.close_block_menu(index);
+        }
+        for player in &self.players {
+            player.send(if player.player.profile.uuid == uuid {
+                player::Output::GameModeChanged { uuid, mode, notify }
+            } else {
+                player::Output::PlayerGameMode { uuid, mode }
+            });
+        }
+        true
     }
 
     /// A player's Start, Abort or Finish of breaking a block, as vanilla's `handlePlayerAction` and
@@ -1874,6 +1950,47 @@ mod tests {
         assert_eq!(
             output.try_recv(),
             Ok(Output::Disconnect("Invalid player movement"))
+        );
+    }
+
+    #[test]
+    fn game_mode_change_revokes_flight_and_updates_other_players() {
+        let mut game = game();
+        let target = join(&mut game, 1, "Steve", 10);
+        let observer = join(&mut game, 2, "Alex", 10);
+        tick(&mut game, 1);
+        while target.try_recv().is_ok() {}
+        while observer.try_recv().is_ok() {}
+        input(&mut game, 1, Input::Flying(true));
+        tick(&mut game, 2);
+        assert!(game.players[0].flying);
+
+        let (reply, changed) = mpsc::channel();
+        game.pending.push(Event::SetGameMode {
+            targets: vec![1],
+            mode: GameMode::Survival,
+            source: None,
+            reply,
+        });
+        input(&mut game, 1, Input::Flying(true));
+        tick(&mut game, 3);
+        assert_eq!(changed.try_recv().unwrap(), vec![(1, "Steve".to_owned())]);
+        assert_eq!(game.players[0].player.profile.game_mode, GameMode::Survival);
+        assert!(!game.players[0].flying);
+        assert_eq!(
+            target.try_recv(),
+            Ok(Output::GameModeChanged {
+                uuid: 1,
+                mode: GameMode::Survival,
+                notify: true,
+            })
+        );
+        assert_eq!(
+            observer.try_recv(),
+            Ok(Output::PlayerGameMode {
+                uuid: 1,
+                mode: GameMode::Survival,
+            })
         );
     }
 

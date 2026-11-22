@@ -425,6 +425,18 @@ impl Connection {
         }
     }
 
+    /// Sends the standard player abilities for this game mode.
+    pub fn send_game_mode_abilities(&mut self, game_mode: play::GameMode) {
+        self.send_play_packet(
+            play::clientbound::PlayerAbilities {
+                flags: abilities(game_mode),
+                flying_speed: 0.05,
+                field_of_view_modifier: 0.1,
+            }
+            .into(),
+        );
+    }
+
     /// The negotiated compression threshold, or none when compression is disabled.
     pub fn compression_threshold(&self) -> Option<usize> {
         self.compression.as_ref().map(Compression::threshold)
@@ -1044,14 +1056,7 @@ impl Connection {
             }
             .into(),
         );
-        self.send_play(
-            play::clientbound::PlayerAbilities {
-                flags: abilities(info.game_mode),
-                flying_speed: 0.05,
-                field_of_view_modifier: 0.1,
-            }
-            .into(),
-        );
+        self.send_game_mode_abilities(info.game_mode);
         self.send_play(
             play::clientbound::PlayerInfoUpdate {
                 updates: play::PlayerInfoUpdates {

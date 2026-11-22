@@ -226,15 +226,16 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
   1.18. The zip is written under a temporary name and
   renamed into place, so an interrupted start leaves nothing behind and keeps the data already installed.
 - If Java 25 is available on `PATH`, Harpas attempts to run the verified jar's data generator once to obtain its
-  registry report [8]. Harpas stores only the block entity type IDs in
+  registry and item component reports [8]. Harpas stores the block entity type IDs in
   `.harpas/vanilla-data/<version>-block-entity-types.json`, and the entries of every built-in registry, in the
   order of their numeric IDs, in `.harpas/vanilla-data/<version>-registries.json`: the tags sent to Java clients
   need the IDs of blocks, items, fluids and other built-in registries
-  ([java-connection.md](java-connection.md#tags)). The other generated reports, unpacked executable files and
-  downloaded jar are removed afterwards. Neither the jar nor the generated data is committed or redistributed.
+  ([java-connection.md](java-connection.md#tags)). The registry file also stores the `food` and `consumable`
+  defaults for basic foods. The other generated reports, unpacked executable files and downloaded jar are
+  removed afterwards. Neither the jar nor the generated data is committed or redistributed.
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
-  before the registries were added, the server warns that block entities, and the tags of built-in registries,
-  are unavailable. Install Java 25 and run
+  before the data was added, the server warns about missing block entity IDs, built-in registries or food
+  defaults. Apples remain available as a fallback until the food defaults are generated. Install Java 25 and run
   `harpas vanilla-data generate-registry`; to avoid downloading the jar again, use
   `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA and the jar hash.
 

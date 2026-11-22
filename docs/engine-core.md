@@ -123,8 +123,9 @@ component codecs are checked against vanilla, and unsupported values refuse load
 instead of removing its components. Details and limits are in [world.md](world.md#player-inventories).
 
 Accepted sprint movement adds exhaustion. In the player tick, exhaustion spends saturation before food.
-Holding use with an apple in either hand consumes one apple after 32 ticks and restores food and saturation.
-Releasing use or changing away from the active hotbar slot cancels the action. The
+Holding use with a basic food in either hand consumes one item after its default use duration and restores food
+and saturation from its item components. Releasing use, changing away from the active hotbar slot or replacing
+the held item cancels the action. The
 `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is

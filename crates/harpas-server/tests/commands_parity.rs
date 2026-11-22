@@ -130,6 +130,17 @@ impl Client {
         })
     }
 
+    fn permission_tree(&mut self, level: i8) -> CommandTree {
+        self.matching("operator level", |packet| match packet {
+            Packet::EntityEvent(event) if (24..=28).contains(&event.event) => {
+                assert_eq!(event.event, 24 + level);
+                Some(())
+            }
+            _ => None,
+        });
+        self.tree()
+    }
+
     fn request_suggestions(&mut self, id: i32, text: &str) {
         let request =
             play::serverbound::Packet::from(play::serverbound::CommandSuggestionsRequest {
@@ -165,6 +176,11 @@ impl Client {
     }
 
     fn command(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
+        self.send_command(command);
+        self.replies(command, replies)
+    }
+
+    fn send_command(&mut self, command: &str) {
         let request = if command
             .strip_prefix("ban ")
             .or_else(|| command.strip_prefix("ban-ip "))
@@ -186,10 +202,13 @@ impl Client {
             })
         };
         self.send(|buf| request.encode(buf));
+    }
+
+    fn replies(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
         (0..replies).map(|_| self.matching("command reply", |packet| match packet {
             Packet::SystemChatMessage(reply) if !matches!(&reply.content,
                 codec::Nbt::Compound(text) if matches!(text.get("translate"), Some(codec::Nbt::String(key))
-                    if matches!(key.as_str(), "multiplayer.player.joined" | "multiplayer.player.left"))) => Some(reply),
+                    if matches!(key.as_str(), "multiplayer.player.joined" | "multiplayer.player.left" | "chat.type.admin"))) => Some(reply),
             Packet::Disconnect(packet) => panic!("disconnected during /{command}: {:?}", packet.reason),
             _ => None,
         })).collect()
@@ -231,7 +250,9 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
                             "ban"
                                 | "ban-ip"
                                 | "banlist"
+                                | "deop"
                                 | "list"
+                                | "op"
                                 | "pardon"
                                 | "pardon-ip"
                                 | "seed"
@@ -274,7 +295,15 @@ fn compare(port: u16, other: u16) {
             expected.iter().any(|(name, _, _)| name == "whitelist"),
             can_whitelist
         );
-        for command in ["ban", "ban-ip", "banlist", "pardon", "pardon-ip"] {
+        for command in [
+            "ban",
+            "ban-ip",
+            "banlist",
+            "deop",
+            "op",
+            "pardon",
+            "pardon-ip",
+        ] {
             assert_eq!(
                 expected.iter().any(|(name, _, _)| name == command),
                 can_whitelist
@@ -621,6 +650,53 @@ fn stop(server: &mut Server) {
     assert!(server.child.wait().unwrap().success());
 }
 
+#[derive(Debug, PartialEq)]
+struct Operators {
+    completions: Vec<CommandSuggestionsResponse>,
+    replies: Vec<SystemChatMessage>,
+    trees: Vec<Vec<(String, bool, bool)>>,
+    saved: Vec<String>,
+}
+
+fn exercise_operators(server: &mut Server, dir: &Path, port: u16) -> Operators {
+    let path = dir.join("ops.json");
+    let original = fs::read_to_string(&path).unwrap();
+    let mut admin = Client::join(port, "Admin");
+    let mut operator = Client::join(port, "NewOperator");
+    admin.tree();
+    let initial = tree_nodes(&operator.tree());
+    let mut replies = operator.command("op NewOperator", 2);
+    let mut completions = vec![admin.suggestions("/op New")];
+
+    replies.extend(admin.command("op @a[name=NewOperator]", 1));
+    let promoted = tree_nodes(&operator.permission_tree(3));
+    assert!(promoted.iter().any(|(name, _, _)| name == "seed"));
+    replies.extend(operator.command("seed", 1));
+    let mut saved = vec![fs::read_to_string(&path).unwrap()];
+    assert!(saved[0].contains("\"name\": \"NewOperator\""));
+    completions.push(admin.suggestions("/deop New"));
+    replies.extend(admin.command("op NewOperator", 1));
+
+    operator.send_command("deop NewOperator");
+    let demoted = tree_nodes(&operator.permission_tree(0));
+    assert_eq!(demoted, initial);
+    replies.extend(operator.replies("deop NewOperator", 1));
+    replies.extend(operator.command("seed", 2));
+    replies.extend(admin.command("deop NewOperator", 1));
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+    writeln!(server.child.stdin.as_mut().unwrap(), "op NewOperator").unwrap();
+    server.wait_for("Made NewOperator a server operator");
+    assert_eq!(tree_nodes(&operator.permission_tree(3)), promoted);
+    saved.push(fs::read_to_string(&path).unwrap());
+    Operators {
+        completions,
+        replies,
+        trees: vec![promoted, demoted],
+        saved,
+    }
+}
+
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn commands_match_vanilla() {
@@ -649,7 +725,7 @@ fn commands_match_vanilla() {
         fs::write(dir.join("server.properties"), format!(
             "server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nnetwork-compression-threshold=-1\n\
              view-distance=2\nsimulation-distance=2\nlevel-type=minecraft:flat\nlevel-seed={seed}\n\
-             generate-structures=false\nmax-players=12\nmax-tick-time=-1\nallow-flight=true\n"
+             generate-structures=false\nmax-players=12\nmax-tick-time=-1\nallow-flight=true\nop-permission-level=3\n"
         )).unwrap();
     }
     let binary = env!("CARGO_BIN_EXE_harpas");
@@ -698,6 +774,10 @@ fn commands_match_vanilla() {
         server.wait_for("There are 3 whitelisted player(s):");
     }
     compare(port, other);
+    assert_eq!(
+        exercise_operators(&mut reference, &vanilla, port),
+        exercise_operators(&mut server, &harpas, other)
+    );
     let expected = exercise_bans(&vanilla, port);
     let actual = exercise_bans(&harpas, other);
     assert_eq!(actual.completions, expected.completions);
@@ -758,6 +838,14 @@ fn commands_match_vanilla() {
         );
         writeln!(server.child.stdin.as_mut().unwrap(), "pardon-ip 127.0.0.1").unwrap();
         server.wait_for("Unbanned IP 127.0.0.1");
+        let mut operator = Client::join(port, "NewOperator");
+        let nodes = tree_nodes(&operator.tree());
+        assert!(nodes.iter().any(|(name, _, _)| name == "deop"));
+        writeln!(server.child.stdin.as_mut().unwrap(), "deop NewOperator").unwrap();
+        server.wait_for("Made NewOperator no longer a server operator");
+        operator.permission_tree(0);
+        operator.whitelist_disconnect();
+        assert_login(port, "NewOperator", false);
         assert_login(port, "Visitor", false);
         console_whitelist(server, dir, false);
         console_whitelist(server, dir, true);

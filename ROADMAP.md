@@ -488,7 +488,7 @@ as shown by the parity report.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).
-- [ ] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
+- [x] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
       `banned-ips.json` and `ops.json`: checked at login in vanilla's order, managed by their commands, and
       operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).
   - [x] The four files loaded and written back at startup as vanilla writes them, and logins checked in vanilla's
@@ -509,7 +509,9 @@ as shown by the parity report.
         disconnect players at the address and survive restarts. `banlist` shows player and IP bans together
         or by type. The tree, replies, saved entries and login results are compared with vanilla
         (`commands_parity`).
-  - [ ] `op` and `deop`.
+  - [x] `op` and `deop` manage `ops.json` from the console and Java clients. Connected targets receive their
+        new operator level and command tree, and commands use the new permissions during the same session.
+        Grants, revocations and whitelist enforcement after `deop` are compared with vanilla (`commands_parity`).
 - [ ] Datapack loading on top of vanilla data.
 - [ ] Nether and End dimensions.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).

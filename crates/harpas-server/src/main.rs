@@ -731,10 +731,8 @@ fn play(
                     info.allow_flight,
                 )
                 .map_err(io::Error::other)?;
-            let command_source = commands::Source::Player {
-                level: access.operator_level(player.uuid),
-                uuid: player.uuid,
-            };
+            let uuid = player.uuid;
+            let level = access.operator_level(uuid);
             let peer = environment
                 .commands
                 .track_peer(player.uuid, connection.entity_id(), peer);
@@ -744,13 +742,14 @@ fn play(
                 .record_profile(player.uuid, player.name.clone());
             info!("{} joined the game", player.name);
             departure.name = Some(player.name.clone());
-            connection.send_play_packet(commands::tree(command_source).into());
+            player::send_permissions(&mut connection, uuid, level);
             if let Some(permit) = permit.as_deref_mut() {
                 permit.entered_play();
             }
-            player_session = Some((session, command_source, peer));
+            player_session = Some((session, peer));
         }
-        if let Some((session, source, _peer)) = &player_session {
+        if let Some((session, peer)) = &player_session {
+            player::send_permission_updates(&mut connection, peer);
             // The logic thread's output first: once it disconnects the player, there is nothing left to
             // forward, and forwarding to a stopped logic thread would hide its reason.
             departure.kick =
@@ -758,13 +757,8 @@ fn play(
                     .kick
                     .or(player::send(&mut connection, session, &environment.chunks));
             if !connection.is_closed() {
-                departure.kick = player::receive(
-                    &mut connection,
-                    session,
-                    logic,
-                    &environment.commands,
-                    *source,
-                )?;
+                departure.kick =
+                    player::receive(&mut connection, session, logic, &environment.commands, peer)?;
             }
             stream.write_all(&connection.take_output())?;
         }

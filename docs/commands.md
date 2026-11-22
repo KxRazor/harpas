@@ -4,10 +4,10 @@ Scope: how commands from vanilla and from every kind of plugin are registered, e
 Bedrock players, and how permissions decide who may run them.
 
 Status: in progress. The console and Java players share a tree for `list`, `list uuids`, `seed`, `ban`,
-`pardon`, `ban-ip`, `pardon-ip`, `banlist` and the six `whitelist` commands. Java players receive the tree
-filtered by their level in `ops.json`. `seed` requires operator level 2. Ban and whitelist commands require
-level 3. Profile arguments support names and player selectors, including `@a`, `@p`, `@r` and the
-`name` and `type` filters.
+`pardon`, `ban-ip`, `pardon-ip`, `banlist`, `op`, `deop` and the six `whitelist` commands. Java players receive
+the tree filtered by their level in `ops.json` at login and when their operator status changes.
+`seed` requires operator level 2. Operator, ban and whitelist commands require level 3. Profile arguments
+support names and player selectors, including `@a`, `@p`, `@r` and the `name` and `type` filters.
 Facts cite their source in [References](#references). Everything else is a design decision of this project.
 
 ---

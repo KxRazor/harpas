@@ -11,7 +11,10 @@ use harpas_protocol_java::v26_1::play::{
 };
 use harpas_protocol_java::v26_1::play::{clientbound, serverbound};
 
-use crate::access::{AccessLists, NOT_WHITELISTED, NOT_WHITELISTED_TEXT, Profile};
+use crate::access::{
+    AccessLists, BANNED, BANNED_TEXT, DEFAULT_BAN_REASON, DEFAULT_BAN_REASON_KEY, NOT_WHITELISTED,
+    NOT_WHITELISTED_TEXT, Profile,
+};
 use crate::profiles::Profiles;
 use crate::session::format_uuid;
 
@@ -32,12 +35,15 @@ enum Action {
     SetWhitelist(bool),
     ChangeWhitelist(bool),
     ReloadWhitelist,
+    Ban,
+    Pardon,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Word {
     Literal(&'static str),
     Profiles,
+    Reason,
 }
 
 struct Node {
@@ -50,6 +56,25 @@ struct Node {
 }
 
 const ROOTS: &[Node] = &[
+    Node {
+        word: Word::Literal("ban"),
+        level: Some(3),
+        allows_restricted: true,
+        action: None,
+        children: &[Node {
+            word: Word::Profiles,
+            level: Some(3),
+            allows_restricted: false,
+            action: Some(Action::Ban),
+            children: &[Node {
+                word: Word::Reason,
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::Ban),
+                children: &[],
+            }],
+        }],
+    },
     Node {
         word: Word::Literal("help"),
         level: None,
@@ -67,6 +92,19 @@ const ROOTS: &[Node] = &[
             level: Some(0),
             allows_restricted: false,
             action: Some(Action::ListUuids),
+            children: &[],
+        }],
+    },
+    Node {
+        word: Word::Literal("pardon"),
+        level: Some(3),
+        allows_restricted: true,
+        action: None,
+        children: &[Node {
+            word: Word::Profiles,
+            level: Some(3),
+            allows_restricted: false,
+            action: Some(Action::Pardon),
             children: &[],
         }],
     },
@@ -157,7 +195,7 @@ impl Node {
 pub fn names() -> impl Iterator<Item = &'static str> {
     ROOTS.iter().filter_map(|node| match node.word {
         Word::Literal(name) => Some(name),
-        Word::Profiles => None,
+        Word::Profiles | Word::Reason => None,
     })
 }
 
@@ -188,7 +226,14 @@ fn add_children(nodes: &mut Vec<CommandNode>, parent: usize, children: &[Node], 
                     name: "targets".into(),
                     parser: 7, // minecraft:game_profile
                     properties: Vec::new(),
-                    suggestions: Some("minecraft:ask_server".into()),
+                    suggestions: (!matches!(node.action, Some(Action::Ban)))
+                        .then(|| "minecraft:ask_server".into()),
+                },
+                Word::Reason => CommandNodeKind::Argument {
+                    name: "reason".into(),
+                    parser: 20, // minecraft:message
+                    properties: Vec::new(),
+                    suggestions: None,
                 },
             },
             children: Vec::new(),
@@ -221,7 +266,10 @@ fn find<'a>(nodes: &'a [Node], literal: &str, source: Source) -> Option<&'a Node
     })
 }
 
-fn parse(input: &str, source: Source) -> Result<(Action, &str), (usize, &'static str)> {
+fn parse(
+    input: &str,
+    source: Source,
+) -> Result<(Action, &str, Option<&str>), (usize, &'static str)> {
     let mut start = 0;
     let mut remaining = input;
     let mut children = ROOTS;
@@ -232,10 +280,19 @@ fn parse(input: &str, source: Source) -> Result<(Action, &str), (usize, &'static
             .find(|node| node.word == Word::Profiles && node.available(source))
             && !word.is_empty()
         {
-            if word.len() != remaining.len() {
+            let reason = if word.len() == remaining.len() {
+                None
+            } else if !tail.is_empty() && node.children.iter().any(|node| node.word == Word::Reason)
+            {
+                Some(tail)
+            } else {
                 return Err((start + word.len(), "command.unknown.argument"));
-            }
-            return Ok((node.action.expect("a profile argument executes"), word));
+            };
+            return Ok((
+                node.action.expect("a profile argument executes"),
+                word,
+                reason,
+            ));
         }
         let Some(node) = find(children, word, source) else {
             return Err((
@@ -250,7 +307,7 @@ fn parse(input: &str, source: Source) -> Result<(Action, &str), (usize, &'static
         if word.len() == remaining.len() {
             return node
                 .action
-                .map(|action| (action, ""))
+                .map(|action| (action, "", None))
                 .ok_or((input.len(), "command.unknown.command"));
         }
         if tail.is_empty() || node.children.is_empty() {
@@ -270,12 +327,14 @@ pub struct Commands {
     spawn: [f64; 3],
 }
 
+pub type Disconnect = (&'static str, &'static str);
+
 pub enum Outcome {
     Help,
     Stop,
     Feedback {
         replies: Vec<(String, Nbt)>,
-        disconnect: bool,
+        disconnect: Option<Disconnect>,
     },
     Syntax {
         cursor: usize,
@@ -317,11 +376,15 @@ impl Commands {
         for node in children.iter().filter(|node| node.available(source)) {
             match (node.word, node.action) {
                 (Word::Literal(name), _) => matches.push(name.into()),
-                (Word::Profiles, Some(Action::ChangeWhitelist(true))) => {
+                (Word::Profiles, Some(Action::ChangeWhitelist(true) | Action::Ban)) => {
                     if let Ok(players) = logic.players() {
                         let access = self.access();
                         matches.extend(players.into_iter().filter_map(|(uuid, name)| {
-                            (!access.is_whitelisted(uuid)).then_some(name)
+                            let already_listed = match node.action {
+                                Some(Action::Ban) => access.is_banned(uuid),
+                                _ => access.is_whitelisted(uuid),
+                            };
+                            (!already_listed).then_some(name)
                         }));
                     }
                 }
@@ -333,7 +396,11 @@ impl Commands {
                             .map(str::to_owned),
                     );
                 }
+                (Word::Profiles, Some(Action::Pardon)) => {
+                    matches.extend(self.access().banned_names().map(str::to_owned));
+                }
                 (Word::Profiles, _) => unreachable!("a profile argument executes"),
+                (Word::Reason, _) => {}
             }
         }
         matches.retain(|name| name.to_lowercase().starts_with(&prefix));
@@ -367,7 +434,7 @@ impl Commands {
     }
 
     pub fn run(&self, logic: &Handle, input: &str, source: Source) -> io::Result<Outcome> {
-        let (action, argument) = match parse(input, source) {
+        let (action, argument, reason) = match parse(input, source) {
             Ok(action) => action,
             Err((cursor, reason)) => return Ok(Outcome::Syntax { cursor, reason }),
         };
@@ -399,6 +466,33 @@ impl Commands {
                 self.change_whitelist(logic, source, argument, add, input.len() - argument.len())?
             }
             Action::ReloadWhitelist => self.reload_whitelist(logic, source)?,
+            Action::Ban | Action::Pardon => {
+                let cursor =
+                    input.len() - argument.len() - reason.map_or(0, |reason| reason.len() + 1);
+                let profiles = match self.resolve_targets(logic, source, argument, cursor)? {
+                    Ok(profiles) => profiles,
+                    Err(outcome) => return Ok(outcome),
+                };
+                let reason = match reason {
+                    Some(reason) => match self.resolve_reason(logic, source, reason)? {
+                        Ok(reason) => Some(reason),
+                        Err((offset, reason)) => {
+                            return Ok(Outcome::Syntax {
+                                cursor: cursor + argument.len() + 1 + offset,
+                                reason,
+                            });
+                        }
+                    },
+                    None => None,
+                };
+                self.change_bans(
+                    logic,
+                    source,
+                    profiles,
+                    matches!(action, Action::Ban),
+                    reason.as_deref(),
+                )?
+            }
             Action::Seed => {
                 let seed = self.seed.to_string();
                 let styled = Compound::from_iter([
@@ -522,24 +616,9 @@ impl Commands {
         add: bool,
         cursor: usize,
     ) -> io::Result<Outcome> {
-        let profiles = if let Some(selector) = target.strip_prefix('@') {
-            match self.select_players(logic, source, selector)? {
-                Ok(profiles) if profiles.is_empty() => {
-                    return Ok(failure(
-                        "No player was found".into(),
-                        "argument.entity.notfound.player",
-                    ));
-                }
-                Ok(profiles) => profiles,
-                Err(reason) => return Ok(Outcome::Syntax { cursor, reason }),
-            }
-        } else if let Some(profile) = self.profiles.resolve(target) {
-            vec![profile]
-        } else {
-            return Ok(failure(
-                "That player does not exist".into(),
-                "argument.player.unknown",
-            ));
+        let profiles = match self.resolve_targets(logic, source, target, cursor)? {
+            Ok(profiles) => profiles,
+            Err(outcome) => return Ok(outcome),
         };
         let mut access = self.access();
         let changed = match access.change_whitelist(profiles, add) {
@@ -576,18 +655,164 @@ impl Commands {
                 } else {
                     format!("Removed {name} from the whitelist")
                 };
-                let component = Compound::from_iter([
-                    ("translate", Nbt::from(key)),
-                    ("with", List::String(vec![name]).into()),
-                ]);
-                (text, component.into())
+                (text, translate_strings(key, vec![name]))
             })
             .collect();
-        let disconnect = !add && Self::enforce_whitelist(&access, logic, source)?;
+        let disconnect = if add {
+            None
+        } else {
+            Self::enforce_whitelist(&access, logic, source)?
+        };
         Ok(Outcome::Feedback {
             replies,
             disconnect,
         })
+    }
+
+    fn change_bans(
+        &self,
+        logic: &Handle,
+        source: Source,
+        profiles: Vec<Profile>,
+        ban: bool,
+        reason: Option<&str>,
+    ) -> io::Result<Outcome> {
+        let author = match (ban, source) {
+            (true, Source::Player { uuid, .. }) => logic
+                .players()
+                .map_err(io::Error::other)?
+                .into_iter()
+                .find_map(|(id, name)| (id == uuid).then_some(name))
+                .ok_or_else(|| io::Error::other("ban command sender left"))?,
+            _ => "Server".into(),
+        };
+        let mut access = self.access();
+        let changed = match access.change_bans(profiles, ban.then_some((author.as_str(), reason))) {
+            Ok(changed) => changed,
+            Err(error) => {
+                log::warn!("Failed to save the player ban list: {error}");
+                return Ok(failure(
+                    "Could not save the player ban list".into(),
+                    "command.failed",
+                ));
+            }
+        };
+        if changed.is_empty() {
+            return Ok(if ban {
+                failure(
+                    "Nothing changed. The player is already banned".into(),
+                    "commands.ban.failed",
+                )
+            } else {
+                failure(
+                    "Nothing changed. The player isn't banned".into(),
+                    "commands.pardon.failed",
+                )
+            });
+        }
+        let disconnect = if ban {
+            let banned: HashSet<_> = changed.iter().map(|profile| profile.uuid).collect();
+            let self_ban = matches!(source, Source::Player { uuid, .. } if banned.contains(&uuid));
+            logic
+                .disconnect_players(banned, BANNED, BANNED_TEXT)
+                .map_err(io::Error::other)?;
+            self_ban.then_some((BANNED, BANNED_TEXT))
+        } else {
+            None
+        };
+        let replies = changed
+            .into_iter()
+            .map(|Profile { name, .. }| match (ban, reason) {
+                (true, Some(reason)) => (
+                    format!("Banned {name}: {reason}"),
+                    translate_strings("commands.ban.success", vec![name, reason.into()]),
+                ),
+                (true, None) => (
+                    format!("Banned {name}: {DEFAULT_BAN_REASON}"),
+                    translate(
+                        "commands.ban.success",
+                        vec![name.into(), translate(DEFAULT_BAN_REASON_KEY, vec![])],
+                    ),
+                ),
+                (false, _) => (
+                    format!("Unbanned {name}"),
+                    translate_strings("commands.pardon.success", vec![name]),
+                ),
+            })
+            .collect();
+        Ok(Outcome::Feedback {
+            replies,
+            disconnect,
+        })
+    }
+
+    fn resolve_targets(
+        &self,
+        logic: &Handle,
+        source: Source,
+        target: &str,
+        cursor: usize,
+    ) -> io::Result<Result<Vec<Profile>, Outcome>> {
+        Ok(if let Some(selector) = target.strip_prefix('@') {
+            match self.select_players(logic, source, selector, true)? {
+                Ok(profiles) if profiles.is_empty() => Err(failure(
+                    "No player was found".into(),
+                    "argument.entity.notfound.player",
+                )),
+                Ok(profiles) => Ok(profiles),
+                Err(reason) => Err(Outcome::Syntax { cursor, reason }),
+            }
+        } else if let Some(profile) = self.profiles.resolve(target) {
+            Ok(vec![profile])
+        } else {
+            Err(failure(
+                "That player does not exist".into(),
+                "argument.player.unknown",
+            ))
+        })
+    }
+
+    fn resolve_reason(
+        &self,
+        logic: &Handle,
+        source: Source,
+        reason: &str,
+    ) -> io::Result<Result<String, (usize, &'static str)>> {
+        let mut remaining = reason;
+        let mut text = String::with_capacity(reason.len());
+        while let Some((prefix, candidate)) = remaining.split_once('@') {
+            text.push_str(prefix);
+            if !matches!(
+                candidate.as_bytes().first(),
+                Some(b'a' | b'p' | b'r' | b's' | b'e' | b'n')
+            ) {
+                text.push('@');
+                remaining = candidate;
+                continue;
+            }
+            let offset = reason.len() - candidate.len() - 1;
+            let end = if candidate[1..].starts_with('[') {
+                let Some(close) = candidate.find(']') else {
+                    return Ok(Err((offset, "argument.entity.options.unterminated")));
+                };
+                close + 1
+            } else {
+                1
+            };
+            let players = match self.select_players(logic, source, &candidate[..end], false)? {
+                Ok(players) => players,
+                Err(error) => return Ok(Err((offset, error))),
+            };
+            for (index, profile) in players.into_iter().enumerate() {
+                if index != 0 {
+                    text.push_str(", ");
+                }
+                text.push_str(&profile.name);
+            }
+            remaining = &candidate[end..];
+        }
+        text.push_str(remaining);
+        Ok(Ok(text))
     }
 
     fn select_players(
@@ -595,6 +820,7 @@ impl Commands {
         logic: &Handle,
         source: Source,
         selector: &str,
+        profiles_only: bool,
     ) -> io::Result<Result<Vec<Profile>, &'static str>> {
         let kind = match selector.as_bytes().first().copied() {
             Some(kind @ (b'a' | b'p' | b'r' | b's' | b'e' | b'n')) => kind,
@@ -623,7 +849,7 @@ impl Commands {
                 }
             }
         }
-        if matches!(kind, b's' | b'e' | b'n') && !player_type {
+        if profiles_only && matches!(kind, b's' | b'e' | b'n') && !player_type {
             return Ok(Err("argument.player.entities"));
         }
 
@@ -690,26 +916,30 @@ impl Commands {
         })
     }
 
-    fn enforce_whitelist(access: &AccessLists, logic: &Handle, source: Source) -> io::Result<bool> {
+    fn enforce_whitelist(
+        access: &AccessLists,
+        logic: &Handle,
+        source: Source,
+    ) -> io::Result<Option<Disconnect>> {
         if !access.whitelist_enforced() {
-            return Ok(false);
+            return Ok(None);
         }
         let allowed: HashSet<_> = access.whitelisted_players().collect();
         let disconnect = matches!(source, Source::Player { uuid, .. } if !allowed.contains(&uuid));
         logic
             .disconnect_players_except(allowed, NOT_WHITELISTED, NOT_WHITELISTED_TEXT)
             .map_err(io::Error::other)?;
-        Ok(disconnect)
+        Ok(disconnect.then_some((NOT_WHITELISTED, NOT_WHITELISTED_TEXT)))
     }
 
-    /// Returns the feedback and whether to disconnect the sender for whitelist enforcement.
+    /// Returns the feedback and any disconnect reason for the sender.
     pub fn player_reply(
         &self,
         logic: &Handle,
         input: &str,
         source: Source,
-    ) -> io::Result<(Vec<clientbound::SystemChatMessage>, bool)> {
-        let (components, not_whitelisted) = match self.run(logic, input, source)? {
+    ) -> io::Result<(Vec<clientbound::SystemChatMessage>, Option<Disconnect>)> {
+        let (components, disconnect) = match self.run(logic, input, source)? {
             Outcome::Feedback {
                 replies,
                 disconnect,
@@ -725,7 +955,7 @@ impl Commands {
                     command_failure(Compound::from_iter([("translate", reason)])),
                     command_failure(error_context(input, cursor)),
                 ],
-                false,
+                None,
             ),
             Outcome::Help | Outcome::Stop => unreachable!("console-only commands were filtered"),
         };
@@ -737,7 +967,7 @@ impl Commands {
                     overlay: false,
                 })
                 .collect(),
-            not_whitelisted,
+            disconnect,
         ))
     }
 }
@@ -801,6 +1031,14 @@ fn translate(key: &str, args: Vec<Nbt>) -> Nbt {
     component.into()
 }
 
+fn translate_strings(key: &str, args: Vec<String>) -> Nbt {
+    Compound::from_iter([
+        ("translate", Nbt::from(key)),
+        ("with", List::String(args).into()),
+    ])
+    .into()
+}
+
 fn suggest_command(command: String) -> Compound {
     Compound::from_iter([("action", "suggest_command".into()), ("command", command)])
 }
@@ -824,7 +1062,7 @@ fn failure(text: String, key: &str) -> Outcome {
 fn feedback(text: String, component: Nbt) -> Outcome {
     Outcome::Feedback {
         replies: vec![(text, component)],
-        disconnect: false,
+        disconnect: None,
     }
 }
 

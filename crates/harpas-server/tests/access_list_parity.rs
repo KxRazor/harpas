@@ -139,6 +139,7 @@ fn run(jar: &Path, eula: &str, ip_bans: bool) -> [(Vec<String>, Vec<String>); 2]
         fs::write(dir.join("banned-players.json"), BANS).unwrap();
         fs::write(dir.join("ops.json"), OPS).unwrap();
         fs::write(dir.join("whitelist.json"), WHITELIST).unwrap();
+        fs::write(dir.join("usercache.json"), r#"[{"name":"OpBypass","uuid":"52b29d89-234c-3f7a-a045-cbb57fa5ea25","expiresOn":"2099-12-31 23:59:59 +0000"}]"#).unwrap();
         if ip_bans {
             fs::write(dir.join("banned-ips.json"), IP_BANS).unwrap();
         }
@@ -167,12 +168,26 @@ fn run(jar: &Path, eula: &str, ip_bans: bool) -> [(Vec<String>, Vec<String>); 2]
     let mut server = Server::start(OsStr::new(env!("CARGO_BIN_EXE_harpas")), &[], &harpas);
     reference.wait_for("Done (");
     server.wait_for("Done (");
-    [(&vanilla, ports[0]), (&harpas, ports[1])].map(|(dir, port)| {
-        let answers = PLAYERS.iter().map(|name| log_in(port, name)).collect();
+    [
+        (&mut reference, &vanilla, ports[0]),
+        (&mut server, &harpas, ports[1]),
+    ]
+    .map(|(server, dir, port)| {
+        let mut answers: Vec<_> = PLAYERS.iter().map(|name| log_in(port, name)).collect();
         let files = FILES
             .iter()
             .map(|file| fs::read_to_string(dir.join(file)).unwrap_or_else(|_| "missing".into()))
             .collect();
+        writeln!(
+            server.child.stdin.as_mut().unwrap(),
+            "ban opbypass Test reason"
+        )
+        .unwrap();
+        server.wait_for("Banned OpBypass: Test reason");
+        answers.push(log_in(port, "OpBypass"));
+        writeln!(server.child.stdin.as_mut().unwrap(), "pardon OPBYPASS").unwrap();
+        server.wait_for("Unbanned OpBypass");
+        answers.push(log_in(port, "OpBypass"));
         (answers, files)
     })
 }
@@ -192,7 +207,17 @@ fn logins_and_list_files_match_vanilla() {
         assert_eq!(expected[0], "closed");
         assert!(expected.iter().any(|a| a == "success") != ip_bans);
         assert!(expected.iter().any(|a| a.contains("not_whitelisted")));
-        for ((name, expected), actual) in PLAYERS.iter().zip(&expected).zip(&actual) {
+        assert_eq!(
+            expected[10],
+            r#"disconnect {"translate":"multiplayer.disconnect.banned.reason","with":["Test reason"]}"#
+        );
+        assert_eq!(expected[11], expected[7]);
+        for ((name, expected), actual) in PLAYERS
+            .into_iter()
+            .chain(["OpBypass after ban", "OpBypass after pardon"])
+            .zip(&expected)
+            .zip(&actual)
+        {
             assert_eq!(expected, actual, "{name} with IP bans {ip_bans}");
         }
         for ((file, expected), actual) in FILES.iter().zip(&expected_files).zip(&actual_files) {

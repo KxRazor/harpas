@@ -165,9 +165,25 @@ impl Client {
     }
 
     fn command(&mut self, command: &str, replies: usize) -> Vec<SystemChatMessage> {
-        let request = play::serverbound::Packet::from(play::serverbound::ChatCommand {
-            command: command.into(),
-        });
+        let request = if command
+            .strip_prefix("ban ")
+            .is_some_and(|args| args.contains(' '))
+        {
+            play::serverbound::SignedChatCommand {
+                command: command.into(),
+                timestamp: 0,
+                salt: 0,
+                argument_signatures: vec![],
+                offset: 0,
+                acknowledged: [0; 3],
+                checksum: 0,
+            }
+            .into()
+        } else {
+            play::serverbound::Packet::from(play::serverbound::ChatCommand {
+                command: command.into(),
+            })
+        };
         self.send(|buf| request.encode(buf));
         (0..replies).map(|_| self.matching("command reply", |packet| match packet {
             Packet::SystemChatMessage(reply) if !matches!(&reply.content,
@@ -178,13 +194,16 @@ impl Client {
         })).collect()
     }
 
-    fn whitelist_disconnect(&mut self) {
-        let reason = self.matching("whitelist disconnect", |packet| match packet {
+    fn disconnect(&mut self) -> codec::Nbt {
+        self.matching("disconnect", |packet| match packet {
             Packet::Disconnect(disconnect) => Some(disconnect.reason),
             _ => None,
-        });
+        })
+    }
+
+    fn whitelist_disconnect(&mut self) {
         assert_eq!(
-            reason,
+            self.disconnect(),
             codec::Nbt::Compound(
                 [("translate", "multiplayer.disconnect.not_whitelisted")]
                     .into_iter()
@@ -206,7 +225,10 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
             let name = match &node.kind {
                 CommandNodeKind::Literal(name)
                     if !prefix.is_empty()
-                        || matches!(name.as_str(), "list" | "seed" | "whitelist") =>
+                        || matches!(
+                            name.as_str(),
+                            "ban" | "list" | "pardon" | "seed" | "whitelist"
+                        ) =>
                 {
                     name.clone()
                 }
@@ -244,6 +266,12 @@ fn compare(port: u16, other: u16) {
             expected.iter().any(|(name, _, _)| name == "whitelist"),
             can_whitelist
         );
+        for command in ["ban", "pardon"] {
+            assert_eq!(
+                expected.iter().any(|(name, _, _)| name == command),
+                can_whitelist
+            );
+        }
         let mut harpas = Client::join(other, name);
         let actual = tree_nodes(&harpas.tree());
         if actual != expected {
@@ -282,7 +310,10 @@ fn compare(port: u16, other: u16) {
             ("whitelist add", 2),
             ("list unexpected", 2),
             ("list ", 2),
-        ] {
+        ]
+        .into_iter()
+        .chain((!can_whitelist).then_some(("ban Builder", 2)))
+        {
             let expected = vanilla.command(command, replies);
             let actual = harpas.command(command, replies);
             if actual != expected {
@@ -315,6 +346,71 @@ fn assert_login(port: u16, name: &str, allowed: bool) {
             r#"{"translate":"multiplayer.disconnect.not_whitelisted"}"#
         ),
         packet => panic!("unexpected login reply for {name}: {packet:?}"),
+    }
+}
+
+fn assert_banned(port: u16, name: &str, reason: Option<&str>) {
+    let login::clientbound::Packet::LoginDisconnect(packet) = Client::login(port, name).1 else {
+        panic!("{name} was allowed to log in");
+    };
+    let reason = reason.map_or_else(
+        || serde_json::json!({"translate": "multiplayer.disconnect.banned.reason.default"}),
+        |reason| serde_json::json!(reason),
+    );
+    assert_eq!(
+        packet.reason,
+        serde_json::json!({
+            "translate": "multiplayer.disconnect.banned.reason", "with": [reason],
+        })
+        .to_string()
+    );
+}
+
+#[derive(Debug, PartialEq)]
+struct Bans {
+    completions: Vec<CommandSuggestionsResponse>,
+    replies: Vec<SystemChatMessage>,
+    disconnect: codec::Nbt,
+    saved: serde_json::Value,
+}
+
+fn exercise_bans(dir: &Path, port: u16) -> Bans {
+    let mut admin = Client::join(port, "Admin");
+    let mut target = Client::join(port, "BanTarget");
+    admin.tree();
+    target.tree();
+    let mut completions = vec![admin.suggestions("/ban bant")];
+    let reason = "Too many  blocks <&> (by Admin)";
+    let mut replies = admin.command("ban @a[name=BanTarget] Too many  blocks <&> (by @s)", 1);
+    let disconnect = target.disconnect();
+    assert_banned(port, "BanTarget", Some(reason));
+    replies.extend(admin.command("ban bantarget", 1));
+    completions.push(admin.suggestions("/pardon bant"));
+    let path = dir.join("banned-players.json");
+    let mut saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved[0]["reason"], reason);
+    assert!(
+        saved[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("created")
+            .unwrap()
+            .is_string()
+    );
+    replies.extend(admin.command("pardon BANTARGET", 1));
+    replies.extend(admin.command("pardon BanTarget", 1));
+    assert_login(port, "BanTarget", true);
+    replies.extend(admin.command("ban bantarget", 1));
+    assert_banned(port, "BanTarget", None);
+    let default: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(default[0].get("reason").is_none());
+    replies.extend(admin.command("pardon bantarget", 1));
+    assert_eq!(fs::read_to_string(path).unwrap(), "[]");
+    Bans {
+        completions,
+        replies,
+        disconnect,
+        saved,
     }
 }
 
@@ -508,6 +604,18 @@ fn commands_match_vanilla() {
         server.wait_for("There are 3 whitelisted player(s):");
     }
     compare(port, other);
+    let expected = exercise_bans(&vanilla, port);
+    let actual = exercise_bans(&harpas, other);
+    assert_eq!(actual.completions, expected.completions);
+    assert_eq!(actual.replies, expected.replies);
+    assert_eq!(actual.disconnect, expected.disconnect);
+    assert_eq!(actual.saved, expected.saved);
+
+    for (server, port) in [(&mut reference, port), (&mut server, other)] {
+        writeln!(server.child.stdin.as_mut().unwrap(), "ban persistentguest").unwrap();
+        server.wait_for("Banned persistentguest: Banned by an operator.");
+        assert_banned(port, "persistentguest", None);
+    }
     assert_eq!(
         exercise_whitelist(&vanilla, port, false),
         exercise_whitelist(&harpas, other, false),
@@ -537,6 +645,14 @@ fn commands_match_vanilla() {
         console_whitelist(server, dir, false);
         console_whitelist(server, dir, true);
         console_whitelist(server, dir, false);
+        assert_banned(port, "persistentguest", None);
+        writeln!(
+            server.child.stdin.as_mut().unwrap(),
+            "pardon persistentguest"
+        )
+        .unwrap();
+        server.wait_for("Unbanned persistentguest");
+        assert_login(port, "persistentguest", true);
     }
     assert_eq!(
         exercise_whitelist(&vanilla, port, true),

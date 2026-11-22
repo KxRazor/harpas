@@ -3,12 +3,11 @@
 Scope: how commands from vanilla and from every kind of plugin are registered, executed and shown to Java and
 Bedrock players, and how permissions decide who may run them.
 
-Status: in progress. The console and Java players share a tree for `list`, `list uuids`, `seed` and
-the six `whitelist` commands. Java players receive the tree filtered by their level
-in `ops.json`. `seed` requires operator level 2, and the whitelist commands require level 3. The whitelist
-profile argument supports names and player selectors, including `@a`, `@p`, `@r` and the `name` and `type`
-filters. Facts cite their source in [References](#references). Everything else is a design decision of this
-project.
+Status: in progress. The console and Java players share a tree for `list`, `list uuids`, `seed`, `ban`,
+`pardon` and the six `whitelist` commands. Java players receive the tree filtered by their level in `ops.json`.
+`seed` requires operator level 2. Bans, pardons and whitelist commands require level 3. Profile arguments
+support names and player selectors, including `@a`, `@p`, `@r` and the `name` and `type` filters.
+Facts cite their source in [References](#references). Everything else is a design decision of this project.
 
 ---
 

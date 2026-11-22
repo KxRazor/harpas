@@ -81,6 +81,11 @@ cached under their login profiles. When the whitelist is on and `enforce-whiteli
 removing a member or reloading it disconnects connected players outside the list, including operators.
 Operators can still log in while the whitelist is enabled.
 
+The console and Java operators at level 3 or higher can use `ban <targets> [reason]` and `pardon <targets>`.
+The commands save `banned-players.json` before the change takes effect. A ban is permanent until pardoned,
+defaults to `Banned by an operator.`, and disconnects any connected target. Later login refusals include the
+saved reason. The target may be a resolved name or a supported player selector.
+
 ---
 
 ## Server folder

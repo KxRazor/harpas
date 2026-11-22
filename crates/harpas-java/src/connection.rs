@@ -130,7 +130,7 @@ pub struct Player {
 /// Play input to apply on the logic thread, in the order it arrived on this connection.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlayEvent {
-    /// A movement or settings packet.
+    /// An accepted Play packet. A signed command packet carries unverified argument signatures.
     Packet(Box<play::serverbound::Packet>),
     /// An accepted chat session or message.
     Chat(ChatEvent),
@@ -1208,11 +1208,13 @@ impl Connection {
                     self.disconnect_play_translated(reason);
                 }
             }
-            Packet::SignedChatCommand(command) => match self.chat.ignored_command(command) {
+            Packet::SignedChatCommand(ref command) if !valid_chat_input(&command.command) => {
+                self.disconnect_play_translated("multiplayer.disconnect.illegal_characters");
+            }
+            Packet::SignedChatCommand(ref command) => match self.chat.command(command) {
                 Err(VALIDATION_FAILED) => self.disconnect_play_translated(VALIDATION_FAILED),
-                // Execution from signed command packets is still pending.
                 Err(reason) => self.disconnect_play(reason),
-                Ok(()) => {}
+                Ok(()) => self.play_input.push(PlayEvent::Packet(Box::new(packet))),
             },
             Packet::ChatCommand(ref command) if !valid_chat_input(&command.command) => {
                 self.disconnect_play_translated("multiplayer.disconnect.illegal_characters");

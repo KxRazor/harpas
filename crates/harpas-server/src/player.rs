@@ -12,7 +12,6 @@ use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
 use std::sync::Arc;
 
-use crate::access::{NOT_WHITELISTED, NOT_WHITELISTED_TEXT};
 use crate::commands::{Commands, Source};
 
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
@@ -54,20 +53,29 @@ pub(crate) fn receive(
 ) -> io::Result<Option<&'static str>> {
     use serverbound::Packet;
     for event in connection.take_play_events() {
+        if let PlayEvent::Packet(packet) = &event {
+            let command = match packet.as_ref() {
+                Packet::ChatCommand(packet) => Some(packet.command.as_str()),
+                // The reason is administrative input, never relayed as signed player chat.
+                Packet::SignedChatCommand(packet) if packet.command.starts_with("ban ") => {
+                    Some(packet.command.as_str())
+                }
+                _ => None,
+            };
+            if let Some(command) = command {
+                let (replies, disconnect) = commands.player_reply(logic, command, source)?;
+                for reply in replies {
+                    connection.send_play_packet(reply.into());
+                }
+                if let Some((key, text)) = disconnect {
+                    connection.disconnect_play_translated(key);
+                    return Ok(Some(text));
+                }
+                continue;
+            }
+        }
         let input = match event {
             PlayEvent::Packet(packet) => match *packet {
-                Packet::ChatCommand(packet) => {
-                    let (replies, not_whitelisted) =
-                        commands.player_reply(logic, &packet.command, source)?;
-                    for reply in replies {
-                        connection.send_play_packet(reply.into());
-                    }
-                    if not_whitelisted {
-                        connection.disconnect_play_translated(NOT_WHITELISTED);
-                        return Ok(Some(NOT_WHITELISTED_TEXT));
-                    }
-                    continue;
-                }
                 Packet::CommandSuggestionsRequest(request) => {
                     if let Some(reply) = commands.suggestions(logic, request, source) {
                         connection.send_play_packet(reply.into());

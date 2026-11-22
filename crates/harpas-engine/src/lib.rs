@@ -158,7 +158,29 @@ impl Handle {
         text: &'static str,
     ) -> Result<(), LogicStopped> {
         self.events
-            .send(Event::DisconnectPlayersExcept { allowed, key, text })
+            .send(Event::DisconnectPlayers {
+                uuids: allowed,
+                except: true,
+                key,
+                text,
+            })
+            .map_err(|_| LogicStopped)
+    }
+
+    /// Disconnects the given UUIDs at the next connection phase, using a translated reason.
+    pub fn disconnect_players(
+        &self,
+        uuids: HashSet<u128>,
+        key: &'static str,
+        text: &'static str,
+    ) -> Result<(), LogicStopped> {
+        self.events
+            .send(Event::DisconnectPlayers {
+                uuids,
+                except: false,
+                key,
+                text,
+            })
             .map_err(|_| LogicStopped)
     }
 
@@ -328,8 +350,9 @@ enum Event {
     },
     Left(i32),
     ListPlayers(Sender<Vec<PlayerListEntry>>),
-    DisconnectPlayersExcept {
-        allowed: HashSet<u128>,
+    DisconnectPlayers {
+        uuids: HashSet<u128>,
+        except: bool,
         key: &'static str,
         text: &'static str,
     },
@@ -627,9 +650,16 @@ impl TickWork for Game {
                         .collect();
                     let _ = reply.send(players);
                 }
-                Event::DisconnectPlayersExcept { allowed, key, text } => {
+                Event::DisconnectPlayers {
+                    uuids,
+                    except,
+                    key,
+                    text,
+                } => {
                     for state in &mut self.players {
-                        if !state.disconnecting && !allowed.contains(&state.player.profile.uuid) {
+                        if !state.disconnecting
+                            && uuids.contains(&state.player.profile.uuid) != except
+                        {
                             state.disconnecting = true;
                             state.send(player::Output::DisconnectTranslated { key, text });
                         }

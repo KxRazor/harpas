@@ -11,7 +11,8 @@ use harpas_protocol_java::v26_1::play::{
 };
 use harpas_protocol_java::v26_1::play::{clientbound, serverbound};
 
-use crate::access::{AccessLists, NOT_WHITELISTED, NOT_WHITELISTED_TEXT};
+use crate::access::{AccessLists, NOT_WHITELISTED, NOT_WHITELISTED_TEXT, Profile};
+use crate::profiles::Profiles;
 use crate::session::format_uuid;
 
 #[derive(Clone, Copy)]
@@ -29,10 +30,18 @@ enum Action {
     Stop,
     WhitelistList,
     SetWhitelist(bool),
+    ChangeWhitelist(bool),
+    ReloadWhitelist,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Word {
+    Literal(&'static str),
+    Profiles,
 }
 
 struct Node {
-    literal: &'static str,
+    word: Word,
     /// `None` is console-only. Player permissions use the levels from `ops.json`.
     level: Option<i32>,
     allows_restricted: bool,
@@ -42,19 +51,19 @@ struct Node {
 
 const ROOTS: &[Node] = &[
     Node {
-        literal: "help",
+        word: Word::Literal("help"),
         level: None,
         allows_restricted: false,
         action: Some(Action::Help),
         children: &[],
     },
     Node {
-        literal: "list",
+        word: Word::Literal("list"),
         level: Some(0),
         allows_restricted: false,
         action: Some(Action::List),
         children: &[Node {
-            literal: "uuids",
+            word: Word::Literal("uuids"),
             level: Some(0),
             allows_restricted: false,
             action: Some(Action::ListUuids),
@@ -62,49 +71,79 @@ const ROOTS: &[Node] = &[
         }],
     },
     Node {
-        literal: "seed",
+        word: Word::Literal("seed"),
         level: Some(2),
         allows_restricted: true,
         action: Some(Action::Seed),
         children: &[],
     },
     Node {
-        literal: "stop",
+        word: Word::Literal("stop"),
         level: None,
         allows_restricted: false,
         action: Some(Action::Stop),
         children: &[],
     },
     Node {
-        literal: "whitelist",
+        word: Word::Literal("whitelist"),
         level: Some(3),
         allows_restricted: true,
         action: None,
         children: &[
+            whitelist_change("add", true),
             Node {
-                literal: "list",
+                word: Word::Literal("list"),
                 level: Some(3),
                 allows_restricted: false,
                 action: Some(Action::WhitelistList),
                 children: &[],
             },
             Node {
-                literal: "off",
+                word: Word::Literal("off"),
                 level: Some(3),
                 allows_restricted: false,
                 action: Some(Action::SetWhitelist(false)),
                 children: &[],
             },
             Node {
-                literal: "on",
+                word: Word::Literal("on"),
                 level: Some(3),
                 allows_restricted: false,
                 action: Some(Action::SetWhitelist(true)),
                 children: &[],
             },
+            Node {
+                word: Word::Literal("reload"),
+                level: Some(3),
+                allows_restricted: false,
+                action: Some(Action::ReloadWhitelist),
+                children: &[],
+            },
+            whitelist_change("remove", false),
         ],
     },
 ];
+
+const fn whitelist_change(literal: &'static str, add: bool) -> Node {
+    const fn command_child(add: bool) -> Node {
+        Node {
+            word: Word::Profiles,
+            level: Some(3),
+            allows_restricted: false,
+            action: Some(Action::ChangeWhitelist(add)),
+            children: &[],
+        }
+    }
+    const ADD: &[Node] = &[command_child(true)];
+    const REMOVE: &[Node] = &[command_child(false)];
+    Node {
+        word: Word::Literal(literal),
+        level: Some(3),
+        allows_restricted: false,
+        action: None,
+        children: if add { ADD } else { REMOVE },
+    }
+}
 
 impl Node {
     fn available(&self, source: Source) -> bool {
@@ -116,7 +155,10 @@ impl Node {
 }
 
 pub fn names() -> impl Iterator<Item = &'static str> {
-    ROOTS.iter().map(|node| node.literal)
+    ROOTS.iter().filter_map(|node| match node.word {
+        Word::Literal(name) => Some(name),
+        Word::Profiles => None,
+    })
 }
 
 /// Projects the dispatcher's tree for one Java player's permission level.
@@ -140,7 +182,15 @@ fn add_children(nodes: &mut Vec<CommandNode>, parent: usize, children: &[Node], 
         let index = nodes.len();
         nodes[parent].children.push(index as i32);
         nodes.push(CommandNode {
-            kind: CommandNodeKind::Literal(node.literal.into()),
+            kind: match node.word {
+                Word::Literal(name) => CommandNodeKind::Literal(name.into()),
+                Word::Profiles => CommandNodeKind::Argument {
+                    name: "targets".into(),
+                    parser: 7, // minecraft:game_profile
+                    properties: Vec::new(),
+                    suggestions: Some("minecraft:ask_server".into()),
+                },
+            },
             children: Vec::new(),
             redirect: None,
             executable: node.action.is_some(),
@@ -150,62 +200,43 @@ fn add_children(nodes: &mut Vec<CommandNode>, parent: usize, children: &[Node], 
     }
 }
 
-/// Returns the byte index and literal completions for the final word.
-pub fn complete(input: &str, source: Source) -> (usize, Vec<String>) {
+fn completion_nodes(input: &str, source: Source) -> (usize, &'static [Node]) {
     let mut start = usize::from(input.starts_with('/'));
     let mut remaining = &input[start..];
     let mut children = ROOTS;
     while let Some((word, tail)) = remaining.split_once(' ') {
         let Some(node) = find(children, word, source) else {
-            return (start, Vec::new());
+            return (start, &[]);
         };
         start += word.len() + 1;
         children = node.children;
         remaining = tail;
     }
-    let prefix = remaining.to_ascii_lowercase();
-    let matches = children
-        .iter()
-        .filter(|node| node.available(source) && node.literal.starts_with(&prefix))
-        .map(|node| node.literal.into())
-        .collect();
-    (start, matches)
-}
-
-pub fn suggestions(
-    request: serverbound::CommandSuggestionsRequest,
-    source: Source,
-) -> Option<clientbound::CommandSuggestionsResponse> {
-    let (start, matches) = complete(&request.text, source);
-    if matches.is_empty() {
-        return None;
-    }
-    Some(clientbound::CommandSuggestionsResponse {
-        id: request.id,
-        start: request.text[..start].encode_utf16().count() as i32,
-        length: request.text[start..].encode_utf16().count() as i32,
-        suggestions: matches
-            .into_iter()
-            .map(|text| CommandSuggestion {
-                text,
-                tooltip: None,
-            })
-            .collect(),
-    })
+    (start, children)
 }
 
 fn find<'a>(nodes: &'a [Node], literal: &str, source: Source) -> Option<&'a Node> {
-    nodes
-        .iter()
-        .find(|node| node.literal == literal && node.available(source))
+    nodes.iter().find(|node| {
+        matches!(node.word, Word::Literal(name) if name == literal) && node.available(source)
+    })
 }
 
-fn parse(input: &str, source: Source) -> Result<Action, (usize, &'static str)> {
+fn parse(input: &str, source: Source) -> Result<(Action, &str), (usize, &'static str)> {
     let mut start = 0;
     let mut remaining = input;
     let mut children = ROOTS;
     loop {
         let (word, tail) = remaining.split_once(' ').unwrap_or((remaining, ""));
+        if let Some(node) = children
+            .iter()
+            .find(|node| node.word == Word::Profiles && node.available(source))
+            && !word.is_empty()
+        {
+            if word.len() != remaining.len() {
+                return Err((start + word.len(), "command.unknown.argument"));
+            }
+            return Ok((node.action.expect("a profile argument executes"), word));
+        }
         let Some(node) = find(children, word, source) else {
             return Err((
                 start,
@@ -217,7 +248,10 @@ fn parse(input: &str, source: Source) -> Result<Action, (usize, &'static str)> {
             ));
         };
         if word.len() == remaining.len() {
-            return node.action.ok_or((input.len(), "command.unknown.command"));
+            return node
+                .action
+                .map(|action| (action, ""))
+                .ok_or((input.len(), "command.unknown.command"));
         }
         if tail.is_empty() || node.children.is_empty() {
             return Err((start + word.len(), "command.unknown.argument"));
@@ -232,22 +266,37 @@ pub struct Commands {
     seed: i64,
     max_players: u32,
     access: Mutex<AccessLists>,
+    profiles: Profiles,
+    spawn: [f64; 3],
 }
 
 pub enum Outcome {
     Help,
     Stop,
-    NotWhitelisted { component: Nbt },
-    Feedback { text: String, component: Nbt },
-    Syntax { cursor: usize, reason: &'static str },
+    Feedback {
+        replies: Vec<(String, Nbt)>,
+        disconnect: bool,
+    },
+    Syntax {
+        cursor: usize,
+        reason: &'static str,
+    },
 }
 
 impl Commands {
-    pub fn new(seed: i64, max_players: u32, access: AccessLists) -> Self {
+    pub fn new(
+        seed: i64,
+        max_players: u32,
+        access: AccessLists,
+        profiles: Profiles,
+        spawn: [f64; 3],
+    ) -> Self {
         Self {
             seed,
             max_players,
             access: Mutex::new(access),
+            profiles,
+            spawn,
         }
     }
 
@@ -257,8 +306,68 @@ impl Commands {
             .unwrap_or_else(|error| error.into_inner())
     }
 
+    pub fn record_profile(&self, uuid: u128, name: String) {
+        self.profiles.record(Profile { uuid, name });
+    }
+
+    pub fn complete(&self, logic: &Handle, input: &str, source: Source) -> (usize, Vec<String>) {
+        let (start, children) = completion_nodes(input, source);
+        let prefix = input[start..].to_lowercase();
+        let mut matches = Vec::new();
+        for node in children.iter().filter(|node| node.available(source)) {
+            match (node.word, node.action) {
+                (Word::Literal(name), _) => matches.push(name.into()),
+                (Word::Profiles, Some(Action::ChangeWhitelist(true))) => {
+                    if let Ok(players) = logic.players() {
+                        let access = self.access();
+                        matches.extend(players.into_iter().filter_map(|(uuid, name)| {
+                            (!access.is_whitelisted(uuid)).then_some(name)
+                        }));
+                    }
+                }
+                (Word::Profiles, Some(Action::ChangeWhitelist(false))) => {
+                    matches.extend(
+                        self.access()
+                            .whitelist_names()
+                            .into_iter()
+                            .map(str::to_owned),
+                    );
+                }
+                (Word::Profiles, _) => unreachable!("a profile argument executes"),
+            }
+        }
+        matches.retain(|name| name.to_lowercase().starts_with(&prefix));
+        matches.sort_by_cached_key(|name| name.to_lowercase());
+        matches.dedup();
+        (start, matches)
+    }
+
+    pub fn suggestions(
+        &self,
+        logic: &Handle,
+        request: serverbound::CommandSuggestionsRequest,
+        source: Source,
+    ) -> Option<clientbound::CommandSuggestionsResponse> {
+        let (start, matches) = self.complete(logic, &request.text, source);
+        if matches.is_empty() {
+            return None;
+        }
+        Some(clientbound::CommandSuggestionsResponse {
+            id: request.id,
+            start: request.text[..start].encode_utf16().count() as i32,
+            length: request.text[start..].encode_utf16().count() as i32,
+            suggestions: matches
+                .into_iter()
+                .map(|text| CommandSuggestion {
+                    text,
+                    tooltip: None,
+                })
+                .collect(),
+        })
+    }
+
     pub fn run(&self, logic: &Handle, input: &str, source: Source) -> io::Result<Outcome> {
-        let action = match parse(input, source) {
+        let (action, argument) = match parse(input, source) {
             Ok(action) => action,
             Err((cursor, reason)) => return Ok(Outcome::Syntax { cursor, reason }),
         };
@@ -270,22 +379,26 @@ impl Commands {
                 let names = access.whitelist_names();
                 let count = names.len();
                 if names.is_empty() {
-                    Outcome::Feedback {
-                        text: "There are no whitelisted players".into(),
-                        component: translate("commands.whitelist.none", vec![]),
-                    }
+                    feedback(
+                        "There are no whitelisted players".into(),
+                        translate("commands.whitelist.none", vec![]),
+                    )
                 } else {
                     let names = names.join(", ");
-                    Outcome::Feedback {
-                        text: format!("There are {count} whitelisted player(s): {names}"),
-                        component: translate(
+                    feedback(
+                        format!("There are {count} whitelisted player(s): {names}"),
+                        translate(
                             "commands.whitelist.list",
                             vec![(count as i32).into(), names.into()],
                         ),
-                    }
+                    )
                 }
             }
             Action::SetWhitelist(enabled) => self.set_whitelist(logic, enabled, source)?,
+            Action::ChangeWhitelist(add) => {
+                self.change_whitelist(logic, source, argument, add, input.len() - argument.len())?
+            }
+            Action::ReloadWhitelist => self.reload_whitelist(logic, source)?,
             Action::Seed => {
                 let seed = self.seed.to_string();
                 let styled = Compound::from_iter([
@@ -309,13 +422,13 @@ impl Commands {
                     ),
                     ("insertion", seed.as_str().into()),
                 ]);
-                Outcome::Feedback {
-                    text: format!("Seed: [{seed}]"),
-                    component: translate(
+                feedback(
+                    format!("Seed: [{seed}]"),
+                    translate(
                         "commands.seed.success",
                         vec![translate("chat.square_brackets", vec![styled.into()])],
                     ),
-                }
+                )
             }
             Action::List | Action::ListUuids => {
                 let players = logic.players().map_err(io::Error::other)?;
@@ -342,12 +455,12 @@ impl Commands {
                         player_name(uuid, name)
                     }
                 });
-                Outcome::Feedback {
-                    text: format!(
+                feedback(
+                    format!(
                         "There are {count} of a max of {} players online: {names}",
                         self.max_players
                     ),
-                    component: translate(
+                    translate(
                         "commands.list.players",
                         vec![
                             count.into(),
@@ -355,7 +468,7 @@ impl Commands {
                             join_names(shown),
                         ],
                     ),
-                }
+                )
             }
         })
     }
@@ -391,22 +504,202 @@ impl Commands {
                 ));
             }
         }
-        let component = translate(key, vec![]);
-        if access.whitelist_enforced() {
-            let allowed: HashSet<_> = access.whitelisted_players().collect();
-            let kick_source =
-                matches!(source, Source::Player { uuid, .. } if !allowed.contains(&uuid));
-            logic
-                .disconnect_players_except(allowed, NOT_WHITELISTED, NOT_WHITELISTED_TEXT)
-                .map_err(io::Error::other)?;
-            if kick_source {
-                return Ok(Outcome::NotWhitelisted { component });
+        let disconnect = Self::enforce_whitelist(&access, logic, source)?;
+        Ok(Outcome::Feedback {
+            replies: vec![(
+                format!("Whitelist is now turned {state}"),
+                translate(key, vec![]),
+            )],
+            disconnect,
+        })
+    }
+
+    fn change_whitelist(
+        &self,
+        logic: &Handle,
+        source: Source,
+        target: &str,
+        add: bool,
+        cursor: usize,
+    ) -> io::Result<Outcome> {
+        let profiles = if let Some(selector) = target.strip_prefix('@') {
+            match self.select_players(logic, source, selector)? {
+                Ok(profiles) if profiles.is_empty() => {
+                    return Ok(failure(
+                        "No player was found".into(),
+                        "argument.entity.notfound.player",
+                    ));
+                }
+                Ok(profiles) => profiles,
+                Err(reason) => return Ok(Outcome::Syntax { cursor, reason }),
+            }
+        } else if let Some(profile) = self.profiles.resolve(target) {
+            vec![profile]
+        } else {
+            return Ok(failure(
+                "That player does not exist".into(),
+                "argument.player.unknown",
+            ));
+        };
+        let mut access = self.access();
+        let changed = match access.change_whitelist(profiles, add) {
+            Ok(changed) => changed,
+            Err(error) => {
+                log::warn!("Failed to save the whitelist: {error}");
+                return Ok(failure(
+                    "Could not save the whitelist".into(),
+                    "command.failed",
+                ));
+            }
+        };
+        let (key, empty, empty_key) = if add {
+            (
+                "commands.whitelist.add.success",
+                "Player is already whitelisted",
+                "commands.whitelist.add.failed",
+            )
+        } else {
+            (
+                "commands.whitelist.remove.success",
+                "Player is not whitelisted",
+                "commands.whitelist.remove.failed",
+            )
+        };
+        if changed.is_empty() {
+            return Ok(failure(empty.into(), empty_key));
+        }
+        let replies = changed
+            .into_iter()
+            .map(|Profile { name, .. }| {
+                let text = if add {
+                    format!("Added {name} to the whitelist")
+                } else {
+                    format!("Removed {name} from the whitelist")
+                };
+                let component = Compound::from_iter([
+                    ("translate", Nbt::from(key)),
+                    ("with", List::String(vec![name]).into()),
+                ]);
+                (text, component.into())
+            })
+            .collect();
+        let disconnect = !add && Self::enforce_whitelist(&access, logic, source)?;
+        Ok(Outcome::Feedback {
+            replies,
+            disconnect,
+        })
+    }
+
+    fn select_players(
+        &self,
+        logic: &Handle,
+        source: Source,
+        selector: &str,
+    ) -> io::Result<Result<Vec<Profile>, &'static str>> {
+        let kind = match selector.as_bytes().first().copied() {
+            Some(kind @ (b'a' | b'p' | b'r' | b's' | b'e' | b'n')) => kind,
+            Some(_) => return Ok(Err("argument.entity.selector.unknown")),
+            None => return Ok(Err("argument.entity.selector.missing")),
+        };
+        let filters = &selector[1..];
+        let mut player_type = false;
+        let mut name_filter = None;
+        if !filters.is_empty() {
+            let Some(filters) = filters
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+            else {
+                return Ok(Err("command.unknown.argument"));
+            };
+            for filter in filters.split(',').filter(|filter| !filter.is_empty()) {
+                if matches!(filter, "type=player" | "type=minecraft:player") && !player_type {
+                    player_type = true;
+                } else if let Some(name) = filter.strip_prefix("name=")
+                    && name_filter.is_none()
+                {
+                    name_filter = Some(name);
+                } else {
+                    return Ok(Err("command.unknown.argument"));
+                }
             }
         }
+        if matches!(kind, b's' | b'e' | b'n') && !player_type {
+            return Ok(Err("argument.player.entities"));
+        }
+
+        let mut players = logic.player_list().map_err(io::Error::other)?;
+        let source_player = match source {
+            Source::Console => None,
+            Source::Player { uuid, .. } => players.iter().find(|p| p.uuid == uuid),
+        };
+        let origin = source_player.map_or(self.spawn, |p| p.position);
+        let sender = source_player.map(|p| p.uuid);
+        players.retain(|player| {
+            (kind != b's' || sender == Some(player.uuid))
+                && name_filter.is_none_or(|name| {
+                    name.strip_prefix('!')
+                        .map_or(player.name == name, |name| player.name != name)
+                })
+        });
+        match kind {
+            b'p' | b'n' => {
+                let distance = |position: [f64; 3]| {
+                    position
+                        .into_iter()
+                        .zip(origin)
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f64>()
+                };
+                players.sort_by(|a, b| distance(a.position).total_cmp(&distance(b.position)));
+                players.truncate(1);
+            }
+            b'r' if !players.is_empty() => {
+                let mut random = [0; 8];
+                getrandom::fill(&mut random).map_err(io::Error::other)?;
+                let index = (u64::from_ne_bytes(random) % players.len() as u64) as usize;
+                players.swap(0, index);
+                players.truncate(1);
+            }
+            _ => {}
+        }
+        Ok(Ok(players
+            .into_iter()
+            .map(|p| Profile {
+                uuid: p.uuid,
+                name: p.name,
+            })
+            .collect()))
+    }
+
+    fn reload_whitelist(&self, logic: &Handle, source: Source) -> io::Result<Outcome> {
+        let mut access = self.access();
+        if let Err(error) = access.reload_whitelist() {
+            log::warn!("Failed to load white-list: {error}");
+            return Ok(failure(
+                "Could not reload the whitelist".into(),
+                "command.failed",
+            ));
+        }
+        let disconnect = Self::enforce_whitelist(&access, logic, source)?;
         Ok(Outcome::Feedback {
-            text: format!("Whitelist is now turned {state}"),
-            component,
+            replies: vec![(
+                "Reloaded the whitelist".into(),
+                translate("commands.whitelist.reloaded", vec![]),
+            )],
+            disconnect,
         })
+    }
+
+    fn enforce_whitelist(access: &AccessLists, logic: &Handle, source: Source) -> io::Result<bool> {
+        if !access.whitelist_enforced() {
+            return Ok(false);
+        }
+        let allowed: HashSet<_> = access.whitelisted_players().collect();
+        let disconnect = matches!(source, Source::Player { uuid, .. } if !allowed.contains(&uuid));
+        logic
+            .disconnect_players_except(allowed, NOT_WHITELISTED, NOT_WHITELISTED_TEXT)
+            .map_err(io::Error::other)?;
+        Ok(disconnect)
     }
 
     /// Returns the feedback and whether to disconnect the sender for whitelist enforcement.
@@ -417,7 +710,16 @@ impl Commands {
         source: Source,
     ) -> io::Result<(Vec<clientbound::SystemChatMessage>, bool)> {
         let (components, not_whitelisted) = match self.run(logic, input, source)? {
-            Outcome::Feedback { component, .. } => (vec![component], false),
+            Outcome::Feedback {
+                replies,
+                disconnect,
+            } => (
+                replies
+                    .into_iter()
+                    .map(|(_, component)| component)
+                    .collect(),
+                disconnect,
+            ),
             Outcome::Syntax { cursor, reason } => (
                 vec![
                     command_failure(Compound::from_iter([("translate", reason)])),
@@ -425,7 +727,6 @@ impl Commands {
                 ],
                 false,
             ),
-            Outcome::NotWhitelisted { component } => (vec![component], true),
             Outcome::Help | Outcome::Stop => unreachable!("console-only commands were filtered"),
         };
         Ok((
@@ -514,9 +815,16 @@ fn command_failure(message: Compound) -> Nbt {
 }
 
 fn failure(text: String, key: &str) -> Outcome {
-    Outcome::Feedback {
+    feedback(
         text,
-        component: command_failure(Compound::from_iter([("translate", key)])),
+        command_failure(Compound::from_iter([("translate", key)])),
+    )
+}
+
+fn feedback(text: String, component: Nbt) -> Outcome {
+    Outcome::Feedback {
+        replies: vec![(text, component)],
+        disconnect: false,
     }
 }
 

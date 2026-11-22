@@ -87,7 +87,10 @@ fn interactive(server: &Server) {
             return;
         }
     };
-    editor.set_helper(Some(CommandHelper));
+    editor.set_helper(Some(CommandHelper {
+        commands: Arc::clone(&server.commands),
+        logic: server.logic.clone(),
+    }));
     if let Ok(printer) = editor.create_external_printer() {
         logging::set_printer(Box::new(printer));
     }
@@ -118,9 +121,12 @@ fn run(server: &Server, line: &str) {
                 info!("/{name}");
             }
         }
-        Ok(Outcome::Feedback { text, .. }) => info!("{text}"),
+        Ok(Outcome::Feedback { replies, .. }) => {
+            for (text, _) in replies {
+                info!("{text}");
+            }
+        }
         Ok(Outcome::Stop) => server.shutdown.stop(),
-        Ok(Outcome::NotWhitelisted { .. }) => unreachable!("the console is not a player"),
         Ok(Outcome::Syntax { reason, .. }) => {
             let message = if reason == "command.unknown.argument" {
                 "Incorrect argument for command"
@@ -135,7 +141,10 @@ fn run(server: &Server, line: &str) {
 }
 
 /// Completes command names.
-struct CommandHelper;
+struct CommandHelper {
+    commands: Arc<Commands>,
+    logic: harpas_engine::Handle,
+}
 
 impl Completer for CommandHelper {
     type Candidate = String;
@@ -146,13 +155,10 @@ impl Completer for CommandHelper {
         pos: usize,
         _: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        Ok(complete(&line[..pos]))
+        Ok(self
+            .commands
+            .complete(&self.logic, &line[..pos], Source::Console))
     }
-}
-
-/// The start of the word being completed and the commands that complete it.
-fn complete(typed: &str) -> (usize, Vec<String>) {
-    commands::complete(typed, Source::Console)
 }
 
 impl Hinter for CommandHelper {
@@ -171,6 +177,15 @@ mod tests {
 
     #[test]
     fn completes_command_names() {
+        let (logic, thread) = harpas_engine::start().unwrap();
+        let commands = Commands::new(
+            0,
+            20,
+            crate::access::AccessLists::none(),
+            crate::profiles::Profiles::in_memory(false),
+            [0.0; 3],
+        );
+        let complete = |input| commands.complete(&logic, input, Source::Console);
         assert_eq!(
             complete(""),
             (
@@ -192,5 +207,7 @@ mod tests {
             (11, vec!["off".into(), "on".into()])
         );
         assert_eq!(complete("x"), (0, Vec::new()));
+        drop(logic);
+        thread.join().unwrap().unwrap();
     }
 }

@@ -203,17 +203,26 @@ fn tree_nodes(tree: &CommandTree) -> Vec<(String, bool, bool)> {
     ) {
         for &id in &tree.nodes[parent as usize].children {
             let node = &tree.nodes[id as usize];
-            if let CommandNodeKind::Literal(name) = &node.kind
-                && match prefix {
-                    "" => matches!(name.as_str(), "list" | "seed" | "whitelist"),
-                    "whitelist " => matches!(name.as_str(), "list" | "on" | "off"),
-                    _ => true,
+            let name = match &node.kind {
+                CommandNodeKind::Literal(name)
+                    if !prefix.is_empty()
+                        || matches!(name.as_str(), "list" | "seed" | "whitelist") =>
+                {
+                    name.clone()
                 }
-            {
-                let path = format!("{prefix}{name}");
-                out.push((path.clone(), node.executable, node.allows_restricted));
-                supported(tree, id, &format!("{path} "), out);
-            }
+                CommandNodeKind::Argument {
+                    name,
+                    parser,
+                    properties,
+                    suggestions,
+                } => {
+                    format!("<{name} {parser} {properties:?} {suggestions:?}>")
+                }
+                _ => continue,
+            };
+            let path = format!("{prefix}{name}");
+            out.push((path.clone(), node.executable, node.allows_restricted));
+            supported(tree, id, &format!("{path} "), out);
         }
     }
     let mut nodes = Vec::new();
@@ -245,7 +254,7 @@ fn compare(port: u16, other: u16) {
         for text in ["/li", "/list u"]
             .into_iter()
             .chain(can_seed.then_some("/see"))
-            .chain(can_whitelist.then_some("/whitelist o"))
+            .chain(can_whitelist.then_some("/whitelist "))
         {
             let expected = vanilla.suggestions(text);
             let actual = harpas.suggestions(text);
@@ -270,6 +279,7 @@ fn compare(port: u16, other: u16) {
             ("seed", if can_seed { 1 } else { 2 }),
             ("whitelist list", if can_whitelist { 1 } else { 2 }),
             ("whitelist", 2),
+            ("whitelist add", 2),
             ("list unexpected", 2),
             ("list ", 2),
         ] {
@@ -289,7 +299,11 @@ fn compare(port: u16, other: u16) {
 fn assert_whitelist_file(dir: &Path, enabled: bool) {
     let properties = fs::read_to_string(dir.join("server.properties")).unwrap();
     let setting = format!("white-list={enabled}");
-    assert!(properties.lines().any(|line| line == setting));
+    assert!(
+        properties.lines().any(|line| line == setting),
+        "{} did not contain {setting}",
+        dir.display()
+    );
 }
 
 fn assert_login(port: u16, name: &str, allowed: bool) {
@@ -349,6 +363,67 @@ fn console_whitelist(server: &mut Server, dir: &Path, enabled: bool) {
     writeln!(server.child.stdin.as_mut().unwrap(), "whitelist {state}").unwrap();
     server.wait_for(&format!("Whitelist is now turned {state}"));
     assert_whitelist_file(dir, enabled);
+}
+
+struct Membership {
+    completions: Vec<CommandSuggestionsResponse>,
+    replies: Vec<SystemChatMessage>,
+    saved: Vec<String>,
+}
+
+fn exercise_membership(server: &mut Server, dir: &Path, port: u16) -> Membership {
+    let path = dir.join("whitelist.json");
+    let mut admin = Client::join(port, "Admin");
+    admin.tree();
+    let mut replies = admin.command("whitelist off", 1);
+    assert_whitelist_file(dir, false);
+    let mut first = Client::join(port, "MemberOne");
+    let mut second = Client::join(port, "MemberTwo");
+    for client in [&mut first, &mut second] {
+        client.tree();
+    }
+    let mut completions = vec![admin.suggestions("/whitelist add mem")];
+    replies.extend(admin.command("whitelist add memberone", 1));
+    replies.extend(admin.command("whitelist add MEMBERONE", 1));
+    completions.push(admin.suggestions("/whitelist add mem"));
+    completions.push(admin.suggestions("/whitelist remove mem"));
+    replies.extend(admin.command("whitelist remove membertwo", 1));
+    replies.extend(admin.command("whitelist remove memberone", 1));
+    first.command("list", 1); // The whitelist is off.
+    replies.extend(admin.command("whitelist add @a", 2));
+    let mut saved = vec![fs::read_to_string(&path).unwrap()];
+    replies.extend(admin.command("whitelist on", 1));
+    replies.extend(admin.command("whitelist remove memberone", 1));
+    first.whitelist_disconnect();
+    assert_login(port, "MemberOne", false);
+    assert_login(port, "Listed", true);
+    saved.push(fs::read_to_string(&path).unwrap());
+    // A reload applies a manual edit, including disconnecting the operator who ran it.
+    let edited = serde_json::to_vec(&[serde_json::json!({
+        "name": "MemberOne", "uuid": uuid("MemberOne")
+    })])
+    .unwrap();
+    fs::write(&path, &edited).unwrap();
+    replies.extend(admin.command("whitelist reload", 1));
+    admin.whitelist_disconnect();
+    second.whitelist_disconnect();
+    assert_login(port, "MemberOne", true);
+    assert_login(port, "MemberTwo", false);
+    assert_eq!(fs::read(path).unwrap(), edited);
+    // The console can resolve a player who only joined before the restart.
+    writeln!(
+        server.child.stdin.as_mut().unwrap(),
+        "whitelist add bUiLdEr"
+    )
+    .unwrap();
+    server.wait_for("Added Builder to the whitelist");
+    assert_login(port, "Builder", true);
+    saved.push(fs::read_to_string(dir.join("whitelist.json")).unwrap());
+    Membership {
+        completions,
+        replies,
+        saved,
+    }
 }
 
 fn stop(server: &mut Server) {
@@ -467,6 +542,11 @@ fn commands_match_vanilla() {
         exercise_whitelist(&vanilla, port, true),
         exercise_whitelist(&harpas, other, true),
     );
+    let expected = exercise_membership(&mut reference, &vanilla, port);
+    let actual = exercise_membership(&mut server, &harpas, other);
+    assert_eq!(actual.completions, expected.completions);
+    assert_eq!(actual.replies, expected.replies);
+    assert_eq!(actual.saved, expected.saved);
 }
 
 fn uuid(name: &str) -> String {

@@ -134,6 +134,15 @@ impl Handle {
 
     /// The UUIDs and names of the players in Play, in join order, as of the next packet phase.
     pub fn players(&self) -> Result<Vec<(u128, String)>, LogicStopped> {
+        Ok(self
+            .player_list()?
+            .into_iter()
+            .map(|player| (player.uuid, player.name))
+            .collect())
+    }
+
+    /// The players in Play and their positions, in join order, as of the next connection phase.
+    pub fn player_list(&self) -> Result<Vec<PlayerListEntry>, LogicStopped> {
         let (sender, receiver) = mpsc::channel();
         self.events
             .send(Event::ListPlayers(sender))
@@ -159,6 +168,16 @@ impl Handle {
             .send(Event::Shutdown(reason))
             .map_err(|_| LogicStopped)
     }
+}
+
+/// A connected player as seen by administrative commands.
+pub struct PlayerListEntry {
+    /// The authenticated or offline-mode UUID.
+    pub uuid: u128,
+    /// The player's login name.
+    pub name: String,
+    /// The position of the player's feet, in block coordinates.
+    pub position: [f64; 3],
 }
 
 /// A connection in Play; dropping it tells the logic thread that the connection has ended.
@@ -308,7 +327,7 @@ enum Event {
         input: player::Input,
     },
     Left(i32),
-    ListPlayers(Sender<Vec<(u128, String)>>),
+    ListPlayers(Sender<Vec<PlayerListEntry>>),
     DisconnectPlayersExcept {
         allowed: HashSet<u128>,
         key: &'static str,
@@ -596,7 +615,15 @@ impl TickWork for Game {
                         .players
                         .iter()
                         .filter(|p| !p.disconnecting)
-                        .map(|p| (p.player.profile.uuid, p.player.profile.name.clone()))
+                        .map(|p| PlayerListEntry {
+                            uuid: p.player.profile.uuid,
+                            name: p.player.profile.name.clone(),
+                            position: [
+                                p.player.position.x,
+                                p.player.position.y,
+                                p.player.position.z,
+                            ],
+                        })
                         .collect();
                     let _ = reply.send(players);
                 }

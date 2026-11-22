@@ -19,9 +19,10 @@ const MAX_DAMAGE: &str = "minecraft:max_damage";
 const UNBREAKABLE: &str = "minecraft:unbreakable";
 const FOOD: &str = "minecraft:food";
 const CONSUMABLE: &str = "minecraft:consumable";
+const USE_REMAINDER: &str = "minecraft:use_remainder";
 
-/// The default components of a food with no consumption effects or leftover item.
-#[derive(Debug, Clone, Copy)]
+/// The default components of a food with no consumption effects.
+#[derive(Debug, Clone)]
 pub struct FoodProperties {
     /// Food points restored by one item.
     pub nutrition: i32,
@@ -31,6 +32,8 @@ pub struct FoodProperties {
     pub can_always_eat: bool,
     /// Number of ticks use must be held.
     pub use_ticks: u32,
+    /// The default stack left after consumption, such as a bowl.
+    pub remainder: Option<ItemStack>,
 }
 
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
@@ -89,6 +92,7 @@ impl ItemCodec {
                     saturation: 2.4,
                     can_always_eat: false,
                     use_ticks: 32,
+                    remainder: None,
                 },
             )]),
         }
@@ -99,18 +103,24 @@ impl ItemCodec {
         DEFAULT.get_or_init(Self::default)
     }
 
-    /// Loads the defaults of basic foods generated locally from the owner's server jar, keyed by item ID.
+    /// Loads the supported food defaults generated locally from the owner's server jar, keyed by item ID.
     pub fn with_foods(mut self, foods: HashMap<u32, FoodProperties>) -> Self {
         self.foods = foods;
         self
     }
 
     pub(crate) fn food(&self, stack: &ItemStack) -> Option<FoodProperties> {
-        let food = *self.foods.get(&stack.item)?;
-        (!stack.is_empty()
-            && !self.component_removed(stack, FOOD)
-            && !self.component_removed(stack, CONSUMABLE))
-        .then_some(food)
+        if stack.is_empty()
+            || self.component_removed(stack, FOOD)
+            || self.component_removed(stack, CONSUMABLE)
+        {
+            return None;
+        }
+        let mut food = self.foods.get(&stack.item)?.clone();
+        if self.component_removed(stack, USE_REMAINDER) {
+            food.remainder = None;
+        }
+        Some(food)
     }
 
     /// Adds the enchantment registry in the same numeric order sent to clients during Configuration.

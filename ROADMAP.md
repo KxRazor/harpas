@@ -498,6 +498,9 @@ as shown by the parity report.
   - [x] Basic foods use the locally generated item defaults for nutrition, saturation and use duration. Bread,
         steak and dried kelp are compared with vanilla, including the inventory on reconnect
         (`food_and_natural_regeneration_match_vanilla`).
+  - [x] Mushroom stew, rabbit stew and beetroot soup return a bowl when eaten. Bowls from either hand,
+        cancelling use and the inventory on reconnect are compared with vanilla
+        (`food_and_natural_regeneration_match_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

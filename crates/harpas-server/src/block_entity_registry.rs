@@ -1,4 +1,4 @@
-//! Built-in registries and basic food defaults generated locally from the owner's verified Minecraft server jar.
+//! Built-in registries and food defaults generated locally from the owner's verified Minecraft server jar.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_core::item::items;
+use harpas_engine::inventory::ItemStack;
 use harpas_engine::item_data::FoodProperties;
 use serde_json::{Map, Value, json};
 
@@ -87,6 +88,14 @@ pub(crate) struct Builtin {
     pub(crate) foods: Option<HashMap<u32, FoodProperties>>,
 }
 
+impl Builtin {
+    pub(crate) fn has_food_remainders(&self) -> bool {
+        self.foods
+            .as_ref()
+            .is_some_and(|foods| foods.values().any(|food| food.remainder.is_some()))
+    }
+}
+
 /// The built-in registries of the data generator's report, each entry at its `protocol_id`.
 fn builtin_from_report(report: &Value) -> io::Result<HashMap<String, Vec<String>>> {
     let registries = report
@@ -153,13 +162,16 @@ fn food_reports(directory: &Path) -> io::Result<Map<String, Value>> {
             && consumable
                 .get("on_consume_effects")
                 .is_none_or(|effects| effects.as_array().is_some_and(Vec::is_empty))
-            && components.get("minecraft:use_remainder").is_none()
+            && components
+                .get("minecraft:suspicious_stew_effects")
+                .is_none()
             && components.get("minecraft:use_cooldown").is_none()
         {
-            foods.insert(
-                format!("minecraft:{name}"),
-                json!({"food": food, "consumable": consumable}),
-            );
+            let mut defaults = json!({"food": food, "consumable": consumable});
+            if let Some(remainder) = components.get("minecraft:use_remainder") {
+                defaults["use_remainder"] = remainder.clone();
+            }
+            foods.insert(format!("minecraft:{name}"), defaults);
         }
     }
     if !foods.contains_key("minecraft:apple") {
@@ -192,6 +204,7 @@ fn food_defaults(value: &Value) -> io::Result<HashMap<u32, FoodProperties>> {
                 .map_or(Some(1.6), Value::as_f64)
                 .ok_or_else(bad)? as f32;
             let ticks = seconds * 20.0;
+            let remainder = entry.get("use_remainder").map(food_remainder).transpose()?;
             if !saturation.is_finite()
                 || saturation < 0.0
                 || !(0.0..u32::MAX as f32).contains(&ticks)
@@ -205,10 +218,33 @@ fn food_defaults(value: &Value) -> io::Result<HashMap<u32, FoodProperties>> {
                     saturation,
                     can_always_eat,
                     use_ticks: ticks as u32,
+                    remainder,
                 },
             ))
         })
         .collect()
+}
+
+fn food_remainder(value: &Value) -> io::Result<ItemStack> {
+    let bad = || invalid("invalid default food remainder");
+    let item = value["id"]
+        .as_str()
+        .and_then(|name| items().id(name))
+        .filter(|&item| item != 0)
+        .ok_or_else(bad)?;
+    let max_count = i64::from(items().max_stack_size(item).ok_or_else(bad)?);
+    let count = value.get("count").map_or(Some(1), Value::as_i64);
+    let count = count
+        .filter(|count| (1..=max_count).contains(count))
+        .ok_or_else(bad)?;
+    if value.get("components").is_some() {
+        return Err(bad());
+    }
+    Ok(ItemStack {
+        item,
+        count: count as i32,
+        ..ItemStack::empty()
+    })
 }
 
 /// Returns None for an installation made without a local Java runtime.
@@ -390,6 +426,24 @@ mod tests {
         let loaded = load_builtin(&scratch.0).unwrap().unwrap();
         assert_eq!(loaded.registries["minecraft:fluid"], ["minecraft:empty"]);
         assert!(loaded.foods.is_none());
+        data["foods"] = json!({"minecraft:apple": {
+            "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {}
+        }});
+        fs::write(&builtin, data.to_string()).unwrap();
+        let loaded = load_builtin(&scratch.0).unwrap().unwrap();
+        assert!(!loaded.has_food_remainders());
+        assert_eq!(loaded.foods.unwrap().len(), 1);
+        data["foods"]["minecraft:mushroom_stew"] = json!({
+            "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {},
+            "use_remainder": {"id": "minecraft:bowl"}
+        });
+        fs::write(&builtin, data.to_string()).unwrap();
+        assert!(
+            load_builtin(&scratch.0)
+                .unwrap()
+                .unwrap()
+                .has_food_remainders()
+        );
         data["server_sha1"] = json!("other");
         fs::write(&builtin, data.to_string()).unwrap();
         assert!(load_builtin(&scratch.0).is_err());

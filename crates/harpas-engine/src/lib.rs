@@ -129,6 +129,11 @@ impl Handle {
 
     /// The names of the players in Play, in join order, as of the next packet phase.
     pub fn player_names(&self) -> Result<Vec<String>, LogicStopped> {
+        Ok(self.players()?.into_iter().map(|(_, name)| name).collect())
+    }
+
+    /// The UUIDs and names of the players in Play, in join order, as of the next packet phase.
+    pub fn players(&self) -> Result<Vec<(u128, String)>, LogicStopped> {
         let (sender, receiver) = mpsc::channel();
         self.events
             .send(Event::ListPlayers(sender))
@@ -291,7 +296,7 @@ enum Event {
         input: player::Input,
     },
     Left(i32),
-    ListPlayers(Sender<Vec<String>>),
+    ListPlayers(Sender<Vec<(u128, String)>>),
     Shutdown(&'static str),
     #[cfg(test)]
     Panic,
@@ -570,13 +575,13 @@ impl TickWork for Game {
                 }
                 Event::Left(entity_id) => self.leave(entity_id),
                 Event::ListPlayers(reply) => {
-                    let names = self
+                    let players = self
                         .players
                         .iter()
                         .filter(|p| !p.disconnecting)
-                        .map(|p| p.player.profile.name.clone())
+                        .map(|p| (p.player.profile.uuid, p.player.profile.name.clone()))
                         .collect();
-                    let _ = reply.send(names);
+                    let _ = reply.send(players);
                 }
                 #[cfg(test)]
                 Event::Panic => panic!("a test asked the logic thread to panic"),

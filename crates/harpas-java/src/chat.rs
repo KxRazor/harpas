@@ -239,8 +239,8 @@ impl ChatState {
         Ok(())
     }
 
-    /// Commands are not executed yet, but their acknowledgement and signature indices still affect
-    /// the next chat message. Their unverified arguments are discarded rather than used as input.
+    /// Signed command packets still affect the next chat message's acknowledgement and signature indices.
+    /// Their unverified arguments are discarded.
     pub(crate) fn ignored_command(
         &mut self,
         packet: serverbound::SignedChatCommand,
@@ -306,13 +306,7 @@ impl ChatState {
         let last_seen = self
             .acknowledge(packet.offset, packet.acknowledged, packet.checksum)
             .map_err(MessageError::Fatal)?;
-        // Vanilla's `isAllowedChatCharacter`: the section sign, the ASCII control characters and DEL are not
-        // allowed. The C1 control characters, U+0080 to U+009F, are.
-        if packet
-            .message
-            .chars()
-            .any(|c| c == '\u{a7}' || c < ' ' || c == '\u{7f}')
-        {
+        if !valid_chat_input(&packet.message) {
             return Err(MessageError::IllegalCharacters);
         }
         if !self.enabled {
@@ -407,6 +401,11 @@ impl ChatState {
             .ok_or("Chat index exhausted")?;
         Ok(Some(index))
     }
+}
+
+/// Vanilla permits every character except the section sign, ASCII control characters and DEL.
+pub(crate) fn valid_chat_input(text: &str) -> bool {
+    !text.chars().any(|c| c == '\u{a7}' || c.is_ascii_control())
 }
 
 fn signed_payload(

@@ -12,6 +12,8 @@ use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
 use std::sync::Arc;
 
+use crate::commands::{self, Commands, Source};
+
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
 const PLAYER_ENTITY_TYPE: i32 = 155;
 /// `minecraft:item` in minecraft-data's Java 26.1 entity type registry.
@@ -42,11 +44,29 @@ pub(crate) fn profile(player: &harpas_java::Player, mode: play::GameMode) -> Pro
     }
 }
 
-pub(crate) fn receive(connection: &mut Connection, session: &PlayerSession) -> io::Result<()> {
+pub(crate) fn receive(
+    connection: &mut Connection,
+    session: &PlayerSession,
+    logic: &harpas_engine::Handle,
+    commands: Commands,
+    source: Source,
+) -> io::Result<()> {
     use serverbound::Packet;
     for event in connection.take_play_events() {
         let input = match event {
             PlayEvent::Packet(packet) => match *packet {
+                Packet::ChatCommand(packet) => {
+                    for reply in commands.player_reply(logic, &packet.command, source)? {
+                        connection.send_play_packet(reply.into());
+                    }
+                    continue;
+                }
+                Packet::CommandSuggestionsRequest(request) => {
+                    if let Some(reply) = commands::suggestions(request, source) {
+                        connection.send_play_packet(reply.into());
+                    }
+                    continue;
+                }
                 Packet::ConfirmTeleportation(p) => Input::ConfirmTeleport(p.teleport_id),
                 Packet::ChunkBatchReceived(p) => Input::ChunkBatchReceived(p.chunks_per_tick),
                 Packet::SetPlayerPosition(p) => Input::Movement(Movement {

@@ -87,6 +87,14 @@ impl AccessLists {
         lists
     }
 
+    /// The command permission level of the authenticated player.
+    pub fn operator_level(&self, uuid: u128) -> i32 {
+        self.ops
+            .entries
+            .get(&uuid_key(uuid))
+            .map_or(0, |(_, op)| op.level)
+    }
+
     /// Checks a player who logs in from `ip`, in vanilla's order: player bans, the whitelist (which operators
     /// skip), IP bans. The player limit, checked last, is the connection's.
     pub fn check(&mut self, uuid: u128, ip: IpAddr, now: Timestamp) -> Verdict {

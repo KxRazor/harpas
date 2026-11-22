@@ -9,17 +9,17 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
 
 use harpas_java::{FrameReader, write_frame};
 use harpas_protocol_java::v26_1::{PROTOCOL, handshaking, login};
+
+mod reference;
+use reference::{Folder, Reference, Server};
 
 const BANS: &str = r#"[
   {"uuid":"375aeb75-17e7-3800-bc1e-0e47a704624b","name":"Banned","created":"2026-01-01 10:00:00 +0000","source":"Server","expires":"2099-12-31 23:59:59 +0000","reason":"Griefing <&>"},
@@ -60,102 +60,6 @@ const FILES: [&str; 4] = [
     "ops.json",
     "whitelist.json",
 ];
-
-struct Folder(PathBuf);
-
-impl Folder {
-    fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "harpas-access-parity-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for Folder {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A server whose output can be awaited.
-struct Server {
-    child: Child,
-    lines: Receiver<String>,
-    log: String,
-}
-
-impl Server {
-    fn start(program: &OsStr, args: &[&OsStr], dir: &Path) -> Self {
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("HARPAS_") {
-                command.env_remove(name);
-            }
-        }
-        let mut child = command.spawn().unwrap();
-        let (sender, lines) = mpsc::channel();
-        let streams: [Option<Box<dyn Read + Send>>; 2] = [
-            child.stdout.take().map(|s| Box::new(s) as _),
-            child.stderr.take().map(|s| Box::new(s) as _),
-        ];
-        for stream in streams.into_iter().flatten() {
-            let sender = sender.clone();
-            thread::spawn(move || {
-                for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                    if sender.send(line).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        Self {
-            child,
-            lines,
-            log: String::new(),
-        }
-    }
-
-    fn wait_for(&mut self, text: &str) {
-        let deadline = Instant::now() + Duration::from_secs(180);
-        loop {
-            if let Ok(line) = self.lines.recv_timeout(Duration::from_millis(200)) {
-                self.log.push_str(&line);
-                self.log.push('\n');
-                if line.contains(text) {
-                    return;
-                }
-            }
-            assert!(
-                self.child.try_wait().unwrap().is_none(),
-                "server exited before {text}: {}",
-                self.log
-            );
-            assert!(
-                Instant::now() < deadline,
-                "server did not reach {text}: {}",
-                self.log
-            );
-        }
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
 
 fn send(client: &mut TcpStream, encode: impl FnOnce(&mut Vec<u8>)) {
     let mut frame = Vec::new();
@@ -207,7 +111,7 @@ fn log_in(port: u16, name: &str) -> String {
 /// Starts both servers with the same lists, logs every player in to each, and returns what each answered and
 /// the list files each wrote, vanilla's first.
 fn run(jar: &Path, eula: &str, ip_bans: bool) -> [(Vec<String>, Vec<String>); 2] {
-    let folder = Folder::new();
+    let folder = Folder::new("access");
     let vanilla = folder.0.join("vanilla");
     let harpas = folder.0.join("harpas");
     let first = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -276,16 +180,7 @@ fn run(jar: &Path, eula: &str, ip_bans: bool) -> [(Vec<String>, Vec<String>); 2]
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn logins_and_list_files_match_vanilla() {
-    let reference = PathBuf::from(
-        std::env::var_os("HARPAS_VANILLA_SERVER_DIR")
-            .expect("HARPAS_VANILLA_SERVER_DIR is not set (docs/parity.md#locally)"),
-    );
-    let eula = fs::read_to_string(reference.join("eula.txt")).expect("reference EULA");
-    assert!(
-        eula.lines().any(|line| line.trim() == "eula=true"),
-        "the reference server's EULA must already be accepted"
-    );
-    let jar = fs::canonicalize(reference.join("server.jar")).expect("reference server.jar");
+    let Reference { jar, eula } = Reference::required();
 
     for ip_bans in [false, true] {
         let [(expected, expected_files), (actual, actual_files)] = run(&jar, &eula, ip_bans);

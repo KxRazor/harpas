@@ -22,10 +22,11 @@ fn java_26_1_matches_minecraft_data() {
     let report = mcdata::check(&java_schema(), &minecraft_data());
     assert_eq!(report.errors, Vec::<String>::new());
     assert_eq!(report.missing_states, Vec::<String>::new());
-    assert_eq!(report.pending.len(), 15);
+    assert_eq!(report.pending.len(), 14);
     assert_eq!(
         report.unchecked,
         [
+            "play clientbound Commands",
             "play clientbound SetContainerContent",
             "play clientbound SetContainerSlot",
             "play clientbound PlayerInfoUpdate",
@@ -64,7 +65,7 @@ fn play_differences_are_reported() {
         .errors
         .iter()
         .partition(|error| error.ends_with("is not in the schema"));
-    assert_eq!(missing.len(), 15);
+    assert_eq!(missing.len(), 14);
     assert!(report.pending.is_empty());
     let packets: Vec<_> = wire
         .iter()

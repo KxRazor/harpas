@@ -3,6 +3,9 @@
 use crate::codec::{self, Decode, DecodeError, Encode, Nbt};
 use crate::v26_1::play::{ProfileProperty, PublicKeyData};
 
+mod commands;
+pub use commands::{CommandNode, CommandNodeKind, CommandTree};
+
 /// The body of a Player Info Update: which actions it carries, and one entry per player.
 ///
 /// The actions are a bit set, and every entry has the fields of the actions that are set, in the order of

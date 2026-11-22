@@ -12,6 +12,7 @@
 mod access;
 mod block_entity_registry;
 mod chunks;
+mod commands;
 mod console;
 mod eula;
 mod harpas_toml;
@@ -247,13 +248,18 @@ fn run() -> io::Result<()> {
     {
         server_info.spawn_position = spawn;
     }
-    if let Some((seed, _)) = harpas_anvil::read_world_seed(&world_dir)? {
+    let seed = harpas_anvil::read_world_seed(&world_dir)?.map(|(seed, _)| seed);
+    if let Some(seed) = seed {
         server_info.hashed_seed = harpas_worldgen::BiomeManager::obfuscate_seed(seed);
     }
     if generator.is_some() {
         server_info.is_flat = false;
     }
     let environment = Arc::new(ConnectionEnvironment {
+        commands: commands::Commands {
+            seed: seed.unwrap_or_default(),
+            max_players: server_info.max_players,
+        },
         info: server_info,
         chunks: chunks::Cache::new(block_entities),
         access: Mutex::new(access),
@@ -292,7 +298,7 @@ fn run() -> io::Result<()> {
     }
     console::start(console::Server {
         logic: logic.clone(),
-        max_players: info.max_players,
+        commands: environment.commands,
         shutdown: Arc::clone(&shutdown),
     })?;
     info!(
@@ -503,6 +509,7 @@ fn load_icon(path: &Path) -> Option<String> {
 struct ConnectionEnvironment {
     info: ServerInfo,
     chunks: chunks::Cache,
+    commands: commands::Commands,
     /// Bans, the whitelist and operators, checked when players log in.
     access: Mutex<AccessLists>,
 }
@@ -616,6 +623,7 @@ fn play(
     let mut buf = vec![0; 16 * 1024];
     let mut last_read = Instant::now();
     let mut player_session = None;
+    let mut command_source = commands::Source::Player(0);
     let mut uuid_logged = false;
     while !connection.is_closed() {
         if permit.as_ref().is_some_and(|p| p.evicted()) {
@@ -711,6 +719,14 @@ fn play(
                 .map_err(io::Error::other)?;
             info!("{} joined the game", player.name);
             departure.name = Some(player.name.clone());
+            command_source = commands::Source::Player(
+                environment
+                    .access
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .operator_level(player.uuid),
+            );
+            connection.send_play_packet(commands::tree(command_source).into());
             if let Some(permit) = permit.as_deref_mut() {
                 permit.entered_play();
             }
@@ -724,7 +740,13 @@ fn play(
                     .kick
                     .or(player::send(&mut connection, session, &environment.chunks));
             if !connection.is_closed() {
-                player::receive(&mut connection, session)?;
+                player::receive(
+                    &mut connection,
+                    session,
+                    logic,
+                    environment.commands,
+                    command_source,
+                )?;
             }
             stream.write_all(&connection.take_output())?;
         }
@@ -858,6 +880,10 @@ mod tests {
         ConnectionEnvironment {
             info: info.clone(),
             chunks: chunks::Cache::new(block_entity_registry::Registry::default()),
+            commands: commands::Commands {
+                seed: 0,
+                max_players: info.max_players,
+            },
             access: Mutex::new(AccessLists::none()),
         }
     }
@@ -1301,16 +1327,23 @@ mod tests {
                 panic!("expected Play Login");
             };
             let mut chunks = Vec::new();
-            loop {
+            let mut received_batch = false;
+            let mut received_commands = false;
+            while !received_batch || !received_commands {
                 match play::clientbound::Packet::decode(&self.next_frame()).unwrap() {
                     play::clientbound::Packet::ChunkDataAndUpdateLight(chunk) => chunks.push(chunk),
                     play::clientbound::Packet::ChunkBatchFinished(_) => {
                         self.acknowledge_chunks();
-                        return (login.entity_id, chunks);
+                        received_batch = true;
+                    }
+                    play::clientbound::Packet::Commands(packet) => {
+                        assert_eq!(packet, commands::tree(commands::Source::Player(0)));
+                        received_commands = true;
                     }
                     _ => {}
                 }
             }
+            (login.entity_id, chunks)
         }
 
         /// The next Play packet, leaving out the player's inventory, which the logic thread sends as the player

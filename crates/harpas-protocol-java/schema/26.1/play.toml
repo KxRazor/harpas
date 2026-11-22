@@ -1,7 +1,7 @@
 # Play state: the game itself.
 #
-# Partial: every packet except 15 that carry item stacks and their data components, entity metadata,
-# particles, the command tree or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
+# Partial: every packet except 14 that carry item stacks and their data components, entity metadata,
+# particles or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
 # M4) and are pending; the inventory packets carry item stacks whose component values are kept as bytes. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
 # are 1/256 of a turn. Text components are network NBT.
 
@@ -167,6 +167,15 @@ fields = [
     { name = "start", type = "varint", doc = "Start of the text to replace." },
     { name = "length", type = "varint", doc = "Length of the text to replace." },
     { name = "suggestions", type = "array(CommandSuggestion)" },
+]
+
+[[clientbound]]
+id = 0x10
+name = "Commands"
+mcdata = "declare_commands"
+doc = "The Brigadier command tree visible to the player."
+fields = [
+    { name = "tree", type = "CommandTree" },
 ]
 
 [[clientbound]]
@@ -2236,6 +2245,9 @@ reason = "Each entry's value has the wire type its serializer ID names, and the 
 
 [externs.PlayerInfoUpdates]
 reason = "The actions are a bit set, and each entry has the fields of the actions that are set."
+
+[externs.CommandTree]
+reason = "Each node's flags and parser determine which fields follow, and links refer to nodes by index."
 
 [enums.Animation]
 doc = "An entity animation."

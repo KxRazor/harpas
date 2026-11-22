@@ -9,7 +9,9 @@ use harpas_protocol_java::codec::{self, DecodeError, Nbt};
 use harpas_protocol_java::v26_1::{self, configuration, handshaking, login, play, status};
 use md5::{Digest, Md5};
 
-use crate::chat::{ChatAuthority, ChatEvent, ChatState, MessageError, VALIDATION_FAILED};
+use crate::chat::{
+    ChatAuthority, ChatEvent, ChatState, MessageError, VALIDATION_FAILED, valid_chat_input,
+};
 use crate::compression::{Compression, CompressionError};
 use crate::crypto::{Encryption, ServerKey, ct_equal, server_hash};
 use crate::frame::{FrameError, FrameReader, write_frame};
@@ -1208,10 +1210,13 @@ impl Connection {
             }
             Packet::SignedChatCommand(command) => match self.chat.ignored_command(command) {
                 Err(VALIDATION_FAILED) => self.disconnect_play_translated(VALIDATION_FAILED),
-                // Commands are not run yet, and vanilla's answers to their other faults are not known.
+                // Execution from signed command packets is still pending.
                 Err(reason) => self.disconnect_play(reason),
                 Ok(()) => {}
             },
+            Packet::ChatCommand(ref command) if !valid_chat_input(&command.command) => {
+                self.disconnect_play_translated("multiplayer.disconnect.illegal_characters");
+            }
             Packet::ClientInformation(ref settings) => {
                 self.chat
                     .enabled(matches!(settings.chat_mode, play::ChatMode::Enabled));
@@ -1223,6 +1228,8 @@ impl Connection {
             | Packet::SetPlayerPositionAndRotation(_)
             | Packet::SetPlayerRotation(_)
             | Packet::SetPlayerMovementFlags(_)
+            | Packet::ChatCommand(_)
+            | Packet::CommandSuggestionsRequest(_)
             | Packet::PlayerAbilities(_) => {
                 self.play_input.push(PlayEvent::Packet(Box::new(packet)))
             }

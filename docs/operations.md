@@ -96,6 +96,11 @@ With an IPv6 connection, banning by player name disconnects players at the addre
 IPv6 address, as in vanilla 26.1. Its login check uses the shortened key described above, so players can
 reconnect. The command argument only accepts an IPv4 literal for `pardon-ip`.
 
+The console and Java operators at level 3 or higher can use `op <targets>` and `deop <targets>` with a
+resolved name or a supported player selector. `op` grants the `op-permission-level` from `server.properties`.
+The commands save `ops.json` before changing permissions. Connected targets receive the new level and
+command tree during the same session. `deop` also applies whitelist enforcement when it is enabled.
+
 ---
 
 ## Server folder

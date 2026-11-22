@@ -46,6 +46,7 @@ pub struct AccessLists {
     /// `white-list` in `server.properties`.
     white_list: bool,
     enforce_whitelist: bool,
+    op_permission_level: i32,
     bans: StoredList<(Profile, Ban)>,
     ip_bans: StoredList<Ban>,
     ops: StoredList<(Profile, Operator)>,
@@ -65,6 +66,7 @@ impl AccessLists {
         Self {
             white_list,
             enforce_whitelist: false,
+            op_permission_level: 4,
             bans: StoredList::new(dir.join("banned-players.json")),
             ip_bans: StoredList::new(dir.join("banned-ips.json")),
             ops: StoredList::new(dir.join("ops.json")),
@@ -84,6 +86,7 @@ impl AccessLists {
             Timestamp::now(),
         );
         lists.enforce_whitelist = properties.parsed("enforce-whitelist", false);
+        lists.op_permission_level = properties.parsed("op-permission-level", 4i32).clamp(0, 4);
         lists
     }
 
@@ -113,6 +116,52 @@ impl AccessLists {
             .entries
             .get(&uuid_key(uuid))
             .map_or(0, |(_, op)| op.level)
+    }
+
+    pub fn is_operator(&self, uuid: u128) -> bool {
+        self.ops.entries.contains_key(&uuid_key(uuid))
+    }
+
+    pub fn operator_names(&self) -> impl Iterator<Item = &str> {
+        self.ops
+            .entries
+            .values()
+            .map(|(profile, _)| profile.name.as_str())
+    }
+
+    /// Saves the new operator list before granting or revoking permissions.
+    pub fn change_operators(
+        &mut self,
+        profiles: Vec<Profile>,
+        grant: bool,
+    ) -> io::Result<Vec<Profile>> {
+        let mut updated = self.ops.clone();
+        let mut changed = Vec::new();
+        for profile in profiles {
+            let key = uuid_key(profile.uuid);
+            if grant {
+                if !updated.entries.contains_key(&key) {
+                    updated.insert(
+                        key,
+                        (
+                            profile.clone(),
+                            Operator {
+                                level: self.op_permission_level,
+                                bypasses_player_limit: false,
+                            },
+                        ),
+                    );
+                    changed.push(profile);
+                }
+            } else if updated.entries.shift_remove(&key).is_some() {
+                changed.push(profile);
+            }
+        }
+        if !changed.is_empty() {
+            updated.write(&self.zone)?;
+            self.ops = updated;
+        }
+        Ok(changed)
     }
 
     /// Persists a whitelist change and reports whether the setting changed.
@@ -1165,6 +1214,55 @@ mod tests {
         );
         assert!(!reopened.is_banned(LISTED));
         assert_eq!(fs::read_to_string(path).unwrap(), "[]");
+    }
+
+    #[test]
+    fn operator_changes_are_published_only_after_saving() {
+        let folder = Folder::new("operator-commands");
+        let player = Profile {
+            uuid: LISTED,
+            name: "Listed".into(),
+        };
+        let properties = Properties::parse("white-list=true\nop-permission-level=2\n");
+        let mut lists = AccessLists::load(&folder.0, &properties);
+        let blocked = folder.0.join("ops.json.tmp");
+        fs::create_dir(&blocked).unwrap();
+        assert!(lists.change_operators(vec![player.clone()], true).is_err());
+        assert!(!lists.allows_whitelist(LISTED));
+        assert_eq!(fs::read_to_string(folder.0.join("ops.json")).unwrap(), "[]");
+        fs::remove_dir(&blocked).unwrap();
+
+        assert_eq!(
+            lists
+                .change_operators(vec![player.clone(), player.clone()], true)
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&player)
+        );
+        assert_eq!(lists.operator_level(LISTED), 2);
+        assert_eq!(
+            lists.check(LISTED, "127.0.0.1".parse().unwrap(), now()),
+            Verdict::Allow {
+                bypasses_player_limit: false
+            }
+        );
+        let mut reloaded = AccessLists::load(&folder.0, &properties);
+        assert_eq!(reloaded.operator_level(LISTED), 2);
+        fs::create_dir(&blocked).unwrap();
+        assert!(
+            reloaded
+                .change_operators(vec![player.clone()], false)
+                .is_err()
+        );
+        assert!(reloaded.is_operator(LISTED));
+        fs::remove_dir(&blocked).unwrap();
+        assert_eq!(
+            reloaded
+                .change_operators(vec![player.clone()], false)
+                .unwrap(),
+            [player]
+        );
+        assert!(!AccessLists::load(&folder.0, &properties).is_operator(LISTED));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, MutexGuard};
 
 use harpas_core::nbt::{Compound, List, Nbt};
@@ -41,6 +42,7 @@ enum Action {
     BanIp,
     PardonIp,
     BanList(BanList),
+    ChangeOperator(bool),
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +68,8 @@ struct Node {
     action: Option<Action>,
     children: &'static [Node],
 }
+
+const OP_COMMAND_LEVEL: i32 = 3;
 
 const ROOTS: &[Node] = &[
     Node {
@@ -129,6 +133,13 @@ const ROOTS: &[Node] = &[
         ],
     },
     Node {
+        word: Word::Literal("deop"),
+        level: Some(OP_COMMAND_LEVEL),
+        allows_restricted: true,
+        action: None,
+        children: &[operator_target(false)],
+    },
+    Node {
         word: Word::Literal("help"),
         level: None,
         allows_restricted: false,
@@ -147,6 +158,13 @@ const ROOTS: &[Node] = &[
             action: Some(Action::ListUuids),
             children: &[],
         }],
+    },
+    Node {
+        word: Word::Literal("op"),
+        level: Some(OP_COMMAND_LEVEL),
+        allows_restricted: true,
+        action: None,
+        children: &[operator_target(true)],
     },
     Node {
         word: Word::Literal("pardon"),
@@ -227,6 +245,16 @@ const ROOTS: &[Node] = &[
         ],
     },
 ];
+
+const fn operator_target(grant: bool) -> Node {
+    Node {
+        word: Word::Profiles,
+        level: Some(OP_COMMAND_LEVEL),
+        allows_restricted: false,
+        action: Some(Action::ChangeOperator(grant)),
+        children: &[],
+    }
+}
 
 const fn whitelist_change(literal: &'static str, add: bool) -> Node {
     const fn command_child(add: bool) -> Node {
@@ -403,15 +431,32 @@ pub struct Commands {
     seed: i64,
     max_players: u32,
     access: Mutex<AccessLists>,
-    peers: Mutex<HashMap<u128, (i32, IpAddr)>>,
+    peers: Mutex<HashMap<u128, Peer>>,
     profiles: Profiles,
     spawn: [f64; 3],
+}
+
+struct Peer {
+    entity_id: i32,
+    ip: IpAddr,
+    permissions: Sender<i32>,
 }
 
 pub struct ConnectedPeer<'a> {
     commands: &'a Commands,
     uuid: u128,
     entity_id: i32,
+    permissions: Receiver<i32>,
+}
+
+impl ConnectedPeer<'_> {
+    pub fn uuid(&self) -> u128 {
+        self.uuid
+    }
+
+    pub fn permission_updates(&self) -> impl Iterator<Item = i32> + '_ {
+        self.permissions.try_iter()
+    }
 }
 
 impl Drop for ConnectedPeer<'_> {
@@ -419,7 +464,7 @@ impl Drop for ConnectedPeer<'_> {
         let mut peers = self.commands.peers();
         if peers
             .get(&self.uuid)
-            .is_some_and(|(id, _)| *id == self.entity_id)
+            .is_some_and(|peer| peer.entity_id == self.entity_id)
         {
             peers.remove(&self.uuid);
         }
@@ -469,17 +514,33 @@ impl Commands {
         self.profiles.record(Profile { uuid, name });
     }
 
-    fn peers(&self) -> MutexGuard<'_, HashMap<u128, (i32, IpAddr)>> {
+    fn peers(&self) -> MutexGuard<'_, HashMap<u128, Peer>> {
         self.peers.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     /// Registers the peer in the same access-list critical section as the engine join.
     pub fn track_peer(&self, uuid: u128, entity_id: i32, ip: IpAddr) -> ConnectedPeer<'_> {
-        self.peers().insert(uuid, (entity_id, ip.to_canonical()));
+        let (sender, permissions) = mpsc::channel();
+        self.peers().insert(
+            uuid,
+            Peer {
+                entity_id,
+                ip: ip.to_canonical(),
+                permissions: sender,
+            },
+        );
         ConnectedPeer {
             commands: self,
             uuid,
             entity_id,
+            permissions,
+        }
+    }
+
+    pub fn player_source(&self, uuid: u128) -> Source {
+        Source::Player {
+            uuid,
+            level: self.access().operator_level(uuid),
         }
     }
 
@@ -490,12 +551,18 @@ impl Commands {
         for node in children.iter().filter(|node| node.available(source)) {
             match (node.word, node.action) {
                 (Word::Literal(name), _) => matches.push(name.into()),
-                (Word::Profiles, Some(Action::ChangeWhitelist(true) | Action::Ban)) => {
+                (
+                    Word::Profiles,
+                    Some(
+                        Action::ChangeWhitelist(true) | Action::Ban | Action::ChangeOperator(true),
+                    ),
+                ) => {
                     if let Ok(players) = logic.players() {
                         let access = self.access();
                         matches.extend(players.into_iter().filter_map(|(uuid, name)| {
                             let already_listed = match node.action {
                                 Some(Action::Ban) => access.is_banned(uuid),
+                                Some(Action::ChangeOperator(true)) => access.is_operator(uuid),
                                 _ => access.is_whitelisted(uuid),
                             };
                             (!already_listed).then_some(name)
@@ -512,6 +579,9 @@ impl Commands {
                 }
                 (Word::Profiles, Some(Action::Pardon)) => {
                     matches.extend(self.access().banned_names().map(str::to_owned));
+                }
+                (Word::Profiles, Some(Action::ChangeOperator(false))) => {
+                    matches.extend(self.access().operator_names().map(str::to_owned));
                 }
                 (Word::Ip, Some(Action::PardonIp)) => {
                     matches.extend(self.access().banned_ips().map(str::to_owned));
@@ -536,7 +606,7 @@ impl Commands {
         if matches.is_empty() {
             let command = request.text.strip_prefix('/').unwrap_or(&request.text);
             let (root, _) = command.split_once(' ')?;
-            if matches!(root, "ban-ip" | "pardon-ip" | "banlist")
+            if matches!(root, "ban-ip" | "pardon-ip" | "banlist" | "op" | "deop")
                 && find(ROOTS, root, source).is_some()
             {
                 return Some(clientbound::CommandSuggestionsResponse {
@@ -595,6 +665,14 @@ impl Commands {
                 self.change_whitelist(logic, source, argument, add, input.len() - argument.len())?
             }
             Action::ReloadWhitelist => self.reload_whitelist(logic, source)?,
+            Action::ChangeOperator(grant) => {
+                let cursor = input.len() - argument.len();
+                let profiles = match self.resolve_targets(logic, source, argument, cursor)? {
+                    Ok(profiles) => profiles,
+                    Err(outcome) => return Ok(outcome),
+                };
+                self.change_operators(logic, source, profiles, grant)?
+            }
             Action::BanList(list) => self.list_bans(list),
             Action::PardonIp => self.pardon_ip(argument),
             Action::BanIp => {
@@ -872,6 +950,79 @@ impl Commands {
         })
     }
 
+    fn change_operators(
+        &self,
+        logic: &Handle,
+        source: Source,
+        profiles: Vec<Profile>,
+        grant: bool,
+    ) -> io::Result<Outcome> {
+        let mut access = self.access();
+        // A profile lookup can overlap with another command revoking the sender's permissions.
+        if let Source::Player { uuid, .. } = source
+            && access.operator_level(uuid) < OP_COMMAND_LEVEL
+        {
+            return Ok(Outcome::Syntax {
+                cursor: 0,
+                reason: "command.unknown.command",
+            });
+        }
+        let changed = match access.change_operators(profiles, grant) {
+            Ok(changed) => changed,
+            Err(error) => {
+                log::warn!("Failed to save the operator list: {error}");
+                return Ok(failure(
+                    "Could not save the operator list".into(),
+                    "command.failed",
+                ));
+            }
+        };
+        if changed.is_empty() {
+            return Ok(if grant {
+                failure(
+                    "Nothing changed. The player already is an operator".into(),
+                    "commands.op.failed",
+                )
+            } else {
+                failure(
+                    "Nothing changed. The player is not an operator".into(),
+                    "commands.deop.failed",
+                )
+            });
+        }
+        {
+            let peers = self.peers();
+            for profile in &changed {
+                if let Some(peer) = peers.get(&profile.uuid) {
+                    let _ = peer.permissions.send(access.operator_level(profile.uuid));
+                }
+            }
+        }
+        let disconnect = if grant {
+            None
+        } else {
+            Self::enforce_whitelist(&access, logic, source)?
+        };
+        let (role, key) = if grant {
+            ("a server operator", "commands.op.success")
+        } else {
+            ("no longer a server operator", "commands.deop.success")
+        };
+        let replies = changed
+            .into_iter()
+            .map(|Profile { name, .. }| {
+                (
+                    format!("Made {name} {role}"),
+                    translate_strings(key, vec![name]),
+                )
+            })
+            .collect();
+        Ok(Outcome::Feedback {
+            replies,
+            disconnect,
+        })
+    }
+
     fn list_bans(&self, list: BanList) -> Outcome {
         let access = self.access();
         let entries = match list {
@@ -927,7 +1078,7 @@ impl Commands {
         let players = logic.players().map_err(io::Error::other)?;
         let (ip, affected) = {
             let peers = self.peers();
-            let player_ip = |uuid: &u128| peers.get(uuid).map(|(_, ip)| *ip);
+            let player_ip = |uuid: &u128| peers.get(uuid).map(|peer| peer.ip);
             let ip = target
                 .parse::<Ipv4Addr>()
                 .map(IpAddr::from)

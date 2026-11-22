@@ -12,7 +12,7 @@ use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
 use std::sync::Arc;
 
-use crate::commands::{Commands, Source};
+use crate::commands::{self, Commands, ConnectedPeer, Source};
 
 /// `minecraft:player` in minecraft-data's Java 26.1 entity type registry.
 const PLAYER_ENTITY_TYPE: i32 = 155;
@@ -49,7 +49,7 @@ pub(crate) fn receive(
     session: &PlayerSession,
     logic: &harpas_engine::Handle,
     commands: &Commands,
-    source: Source,
+    peer: &ConnectedPeer<'_>,
 ) -> io::Result<Option<&'static str>> {
     use serverbound::Packet;
     for event in connection.take_play_events() {
@@ -66,7 +66,9 @@ pub(crate) fn receive(
                 _ => None,
             };
             if let Some(command) = command {
+                let source = commands.player_source(peer.uuid());
                 let (replies, disconnect) = commands.player_reply(logic, command, source)?;
+                send_permission_updates(connection, peer);
                 for reply in replies {
                     connection.send_play_packet(reply.into());
                 }
@@ -80,6 +82,7 @@ pub(crate) fn receive(
         let input = match event {
             PlayEvent::Packet(packet) => match *packet {
                 Packet::CommandSuggestionsRequest(request) => {
+                    let source = commands.player_source(peer.uuid());
                     if let Some(reply) = commands.suggestions(logic, request, source) {
                         connection.send_play_packet(reply.into());
                     }
@@ -205,6 +208,24 @@ pub(crate) fn receive(
         session.send(input).map_err(io::Error::other)?;
     }
     Ok(None)
+}
+
+pub(crate) fn send_permissions(connection: &mut Connection, uuid: u128, level: i32) {
+    connection.send_play_packet(
+        clientbound::EntityEvent {
+            entity_id: connection.entity_id(),
+            // Entity events 24 through 28 update the client's operator level.
+            event: 24 + level as i8,
+        }
+        .into(),
+    );
+    connection.send_play_packet(commands::tree(Source::Player { uuid, level }).into());
+}
+
+pub(crate) fn send_permission_updates(connection: &mut Connection, peer: &ConnectedPeer<'_>) {
+    for level in peer.permission_updates() {
+        send_permissions(connection, peer.uuid(), level);
+    }
 }
 
 fn mode_id(mode: player::GameMode) -> i32 {

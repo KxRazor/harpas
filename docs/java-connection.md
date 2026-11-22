@@ -68,8 +68,9 @@ Every connection starts in Handshaking and moves through the states vanilla defi
   bans and the whitelist are checked, and operators with `bypassesPlayerLimit` skip the limit; see
   [operations.md](operations.md#whitelist-bans-and-operators).
 - **Configuration:** see [Configuration state](#configuration-state).
-- **Play:** players join the overworld at (0.5, 65, 0.5), with abilities for the `gamemode` of
-  `server.properties`. The server maintains a shared player list and sends profiles, entities and accepted
+- **Play:** players join the overworld at (0.5, 65, 0.5). Play Login, the initial abilities and the player
+  list use the saved game mode. The `gamemode` property sets the default and applies to all joining players
+  when `force-gamemode` is enabled. The server maintains a shared player list and sends profiles, entities and accepted
   movement to other players in range. Existing overworld chunks follow the player's position and effective view
   distance; missing chunks are void until generation. Block entity types and verified client update fields are
   sent when the locally generated registry is available; see [world.md](world.md#loading). Java 26.1's

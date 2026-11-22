@@ -243,6 +243,15 @@ fn mode_id(mode: player::GameMode) -> i32 {
     }
 }
 
+pub(crate) fn java_game_mode(mode: player::GameMode) -> play::GameMode {
+    match mode {
+        player::GameMode::Survival => play::GameMode::Survival,
+        player::GameMode::Creative => play::GameMode::Creative,
+        player::GameMode::Adventure => play::GameMode::Adventure,
+        player::GameMode::Spectator => play::GameMode::Spectator,
+    }
+}
+
 fn game_mode_update(uuid: u128, mode: player::GameMode) -> clientbound::PlayerInfoUpdate {
     clientbound::PlayerInfoUpdate {
         updates: play::PlayerInfoUpdates {
@@ -488,14 +497,10 @@ pub(crate) fn send(
                 players: vec![uuid],
             }
             .into(),
+            Output::Login { .. } => unreachable!("Play Login consumes the initial game mode"),
             Output::PlayerGameMode { uuid, mode } => game_mode_update(uuid, mode).into(),
             Output::GameModeChanged { uuid, mode, notify } => {
-                let java_mode = match mode {
-                    player::GameMode::Survival => play::GameMode::Survival,
-                    player::GameMode::Creative => play::GameMode::Creative,
-                    player::GameMode::Adventure => play::GameMode::Adventure,
-                    player::GameMode::Spectator => play::GameMode::Spectator,
-                };
+                let java_mode = java_game_mode(mode);
                 // Vanilla sends the new abilities both before the list update and after the game event.
                 connection.send_game_mode_abilities(java_mode);
                 connection.send_play_packet(game_mode_update(uuid, mode).into());

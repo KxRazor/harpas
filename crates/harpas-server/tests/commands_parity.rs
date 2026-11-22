@@ -5,7 +5,7 @@ mod reference;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -51,7 +51,10 @@ impl Client {
 
     fn join(port: u16, name: &str) -> Self {
         let (mut client, reply) = Self::login(port, name);
-        assert!(matches!(reply, login::clientbound::Packet::LoginSuccess(_)));
+        assert!(
+            matches!(reply, login::clientbound::Packet::LoginSuccess(_)),
+            "login refused for {name} on port {port}"
+        );
         let ack = login::serverbound::Packet::from(login::serverbound::LoginAcknowledged);
         client.send(|buf| ack.encode(buf));
         client.send(|buf| {
@@ -127,6 +130,36 @@ impl Client {
         self.matching("Commands", |packet| match packet {
             Packet::Commands(commands) => Some(commands.tree),
             _ => None,
+        })
+    }
+
+    fn initial_game_mode(&mut self, name: &str) -> (play::GameMode, i8, play::AbilityFlags, i32) {
+        let uuid = offline_uuid(name);
+        let (mode, previous) = self.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some((login.spawn.game_mode, login.spawn.previous_game_mode)),
+            _ => None,
+        });
+        let mut abilities = None;
+        let mut listed_mode = None;
+        self.matching("initial abilities and player list entry", |packet| {
+            match packet {
+                Packet::PlayerAbilities(packet) => {
+                    abilities.get_or_insert(packet.flags);
+                }
+                Packet::PlayerInfoUpdate(packet) if packet.updates.actions.add_player => {
+                    assert!(packet.updates.actions.update_game_mode);
+                    for entry in packet.updates.entries {
+                        if entry.uuid == uuid {
+                            listed_mode = Some(entry.game_mode);
+                        }
+                    }
+                }
+                Packet::GameEvent(event) if event.event == play::GameEventKind::ChangeGameMode => {
+                    panic!("initial game mode was corrected after Play Login");
+                }
+                _ => {}
+            }
+            Some((mode, previous, abilities?, listed_mode?))
         })
     }
 
@@ -748,6 +781,23 @@ fn exercise_game_modes(server: &mut Server, port: u16) -> Vec<Packet> {
     packets
 }
 
+fn reconnect_in_spectator(
+    server: &mut Server,
+    port: u16,
+) -> (play::GameMode, i8, play::AbilityFlags, i32) {
+    let mut client = Client::join(port, "ModeTarget");
+    client.tree();
+    writeln!(
+        server.child.stdin.as_mut().unwrap(),
+        "gamemode spectator ModeTarget"
+    )
+    .unwrap();
+    server.wait_for("Set ModeTarget's game mode to Spectator Mode");
+    mode_feedback(&mut client, "ModeTarget");
+    client.stream.shutdown(Shutdown::Both).unwrap();
+    Client::join(port, "ModeTarget").initial_game_mode("ModeTarget")
+}
+
 #[derive(Debug, PartialEq)]
 struct Operators {
     completions: Vec<CommandSuggestionsResponse>,
@@ -878,6 +928,10 @@ fn commands_match_vanilla() {
     for (index, (actual, expected)) in actual_modes.iter().zip(&expected_modes).enumerate() {
         assert_eq!(actual, expected, "game mode packet {index}");
     }
+    let expected_rejoin = reconnect_in_spectator(&mut reference, port);
+    let actual_rejoin = reconnect_in_spectator(&mut server, other);
+    assert_eq!(expected_rejoin.0, play::GameMode::Spectator);
+    assert_eq!(actual_rejoin, expected_rejoin);
     assert_eq!(
         exercise_operators(&mut reference, &vanilla, port),
         exercise_operators(&mut server, &harpas, other)
@@ -922,7 +976,9 @@ fn commands_match_vanilla() {
         assert!(properties.contains("enforce-whitelist=false"));
         fs::write(
             path,
-            properties.replace("enforce-whitelist=false", "enforce-whitelist=true"),
+            properties
+                .replace("enforce-whitelist=false", "enforce-whitelist=true")
+                .replace("gamemode=survival", "gamemode=adventure"),
         )
         .unwrap();
         assert_eq!(fs::read(dir.join("whitelist.json")).unwrap(), whitelist);
@@ -972,6 +1028,60 @@ fn commands_match_vanilla() {
     assert_eq!(actual.completions, expected.completions);
     assert_eq!(actual.replies, expected.replies);
     assert_eq!(actual.saved, expected.saved);
+
+    for (server, dir) in [(&mut reference, &vanilla), (&mut server, &harpas)] {
+        console_whitelist(server, dir, false);
+    }
+    let expected_restarted = Client::join(port, "ModeTarget").initial_game_mode("ModeTarget");
+    let actual_restarted = Client::join(other, "ModeTarget").initial_game_mode("ModeTarget");
+    assert_eq!(expected_restarted, expected_rejoin);
+    assert_eq!(actual_restarted, expected_restarted);
+    let first_join = "DefaultMode";
+    let expected_default = Client::join(port, first_join).initial_game_mode(first_join);
+    assert_eq!(expected_default.0, play::GameMode::Adventure);
+    assert_eq!(
+        Client::join(other, first_join).initial_game_mode(first_join),
+        expected_default
+    );
+
+    for (server, dir) in [(&mut reference, &vanilla), (&mut server, &harpas)] {
+        stop(server);
+        let path = dir.join("server.properties");
+        let properties = fs::read_to_string(&path).unwrap();
+        assert!(properties.contains("force-gamemode=false"));
+        fs::write(
+            path,
+            properties
+                .replace("force-gamemode=false", "force-gamemode=true")
+                .replace("gamemode=adventure", "gamemode=creative"),
+        )
+        .unwrap();
+    }
+    let saved_modes = |dir: &Path, name| {
+        let (root, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+            .unwrap()
+            .unwrap();
+        ["playerGameType", "previousPlayerGameType"].map(|key| root.get(key).cloned())
+    };
+    assert_eq!(
+        saved_modes(&harpas, "ModeTarget"),
+        saved_modes(&vanilla, "ModeTarget")
+    );
+
+    let mut reference = start_vanilla();
+    let mut server = start_harpas();
+    reference.wait_for("Done (");
+    server.wait_for("Done (");
+    for name in ["ModeTarget", "FirstJoin"] {
+        let expected = Client::join(port, name).initial_game_mode(name);
+        assert_eq!(expected.0, play::GameMode::Creative);
+        assert_eq!(Client::join(other, name).initial_game_mode(name), expected);
+    }
+    stop(&mut reference);
+    stop(&mut server);
+    for name in ["ModeTarget", "FirstJoin"] {
+        assert_eq!(saved_modes(&harpas, name), saved_modes(&vanilla, name));
+    }
 }
 
 fn uuid(name: &str) -> String {

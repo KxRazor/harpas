@@ -40,6 +40,7 @@ use std::{fs, thread};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use harpas_engine::player::Output;
 use harpas_java::{AuthOutcome, Connection, LoginVerdict, ServerInfo, ServerKey, State};
 use harpas_protocol_java::v26_1::play::GameMode;
 use log::{error, info, warn};
@@ -268,6 +269,7 @@ fn run() -> io::Result<()> {
         )),
         info: server_info,
         chunks: chunks::Cache::new(block_entities),
+        force_game_mode: properties.parsed("force-gamemode", false),
     });
     let info = &environment.info;
     info!("Default game type: {:?}", info.game_mode);
@@ -510,6 +512,7 @@ struct ConnectionEnvironment {
     info: ServerInfo,
     chunks: chunks::Cache,
     commands: Arc<commands::Commands>,
+    force_game_mode: bool,
 }
 
 fn serve(
@@ -607,6 +610,7 @@ fn play(
     // The player gets its entity ID when it enters Play: a server list ping or a failed login takes none.
     let ids = logic.clone();
     let mut connection = Connection::with_entity_ids(key, move || ids.next_entity_id());
+    connection.defer_play_login();
     if logic.has_world() {
         connection.use_external_chunks();
     }
@@ -721,7 +725,7 @@ fn play(
             }
             let max_view_distance = info.view_distance.clamp(2, 32) as u8;
             let session = logic
-                .player_joined_with_view(
+                .player_joined_for_login(
                     connection.entity_id(),
                     player::profile(player, info.game_mode),
                     max_view_distance,
@@ -729,19 +733,43 @@ fn play(
                         .client_view_distance()
                         .unwrap_or(max_view_distance),
                     info.allow_flight,
+                    environment.force_game_mode,
                 )
                 .map_err(io::Error::other)?;
             let uuid = player.uuid;
+            let name = player.name.clone();
             let level = access.operator_level(uuid);
             let peer = environment
                 .commands
                 .track_peer(player.uuid, connection.entity_id(), peer);
             drop(access);
-            environment
-                .commands
-                .record_profile(player.uuid, player.name.clone());
-            info!("{} joined the game", player.name);
-            departure.name = Some(player.name.clone());
+            let initial = session
+                .recv_timeout(READ_TIMEOUT)
+                .map_err(io::Error::other)?;
+            match initial {
+                Output::Login {
+                    mode,
+                    previous,
+                    flying,
+                } => {
+                    info.game_mode = player::java_game_mode(mode);
+                    connection
+                        .finish_play_login(&info, previous.map(player::java_game_mode), flying)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                }
+                Output::Disconnect(reason) => connection.disconnect_play(reason),
+                Output::DisconnectTranslated { key, .. } => {
+                    connection.disconnect_play_translated(key)
+                }
+                _ => return Err(io::Error::other("expected the player's initial game mode")),
+            }
+            if connection.is_closed() {
+                stream.write_all(&connection.take_output())?;
+                break;
+            }
+            environment.commands.record_profile(uuid, name.clone());
+            info!("{name} joined the game");
+            departure.name = Some(name);
             player::send_permissions(&mut connection, uuid, level);
             if let Some(permit) = permit.as_deref_mut() {
                 permit.entered_play();
@@ -898,6 +926,7 @@ mod tests {
         ConnectionEnvironment {
             info: info.clone(),
             chunks: chunks::Cache::new(block_entity_registry::Registry::default()),
+            force_game_mode: false,
             commands: Arc::new(commands::Commands::new(
                 0,
                 info.max_players,

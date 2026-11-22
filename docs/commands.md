@@ -35,10 +35,12 @@ All commands live in **one command tree**, in the style of vanilla's Brigadier d
 The tree is sent to Java clients with suggestions, filtered by the player's permissions, as on Paper. Commands
 from the console, RCON, command blocks and functions run through the same tree.
 
-Use `gamemode <survival|creative|adventure|spectator> [target]` to change a connected player's mode for the
-current session. The target is required from the console and defaults to the sender in Java. A target can be a
+Use `gamemode <survival|creative|adventure|spectator> [target]` to change a connected player's mode.
+The target is required from the console and defaults to the sender in Java. A target can be a
 player name or a supported player selector, including `@s` for the sender. The affected player receives the new
 abilities and game mode immediately, and all connected players receive the updated player list entry.
+On the next login, the player keeps their saved mode. The `gamemode` server property supplies the default
+for new players and applies to everyone at login when `force-gamemode=true`.
 
 ---
 

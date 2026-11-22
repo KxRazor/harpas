@@ -490,7 +490,9 @@ as shown by the parity report.
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).
   - [x] `gamemode` changes a connected player's mode from the console or Java. Level 2 permissions, player
         selectors, live abilities and player list updates are compared with vanilla (`commands_parity`).
-  - [ ] Persist the player's game mode across reconnects.
+  - [x] The current and previous game modes persist in vanilla player data across reconnects and restarts.
+        Play Login, abilities and the player list reflect the saved mode or `force-gamemode`
+        (`commands_parity`).
 - [x] Whitelist, player and IP bans and operators from vanilla's `whitelist.json`, `banned-players.json`,
       `banned-ips.json` and `ops.json`: checked at login in vanilla's order, managed by their commands, and
       operators bypassing `max-players` as in vanilla ([docs/operations.md](docs/operations.md)).

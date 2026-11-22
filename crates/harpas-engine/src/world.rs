@@ -2097,6 +2097,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -2125,6 +2126,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -2197,6 +2199,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -2935,6 +2938,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -3036,6 +3040,7 @@ mod tests {
                 initial_view_distance: 10,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -3097,6 +3102,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -3163,6 +3169,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -3235,6 +3242,7 @@ mod tests {
                 initial_view_distance: 3,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -3397,6 +3405,7 @@ mod tests {
             initial_view_distance: 2,
             allow_flight: false,
             output,
+            force_game_mode_on_login: None,
         };
         let mut game = Game {
             pending: vec![joined(1, miner), joined(2, watcher)],
@@ -3612,10 +3621,10 @@ mod tests {
                 game_mode: GameMode::Survival,
                 ..profile()
             },
-            2,
-            2,
+            (2, 2),
             false,
             sender,
+            None,
         );
         wait_until(|| {
             game.players[0].awaiting_chunk_batch = false;
@@ -3807,10 +3816,10 @@ mod tests {
                 game_mode: GameMode::Survival,
                 ..profile()
             },
-            2,
-            2,
+            (2, 2),
             false,
             sender,
+            None,
         );
         wait_until(|| {
             tick(&mut game, 2);
@@ -3841,6 +3850,7 @@ mod tests {
             initial_view_distance: 2,
             allow_flight: false,
             output,
+            force_game_mode_on_login: None,
         };
         let mut game = Game {
             pending: vec![
@@ -4011,6 +4021,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output: breaker,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4159,6 +4170,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4275,6 +4287,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4460,6 +4473,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4696,6 +4710,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4802,6 +4817,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -4890,6 +4906,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -5033,10 +5050,10 @@ mod tests {
             viewers: Vec::new(),
             stopped: false,
         };
-        game.join(1, profile(), 2, 2, false, first_output);
+        game.join(1, profile(), (2, 2), false, first_output, None);
         let mut other = profile();
         other.uuid = 2;
-        game.join(2, other, 2, 2, false, second_output);
+        game.join(2, other, (2, 2), false, second_output, None);
         wait_until(|| {
             for player in &mut game.players {
                 player.awaiting_chunk_batch = false;
@@ -5228,7 +5245,7 @@ mod tests {
             viewers: Vec::new(),
             stopped: false,
         };
-        game.join(1, profile(), 2, 2, false, sender);
+        game.join(1, profile(), (2, 2), false, sender, None);
         wait_until(|| {
             game.players[0].awaiting_chunk_batch = false;
             tick(&mut game, 1);
@@ -5373,10 +5390,10 @@ mod tests {
             viewers: Vec::new(),
             stopped: false,
         };
-        game.join(1, profile(), 2, 2, false, first_output);
+        game.join(1, profile(), (2, 2), false, first_output, None);
         let mut other = profile();
         other.uuid = 2;
-        game.join(2, other, 2, 2, false, second_output);
+        game.join(2, other, (2, 2), false, second_output, None);
         wait_until(|| {
             // Acknowledge each batch so the saved chunk can arrive after its empty neighbors.
             for player in &mut game.players {
@@ -5857,6 +5874,7 @@ mod tests {
                 initial_view_distance: 2,
                 allow_flight: false,
                 output,
+                force_game_mode_on_login: None,
             }],
             players: Vec::new(),
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -5948,7 +5966,7 @@ mod tests {
         let mut second = profile();
         second.uuid = 2;
         second.name = "Other".into();
-        game.join(2, second, 2, 2, false, output);
+        game.join(2, second, (2, 2), false, output, None);
         wait_until(|| {
             game.poll_player_data();
             game.players[1].data_ready

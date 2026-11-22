@@ -1112,6 +1112,7 @@ impl Game {
     }
 
     fn finish_join(&mut self, index: usize, data: Option<Arc<player_data::PlayerInventory>>) {
+        let hunger_id = self.world.as_ref().and_then(world::World::hunger_effect_id);
         let player = &mut self.players[index];
         if let Some(data) = data {
             Self::restore_inventory(player, data);
@@ -1123,6 +1124,9 @@ impl Game {
                 flying: player.flying,
             });
             player.send(player.vitals.update());
+            if player.hunger_effect.is_some() {
+                player.send_hunger_effect(hunger_id, false);
+            }
             if player.is_dead() {
                 player.send(player::Output::Death {
                     entity_id: player.player.entity_id,
@@ -1778,6 +1782,89 @@ mod tests {
     }
 
     #[test]
+    fn hunger_rolls_only_when_food_is_finished_and_exhausts_until_expiry() {
+        use harpas_core::random::LegacyRandom;
+        use inventory::{HOTBAR, ItemStack};
+        use item_data::{FoodHunger, FoodProperties, ItemCodec};
+
+        let mut game = game();
+        let received = join(&mut game, 1, "Eating", 2);
+        game.connections();
+        let flesh = harpas_core::item::items()
+            .id("minecraft:rotten_flesh")
+            .unwrap();
+        let path = std::env::temp_dir().join(format!("harpas-food-hunger-{}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
+        world.set_item_codec(Arc::new(
+            ItemCodec::default()
+                .with_mob_effects(&["minecraft:hunger".to_owned()])
+                .with_foods(
+                    [(
+                        flesh,
+                        FoodProperties {
+                            nutrition: 4,
+                            saturation: 0.8,
+                            can_always_eat: false,
+                            use_ticks: 2,
+                            remainder: None,
+                            hunger: Some(FoodHunger {
+                                duration: 3,
+                                probability: 0.8,
+                            }),
+                        },
+                    )]
+                    .into(),
+                ),
+        ));
+        game.world = Some(world);
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.awaiting_teleport = None;
+        player.vitals.food = 10;
+        player.vitals.saturation = 0.0;
+        player.vitals.exhaustion = 3.999;
+        // This seed rolls below 0.8 on the first draw and above it on the second.
+        player.random = LegacyRandom::new(0);
+        player.inventory.slots[HOTBAR] = ItemStack {
+            item: flesh,
+            count: 2,
+            ..ItemStack::empty()
+        };
+        let rules = survival::SurvivalRules::default();
+        game.use_item(0, false, 1);
+        game.tick_survival(rules);
+        game.stop_using_item(0);
+        assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 2);
+        assert!(game.players[0].hunger_effect.is_none());
+        game.use_item(0, false, 2);
+        for _ in 0..2 {
+            game.tick_survival(rules);
+        }
+        assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 1);
+        assert_eq!(game.players[0].vitals.saturation, 0.8);
+        assert!(game.players[0].hunger_effect.is_some());
+        game.use_item(0, false, 3);
+        game.tick_survival(rules);
+        assert_eq!(game.players[0].vitals.saturation, 0.0);
+        for _ in 0..2 {
+            game.tick_survival(rules);
+        }
+        assert_eq!(game.players[0].inventory.slots[HOTBAR].count, 0);
+        assert!(game.players[0].hunger_effect.is_none());
+        assert!((game.players[0].vitals.exhaustion - 0.014).abs() < 0.000001);
+        let updates: Vec<_> = std::iter::from_fn(|| received.try_recv().ok())
+            .filter_map(|output| match output {
+                Output::EntityEffect { effect, .. } => Some(effect.map(|effect| effect.duration)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(updates, [Some(3), None]);
+        drop(game);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn food_use_honors_the_configured_duration_and_cancels_on_item_replacement() {
         use inventory::{ItemStack, OFF_HAND};
         use item_data::{FoodProperties, ItemCodec};
@@ -1799,6 +1886,7 @@ mod tests {
                     can_always_eat: false,
                     use_ticks: 16,
                     remainder: None,
+                    hunger: None,
                 },
             )]),
         )));
@@ -1862,6 +1950,7 @@ mod tests {
                         can_always_eat: false,
                         use_ticks: 1,
                         remainder: Some(bowl.clone()),
+                        hunger: None,
                     },
                 )]
                 .into(),

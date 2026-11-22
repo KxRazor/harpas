@@ -598,6 +598,31 @@ pub(crate) fn send(
                 saturation,
             }
             .into(),
+            Output::EntityEffect {
+                entity_id,
+                effect_id,
+                effect,
+                blend,
+            } => match effect {
+                Some(effect) => clientbound::EntityEffect {
+                    entity_id,
+                    effect: effect_id,
+                    amplifier: i32::from(effect.amplifier),
+                    duration: effect.duration,
+                    flags: play::EffectFlags {
+                        ambient: effect.ambient,
+                        show_particles: effect.show_particles,
+                        show_icon: effect.show_icon,
+                        blend,
+                    },
+                }
+                .into(),
+                None => clientbound::RemoveEntityEffect {
+                    entity_id,
+                    effect: effect_id,
+                }
+                .into(),
+            },
             Output::UsingItem {
                 entity_id,
                 off_hand,

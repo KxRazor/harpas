@@ -13,7 +13,7 @@ use harpas_core::nbt::{Compound, List, Nbt};
 use crate::inventory::{Inventory, ItemStack, SLOTS};
 use crate::item_data::{ItemCodec, invalid};
 use crate::player::{GameMode, PlayerState};
-use crate::survival::Vitals;
+use crate::survival::{HungerEffect, Vitals};
 
 const CAPACITY: usize = 64;
 const EQUIPMENT: [(&str, usize); 5] = [
@@ -34,6 +34,7 @@ pub struct PlayerInventory {
     root: Arc<Compound>,
     mode: Option<SavedGameMode>,
     vitals: Option<Vitals>,
+    hunger_effect: Option<HungerEffect>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +90,7 @@ impl PlayerInventory {
             root: Arc::new(root),
             mode: None,
             vitals: None,
+            hunger_effect: None,
         })
     }
 
@@ -159,6 +161,18 @@ impl PlayerInventory {
             root.insert("foodSaturationLevel", Nbt::Float(vitals.saturation));
             root.insert("foodExhaustionLevel", Nbt::Float(vitals.exhaustion));
             root.insert("foodTickTimer", Nbt::Int(vitals.food_timer));
+            let mut effects = active_effects(&root).to_vec();
+            effects.retain(|tag| !is_hunger_effect(tag));
+            if let Some(effect) = &self.hunger_effect {
+                let mut tag = effect.write();
+                tag.insert("id", HungerEffect::ID);
+                effects.push(tag);
+            }
+            if effects.is_empty() {
+                root.remove("active_effects");
+            } else {
+                root.insert("active_effects", Nbt::List(List::Compound(effects)));
+            }
         }
         Ok(root)
     }
@@ -174,6 +188,7 @@ impl PlayerInventory {
                 flying: player.flying,
             }),
             vitals: Some(player.vitals),
+            hunger_effect: player.hunger_effect.clone(),
         }
     }
 
@@ -210,6 +225,7 @@ impl PlayerInventory {
     fn restore_vitals(&self, player: &mut PlayerState) {
         if let Some(vitals) = self.vitals {
             player.vitals = vitals;
+            player.hunger_effect = self.hunger_effect.clone();
             return;
         }
         if let Some(Nbt::Float(health)) = self.root.get("Health")
@@ -233,7 +249,22 @@ impl PlayerInventory {
         if let Some(Nbt::Int(timer)) = self.root.get("foodTickTimer") {
             player.vitals.food_timer = *timer;
         }
+        player.hunger_effect = active_effects(&self.root)
+            .iter()
+            .find(|tag| is_hunger_effect(tag))
+            .and_then(HungerEffect::read);
     }
+}
+
+fn active_effects(root: &Compound) -> &[Compound] {
+    match root.get("active_effects") {
+        Some(Nbt::List(List::Compound(effects))) => effects,
+        _ => &[],
+    }
+}
+
+fn is_hunger_effect(tag: &Compound) -> bool {
+    matches!(tag.get("id"), Some(Nbt::String(id)) if id == HungerEffect::ID)
 }
 
 fn inventory_entries(root: &Compound) -> io::Result<&[Compound]> {
@@ -810,8 +841,20 @@ mod autosave_tests {
             true,
             output,
         );
-        let document =
-            Arc::new(PlayerInventory::read(new_player(1), &ItemCodec::default()).unwrap());
+        let mut root = new_player(1);
+        let hunger = Compound::from_iter([
+            ("id", Nbt::from(HungerEffect::ID)),
+            ("duration", Nbt::Int(15)),
+        ]);
+        let other = Compound::from_iter([
+            ("id", Nbt::from("minecraft:blindness")),
+            ("duration", Nbt::Int(100)),
+        ]);
+        root.insert(
+            "active_effects",
+            Nbt::List(List::Compound(vec![hunger, other.clone()])),
+        );
+        let document = Arc::new(PlayerInventory::read(root, &ItemCodec::default()).unwrap());
         crate::Game::restore_inventory(&mut player, document);
         player.inventory.slots[36] = ItemStack {
             item: 1,
@@ -845,6 +888,7 @@ mod autosave_tests {
         game.players[0].vitals.health = 9.0;
         game.players[0].vitals.exhaustion = 0.0;
         game.players[0].vitals.food_timer = 0;
+        game.players[0].hunger_effect = None;
         game.world
             .as_mut()
             .unwrap()
@@ -855,10 +899,20 @@ mod autosave_tests {
             .unwrap();
         let snapshot = writes.lock().unwrap()[0].clone();
         assert_eq!(snapshot.get("Health"), Some(&Nbt::Float(16.0)));
+        assert_eq!(active_effects(&snapshot)[0], other);
         let inventory = PlayerInventory::read(snapshot, &ItemCodec::default()).unwrap();
         inventory.restore_vitals(&mut game.players[0]);
         assert_eq!(game.players[0].vitals.exhaustion, 3.5);
         assert_eq!(game.players[0].vitals.food_timer, 9);
+        assert_eq!(
+            game.players[0]
+                .hunger_effect
+                .as_ref()
+                .unwrap()
+                .write()
+                .get("duration"),
+            Some(&Nbt::Int(15)),
+        );
         assert_eq!(inventory.slots[36].count, 16);
         assert_eq!(inventory.selected, 4);
         assert!(inventory.slots[1].is_empty());

@@ -501,6 +501,9 @@ as shown by the parity report.
   - [x] Mushroom stew, rabbit stew and beetroot soup return a bowl when eaten. Bowls from either hand,
         cancelling use and the inventory on reconnect are compared with vanilla
         (`food_and_natural_regeneration_match_vanilla`).
+  - [x] Rotten flesh and raw chicken can apply Hunger from their default item components. Applying the
+        effect, reconnecting, expiry and the resulting exhaustion are compared with vanilla
+        (`food_hunger_effect_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

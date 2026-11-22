@@ -21,7 +21,7 @@ const FOOD: &str = "minecraft:food";
 const CONSUMABLE: &str = "minecraft:consumable";
 const USE_REMAINDER: &str = "minecraft:use_remainder";
 
-/// The default components of a food with no consumption effects.
+/// The default components of a supported food.
 #[derive(Debug, Clone)]
 pub struct FoodProperties {
     /// Food points restored by one item.
@@ -34,6 +34,17 @@ pub struct FoodProperties {
     pub use_ticks: u32,
     /// The default stack left after consumption, such as a bowl.
     pub remainder: Option<ItemStack>,
+    /// A chance to apply Hunger when the food is finished.
+    pub hunger: Option<FoodHunger>,
+}
+
+/// The Hunger effect configured on a vanilla consumable.
+#[derive(Debug, Clone, Copy)]
+pub struct FoodHunger {
+    /// Duration in ticks.
+    pub duration: i32,
+    /// Probability of applying the effect, from zero to one.
+    pub probability: f32,
 }
 
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
@@ -44,6 +55,7 @@ pub struct ItemCodec {
     enchantments: Vec<String>,
     potions: Vec<String>,
     mob_effects: Vec<String>,
+    hunger_effect_id: Option<i32>,
     foods: HashMap<u32, FoodProperties>,
 }
 
@@ -85,6 +97,7 @@ impl ItemCodec {
             enchantments: Vec::new(),
             potions: Vec::new(),
             mob_effects: Vec::new(),
+            hunger_effect_id: None,
             foods: HashMap::from([(
                 items().id("minecraft:apple").expect("registered apple"),
                 FoodProperties {
@@ -93,6 +106,7 @@ impl ItemCodec {
                     can_always_eat: false,
                     use_ticks: 32,
                     remainder: None,
+                    hunger: None,
                 },
             )]),
         }
@@ -138,7 +152,15 @@ impl ItemCodec {
     /// Adds the locally generated built-in mob effect registry in numeric order.
     pub fn with_mob_effects(mut self, names: &[String]) -> Self {
         self.mob_effects = names.to_vec();
+        self.hunger_effect_id = names
+            .iter()
+            .position(|name| name == crate::survival::HungerEffect::ID)
+            .map(|id| id as i32);
         self
+    }
+
+    pub(crate) fn hunger_effect_id(&self) -> Option<i32> {
+        self.hunger_effect_id
     }
 
     pub(crate) fn set_potion(&self, stack: &mut ItemStack, name: &str) -> io::Result<()> {

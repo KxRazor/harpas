@@ -734,6 +734,10 @@ impl World {
             .clone()
     }
 
+    pub(crate) fn hunger_effect_id(&self) -> Option<i32> {
+        self.block_item_codec().hunger_effect_id()
+    }
+
     /// Incorporates entity mutations before snapshots or eviction. The entity and terrain revisions share
     /// the existing saver, so a chunk cannot reload an older entity snapshot while a write is outstanding.
     fn sync_entity_changes(&mut self) -> io::Result<()> {

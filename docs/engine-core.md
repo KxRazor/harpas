@@ -127,8 +127,11 @@ Holding use with a supported food in either hand consumes one item after its def
 food and saturation from its item components. Mushroom stew, rabbit stew and beetroot soup return a bowl.
 The returned item takes the place of the last food in the hand. If food remains there, the item goes into the
 inventory or drops when there is no room. Releasing use, changing away from the active hotbar slot or replacing
-the held item cancels the action. The
-`minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
+the held item cancels the action. Completing rotten flesh or raw chicken use rolls the chance of applying
+Hunger from the item's defaults. Hunger starts adding exhaustion on the next player tick, before the food
+tick. The Java client receives effect changes on application, login and expiry. The remaining duration
+persists in player data.
+The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is
 above 10 health on Easy or Peaceful, or above 1 on Normal. On Hard the damage can be lethal. On Peaceful,

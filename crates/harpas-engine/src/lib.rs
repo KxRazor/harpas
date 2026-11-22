@@ -1798,6 +1798,7 @@ mod tests {
                     saturation: 4.0,
                     can_always_eat: false,
                     use_ticks: 16,
+                    remainder: None,
                 },
             )]),
         )));
@@ -1832,6 +1833,66 @@ mod tests {
         assert_eq!(game.players[0].inventory.slots[OFF_HAND].count, 1);
         assert_eq!(game.players[0].vitals.food, 20);
         assert_eq!(game.players[0].vitals.saturation, 20.0);
+    }
+
+    #[test]
+    fn stacked_food_returns_its_container_to_the_inventory_or_drops_it() {
+        use inventory::{HOTBAR, ItemStack, OFF_HAND};
+        use item_data::{FoodProperties, ItemCodec};
+
+        let stack = |name, count| ItemStack {
+            item: harpas_core::item::items().id(name).unwrap(),
+            count,
+            ..ItemStack::empty()
+        };
+        let mut stew = stack("minecraft:mushroom_stew", 2);
+        Arc::make_mut(&mut stew.components).max_stack_size = Some(2);
+        let bowl = stack("minecraft:bowl", 1);
+        let path =
+            std::env::temp_dir().join(format!("harpas-food-remainder-{}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
+        world.set_item_codec(Arc::new(
+            ItemCodec::default().with_foods(
+                [(
+                    stew.item,
+                    FoodProperties {
+                        nutrition: 6,
+                        saturation: 7.2,
+                        can_always_eat: false,
+                        use_ticks: 1,
+                        remainder: Some(bowl.clone()),
+                    },
+                )]
+                .into(),
+            ),
+        ));
+        let mut game = game();
+        let _received = join(&mut game, 1, "Eating", 2);
+        game.connections();
+        game.world = Some(world);
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.awaiting_teleport = None;
+        player.vitals.food = 10;
+        player.inventory.slots[OFF_HAND] = stew.clone();
+
+        let rules = survival::SurvivalRules::default();
+        game.use_item(0, true, 1);
+        game.tick_survival(rules);
+        assert_eq!(game.players[0].inventory.slots[OFF_HAND].count, 1);
+        assert_eq!(game.players[0].inventory.slots[HOTBAR], bowl);
+
+        game.players[0].inventory.slots[9..OFF_HAND].fill(stack("minecraft:stone", 64));
+        game.players[0].inventory.slots[OFF_HAND] = stew;
+        game.use_item(0, true, 2);
+        game.tick_survival(rules);
+        assert_eq!(game.players[0].inventory.slots[OFF_HAND].count, 1);
+        let entities = &game.world.as_ref().unwrap().entities;
+        assert_eq!(entities.order.len(), 1);
+        assert_eq!(entities.item(entities.order[0]).unwrap().stack, bowl);
+        drop(game);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

@@ -224,6 +224,7 @@ fn run() -> io::Result<()> {
     };
     let items = {
         let builtin = block_entity_registry::load_builtin(Path::new(""))?.unwrap_or_default();
+        let has_food_remainders = builtin.has_food_remainders();
         let entries = |name| {
             builtin
                 .registries
@@ -239,7 +240,14 @@ fn run() -> io::Result<()> {
                 .with_potions(entries("minecraft:potion"))
                 .with_mob_effects(entries("minecraft:mob_effect"));
         match builtin.foods {
-            Some(foods) => codec.with_foods(foods),
+            Some(foods) => {
+                if !has_food_remainders {
+                    warn!(
+                        "Update the food defaults with `harpas vanilla-data generate-registry` to enable foods that return containers"
+                    );
+                }
+                codec.with_foods(foods)
+            }
             None => {
                 warn!(
                     "Only apples can be eaten until the food defaults are generated. Install Java 25 and run `harpas vanilla-data generate-registry`"

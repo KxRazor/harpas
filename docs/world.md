@@ -230,13 +230,14 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
   `.harpas/vanilla-data/<version>-block-entity-types.json`, and the entries of every built-in registry, in the
   order of their numeric IDs, in `.harpas/vanilla-data/<version>-registries.json`: the tags sent to Java clients
   need the IDs of blocks, items, fluids and other built-in registries
-  ([java-connection.md](java-connection.md#tags)). The registry file also stores the `food` and `consumable`
-  defaults for basic foods. The other generated reports, unpacked executable files and downloaded jar are
-  removed afterwards. Neither the jar nor the generated data is committed or redistributed.
+  ([java-connection.md](java-connection.md#tags)). The registry file also stores the `food`, `consumable` and
+  optional `use_remainder` defaults for supported foods. The generator removes the other reports, unpacked
+  executable files and downloaded jar afterwards. Neither the jar nor the generated data is committed or redistributed.
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
   before the data was added, the server warns about missing block entity IDs, built-in registries or food
-  defaults. Apples remain available as a fallback until the food defaults are generated. Install Java 25 and run
-  `harpas vanilla-data generate-registry`; to avoid downloading the jar again, use
+  defaults. Apples remain available as a fallback until the food defaults are generated. Older food defaults
+  continue to work for basic foods. To add foods that return a container or generate missing data, install Java 25
+  and run `harpas vanilla-data generate-registry`. To reuse a downloaded jar, run
   `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA and the jar hash.
 
 The data stays in a zip, as vanilla reads it from inside its own jar, rather than being unpacked into a folder:

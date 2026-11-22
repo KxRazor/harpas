@@ -1352,6 +1352,37 @@ fn use_food(client: &mut Client, hand: play::Hand, sequence: i32) {
     });
 }
 
+fn cancel_food(client: &mut Client, entity_id: i32) {
+    play_packet(
+        client,
+        play::serverbound::PlayerAction {
+            status: play::PlayerActionStatus::FinishUsingItem,
+            position: play::BlockPos { x: 0, y: 0, z: 0 },
+            face: 0,
+            sequence: 0,
+        },
+    );
+    // Releasing use neither changes food nor finishes the action, even after a full use duration.
+    std::thread::sleep(Duration::from_millis(1800));
+    client.send_command("list");
+    client.matching(
+        "list after releasing the use button",
+        |packet| match packet {
+            Packet::SetHealth(health) => panic!("cancelled food use changed health: {health:?}"),
+            Packet::EntityEvent(event) if event.entity_id == entity_id && event.event == 9 => {
+                panic!("cancelled food use finished")
+            }
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+            {
+                Some(())
+            }
+            _ => None,
+        },
+    );
+}
+
 fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHealth> {
     let mut client = Client::join(port, "Runner");
     client.stream.set_nodelay(true).unwrap();
@@ -1383,34 +1414,7 @@ fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHe
         },
     );
     use_food(&mut client, play::Hand::OffHand, 1);
-    play_packet(
-        &mut client,
-        play::serverbound::PlayerAction {
-            status: play::PlayerActionStatus::FinishUsingItem,
-            position: play::BlockPos { x: 0, y: 0, z: 0 },
-            face: 0,
-            sequence: 0,
-        },
-    );
-    // The first apple neither changes food nor consumes a stack, even after a full use duration.
-    std::thread::sleep(Duration::from_millis(1800));
-    client.send_command("list");
-    client.matching(
-        "list after releasing the use button",
-        |packet| match packet {
-            Packet::SetHealth(health) => panic!("cancelled apple use changed health: {health:?}"),
-            Packet::EntityEvent(event) if event.entity_id == entity_id && event.event == 9 => {
-                panic!("cancelled apple use finished")
-            }
-            Packet::SystemChatMessage(reply)
-                if matches!(&reply.content, codec::Nbt::Compound(text)
-                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
-            {
-                Some(())
-            }
-            _ => None,
-        },
-    );
+    cancel_food(&mut client, entity_id);
     use_food(&mut client, play::Hand::OffHand, 2);
     let mut finished = false;
     let after_apple = client.matching(
@@ -1461,33 +1465,111 @@ fn exercise_food(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHe
         .collect()
 }
 
-const BASIC_FOODS: [(&str, &str, play::Hand, u32); 3] = [
-    ("BreadEater", "minecraft:bread", play::Hand::MainHand, 32),
-    (
-        "SteakEater",
-        "minecraft:cooked_beef",
-        play::Hand::OffHand,
-        32,
-    ),
-    (
-        "KelpEater",
-        "minecraft:dried_kelp",
-        play::Hand::MainHand,
-        16,
-    ),
+struct FoodCase {
+    name: &'static str,
+    item: &'static str,
+    hand: play::Hand,
+    ticks: u32,
+    remainder: Option<&'static str>,
+}
+
+const FOOD_CASES: [FoodCase; 6] = [
+    FoodCase {
+        name: "BreadEater",
+        item: "minecraft:bread",
+        hand: play::Hand::MainHand,
+        ticks: 32,
+        remainder: None,
+    },
+    FoodCase {
+        name: "SteakEater",
+        item: "minecraft:cooked_beef",
+        hand: play::Hand::OffHand,
+        ticks: 32,
+        remainder: None,
+    },
+    FoodCase {
+        name: "KelpEater",
+        item: "minecraft:dried_kelp",
+        hand: play::Hand::MainHand,
+        ticks: 16,
+        remainder: None,
+    },
+    FoodCase {
+        name: "StewEater",
+        item: "minecraft:mushroom_stew",
+        hand: play::Hand::MainHand,
+        ticks: 32,
+        remainder: Some("minecraft:bowl"),
+    },
+    FoodCase {
+        name: "SoupEater",
+        item: "minecraft:beetroot_soup",
+        hand: play::Hand::OffHand,
+        ticks: 32,
+        remainder: Some("minecraft:bowl"),
+    },
+    FoodCase {
+        name: "RabbitEater",
+        item: "minecraft:rabbit_stew",
+        hand: play::Hand::MainHand,
+        ticks: 32,
+        remainder: Some("minecraft:bowl"),
+    },
 ];
 
-fn exercise_basic_foods(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHealth> {
-    BASIC_FOODS
+fn exercise_food_defaults(server: &mut Server, port: u16) -> Vec<play::clientbound::SetHealth> {
+    FOOD_CASES
         .into_iter()
-        .map(|(name, item, hand, ticks)| {
+        .map(|case| {
+            let FoodCase {
+                name,
+                item,
+                hand,
+                ticks,
+                remainder,
+            } = case;
             let mut client = Client::join(port, name);
             client.stream.set_nodelay(true).unwrap();
+            let entity_id = client.matching("Play Login", |packet| match packet {
+                Packet::Login(login) => Some(login.entity_id),
+                _ => None,
+            });
             confirm_position(&mut client);
             assert_eq!(health(&mut client).food, 16);
+            let sequence = if remainder.is_some() && hand == play::Hand::OffHand {
+                use_food(&mut client, hand, 1);
+                cancel_food(&mut client, entity_id);
+                2
+            } else {
+                1
+            };
+            let slot = if hand == play::Hand::MainHand { 36 } else { 45 };
+            let expected_item = harpas_core::item::items()
+                .id(remainder.unwrap_or(item))
+                .unwrap();
+            let (mut updated_health, mut delivered_remainder) = (None, remainder.is_none());
             let started = Instant::now();
-            use_food(&mut client, hand, 1);
-            let after = health(&mut client);
+            use_food(&mut client, hand, sequence);
+            let after = client.matching("food update and any returned container", |packet| {
+                match packet {
+                    Packet::SetHealth(health) => updated_health = Some(health),
+                    Packet::SetContainerSlot(change)
+                        if change.window_id == 0
+                            && change.slot == slot
+                            && change.item.item as u32 == expected_item
+                            && change.item.count == 1 =>
+                    {
+                        delivered_remainder = true;
+                    }
+                    _ => {}
+                }
+                if delivered_remainder {
+                    updated_health.take()
+                } else {
+                    None
+                }
+            });
             let elapsed = started.elapsed();
             let expected = Duration::from_millis(u64::from(ticks) * 50);
             // The exact ticks are checked in the engine. Allow for network and scheduling delays here.
@@ -1498,13 +1580,12 @@ fn exercise_basic_foods(server: &mut Server, port: u16) -> Vec<play::clientbound
             drop(client);
             server.wait_for(&format!("{name} left the game"));
 
-            let slot = if hand == play::Hand::MainHand { 36 } else { 45 };
             let (mut saved_health, mut saved_stack) = (None, None);
             Client::join(port, name).matching("food and inventory after reconnect", |packet| {
                 match packet {
                     Packet::SetHealth(health) => saved_health = Some(health),
                     Packet::SetContainerContent(contents) if contents.window_id == 0 => {
-                        saved_stack = Some(contents.slots[slot].clone());
+                        saved_stack = Some(contents.slots[slot as usize].clone());
                     }
                     _ => {}
                 }
@@ -1512,11 +1593,8 @@ fn exercise_basic_foods(server: &mut Server, port: u16) -> Vec<play::clientbound
             });
             assert_eq!(saved_health.unwrap(), after);
             let stack = saved_stack.unwrap();
-            assert_eq!(
-                stack.item as u32,
-                harpas_core::item::items().id(item).unwrap()
-            );
-            assert_eq!(stack.count, 1, "one {item} should have been eaten");
+            assert_eq!(stack.item as u32, expected_item);
+            assert_eq!(stack.count, 1, "inventory after eating {item}");
             after
         })
         .collect()
@@ -1554,14 +1632,23 @@ fn food_and_natural_regeneration_match_vanilla() {
             }
             harpas_anvil::write_player(&world, offline_uuid(name), &data).unwrap();
         }
-        for (name, item, hand, _) in BASIC_FOODS {
+        for FoodCase {
+            name,
+            item,
+            hand,
+            remainder,
+            ..
+        } in FOOD_CASES
+        {
             let mut data = Compound::from_iter([
                 ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
                 ("Health", Nbt::Float(20.0)),
                 ("foodLevel", Nbt::Int(16)),
                 ("foodSaturationLevel", Nbt::Float(10.0)),
             ]);
-            let mut stack = Compound::from_iter([("id", Nbt::from(item)), ("count", Nbt::Int(2))]);
+            let count = if remainder.is_some() { 1 } else { 2 };
+            let mut stack =
+                Compound::from_iter([("id", Nbt::from(item)), ("count", Nbt::Int(count))]);
             if hand == play::Hand::MainHand {
                 stack.insert("Slot", 0_i8);
                 data.insert(
@@ -1575,11 +1662,11 @@ fn food_and_natural_regeneration_match_vanilla() {
         }
     }
     let expected = exercise_food(&mut reference, port);
-    let expected_basic = exercise_basic_foods(&mut reference, port);
+    let expected_foods = exercise_food_defaults(&mut reference, port);
     stop(&mut reference);
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
     assert_eq!(exercise_food(&mut server, other), expected);
-    assert_eq!(exercise_basic_foods(&mut server, other), expected_basic);
+    assert_eq!(exercise_food_defaults(&mut server, other), expected_foods);
     stop(&mut server);
     let [expected, actual] = [&vanilla, &harpas].map(|dir| {
         harpas_anvil::read_player(&dir.join("world"), offline_uuid("Runner"))

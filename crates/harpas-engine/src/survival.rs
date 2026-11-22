@@ -50,7 +50,7 @@ impl Vitals {
         self.health = (self.health + amount).min(MAX_HEALTH);
     }
 
-    fn eat(&mut self, food: FoodProperties) {
+    fn eat(&mut self, food: &FoodProperties) {
         self.food = self.food.saturating_add(food.nutrition).min(MAX_FOOD);
         self.saturation = (self.saturation + food.saturation).min(self.food as f32);
     }
@@ -257,13 +257,18 @@ impl Game {
         }
         using.ticks_left = using.ticks_left.saturating_sub(1);
         if using.ticks_left == 0 {
+            let mut remainder = using.food.remainder.clone().unwrap_or_default();
             held.count -= 1;
             if held.is_empty() {
-                *held = ItemStack::empty();
+                *held = std::mem::take(&mut remainder);
             }
-            player.vitals.eat(using.food);
+            player.vitals.eat(&using.food);
+            player.inventory.add(&mut remainder, false);
             player.send(Output::FinishUsingItem(player.player.entity_id));
             self.stop_using_item(index);
+            if !remainder.is_empty() {
+                self.drop_item(index, remainder);
+            }
         }
     }
 
@@ -536,11 +541,12 @@ mod tests {
         }
         assert!(vitals.tick_food(rules));
         vitals.food_timer = 79;
-        vitals.eat(FoodProperties {
+        vitals.eat(&FoodProperties {
             nutrition: 1,
             saturation: 0.0,
             can_always_eat: false,
             use_ticks: 1,
+            remainder: None,
         });
         assert!(!vitals.tick_food(rules));
         assert_eq!(vitals.food_timer, 0);

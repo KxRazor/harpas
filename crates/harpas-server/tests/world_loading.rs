@@ -212,7 +212,7 @@ fn next_frame(client: &mut TcpStream, frames: &mut FrameReader) -> Vec<u8> {
 }
 
 #[test]
-fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
+fn incompatible_chunk_stops_the_idle_server_during_player_login() {
     if !loopback_available() {
         return;
     }
@@ -237,7 +237,8 @@ fn incompatible_chunk_stops_the_idle_server_after_a_player_joins() {
     };
     assert_eq!(status.code(), Some(1));
     let lines = fs::read_to_string(log).unwrap();
-    assert!(lines.contains("Steve joined the game"), "{lines}");
+    // The spawn chunk can fail to load before the connection finishes joining.
+    assert!(lines.contains("UUID of player Steve is"), "{lines}");
     assert!(lines.contains("Cannot load chunk 0, 0"), "{lines}");
     assert!(lines.contains("--forceUpgrade"), "{lines}");
 }

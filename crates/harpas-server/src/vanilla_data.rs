@@ -90,7 +90,11 @@ fn verify_jar(jar: &Path) -> io::Result<()> {
 fn generate_if_possible(server: &Path, jar: &Path) {
     if matches!(crate::block_entity_registry::load(server), Ok(Some(_)))
         && matches!(crate::block_entity_registry::load_builtin(server), Ok(Some(data))
-            if data.has_food_remainders() && data.has_food_effects() && data.has_suspicious_stew() && data.has_milk_bucket())
+            if data.has_food_remainders()
+                && data.has_food_effects()
+                && data.has_suspicious_stew()
+                && data.has_milk_bucket()
+                && data.has_honey_bottle())
     {
         return;
     }

@@ -40,7 +40,7 @@ pub struct Consumable {
     pub food: Option<FoodProperties>,
     /// Number of ticks use must be held.
     pub use_ticks: u32,
-    /// The default stack left after consumption, such as a bowl or bucket.
+    /// The default stack left after consumption, such as a bowl, bucket or bottle.
     pub remainder: Option<ItemStack>,
     /// Action taken when consumption finishes.
     pub effect: Option<ConsumeEffect>,
@@ -56,6 +56,8 @@ pub enum ConsumeEffect {
         /// Probability of applying the group, from zero to one.
         probability: f32,
     },
+    /// Remove the specified active status effects.
+    Remove(Vec<EffectKind>),
     /// Remove all active status effects.
     ClearAll,
 }

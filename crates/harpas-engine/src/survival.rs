@@ -346,14 +346,12 @@ impl PlayerState {
         }
     }
 
-    fn clear_effects(&mut self, effect_ids: [Option<i32>; EffectKind::ALL.len()]) {
-        for (kind, effect_id) in EffectKind::ALL.into_iter().zip(effect_ids) {
-            if self.effects[kind as usize].take().is_some() {
-                self.send_effect(kind, effect_id, false);
-                if kind == EffectKind::Absorption {
-                    self.send_max_absorption();
-                    self.set_absorption(0.0);
-                }
+    fn remove_effect(&mut self, kind: EffectKind, effect_id: Option<i32>) {
+        if self.effects[kind as usize].take().is_some() {
+            self.send_effect(kind, effect_id, false);
+            if kind == EffectKind::Absorption {
+                self.send_max_absorption();
+                self.set_absorption(0.0);
             }
         }
     }
@@ -467,8 +465,16 @@ impl Game {
                     effects,
                     probability,
                 }) if player.random.next_float() < probability => effects,
+                Some(ConsumeEffect::Remove(kinds)) => {
+                    for kind in kinds {
+                        player.remove_effect(kind, effect_ids[kind as usize]);
+                    }
+                    Vec::new()
+                }
                 Some(ConsumeEffect::ClearAll) => {
-                    player.clear_effects(effect_ids);
+                    for (kind, effect_id) in EffectKind::ALL.into_iter().zip(effect_ids) {
+                        player.remove_effect(kind, effect_id);
+                    }
                     Vec::new()
                 }
                 _ => Vec::new(),

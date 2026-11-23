@@ -233,13 +233,14 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
   order of their numeric IDs, in `.harpas/vanilla-data/<version>-registries.json`: the tags sent to Java clients
   need the IDs of blocks, items, fluids and other built-in registries
   ([java-connection.md](java-connection.md#tags)). The registry file also stores `consumable` defaults and,
-  when present, `food` and `use_remainder` for supported foods and drinks. The generator removes the other reports, unpacked
-  executable files and downloaded jar afterwards. Neither the jar nor the generated data is committed or redistributed.
+  when present, `food` and `use_remainder` for supported foods and drinks. It also stores the attack modifiers
+  and durability of swords. The generator removes the other reports, unpacked executable files and downloaded
+  jar afterwards. Neither the jar nor the generated data is committed or redistributed.
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
   before the data was added, the server warns about missing block entity IDs, built-in registries or consumable
   defaults. Apples remain available as a fallback until the consumable defaults are generated. Older registry
-  files still provide the consumables they already include. To add newly supported items such as Regeneration
-  potions, install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a
+  files still provide the consumables they already include. To enable sword combat or add newly supported
+  consumables such as Regeneration potions, install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a
   downloaded jar, run `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA
   and the jar hash.
 

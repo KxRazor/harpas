@@ -14,8 +14,8 @@ const MAX_FOOD: i32 = 20;
 const SAFE_FALL_DISTANCE: f64 = 3.0;
 const LAVA_FIRE_TICKS: i16 = 15 * 20;
 const SURVIVAL_ENTITY_REACH: f64 = 3.0;
-// The default attack speed is four attacks per second.
-const BARE_HAND_RECHARGE_TICKS: u8 = 5;
+const BASE_ATTACK_SPEED: f64 = 4.0;
+const BASE_ATTACK_DAMAGE: f64 = 1.0;
 
 pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
 
@@ -581,13 +581,29 @@ impl Game {
             }
             let before = player.vitals;
             player.ticks_alive = player.ticks_alive.wrapping_add(1);
-            let main_hand_item = player.inventory.slots[player.inventory.hand_slot(false)].item;
-            if player.last_main_hand_item == main_hand_item {
-                player.attack_charge_ticks =
-                    (player.attack_charge_ticks + 1).min(BARE_HAND_RECHARGE_TICKS);
+            let main_hand = &player.inventory.slots[player.inventory.hand_slot(false)];
+            if player.last_main_hand_item == main_hand.item {
+                player.attack_charge_ticks = player.attack_charge_ticks.saturating_add(1);
             } else {
-                player.last_main_hand_item = main_hand_item;
+                player.last_main_hand_item = main_hand.item;
                 player.attack_charge_ticks = 0;
+            }
+            let codec = self
+                .world
+                .as_ref()
+                .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+            let sword = codec.sword(main_hand);
+            player.attack_damage_modifier = sword.map_or(0.0, |sword| sword.attack_damage_modifier);
+            let modifier = sword
+                .map(|sword| sword.attack_speed_modifier)
+                .filter(|&modifier| modifier != 0.0);
+            if player.attack_speed_modifier != modifier {
+                player.attack_speed_modifier = modifier;
+                player.send(Output::AttackSpeed {
+                    entity_id: player.player.entity_id,
+                    base_speed: BASE_ATTACK_SPEED,
+                    modifier,
+                });
             }
             self.tick_fire(index, rules);
             if self.players[index].is_dead() {
@@ -705,13 +721,20 @@ impl Game {
             .map_or_else(Default::default, |world| world.survival_rules);
         let source = &self.players[attacker];
         let target = &self.players[defender];
+        let codec = self
+            .world
+            .as_ref()
+            .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+        let slot = source.inventory.hand_slot(false);
+        let main_hand = &source.inventory.slots[slot];
+        let sword = codec.sword(main_hand);
         if !rules.pvp
             || attacker == defender
             || source.player.profile.game_mode != GameMode::Survival
             || !target.uses_food()
             || source.awaiting_teleport.is_some()
             || target.awaiting_teleport.is_some()
-            || !source.inventory.slots[source.inventory.hand_slot(false)].is_empty()
+            || (!main_hand.is_empty() && sword.is_none())
         {
             return;
         }
@@ -728,10 +751,12 @@ impl Game {
         let source_id = source.player.entity_id;
         let mut dx = x - source.player.position.x;
         let mut dz = z - source.player.position.z;
-        let charge = ((f32::from(source.attack_charge_ticks) + 0.5)
-            / f32::from(BARE_HAND_RECHARGE_TICKS))
-        .min(1.0);
-        let damage = 0.2 + charge * charge * 0.8;
+        // Equipment attributes change on the player tick. Wear applies to the item held at the hit.
+        let speed = BASE_ATTACK_SPEED + source.attack_speed_modifier.unwrap_or_default();
+        let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
+        let recharge_ticks = 20.0 / speed as f32;
+        let charge = ((f32::from(source.attack_charge_ticks) + 0.5) / recharge_ticks).min(1.0);
+        let damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
         self.players[attacker].attack_charge_ticks = 0;
         let fresh_hit = self.players[defender].hurt_cooldown <= 10;
         let health = self.players[defender].vitals.health;
@@ -759,6 +784,20 @@ impl Game {
         }
         if health != target.vitals.health {
             target.send(target.vitals.update());
+        }
+        if let Some(sword) = sword {
+            let codec = self
+                .world
+                .as_ref()
+                .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+            let stack = &mut self.players[attacker].inventory.slots[slot];
+            if !codec.component_removed(stack, "minecraft:weapon") {
+                match codec.wear_tool(stack, sword.durability) {
+                    Ok(true) => Self::send_main_hand_item_broken(&self.players, source_id),
+                    Ok(false) => {}
+                    Err(error) => log::warn!("Cannot apply sword wear to item {slot}: {error}"),
+                }
+            }
         }
     }
 
@@ -880,6 +919,9 @@ impl Game {
         player.fall_distance = 0.0;
         player.hurt_cooldown = 0;
         player.attack_charge_ticks = 0;
+        player.last_main_hand_item = 0;
+        player.attack_damage_modifier = 0.0;
+        player.attack_speed_modifier = None;
         player.last_damage = 0.0;
         player.peaceful_food_ticks = 0;
         player.effects = Default::default();

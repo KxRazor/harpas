@@ -75,6 +75,17 @@ pub struct FoodEffect {
     pub amplifier: u8,
 }
 
+/// The default main-hand modifiers and durability of an ordinary vanilla sword.
+#[derive(Debug, Clone, Copy)]
+pub struct Sword {
+    /// Additive modifier to the player's attack damage.
+    pub attack_damage_modifier: f64,
+    /// Additive modifier to the player's attack speed.
+    pub attack_speed_modifier: f64,
+    /// Maximum durability of the item before stack overrides.
+    pub durability: i32,
+}
+
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
 #[derive(Debug)]
 pub struct ItemCodec {
@@ -85,6 +96,7 @@ pub struct ItemCodec {
     mob_effects: Vec<String>,
     effect_ids: [Option<i32>; EffectKind::ALL.len()],
     consumables: HashMap<u32, Consumable>,
+    swords: HashMap<u32, Sword>,
 }
 
 impl Default for ItemCodec {
@@ -126,6 +138,7 @@ impl ItemCodec {
             potions: Vec::new(),
             mob_effects: Vec::new(),
             effect_ids: Default::default(),
+            swords: HashMap::new(),
             consumables: HashMap::from([(
                 items().id("minecraft:apple").expect("registered apple"),
                 Consumable {
@@ -151,6 +164,24 @@ impl ItemCodec {
     pub fn with_consumables(mut self, consumables: HashMap<u32, Consumable>) -> Self {
         self.consumables = consumables;
         self
+    }
+
+    /// Loads the sword defaults from the owner's server jar, keyed by item ID.
+    pub fn with_swords(mut self, swords: HashMap<u32, Sword>) -> Self {
+        self.swords = swords;
+        self
+    }
+
+    pub(crate) fn sword(&self, stack: &ItemStack) -> Option<Sword> {
+        if stack.is_empty() {
+            return None;
+        }
+        let mut sword = *self.swords.get(&stack.item)?;
+        if self.component_removed(stack, "minecraft:attribute_modifiers") {
+            sword.attack_damage_modifier = 0.0;
+            sword.attack_speed_modifier = 0.0;
+        }
+        Some(sword)
     }
 
     pub(crate) fn consumable(&self, stack: &ItemStack) -> Option<Consumable> {

@@ -158,11 +158,14 @@ above 10 health on Easy or Peaceful, or above 1 on Normal. On Hard the damage ca
 natural regeneration restores one food point every 10 player ticks, before the starvation check. Falls,
 starvation and Poison also use the damage cooldown, and death messages give the cause.
 
-Java Survival players can punch with an empty main hand when the saved `minecraft:pvp` rule allows it.
-Reach is measured from the attacker's eyes to the target player's hitbox. A punch uses the attacker's
-current charge and starts recharging it. The player's damage cooldown determines whether the punch deals
-damage, and a fresh hit sends knockback velocity to the target. Damage events and lethal hit messages
-identify the attacker.
+Java Survival players can punch or strike with a sword when the saved `minecraft:pvp` rule allows it.
+Reach is measured from the attacker's eyes to the target player's hitbox. An attack uses the current charge
+and starts recharging it. Swords use attack damage, attack speed and durability from the locally generated
+item defaults. The player tick resets the charge if the main-hand item type changed and applies the equipped
+item's attack modifiers. The server sends attack speed changes for the client's attack indicator. The target's
+damage cooldown determines whether the attack deals damage.
+A successful strike wears the sword by one point, and a fresh hit sends knockback velocity to the target.
+Damage events and lethal hit messages identify the attacker.
 
 ### 2. Parallel only where it cannot be observed
 

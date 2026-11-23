@@ -1,4 +1,4 @@
-//! Built-in registries and consumable defaults generated from the owner's verified Minecraft server jar.
+//! Built-in registries and item defaults generated from the owner's verified Minecraft server jar.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_core::item::items;
 use harpas_engine::inventory::ItemStack;
-use harpas_engine::item_data::{Consumable, ConsumeEffect, FoodEffect, FoodProperties};
+use harpas_engine::item_data::{Consumable, ConsumeEffect, FoodEffect, FoodProperties, Sword};
 use harpas_engine::player::EffectKind;
 use serde_json::{Map, Value, json};
 
@@ -87,6 +87,8 @@ pub(crate) struct Builtin {
     pub(crate) registries: HashMap<String, Vec<String>>,
     /// Absent in installations generated before the item component reports were read.
     pub(crate) consumables: Option<HashMap<u32, Consumable>>,
+    /// Absent in installations generated before sword defaults were read.
+    pub(crate) swords: Option<HashMap<u32, Sword>>,
 }
 
 impl Builtin {
@@ -221,7 +223,70 @@ pub(crate) fn load_builtin(server: &Path) -> io::Result<Option<Builtin>> {
             .or_else(|| data.get("foods"))
             .map(consumable_defaults)
             .transpose()?,
+        swords: data.get("swords").map(sword_defaults).transpose()?,
     }))
+}
+
+fn sword_reports(directory: &Path) -> io::Result<Map<String, Value>> {
+    let mut swords = Map::new();
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with("_sword") {
+            let report: Value = serde_json::from_reader(File::open(&path)?).map_err(invalid)?;
+            let components = &report["components"];
+            swords.insert(
+                format!("minecraft:{name}"),
+                json!({
+                    "attribute_modifiers": components["minecraft:attribute_modifiers"],
+                    "max_damage": components["minecraft:max_damage"],
+                }),
+            );
+        }
+    }
+    if !swords.contains_key("minecraft:wooden_sword") {
+        return Err(invalid("the item reports have no wooden sword defaults"));
+    }
+    Ok(swords)
+}
+
+fn sword_defaults(value: &Value) -> io::Result<HashMap<u32, Sword>> {
+    value
+        .as_object()
+        .ok_or_else(|| invalid("sword defaults are not an object"))?
+        .iter()
+        .map(|(name, entry)| {
+            let bad = || invalid(format!("invalid sword defaults for {name}"));
+            let id = items().id(name).ok_or_else(bad)?;
+            let modifiers = entry["attribute_modifiers"].as_array().ok_or_else(bad)?;
+            let modifier = |attribute: &str| {
+                modifiers
+                    .iter()
+                    .find(|value| {
+                        value["type"] == attribute
+                            && value["operation"] == "add_value"
+                            && value["slot"] == "mainhand"
+                    })
+                    .and_then(|value| value["amount"].as_f64())
+                    .ok_or_else(bad)
+            };
+            let durability = entry["max_damage"]
+                .as_i64()
+                .and_then(|value| i32::try_from(value).ok())
+                .filter(|&value| value > 0)
+                .ok_or_else(bad)?;
+            Ok((
+                id,
+                Sword {
+                    attack_damage_modifier: modifier("minecraft:attack_damage")?,
+                    attack_speed_modifier: modifier("minecraft:attack_speed")?,
+                    durability,
+                },
+            ))
+        })
+        .collect()
 }
 
 fn consumable_reports(directory: &Path) -> io::Result<Map<String, Value>> {
@@ -434,7 +499,7 @@ pub(crate) fn load(server: &Path) -> io::Result<Option<Registry>> {
     Registry::entries(&data["entries"]).map(Some)
 }
 
-/// Runs Mojang's data generator, storing the registries and supported consumable defaults on this machine.
+/// Runs Mojang's data generator, storing the registries and supported item defaults on this machine.
 /// The caller must verify the jar before calling this function.
 pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
     let path = registry_path(server);
@@ -462,11 +527,12 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
     let report: Value = serde_json::from_slice(&report).map_err(invalid)?;
     let registry = Registry::from_report(&report)?;
     let builtin = builtin_from_report(&report)?;
-    let consumables = consumable_reports(
-        &scratch
-            .0
-            .join("generated/reports/minecraft/components/item"),
-    )?;
+    let item_reports = scratch
+        .0
+        .join("generated/reports/minecraft/components/item");
+    let consumables = consumable_reports(&item_reports)?;
+    let swords = Value::Object(sword_reports(&item_reports)?);
+    sword_defaults(&swords)?;
     write(
         &scratch,
         &builtin_path(server),
@@ -475,6 +541,7 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
             "server_sha1": SERVER_JAR_SHA1,
             "registries": builtin,
             "consumables": consumables,
+            "swords": swords,
         }),
     )?;
     write(

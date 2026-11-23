@@ -824,6 +824,12 @@ impl TickWork for Game {
                             }
                             continue;
                         }
+                        player::Input::Attack(target) => {
+                            if let Some(index) = self.active(entity_id) {
+                                self.attack_player(index, target);
+                            }
+                            continue;
+                        }
                         player::Input::Movement(movement) => {
                             if let Some(index) = self.active(entity_id) {
                                 let state = &mut self.players[index];
@@ -966,6 +972,7 @@ impl TickWork for Game {
                             | player::Input::ChatSessionEnded
                             | player::Input::ChatMessage(_)
                             | player::Input::Respawn
+                            | player::Input::Attack(_)
                             | player::Input::Movement(_)
                             | player::Input::Dig { .. }
                             | player::Input::SetCreativeSlot { .. }
@@ -1148,6 +1155,7 @@ impl Game {
                     uuid: player.player.profile.uuid,
                     name: player.player.profile.name.clone(),
                     kind: None,
+                    attacker: None,
                 });
             }
         }
@@ -1735,6 +1743,60 @@ mod tests {
             rotation: Some([yaw, 0.0]),
             on_ground: false,
         })
+    }
+
+    #[test]
+    fn rapid_bare_hand_attacks_share_charge_across_targets() {
+        use harpas_core::nbt::Compound;
+
+        let mut game = game();
+        let _attacker = join(&mut game, 1, "Attacker", 2);
+        let _defender = join(&mut game, 2, "Defender", 2);
+        let _other = join(&mut game, 3, "Other", 2);
+        game.connections();
+        for (offset, player) in game.players.iter_mut().enumerate() {
+            player.player.profile.game_mode = GameMode::Survival;
+            player.player.position.x += offset as f64;
+            player.awaiting_teleport = None;
+        }
+        let game_rules = Compound::from_iter([("minecraft:natural_health_regeneration", 0_i8)]);
+        let rules = survival::SurvivalRules::read(Some(&game_rules), None);
+        for _ in 0..5 {
+            game.tick_survival(rules);
+        }
+
+        input(&mut game, 1, Input::Attack(2));
+        input(&mut game, 1, Input::Attack(2));
+        input(&mut game, 1, Input::Attack(3));
+        game.connections();
+        assert_eq!(game.players[1].vitals.health, 19.0);
+        assert_eq!(game.players[2].vitals.health, 20.0 - 0.208);
+
+        game.players[2].player.profile.game_mode = GameMode::Creative;
+        for _ in 0..10 {
+            game.tick_survival(rules);
+        }
+        input(&mut game, 1, Input::Attack(3));
+        input(&mut game, 1, Input::Attack(1));
+        input(&mut game, 1, Input::Attack(2));
+        game.connections();
+        assert_eq!(game.players[0].vitals.health, 20.0);
+        assert_eq!(game.players[1].vitals.health, 18.0);
+        assert_eq!(game.players[2].vitals.health, 20.0 - 0.208);
+
+        game.players[0].inventory.slots[inventory::HOTBAR] = inventory::ItemStack {
+            item: harpas_core::item::items().id("minecraft:apple").unwrap(),
+            count: 1,
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            game.tick_survival(rules);
+        }
+        game.players[0].inventory.slots[inventory::HOTBAR] = inventory::ItemStack::empty();
+        game.tick_survival(rules);
+        input(&mut game, 1, Input::Attack(2));
+        game.connections();
+        assert_eq!(game.players[1].vitals.health, 18.0 - 0.208);
     }
 
     #[test]

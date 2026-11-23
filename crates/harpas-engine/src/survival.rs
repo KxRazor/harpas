@@ -13,6 +13,9 @@ const MAX_HEALTH: f32 = 20.0;
 const MAX_FOOD: i32 = 20;
 const SAFE_FALL_DISTANCE: f64 = 3.0;
 const LAVA_FIRE_TICKS: i16 = 15 * 20;
+const SURVIVAL_ENTITY_REACH: f64 = 3.0;
+// The default attack speed is four attacks per second.
+const BARE_HAND_RECHARGE_TICKS: u8 = 5;
 
 pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
 
@@ -248,6 +251,7 @@ pub(crate) struct SurvivalRules {
     keep_inventory: bool,
     show_death_messages: bool,
     natural_regeneration: bool,
+    pvp: bool,
     difficulty: Difficulty,
 }
 
@@ -278,6 +282,7 @@ impl SurvivalRules {
             keep_inventory: boolean("minecraft:keep_inventory", false),
             show_death_messages: boolean("minecraft:show_death_messages", true),
             natural_regeneration: boolean("minecraft:natural_health_regeneration", true),
+            pvp: boolean("minecraft:pvp", true),
             difficulty,
         }
     }
@@ -576,6 +581,14 @@ impl Game {
             }
             let before = player.vitals;
             player.ticks_alive = player.ticks_alive.wrapping_add(1);
+            let main_hand_item = player.inventory.slots[player.inventory.hand_slot(false)].item;
+            if player.last_main_hand_item == main_hand_item {
+                player.attack_charge_ticks =
+                    (player.attack_charge_ticks + 1).min(BARE_HAND_RECHARGE_TICKS);
+            } else {
+                player.last_main_hand_item = main_hand_item;
+                player.attack_charge_ticks = 0;
+            }
             self.tick_fire(index, rules);
             if self.players[index].is_dead() {
                 self.players[index].send(self.players[index].vitals.update());
@@ -682,14 +695,87 @@ impl Game {
         }
     }
 
-    fn hurt_player(&mut self, index: usize, damage: f32, kind: DamageKind, rules: SurvivalRules) {
+    pub(crate) fn attack_player(&mut self, attacker: usize, target_id: i32) {
+        let Some(defender) = self.active(target_id) else {
+            return;
+        };
+        let rules = self
+            .world
+            .as_ref()
+            .map_or_else(Default::default, |world| world.survival_rules);
+        let source = &self.players[attacker];
+        let target = &self.players[defender];
+        if !rules.pvp
+            || attacker == defender
+            || source.player.profile.game_mode != GameMode::Survival
+            || !target.uses_food()
+            || source.awaiting_teleport.is_some()
+            || target.awaiting_teleport.is_some()
+            || !source.inventory.slots[source.inventory.hand_slot(false)].is_empty()
+        {
+            return;
+        }
+        let Position { x, y, z, .. } = target.player.position;
+        let [eye_x, eye_y, eye_z] = source.eye_position();
+        // Measure reach to the nearest point on the standing player's hitbox.
+        let dx = eye_x - eye_x.clamp(x - 0.3, x + 0.3);
+        let dy = eye_y - eye_y.clamp(y, y + 1.8);
+        let dz = eye_z - eye_z.clamp(z - 0.3, z + 0.3);
+        if dx * dx + dy * dy + dz * dz >= SURVIVAL_ENTITY_REACH.powi(2) {
+            return;
+        }
+
+        let source_id = source.player.entity_id;
+        let mut dx = x - source.player.position.x;
+        let mut dz = z - source.player.position.z;
+        let charge = ((f32::from(source.attack_charge_ticks) + 0.5)
+            / f32::from(BARE_HAND_RECHARGE_TICKS))
+        .min(1.0);
+        let damage = 0.2 + charge * charge * 0.8;
+        self.players[attacker].attack_charge_ticks = 0;
+        let fresh_hit = self.players[defender].hurt_cooldown <= 10;
+        let health = self.players[defender].vitals.health;
+        if !self.hurt_player(defender, damage, DamageKind::PlayerAttack(source_id), rules) {
+            return;
+        }
+        self.players[attacker].vitals.exhaust(0.1);
+        let target = &mut self.players[defender];
+        if fresh_hit {
+            while dx * dx + dz * dz < 1.0e-5 {
+                dx = (target.random.next_double() - 0.5) * 0.02;
+                dz = (target.random.next_double() - 0.5) * 0.02;
+            }
+            let horizontal = 0.4 / dx.hypot(dz);
+            // A standing player already carries one tick's downward gravity before the hit.
+            let vertical = if target.player.position.on_ground {
+                0.4 - 0.08 * 0.98 / 2.0
+            } else {
+                0.0
+            };
+            target.send(Output::EntityVelocity {
+                entity_id: target_id,
+                velocity: [dx * horizontal, vertical, dz * horizontal],
+            });
+        }
+        if health != target.vitals.health {
+            target.send(target.vitals.update());
+        }
+    }
+
+    fn hurt_player(
+        &mut self,
+        index: usize,
+        damage: f32,
+        kind: DamageKind,
+        rules: SurvivalRules,
+    ) -> bool {
         let player = &mut self.players[index];
         if matches!(kind, DamageKind::Lava | DamageKind::OnFire)
             && (!rules.fire_damage
                 || !player.uses_food()
                 || player.effects[EffectKind::FireResistance as usize].is_some())
         {
-            return;
+            return false;
         }
         // Only the part above the previous hit applies during the first ten ticks of damage immunity.
         let taken = if player.hurt_cooldown > 10 {
@@ -699,7 +785,7 @@ impl Game {
             damage
         };
         if taken <= 0.0 {
-            return;
+            return false;
         }
         player.last_damage = damage;
         let taken = match &player.effects[EffectKind::Resistance as usize] {
@@ -710,7 +796,11 @@ impl Game {
             _ => taken,
         };
         let absorbed = player.vitals.absorption.min(taken);
-        player.vitals.health = (player.vitals.health - (taken - absorbed)).max(0.0);
+        let health_damage = taken - absorbed;
+        if health_damage > 0.0 && matches!(kind, DamageKind::PlayerAttack(_)) {
+            player.vitals.exhaust(0.1);
+        }
+        player.vitals.health = (player.vitals.health - health_damage).max(0.0);
         let entity_id = player.player.entity_id;
         for viewer in &self.players {
             if viewer.player.entity_id == entity_id || viewer.tracked.contains(&entity_id) {
@@ -722,6 +812,7 @@ impl Game {
         if self.players[index].is_dead() {
             self.die(index, kind, rules);
         }
+        true
     }
 
     fn die(&mut self, index: usize, kind: DamageKind, rules: SurvivalRules) {
@@ -746,6 +837,13 @@ impl Game {
         let entity_id = player.player.entity_id;
         let uuid = player.player.profile.uuid;
         let name = player.player.profile.name.clone();
+        let attacker = match kind {
+            DamageKind::PlayerAttack(id) => self.players.iter().find_map(|state| {
+                let profile = &state.player.profile;
+                (state.player.entity_id == id).then(|| (profile.uuid, profile.name.clone()))
+            }),
+            _ => None,
+        };
         for viewer in &self.players {
             if rules.show_death_messages || viewer.player.entity_id == entity_id {
                 viewer.send(Output::Death {
@@ -753,6 +851,7 @@ impl Game {
                     uuid,
                     name: name.clone(),
                     kind: rules.show_death_messages.then_some(kind),
+                    attacker: attacker.clone(),
                 });
             }
             if viewer.tracked.contains(&entity_id) {
@@ -780,6 +879,7 @@ impl Game {
         player.sprinting = false;
         player.fall_distance = 0.0;
         player.hurt_cooldown = 0;
+        player.attack_charge_ticks = 0;
         player.last_damage = 0.0;
         player.peaceful_food_ticks = 0;
         player.effects = Default::default();

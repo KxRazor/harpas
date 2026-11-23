@@ -527,6 +527,9 @@ as shown by the parity report.
   - [x] Normal, extended and stronger Regeneration potions read their variant from the held stack and return
         a glass bottle. Both hands, full hunger, cancellation, the healing interval and remaining effect
         duration on reconnect are compared with vanilla (`regeneration_potions_match_vanilla`).
+  - [x] Java Survival players can punch each other with an empty main hand. Reach, damage, knockback, a
+        rapid repeat attack and a player-attributed death are compared with vanilla
+        (`bare_hand_combat_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

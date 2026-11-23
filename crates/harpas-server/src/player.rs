@@ -126,6 +126,7 @@ pub(crate) fn receive(
                     stack: engine_stack(p.item.0),
                 },
                 Packet::SetHeldItem(p) => Input::SelectHotbarSlot(p.slot),
+                Packet::Attack(p) => Input::Attack(p.entity_id),
                 Packet::PlayerInput(p) => Input::SecondaryUse(p.inputs.sneak),
                 Packet::PlayerCommand(p) => match p.action {
                     play::PlayerCommandAction::StartSprinting => Input::Sprinting(true),
@@ -682,6 +683,10 @@ pub(crate) fn send(
                     DamageKind::Magic => "minecraft:magic",
                     DamageKind::Lava => "minecraft:lava",
                     DamageKind::OnFire => "minecraft:on_fire",
+                    DamageKind::PlayerAttack(attacker) => {
+                        connection.send_melee_damage(entity_id, attacker);
+                        continue;
+                    }
                 };
                 connection.send_environmental_damage(entity_id, source);
                 continue;
@@ -691,6 +696,7 @@ pub(crate) fn send(
                 uuid,
                 name,
                 kind,
+                attacker,
             } => {
                 let message = kind.map(|kind| {
                     let translation = match kind {
@@ -699,14 +705,16 @@ pub(crate) fn send(
                         DamageKind::Magic => "death.attack.magic",
                         DamageKind::Lava => "death.attack.lava",
                         DamageKind::OnFire => "death.attack.onFire",
+                        DamageKind::PlayerAttack(_) => "death.attack.player",
                     };
+                    let mut names = vec![commands::player_name(uuid, name)];
+                    if let Some((uuid, name)) = attacker {
+                        names.push(commands::player_name(uuid, name));
+                    }
                     Nbt::Compound(
                         [
                             ("translate", Nbt::from(translation)),
-                            (
-                                "with",
-                                Nbt::List(List::Compound(vec![commands::player_name(uuid, name)])),
-                            ),
+                            ("with", Nbt::List(List::Compound(names))),
                         ]
                         .into_iter()
                         .collect(),

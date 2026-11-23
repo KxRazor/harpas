@@ -621,6 +621,14 @@ pub(crate) fn send(
                 }],
             }
             .into(),
+            Output::OnFire { entity_id, burning } => clientbound::SetEntityMetadata {
+                entity_id,
+                metadata: play::EntityMetadata {
+                    // The first shared entity flag indicates whether the entity is on fire.
+                    entries: vec![(0, play::MetadataValue::Byte(i8::from(burning)))],
+                },
+            }
+            .into(),
             Output::EntityEffect {
                 entity_id,
                 effect_id,
@@ -672,6 +680,8 @@ pub(crate) fn send(
                     DamageKind::Fall => "minecraft:fall",
                     DamageKind::Starvation => "minecraft:starve",
                     DamageKind::Magic => "minecraft:magic",
+                    DamageKind::Lava => "minecraft:lava",
+                    DamageKind::OnFire => "minecraft:on_fire",
                 };
                 connection.send_environmental_damage(entity_id, source);
                 continue;
@@ -687,6 +697,8 @@ pub(crate) fn send(
                         DamageKind::Fall => "death.fell.accident.generic",
                         DamageKind::Starvation => "death.attack.starve",
                         DamageKind::Magic => "death.attack.magic",
+                        DamageKind::Lava => "death.attack.lava",
+                        DamageKind::OnFire => "death.attack.onFire",
                     };
                     Nbt::Compound(
                         [

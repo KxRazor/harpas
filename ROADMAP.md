@@ -512,6 +512,9 @@ as shown by the parity report.
   - [x] Normal golden apples can be eaten at full hunger and grant Regeneration II and Absorption. Healing,
         absorbed fall damage, eating again, reconnecting and expiry are compared with vanilla
         (`food_golden_apple_matches_vanilla`).
+  - [x] Enchanted golden apples grant Regeneration II, Resistance, Fire Resistance and Absorption IV at full
+        hunger. Fall damage, lava and the fire it leaves, expiry and reconnects are compared with vanilla
+        (`food_enchanted_golden_apple_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

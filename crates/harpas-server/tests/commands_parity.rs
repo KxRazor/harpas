@@ -2351,6 +2351,224 @@ fn food_golden_apple_matches_vanilla() {
     }
 }
 
+fn enter_lava(client: &mut Client, [_, ground, z]: [f64; 3]) {
+    // Move to the opening at ground level before descending into the lava.
+    move_player(client, [5.5, ground, z], false);
+    std::thread::sleep(Duration::from_millis(100));
+    move_player(client, [5.5, ground - 1.0, z], false);
+    std::thread::sleep(Duration::from_millis(200));
+}
+
+fn leave_lava(client: &mut Client, spawn: [f64; 3]) {
+    move_player(client, [5.5, spawn[1], spawn[2]], false);
+    std::thread::sleep(Duration::from_millis(100));
+    move_player(client, spawn, true);
+}
+
+fn exercise_enchanted_golden_apple(
+    server: &mut Server,
+    port: u16,
+) -> [play::clientbound::EntityEffect; 4] {
+    let mut client = Client::join(port, "EnchantedEater");
+    let spawn = confirm_position(&mut client);
+    let initial = health(&mut client);
+    assert_eq!((initial.health, initial.food), (19.0, 20));
+    use_food(&mut client, play::Hand::OffHand, 1);
+    let mut applied = [(1, 400), (0, 6000), (0, 6000), (3, 2400)].map(|(amplifier, duration)| {
+        client.matching("enchanted golden apple effect", |packet| match packet {
+            Packet::EntityEffect(effect) => {
+                assert_eq!((effect.amplifier, effect.duration), (amplifier, duration));
+                assert!(effect.flags.blend);
+                Some(effect)
+            }
+            _ => None,
+        })
+    });
+    let entity = applied[0].entity_id;
+    absorption_packets(&mut client, entity, 16.0, 16.0);
+    client.matching("enchanted golden apple healing", |packet| match packet {
+        Packet::SetHealth(update) if update.health == 20.0 => {
+            assert_eq!((update.food, update.saturation), (20, 9.6));
+            Some(())
+        }
+        _ => None,
+    });
+
+    // Resistance I reduces the five points of fall damage to four before absorption.
+    let damage_types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+    fall(&mut client, spawn, 8);
+    client.matching("resisted fall", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            assert_eq!(damage_types[event.source_type as usize], "minecraft:fall");
+            Some(())
+        }
+        _ => None,
+    });
+    let remaining = (0..1000).find_map(|_| {
+        let bytes = client.next("remaining absorption after resisted fall");
+        absorption_metadata(&bytes, entity)
+    });
+    assert_eq!(remaining, Some(12.0));
+    enter_lava(&mut client, spawn);
+    assert_no_damage_until_list_reply(&mut client, "with Fire Resistance in lava");
+    leave_lava(&mut client, spawn);
+    assert_no_damage_until_list_reply(&mut client, "after leaving lava");
+    drop(client);
+    server.wait_for("EnchantedEater left the game");
+
+    let mut client = Client::join(port, "EnchantedEater");
+    confirm_position(&mut client);
+    let mut resumed = applied.each_ref().map(|_| {
+        client.matching(
+            "enchanted apple effect on reconnect",
+            |packet| match packet {
+                Packet::EntityEffect(effect) => Some(effect),
+                _ => None,
+            },
+        )
+    });
+    absorption_packets(&mut client, resumed[0].entity_id, 12.0, 16.0);
+    resumed.sort_by_key(|effect| effect.effect);
+    applied.sort_by_key(|effect| effect.effect);
+    for (current, initial) in resumed.iter().zip(&mut applied) {
+        assert_eq!(current.effect, initial.effect);
+        assert_eq!(current.amplifier, initial.amplifier);
+        assert!(!current.flags.blend);
+        assert!((1..initial.duration).contains(&current.duration));
+        initial.entity_id = 0;
+    }
+    drop(client);
+    server.wait_for("EnchantedEater left the game");
+
+    let mut client = Client::join(port, "LavaProbe");
+    let spawn = confirm_position(&mut client);
+    assert_eq!(health(&mut client).health, 20.0);
+    enter_lava(&mut client, spawn);
+    assert_no_damage_until_list_reply(&mut client, "before Fire Resistance expired");
+    client.matching("Fire Resistance expiry", |packet| match packet {
+        Packet::RemoveEntityEffect(_) => Some(()),
+        _ => None,
+    });
+    client.matching("lava damage", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            assert_eq!(damage_types[event.source_type as usize], "minecraft:lava");
+            Some(())
+        }
+        Packet::SynchronizePlayerPosition(position) => {
+            panic!("unexpected teleport to {position:?}")
+        }
+        _ => None,
+    });
+    assert_eq!(health(&mut client).health, 16.0);
+    leave_lava(&mut client, spawn);
+    client.matching("burn damage after leaving lava", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            assert_eq!(
+                damage_types[event.source_type as usize],
+                "minecraft:on_fire"
+            );
+            Some(())
+        }
+        _ => None,
+    });
+    assert_eq!(health(&mut client).health, 15.0);
+    drop(client);
+    server.wait_for("LavaProbe left the game");
+    applied
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_enchanted_golden_apple_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food-enchanted-golden-apple");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let mut setup = Client::join(port, "TerrainSetup");
+    confirm_position(&mut setup);
+    setup.matching("chunk containing the lava fixture", |packet| match packet {
+        Packet::ChunkDataAndUpdateLight(chunk) if (chunk.x, chunk.z) == (0, 0) => Some(()),
+        _ => None,
+    });
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "setblock 5 -61 0 minecraft:lava\nsave-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Changed the block");
+    reference.wait_for("Saved the game");
+    drop(setup);
+    reference.wait_for("TerrainSetup left the game");
+    let apple = Compound::from_iter([
+        ("id", Nbt::from("minecraft:enchanted_golden_apple")),
+        ("count", Nbt::Int(1)),
+    ]);
+    let eater = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Health", Nbt::Float(19.0)),
+        ("foodLevel", Nbt::Int(20)),
+        ("foodSaturationLevel", Nbt::Float(0.0)),
+        (
+            "equipment",
+            Compound::from_iter([("offhand", apple)]).into(),
+        ),
+    ]);
+    let fire_resistance = Compound::from_iter([
+        ("id", Nbt::from("minecraft:fire_resistance")),
+        ("duration", Nbt::Int(80)),
+    ]);
+    let probe = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "active_effects",
+            Nbt::List(List::Compound(vec![fire_resistance])),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        for (name, data) in [("EnchantedEater", &eater), ("LavaProbe", &probe)] {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), data).unwrap();
+        }
+    }
+    let expected = exercise_enchanted_golden_apple(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(
+        exercise_enchanted_golden_apple(&mut server, other),
+        expected
+    );
+    stop(&mut server);
+
+    for dir in [&vanilla, &harpas] {
+        let (saved, _) =
+            harpas_anvil::read_player(&dir.join("world"), offline_uuid("EnchantedEater"))
+                .unwrap()
+                .unwrap();
+        assert!(saved.get("equipment").is_none());
+        assert_eq!(saved.get("AbsorptionAmount"), Some(&Nbt::Float(12.0)));
+        let Some(Nbt::List(List::Compound(effects))) = saved.get("active_effects") else {
+            panic!("missing saved enchanted golden apple effects in {dir:?}");
+        };
+        for id in [
+            "regeneration",
+            "resistance",
+            "fire_resistance",
+            "absorption",
+        ] {
+            assert!(
+                effects
+                    .iter()
+                    .any(|effect| effect.get("id") == Some(&Nbt::from(format!("minecraft:{id}"))))
+            );
+        }
+        let (burning, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid("LavaProbe"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(burning.get("Fire"), Some(Nbt::Short(1..=300))));
+    }
+}
+
 fn starvation_damage(client: &mut Client) {
     client.matching("starvation damage", |packet| match packet {
         Packet::DamageEvent(event) => {

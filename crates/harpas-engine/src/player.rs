@@ -71,6 +71,10 @@ pub enum DamageKind {
     Starvation,
     /// Direct magic damage, such as from Poison.
     Magic,
+    /// Touching lava.
+    Lava,
+    /// Burning after leaving lava.
+    OnFire,
 }
 
 /// The status effects the engine can apply to a player.
@@ -86,6 +90,10 @@ pub enum EffectKind {
     Regeneration,
     /// Grants temporary health that takes damage first.
     Absorption,
+    /// Reduces damage from sources that respect resistance.
+    Resistance,
+    /// Prevents damage from fire sources, including lava.
+    FireResistance,
 }
 
 impl EffectKind {
@@ -97,16 +105,20 @@ impl EffectKind {
             Self::Nausea => "minecraft:nausea",
             Self::Regeneration => "minecraft:regeneration",
             Self::Absorption => "minecraft:absorption",
+            Self::Resistance => "minecraft:resistance",
+            Self::FireResistance => "minecraft:fire_resistance",
         }
     }
 
     /// The effects implemented by the engine, in storage order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Hunger,
         Self::Poison,
         Self::Nausea,
         Self::Regeneration,
         Self::Absorption,
+        Self::Resistance,
+        Self::FireResistance,
     ];
 }
 
@@ -434,6 +446,13 @@ pub enum Output {
         entity_id: i32,
         /// Maximum absorption in half-hearts.
         amount: f32,
+    },
+    /// The player's fire flag changed.
+    OnFire {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Whether the player is burning.
+        burning: bool,
     },
     /// Add, refresh or remove a status effect on the local player.
     EntityEffect {

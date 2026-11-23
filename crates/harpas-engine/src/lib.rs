@@ -1136,6 +1136,12 @@ impl Game {
                 player.send_max_absorption();
                 player.send_absorption();
             }
+            if player.is_burning() {
+                player.send(player::Output::OnFire {
+                    entity_id: player.player.entity_id,
+                    burning: true,
+                });
+            }
             if player.is_dead() {
                 player.send(player::Output::Death {
                     entity_id: player.player.entity_id,
@@ -1567,14 +1573,16 @@ impl Game {
                 let tracked = self.players[viewer].tracked.contains(&entity_id);
                 match (visible, tracked) {
                     (true, false) => {
-                        let spawned = self.players[target].player.clone();
-                        let using = self.players[target]
-                            .food_use
-                            .as_ref()
-                            .map(|using| using.off_hand);
+                        let target = &self.players[target];
+                        let spawned = target.player.clone();
+                        let using = target.food_use.as_ref().map(|using| using.off_hand);
+                        let burning = target.is_burning();
                         let viewer = &mut self.players[viewer];
                         viewer.tracked.insert(entity_id);
                         viewer.send(player::Output::Spawn(spawned));
+                        if burning {
+                            viewer.send(player::Output::OnFire { entity_id, burning });
+                        }
                         if using.is_some() {
                             viewer.send(player::Output::UsingItem {
                                 entity_id,

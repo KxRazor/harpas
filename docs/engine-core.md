@@ -129,9 +129,10 @@ The returned item takes the place of the last food in the hand. If food remains 
 inventory or drops when there is no room. Releasing use, changing away from the active hotbar slot or replacing
 the held item cancels the action. Completing rotten flesh or raw chicken use rolls the chance of applying
 Hunger from the item's defaults. Spider eyes and poisonous potatoes can apply Poison from their defaults.
-Hunger adds exhaustion before the food tick. Poison deals one point of magic damage every 25 ticks at
-level I while health is above one point. The Java client receives effect changes on application, login and
-expiry. The remaining durations persist in player data.
+Pufferfish apply Poison II, Hunger III and Nausea from one consume action. Hunger adds exhaustion before
+the food tick. Poison deals one point of magic damage every 25 ticks at level I and every 12 at level II
+while health is above one point. The Java client receives effect changes on application, login and expiry.
+The remaining durations persist in player data.
 The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is

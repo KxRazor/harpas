@@ -35,19 +35,28 @@ pub struct FoodProperties {
     pub use_ticks: u32,
     /// The default stack left after consumption, such as a bowl.
     pub remainder: Option<ItemStack>,
-    /// A chance to apply a status effect when the food is finished.
-    pub effect: Option<FoodEffect>,
+    /// Effects applied together when the food is finished.
+    pub effects: Option<FoodEffects>,
+}
+
+/// The effects of one vanilla `apply_effects` consume action.
+#[derive(Debug, Clone)]
+pub struct FoodEffects {
+    /// Effects applied in order on a successful roll.
+    pub effects: Vec<FoodEffect>,
+    /// Probability of applying the group, from zero to one.
+    pub probability: f32,
 }
 
 /// A supported effect configured on a vanilla consumable.
 #[derive(Debug, Clone, Copy)]
 pub struct FoodEffect {
-    /// The effect applied at level I.
+    /// The effect to apply.
     pub kind: EffectKind,
     /// Duration in ticks.
     pub duration: i32,
-    /// Probability of applying the effect, from zero to one.
-    pub probability: f32,
+    /// Level of the effect, starting at zero.
+    pub amplifier: u8,
 }
 
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
@@ -109,7 +118,7 @@ impl ItemCodec {
                     can_always_eat: false,
                     use_ticks: 32,
                     remainder: None,
-                    effect: None,
+                    effects: None,
                 },
             )]),
         }

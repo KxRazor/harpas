@@ -1790,8 +1790,8 @@ mod tests {
     fn hunger_rolls_only_when_food_is_finished_and_exhausts_until_expiry() {
         use harpas_core::random::LegacyRandom;
         use inventory::{HOTBAR, ItemStack};
-        use item_data::{FoodEffect, FoodProperties, ItemCodec};
-        use player::EffectKind::Hunger;
+        use item_data::{FoodEffect, FoodEffects, FoodProperties, ItemCodec};
+        use player::EffectKind::{Hunger, Nausea};
 
         let mut game = game();
         let received = join(&mut game, 1, "Eating", 2);
@@ -1804,7 +1804,7 @@ mod tests {
         let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
         world.set_item_codec(Arc::new(
             ItemCodec::default()
-                .with_mob_effects(&["minecraft:hunger".to_owned()])
+                .with_mob_effects(&[Hunger.id().to_owned(), Nausea.id().to_owned()])
                 .with_foods(
                     [(
                         flesh,
@@ -1814,9 +1814,19 @@ mod tests {
                             can_always_eat: false,
                             use_ticks: 2,
                             remainder: None,
-                            effect: Some(FoodEffect {
-                                kind: Hunger,
-                                duration: 3,
+                            effects: Some(FoodEffects {
+                                effects: vec![
+                                    FoodEffect {
+                                        kind: Hunger,
+                                        duration: 3,
+                                        amplifier: 0,
+                                    },
+                                    FoodEffect {
+                                        kind: Nausea,
+                                        duration: 10,
+                                        amplifier: 0,
+                                    },
+                                ],
                                 probability: 0.8,
                             }),
                         },
@@ -1862,11 +1872,13 @@ mod tests {
         assert!((game.players[0].vitals.exhaustion - 0.014).abs() < 0.000001);
         let updates: Vec<_> = std::iter::from_fn(|| received.try_recv().ok())
             .filter_map(|output| match output {
-                Output::EntityEffect { effect, .. } => Some(effect.map(|effect| effect.duration)),
+                Output::EntityEffect {
+                    effect_id, effect, ..
+                } => Some((effect_id, effect.map(|effect| effect.duration))),
                 _ => None,
             })
             .collect();
-        assert_eq!(updates, [Some(3), None]);
+        assert_eq!(updates, [(0, Some(3)), (1, Some(10)), (0, None)]);
         drop(game);
         std::fs::remove_dir_all(path).unwrap();
     }
@@ -1876,33 +1888,42 @@ mod tests {
         use harpas_core::nbt::Compound;
         use player::{DamageKind, EffectKind::Poison};
 
-        let mut game = game();
-        let received = join(&mut game, 1, "Poisoned", 2);
-        game.connections();
-        let player = &mut game.players[0];
-        player.player.profile.game_mode = GameMode::Survival;
-        player.effects[Poison as usize] =
-            survival::ActiveEffect::read(&Compound::from_iter([("duration", 76_i32)]));
-        player.vitals.health = 3.0;
-        player.vitals.food = 10;
-        for tick in 1..=76 {
-            game.tick_survival(survival::SurvivalRules::default());
-            let damage = received
-                .try_iter()
-                .filter(|output| {
-                    matches!(
-                        output,
-                        Output::Damage {
-                            kind: DamageKind::Magic,
-                            ..
-                        }
-                    )
-                })
-                .count();
-            assert_eq!(damage, usize::from(matches!(tick, 2 | 27)), "tick {tick}");
+        for (amplifier, damage_ticks) in [(0, [2, 27]), (1, [5, 17])] {
+            let mut game = game();
+            let received = join(&mut game, 1, "Poisoned", 2);
+            game.connections();
+            let player = &mut game.players[0];
+            player.player.profile.game_mode = GameMode::Survival;
+            player.effects[Poison as usize] = survival::ActiveEffect::read(&Compound::from_iter([
+                ("duration", 76_i32),
+                ("amplifier", amplifier),
+            ]));
+            player.vitals.health = 3.0;
+            player.vitals.food = 10;
+            for tick in 1..=76 {
+                game.tick_survival(survival::SurvivalRules::default());
+                let damage = received
+                    .try_iter()
+                    .filter(|output| {
+                        matches!(
+                            output,
+                            Output::Damage {
+                                kind: DamageKind::Magic,
+                                ..
+                            }
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    damage,
+                    usize::from(damage_ticks.contains(&tick)),
+                    "level {}, tick {tick}",
+                    amplifier + 1
+                );
+            }
+            assert_eq!(game.players[0].vitals.health, 1.0);
+            assert!(game.players[0].effects[Poison as usize].is_none());
         }
-        assert_eq!(game.players[0].vitals.health, 1.0);
-        assert!(game.players[0].effects[Poison as usize].is_none());
     }
 
     #[test]
@@ -1927,7 +1948,7 @@ mod tests {
                     can_always_eat: false,
                     use_ticks: 16,
                     remainder: None,
-                    effect: None,
+                    effects: None,
                 },
             )]),
         )));
@@ -1991,7 +2012,7 @@ mod tests {
                         can_always_eat: false,
                         use_ticks: 1,
                         remainder: Some(bowl.clone()),
-                        effect: None,
+                        effects: None,
                     },
                 )]
                 .into(),

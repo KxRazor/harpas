@@ -67,11 +67,11 @@ impl ActiveEffect {
         tag
     }
 
-    fn from_food(duration: i32) -> Self {
+    fn from_food(duration: i32, amplifier: u8) -> Self {
         Self {
             visible: Effect {
                 duration,
-                amplifier: 0,
+                amplifier,
                 ambient: false,
                 show_particles: true,
                 show_icon: true,
@@ -80,21 +80,32 @@ impl ActiveEffect {
         }
     }
 
-    // A longer, weaker food effect can outlast a stronger effect loaded from vanilla.
-    fn refresh_from_food(&mut self, duration: i32) -> bool {
-        if self.visible.duration == -1 || self.visible.duration >= duration {
-            return false;
+    fn refresh_from_food(&mut self, duration: i32, amplifier: u8) -> bool {
+        let previous = self.visible;
+        let food = Self::from_food(duration, amplifier);
+        let lasts_longer = previous.duration != -1 && duration > previous.duration;
+        if amplifier > previous.amplifier {
+            // Keep a weaker effect if it will outlast the stronger one.
+            if previous.duration == -1 || previous.duration > duration {
+                self.hidden = Some(Box::new(Self {
+                    visible: previous,
+                    hidden: self.hidden.take(),
+                }));
+            }
+            self.visible = food.visible;
+        } else if lasts_longer {
+            if amplifier == previous.amplifier {
+                self.visible.duration = duration;
+            } else if let Some(hidden) = &mut self.hidden {
+                hidden.refresh_from_food(duration, amplifier);
+            } else {
+                self.hidden = Some(Box::new(food));
+            }
         }
-        if self.visible.amplifier == 0 {
-            self.visible = Self::from_food(duration).visible;
-            return true;
-        }
-        if let Some(hidden) = &mut self.hidden {
-            hidden.refresh_from_food(duration);
-        } else {
-            self.hidden = Some(Box::new(Self::from_food(duration)));
-        }
-        false
+        self.visible.ambient = false;
+        self.visible.show_particles = true;
+        self.visible.show_icon = true;
+        self.visible != previous
     }
 
     fn count_down(&mut self) {
@@ -385,18 +396,20 @@ impl Game {
                 *held = std::mem::take(&mut remainder);
             }
             player.vitals.eat(&using.food);
-            if let Some(effect) = using.food.effect
-                && player.random.next_float() < effect.probability
+            if let Some(group) = using.food.effects.take()
+                && player.random.next_float() < group.probability
             {
-                let slot = &mut player.effects[effect.kind as usize];
-                let changed = if let Some(active) = slot {
-                    active.refresh_from_food(effect.duration)
-                } else {
-                    *slot = Some(ActiveEffect::from_food(effect.duration));
-                    true
-                };
-                if changed {
-                    player.send_effect(effect.kind, effect_ids[effect.kind as usize], true);
+                for effect in group.effects {
+                    let slot = &mut player.effects[effect.kind as usize];
+                    let changed = if let Some(active) = slot {
+                        active.refresh_from_food(effect.duration, effect.amplifier)
+                    } else {
+                        *slot = Some(ActiveEffect::from_food(effect.duration, effect.amplifier));
+                        true
+                    };
+                    if changed {
+                        player.send_effect(effect.kind, effect_ids[effect.kind as usize], true);
+                    }
                 }
             }
             player.inventory.add(&mut remainder, false);
@@ -710,6 +723,23 @@ mod tests {
     }
 
     #[test]
+    fn stronger_food_effect_preserves_weaker_effects_that_outlast_it() {
+        let mut effect = ActiveEffect::from_food(12, 0);
+        assert!(effect.refresh_from_food(2, 2));
+        assert_eq!((effect.visible.amplifier, effect.visible.duration), (2, 2));
+        assert!(!effect.refresh_from_food(6, 1));
+        let mut active = Some(effect);
+        for (ticks, expected) in [(2, (1, 4)), (4, (0, 6))] {
+            for _ in 1..ticks {
+                assert!(!ActiveEffect::tick(&mut active));
+            }
+            assert!(ActiveEffect::tick(&mut active));
+            let visible = active.as_ref().unwrap().visible;
+            assert_eq!((visible.amplifier, visible.duration), expected);
+        }
+    }
+
+    #[test]
     fn starvation_uses_the_food_timer_and_resets_when_the_player_eats() {
         let disabled_rules = Compound::from_iter([("minecraft:natural_health_regeneration", 0_i8)]);
         let rules = SurvivalRules::read(Some(&disabled_rules), None);
@@ -735,7 +765,7 @@ mod tests {
             can_always_eat: false,
             use_ticks: 1,
             remainder: None,
-            effect: None,
+            effects: None,
         });
         assert!(!vitals.tick_food(rules));
         assert_eq!(vitals.food_timer, 0);

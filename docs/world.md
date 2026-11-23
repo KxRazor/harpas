@@ -238,9 +238,8 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
   before the data was added, the server warns about missing block entity IDs, built-in registries or food
   defaults. Apples remain available as a fallback until the food defaults are generated. Older food defaults
-  continue to work for basic foods. To add foods that return a container or apply Hunger or Poison, or to generate
-  missing data, install Java 25
-  and run `harpas vanilla-data generate-registry`. To reuse a downloaded jar, run
+  continue to work with the foods they already include. To add newer foods such as pufferfish, or to generate
+  missing data, install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a downloaded jar, run
   `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA and the jar hash.
 
 The data stays in a zip, as vanilla reads it from inside its own jar, rather than being unpacked into a folder:

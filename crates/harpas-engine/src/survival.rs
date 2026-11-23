@@ -876,12 +876,13 @@ impl Game {
             return false;
         }
         player.last_damage = damage;
-        let taken = if matches!(kind, DamageKind::PlayerAttack(_)) {
+        let player_attack = matches!(kind, DamageKind::PlayerAttack(_));
+        let taken = if player_attack {
             self.hurt_armor(index, taken)
         } else {
             taken
         };
-        let player = &mut self.players[index];
+        let player = &self.players[index];
         let taken = match &player.effects[EffectKind::Resistance as usize] {
             Some(effect) if kind != DamageKind::Starvation => {
                 let remaining = (25 - 5 * (i32::from(effect.visible.amplifier) + 1)).max(0);
@@ -889,9 +890,25 @@ impl Game {
             }
             _ => taken,
         };
+        let taken = if player_attack {
+            let codec = self
+                .world
+                .as_ref()
+                .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+            // Enchantments use the equipment left after armor wear, before absorption is spent.
+            let protection = ArmorSlot::ALL
+                .into_iter()
+                .map(|slot| codec.protection_level(&player.inventory.slots[slot.menu_slot()]))
+                .sum::<i32>()
+                .min(20);
+            taken * (1.0 - protection as f32 / 25.0)
+        } else {
+            taken
+        };
+        let player = &mut self.players[index];
         let absorbed = player.vitals.absorption.min(taken);
         let health_damage = taken - absorbed;
-        if health_damage > 0.0 && matches!(kind, DamageKind::PlayerAttack(_)) {
+        if health_damage > 0.0 && player_attack {
             player.vitals.exhaust(0.1);
         }
         player.vitals.health = (player.vitals.health - health_damage).max(0.0);

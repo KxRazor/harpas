@@ -1653,6 +1653,179 @@ fn armored_combat_matches_vanilla() {
     }
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn protection_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("protection");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let cases = [
+        ("Plain", [0; 4]),
+        ("Single", [0, 4, 0, 0]),
+        ("Full", [4; 4]),
+        ("AtLimit", [5; 4]),
+        ("OverLimit", [6; 4]),
+        ("Offhand", [0; 4]),
+        ("Fragile", [0, 4, 0, 0]),
+        ("WithEffects", [4; 4]),
+    ];
+    let armor = |piece, level, fragile| {
+        let mut stack = Compound::from_iter([("id", format!("minecraft:iron_{piece}"))]);
+        let mut components = Compound::new();
+        if level > 0 {
+            components.insert(
+                "minecraft:enchantments",
+                Compound::from_iter([("minecraft:protection", level)]),
+            );
+        }
+        if fragile {
+            components.insert("minecraft:max_damage", 2);
+        }
+        if !components.is_empty() {
+            stack.insert("components", components);
+        }
+        stack
+    };
+    let attacker = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "Inventory",
+            Nbt::List(List::Compound(vec![Compound::from_iter([
+                ("Slot", Nbt::Byte(0)),
+                ("id", "minecraft:netherite_sword".into()),
+            ])])),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        let world = dir.join("world");
+        harpas_anvil::write_player(&world, offline_uuid("Attacker"), &attacker).unwrap();
+        for (name, levels) in cases {
+            let mut equipment = Compound::from_iter(
+                [
+                    ("head", "helmet"),
+                    ("chest", "chestplate"),
+                    ("legs", "leggings"),
+                    ("feet", "boots"),
+                ]
+                .into_iter()
+                .zip(levels)
+                .map(|((slot, piece), level)| {
+                    (
+                        slot,
+                        armor(piece, level, name == "Fragile" && slot == "chest"),
+                    )
+                }),
+            );
+            if name == "Offhand" {
+                equipment.insert("offhand", armor("helmet", 20, false));
+            }
+            let mut data = Compound::from_iter([
+                ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+                ("equipment", equipment.into()),
+            ]);
+            if name == "WithEffects" {
+                data.insert("AbsorptionAmount", 4.0_f32);
+                data.insert(
+                    "active_effects",
+                    List::Compound(
+                        ["minecraft:resistance", "minecraft:absorption"]
+                            .map(|id| {
+                                Compound::from_iter([
+                                    ("id", Nbt::from(id)),
+                                    ("duration", 1200.into()),
+                                ])
+                            })
+                            .into(),
+                    ),
+                );
+                data.insert(
+                    "attributes",
+                    List::Compound(vec![Compound::from_iter([
+                        ("id", "minecraft:max_absorption".into()),
+                        ("base", Nbt::Double(0.0)),
+                        (
+                            "modifiers",
+                            List::Compound(vec![Compound::from_iter([
+                                ("id", "minecraft:effect.absorption".into()),
+                                ("amount", Nbt::Double(4.0)),
+                                ("operation", "add_value".into()),
+                            ])])
+                            .into(),
+                        ),
+                    ])]),
+                );
+            }
+            harpas_anvil::write_player(&world, offline_uuid(name), &data).unwrap();
+        }
+    }
+
+    let exercise = |server: &mut Server, port| {
+        let mut attacker = Client::join(port, "Attacker");
+        attacker.stream.set_nodelay(true).unwrap();
+        confirm_position(&mut attacker);
+        for (name, _) in cases {
+            let mut defender = Client::join(port, name);
+            let entity_id = defender.matching("Play Login", |packet| match packet {
+                Packet::Login(login) => Some(login.entity_id),
+                _ => None,
+            });
+            let [x, y, z] = confirm_position(&mut defender);
+            move_player(&mut defender, [x, y, z], true);
+            move_player(&mut attacker, [x + 2.0, y, z], true);
+            std::thread::sleep(Duration::from_millis(800));
+            play_packet(&mut attacker, play::serverbound::Attack { entity_id });
+            defender.matching("sword hit", |packet| match packet {
+                Packet::DamageEvent(event) if event.entity_id == entity_id => Some(()),
+                _ => None,
+            });
+            drop(defender);
+            server.wait_for(&format!("{name} left the game"));
+        }
+    };
+    exercise(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    exercise(&mut server, other);
+    stop(&mut server);
+
+    let expected_health = cases.map(|(name, _)| {
+        let [expected, actual] = [&vanilla, &harpas].map(|dir| {
+            harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+                .unwrap()
+                .unwrap()
+                .0
+        });
+        for field in ["Health", "AbsorptionAmount", "equipment"] {
+            assert_eq!(actual.get(field), expected.get(field), "{name} {field}");
+        }
+        if name == "WithEffects" {
+            assert!(matches!(expected.get("AbsorptionAmount"), Some(Nbt::Float(left)) if *left > 0.0 && *left < 4.0));
+        }
+        let Some(Nbt::Float(health)) = expected.get("Health") else {
+            panic!("missing saved health for {name}");
+        };
+        *health
+    });
+    let [
+        plain,
+        single,
+        full,
+        limit,
+        over,
+        offhand,
+        fragile,
+        with_effects,
+    ] = expected_health;
+    assert!(plain < single && single < full && full < limit);
+    assert_eq!(limit, over);
+    assert_eq!(plain, offhand);
+    assert_eq!(plain, fragile);
+    assert_eq!(with_effects, 20.0);
+}
+
 fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets

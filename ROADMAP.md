@@ -536,6 +536,9 @@ as shown by the parity report.
   - [x] Unenchanted armor reduces Java Survival melee damage between players and wears on impact. Health,
         chestplate breakage, the armor bar and saved equipment are compared with vanilla for unarmored, iron
         and diamond defenders (`armored_combat_matches_vanilla`).
+  - [x] Protection on equipped armor reduces melee damage between Java Survival players. The combined level,
+        reduction limit, breakage on impact and interaction with Resistance and Absorption are compared with
+        vanilla (`protection_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

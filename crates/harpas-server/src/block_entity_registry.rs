@@ -96,6 +96,13 @@ impl Builtin {
             .is_some_and(|foods| foods.values().any(|food| food.remainder.is_some()))
     }
 
+    pub(crate) fn has_suspicious_stew(&self) -> bool {
+        items()
+            .id("minecraft:suspicious_stew")
+            .zip(self.foods.as_ref())
+            .is_some_and(|(id, foods)| foods.contains_key(&id))
+    }
+
     pub(crate) fn has_food_effects(&self) -> bool {
         use EffectKind::{
             Absorption, FireResistance, Hunger, Nausea, Poison, Regeneration, Resistance,
@@ -193,9 +200,6 @@ fn food_reports(directory: &Path) -> io::Result<Map<String, Value>> {
         if food.is_object()
             && consumable.is_object()
             && food_effects(consumable).is_ok()
-            && components
-                .get("minecraft:suspicious_stew_effects")
-                .is_none()
             && components.get("minecraft:use_cooldown").is_none()
         {
             let mut defaults = json!({"food": food, "consumable": consumable});

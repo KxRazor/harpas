@@ -1982,6 +1982,143 @@ fn food_poison_matches_vanilla() {
     }
 }
 
+fn exercise_suspicious_stew(
+    server: &mut Server,
+    port: u16,
+) -> [play::clientbound::EntityEffect; 2] {
+    let mut client = Client::join(port, "SuspiciousEater");
+    confirm_position(&mut client);
+    assert_eq!(health(&mut client).food, 14);
+    let bowl = harpas_core::item::items().id("minecraft:bowl").unwrap() as i32;
+    let mut applied = [
+        (play::Hand::MainHand, 36, 1, 160),
+        (play::Hand::OffHand, 45, 2, 210),
+    ]
+    .map(|(hand, slot, sequence, duration)| {
+        use_food(&mut client, hand, sequence);
+        let (mut effect, mut returned_bowl, mut full) = (None, false, sequence == 2);
+        let effect = client.matching("stew effect and returned bowl", |packet| {
+            match packet {
+                Packet::EntityEffect(active) => assert!(effect.replace(active).is_none()),
+                Packet::SetContainerSlot(change)
+                    if change.window_id == 0 && change.slot == slot =>
+                {
+                    assert_eq!((change.item.item, change.item.count), (bowl, 1));
+                    returned_bowl = true;
+                }
+                Packet::SetHealth(update) => {
+                    assert_eq!(update.food, 20);
+                    full = true;
+                }
+                _ => {}
+            }
+            if returned_bowl && full {
+                effect.take()
+            } else {
+                None
+            }
+        });
+        assert_eq!((effect.amplifier, effect.duration), (0, duration));
+        effect
+    });
+    assert_ne!(applied[0].effect, applied[1].effect);
+    poison_damage(&mut client, &applied[1]);
+    drop(client);
+    server.wait_for("SuspiciousEater left the game");
+
+    let mut client = Client::join(port, "SuspiciousEater");
+    let (mut resumed, mut inventory_synced) = ([false; 2], false);
+    client.matching("stew effects and bowls after reconnect", |packet| {
+        match packet {
+            Packet::EntityEffect(current) => {
+                let index = applied
+                    .iter()
+                    .position(|effect| effect.effect == current.effect)
+                    .unwrap();
+                let initial = &applied[index];
+                assert_eq!(current.amplifier, initial.amplifier);
+                assert!(
+                    (1..initial.duration).contains(&current.duration),
+                    "{current:?}"
+                );
+                assert_eq!(
+                    current.flags,
+                    play::EffectFlags {
+                        blend: false,
+                        ..initial.flags
+                    }
+                );
+                resumed[index] = true;
+            }
+            Packet::SetContainerContent(contents) if contents.window_id == 0 => {
+                for slot in [36, 45] {
+                    let stack = &contents.slots[slot];
+                    assert_eq!((stack.item, stack.count), (bowl, 1));
+                }
+                inventory_synced = true;
+            }
+            _ => {}
+        }
+        (resumed == [true; 2] && inventory_synced).then_some(())
+    });
+    drop(client);
+    server.wait_for("SuspiciousEater left the game");
+    for effect in &mut applied {
+        effect.entity_id = 0;
+    }
+    applied
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_suspicious_stew_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food-suspicious-stew");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let stew = |effect| {
+        Compound::from_iter([
+            ("id", Nbt::from("minecraft:suspicious_stew")),
+            ("count", Nbt::Int(1)),
+            (
+                "components",
+                Compound::from_iter([(
+                    "minecraft:suspicious_stew_effects",
+                    List::Compound(vec![effect]),
+                )])
+                .into(),
+            ),
+        ])
+    };
+    let mut regeneration = stew(Compound::from_iter([("id", "minecraft:regeneration")]));
+    regeneration.insert("Slot", 0_i8);
+    let poison = stew(Compound::from_iter([
+        ("id", Nbt::from("minecraft:poison")),
+        ("duration", Nbt::Int(210)),
+    ]));
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("foodLevel", Nbt::Int(14)),
+        ("foodSaturationLevel", Nbt::Float(0.0)),
+        ("Inventory", List::Compound(vec![regeneration]).into()),
+        (
+            "equipment",
+            Compound::from_iter([("offhand", poison)]).into(),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), offline_uuid("SuspiciousEater"), &data)
+            .unwrap();
+    }
+    let expected = exercise_suspicious_stew(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_suspicious_stew(&mut server, other), expected);
+    stop(&mut server);
+}
+
 fn pufferfish_effect_packets(client: &mut Client) -> [play::clientbound::EntityEffect; 3] {
     let mut effects = std::array::from_fn(|_| {
         client.matching("pufferfish effect", |packet| match packet {

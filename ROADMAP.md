@@ -515,6 +515,9 @@ as shown by the parity report.
   - [x] Enchanted golden apples grant Regeneration II, Resistance, Fire Resistance and Absorption IV at full
         hunger. Fall damage, lava and the fire it leaves, expiry and reconnects are compared with vanilla
         (`food_enchanted_golden_apple_matches_vanilla`).
+  - [x] Suspicious stew can be eaten at full hunger, returns a bowl and applies the supported effects stored on
+        the stack. Regeneration and Poison are compared with vanilla, including both hands and reconnects
+        (`food_suspicious_stew_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

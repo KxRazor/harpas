@@ -228,6 +228,7 @@ fn run() -> io::Result<()> {
         let has_food_effects = builtin.has_food_effects();
         let has_suspicious_stew = builtin.has_suspicious_stew();
         let has_milk_bucket = builtin.has_milk_bucket();
+        let has_honey_bottle = builtin.has_honey_bottle();
         let entries = |name| {
             builtin
                 .registries
@@ -262,6 +263,11 @@ fn run() -> io::Result<()> {
                 if !has_milk_bucket {
                     warn!(
                         "Update the consumable defaults with `harpas vanilla-data generate-registry` to enable milk buckets"
+                    );
+                }
+                if !has_honey_bottle {
+                    warn!(
+                        "Update the consumable defaults with `harpas vanilla-data generate-registry` to enable honey bottles"
                     );
                 }
                 codec.with_consumables(consumables)

@@ -1363,7 +1363,7 @@ fn cancel_food(client: &mut Client, entity_id: i32) {
         },
     );
     // Releasing use neither changes food nor finishes the action, even after a full use duration.
-    std::thread::sleep(Duration::from_millis(1800));
+    std::thread::sleep(Duration::from_millis(2200));
     client.send_command("list");
     client.matching(
         "list after releasing the use button",
@@ -2381,20 +2381,9 @@ fn exercise_milk_bucket(server: &mut Server, port: u16) -> Vec<i32> {
     removed
 }
 
-#[test]
-#[ignore = "needs Mojang's server: docs/parity.md#locally"]
-fn milk_bucket_matches_vanilla() {
-    let Reference { jar, eula } = Reference::required();
-    let folder = Folder::new("milk-bucket");
-    let vanilla = folder.0.join("vanilla");
-    let harpas = folder.0.join("harpas");
-    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
-    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
-    let milk = Compound::from_iter([
-        ("id", Nbt::from("minecraft:milk_bucket")),
-        ("count", Nbt::Int(1)),
-    ]);
-    let mut main_hand = milk.clone();
+fn drinker_with_poison_and_absorption(item: &str) -> Compound {
+    let drink = Compound::from_iter([("id", Nbt::from(item)), ("count", Nbt::Int(1))]);
+    let mut main_hand = drink.clone();
     main_hand.insert("Slot", 0_i8);
     let mut poison = Compound::from_iter([("id", "minecraft:poison")]);
     poison.insert("duration", 1200_i32);
@@ -2415,20 +2404,35 @@ fn milk_bucket_matches_vanilla() {
         ("base", Nbt::Double(0.0)),
         ("modifiers", Nbt::List(List::Compound(vec![modifier]))),
     ]);
-    let data = Compound::from_iter([
+    Compound::from_iter([
         ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
         ("Health", Nbt::Float(1.0)),
         ("foodLevel", Nbt::Int(20)),
         ("foodSaturationLevel", Nbt::Float(3.0)),
         ("AbsorptionAmount", Nbt::Float(3.0)),
         ("Inventory", List::Compound(vec![main_hand]).into()),
-        ("equipment", Compound::from_iter([("offhand", milk)]).into()),
+        (
+            "equipment",
+            Compound::from_iter([("offhand", drink)]).into(),
+        ),
         ("attributes", List::Compound(vec![attribute]).into()),
         (
             "active_effects",
             List::Compound(vec![poison, absorption]).into(),
         ),
-    ]);
+    ])
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn milk_bucket_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("milk-bucket");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let data = drinker_with_poison_and_absorption("minecraft:milk_bucket");
     let uuid = offline_uuid("MilkDrinker");
     for dir in [&vanilla, &harpas] {
         harpas_anvil::write_player(&dir.join("world"), uuid, &data).unwrap();
@@ -2444,6 +2448,152 @@ fn milk_bucket_matches_vanilla() {
             .unwrap();
         assert!(saved.get("active_effects").is_none(), "{dir:?}");
         assert_eq!(saved.get("AbsorptionAmount"), Some(&Nbt::Float(0.0)));
+    }
+}
+
+fn exercise_honey_bottle(server: &mut Server, port: u16) -> (i32, i32) {
+    let mut client = Client::join(port, "HoneyDrinker");
+    client.stream.set_nodelay(true).unwrap();
+    let entity_id = client.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    confirm_position(&mut client);
+    let mut effects = [None; 2];
+    let mut vitals = None;
+    client.matching("initial health, Poison II and Absorption", |packet| {
+        match packet {
+            Packet::EntityEffect(effect) if effect.entity_id == entity_id => {
+                effects[effect.amplifier as usize] = Some(effect.effect);
+            }
+            Packet::SetHealth(update) => vitals = Some(update),
+            _ => {}
+        }
+        (effects.iter().all(Option::is_some) && vitals.is_some()).then_some(())
+    });
+    let [absorption, poison] = effects.map(Option::unwrap);
+    let mut vitals = vitals.unwrap();
+    assert_eq!(
+        (vitals.health, vitals.food, vitals.saturation),
+        (1.0, 14, 3.0)
+    );
+    let bottle = harpas_core::item::items()
+        .id("minecraft:glass_bottle")
+        .unwrap() as i32;
+
+    use_food(&mut client, play::Hand::OffHand, 1);
+    cancel_food(&mut client, entity_id);
+
+    for (sequence, hand, slot) in [(2, play::Hand::OffHand, 45), (3, play::Hand::MainHand, 36)] {
+        let first_drink = sequence == 2;
+        let (mut removed_poison, mut returned_bottle) = (false, false);
+        // The second drink changes only nonzero saturation, which is synced on reconnect.
+        let mut updated_health = !first_drink;
+        vitals.food = 20;
+        vitals.saturation += 1.2;
+        let started = Instant::now();
+        use_food(&mut client, hand, sequence);
+        client.matching("honey effect, food and returned bottle", |packet| {
+            match packet {
+                Packet::RemoveEntityEffect(effect) if effect.entity_id == entity_id => {
+                    assert_eq!(effect.effect, poison);
+                    assert!(first_drink);
+                    assert!(!removed_poison);
+                    removed_poison = true;
+                }
+                Packet::SetHealth(update) => {
+                    assert_eq!(update, vitals);
+                    updated_health = true;
+                }
+                Packet::SetContainerSlot(change)
+                    if change.window_id == 0 && change.slot == slot =>
+                {
+                    assert_eq!((change.item.item, change.item.count), (bottle, 1));
+                    returned_bottle = true;
+                    assert!(
+                        started.elapsed().abs_diff(Duration::from_secs(2))
+                            < Duration::from_millis(400)
+                    );
+                }
+                _ => {}
+            }
+            (returned_bottle && updated_health && (removed_poison || !first_drink)).then_some(())
+        });
+    }
+    drop(client);
+    server.wait_for("HoneyDrinker left the game");
+
+    let mut client = Client::join(port, "HoneyDrinker");
+    confirm_position(&mut client);
+    client.send_command("list");
+    let (mut synced_inventory, mut synced_health, mut synced_absorption) = (false, false, false);
+    client.matching("honey inventory and effects after reconnect", |packet| {
+        match packet {
+            Packet::EntityEffect(effect) => {
+                assert_eq!((effect.effect, effect.amplifier), (absorption, 0));
+                assert!((1..1200).contains(&effect.duration));
+                synced_absorption = true;
+            }
+            Packet::SetContainerContent(contents) if contents.window_id == 0 => {
+                for slot in [36, 45] {
+                    let stack = &contents.slots[slot];
+                    assert_eq!((stack.item, stack.count), (bottle, 1));
+                }
+                synced_inventory = true;
+            }
+            Packet::SetHealth(update) => {
+                assert_eq!(update, vitals);
+                synced_health = true;
+            }
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+            {
+                assert!(synced_inventory && synced_health && synced_absorption);
+                return Some(());
+            }
+            _ => {}
+        }
+        None
+    });
+    drop(client);
+    server.wait_for("HoneyDrinker left the game");
+    (poison, absorption)
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn honey_bottle_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("honey-bottle");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let mut data = drinker_with_poison_and_absorption("minecraft:honey_bottle");
+    data.insert("foodLevel", 14_i32);
+    let uuid = offline_uuid("HoneyDrinker");
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), uuid, &data).unwrap();
+    }
+    let expected = exercise_honey_bottle(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_honey_bottle(&mut server, other), expected);
+    stop(&mut server);
+    for dir in [&vanilla, &harpas] {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), uuid)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.get("AbsorptionAmount"), Some(&Nbt::Float(3.0)));
+        let Some(Nbt::List(List::Compound(effects))) = saved.get("active_effects") else {
+            panic!("missing saved Absorption in {dir:?}");
+        };
+        assert_eq!(effects.len(), 1);
+        assert_eq!(
+            effects[0].get("id"),
+            Some(&Nbt::from("minecraft:absorption"))
+        );
     }
 }
 

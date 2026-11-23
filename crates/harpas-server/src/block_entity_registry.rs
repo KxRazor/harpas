@@ -117,6 +117,19 @@ impl Builtin {
             })
     }
 
+    pub(crate) fn has_honey_bottle(&self) -> bool {
+        items()
+            .id("minecraft:honey_bottle")
+            .zip(self.consumables.as_ref())
+            .and_then(|(id, consumables)| consumables.get(&id))
+            .is_some_and(|honey| {
+                honey.food.as_ref().is_some_and(|food| food.can_always_eat)
+                    && matches!(&honey.effect, Some(ConsumeEffect::Remove(kinds)) if kinds == &[EffectKind::Poison])
+                    && honey.remainder.as_ref().and_then(ItemStack::name)
+                        == Some("minecraft:glass_bottle")
+            })
+    }
+
     pub(crate) fn has_food_effects(&self) -> bool {
         use EffectKind::{
             Absorption, FireResistance, Hunger, Nausea, Poison, Regeneration, Resistance,
@@ -298,6 +311,19 @@ fn consume_effect(consumable: &Value) -> io::Result<Option<ConsumeEffect>> {
     };
     match action["type"].as_str() {
         Some("minecraft:clear_all_effects") => return Ok(Some(ConsumeEffect::ClearAll)),
+        Some("minecraft:remove_effects") => {
+            let effects = &action["effects"];
+            let ids = match effects {
+                Value::String(_) => std::slice::from_ref(effects),
+                Value::Array(ids) => ids.as_slice(),
+                _ => return Err(bad()),
+            };
+            let kinds = ids
+                .iter()
+                .map(|id| effect_kind(id).ok_or_else(bad))
+                .collect::<io::Result<_>>()?;
+            return Ok(Some(ConsumeEffect::Remove(kinds)));
+        }
         Some("minecraft:apply_effects") => {}
         _ => return Err(bad()),
     }
@@ -319,12 +345,13 @@ fn consume_effect(consumable: &Value) -> io::Result<Option<ConsumeEffect>> {
     }))
 }
 
+fn effect_kind(id: &Value) -> Option<EffectKind> {
+    EffectKind::ALL.into_iter().find(|kind| id == kind.id())
+}
+
 fn food_effect(effect: &Value) -> io::Result<FoodEffect> {
     let bad = || invalid("unsupported default food effect");
-    let kind = EffectKind::ALL
-        .into_iter()
-        .find(|kind| effect["id"] == kind.id())
-        .ok_or_else(bad)?;
+    let kind = effect_kind(&effect["id"]).ok_or_else(bad)?;
     if effect
         .get("ambient")
         .is_some_and(|value| value.as_bool() != Some(false))
@@ -581,6 +608,38 @@ mod tests {
     }
 
     #[test]
+    fn extracts_honey_as_food_that_removes_a_specific_effect() {
+        let scratch = Scratch::new(&std::env::temp_dir()).unwrap();
+        let food = json!({"nutrition": 2, "saturation": 0.5, "can_always_eat": true});
+        let apple = json!({"components": {"minecraft:food": food, "minecraft:consumable": {}}});
+        fs::write(scratch.0.join("apple.json"), apple.to_string()).unwrap();
+        for effects in [json!("minecraft:poison"), json!(["minecraft:poison"])] {
+            let honey = json!({"components": {
+                "minecraft:food": food,
+                "minecraft:consumable": {
+                    "consume_seconds": 2.5,
+                    "on_consume_effects": [{"type": "minecraft:remove_effects", "effects": effects}],
+                },
+                "minecraft:use_remainder": {"id": "minecraft:glass_bottle"},
+            }});
+            fs::write(scratch.0.join("honey_bottle.json"), honey.to_string()).unwrap();
+            let reports = consumable_reports(&scratch.0).unwrap();
+            let consumables = consumable_defaults(&Value::Object(reports)).unwrap();
+            assert_eq!(
+                consumables[&items().id("minecraft:honey_bottle").unwrap()].use_ticks,
+                50
+            );
+            assert!(
+                Builtin {
+                    consumables: Some(consumables),
+                    ..Builtin::default()
+                }
+                .has_honey_bottle()
+            );
+        }
+    }
+
+    #[test]
     fn loaded_registry_must_match_the_pinned_version_and_jar() {
         let scratch = Scratch::new(&std::env::temp_dir()).unwrap();
         assert!(load(&scratch.0).unwrap().is_none());
@@ -603,6 +662,7 @@ mod tests {
         let loaded = load_builtin(&scratch.0).unwrap().unwrap();
         assert!(!loaded.has_food_remainders());
         assert!(!loaded.has_milk_bucket());
+        assert!(!loaded.has_honey_bottle());
         assert_eq!(loaded.consumables.unwrap().len(), 1);
         data["foods"]["minecraft:mushroom_stew"] = json!({
             "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {},

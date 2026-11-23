@@ -148,6 +148,9 @@ Milk can be drunk from either hand at any food level. It uses the same timed use
 Completing a drink returns an empty bucket and clears the active effects the engine tracks, including hidden
 weaker effects. Absorption loses its remaining hearts and its capacity. The client receives the removals, and
 the cleared effects and returned bucket persist in player data.
+Honey bottles can be drunk from either hand at full hunger. Completing a drink applies the food and
+saturation from the item defaults, returns a glass bottle and removes Poison, including its hidden weaker
+effects. Other active effects continue, and the inventory and remaining effects persist in player data.
 The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is

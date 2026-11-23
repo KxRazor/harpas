@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use harpas_core::nbt::{Compound, Nbt};
+use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_java::{FrameReader, offline_uuid, write_frame};
 use harpas_protocol_java::codec;
 use harpas_protocol_java::v26_1::{PROTOCOL, configuration, handshaking, login, play};
@@ -1979,6 +1979,113 @@ fn food_poison_matches_vanilla() {
             .unwrap();
         assert_eq!(saved.get("Health"), Some(&Nbt::Float(1.0)));
         assert!(saved.get("active_effects").is_none());
+    }
+}
+
+fn pufferfish_effect_packets(client: &mut Client) -> [play::clientbound::EntityEffect; 3] {
+    let mut effects = std::array::from_fn(|_| {
+        client.matching("pufferfish effect", |packet| match packet {
+            Packet::EntityEffect(effect) => Some(effect),
+            _ => None,
+        })
+    });
+    effects.sort_unstable_by_key(|effect| effect.amplifier);
+    effects
+}
+
+fn exercise_pufferfish(server: &mut Server, port: u16) -> [play::clientbound::EntityEffect; 3] {
+    let mut client = Client::join(port, "FishEater");
+    confirm_position(&mut client);
+    assert_eq!(health(&mut client).food, 10);
+    use_food(&mut client, play::Hand::OffHand, 1);
+    let mut applied = pufferfish_effect_packets(&mut client);
+    assert_eq!(applied.each_ref().map(|effect| effect.amplifier), [0, 1, 2]);
+    assert_eq!(
+        applied.each_ref().map(|effect| effect.duration),
+        [300, 1200, 300]
+    );
+    assert!(applied.iter().all(|effect| effect.flags.blend));
+    poison_damage(&mut client, &applied[1]);
+    let hurt = health(&mut client);
+    assert_eq!((hurt.health, hurt.food), (19.0, 11));
+    drop(client);
+    server.wait_for("FishEater left the game");
+
+    let mut client = Client::join(port, "FishEater");
+    confirm_position(&mut client);
+    let resumed = pufferfish_effect_packets(&mut client);
+    let elapsed = applied[1].duration - resumed[1].duration;
+    assert!((1..120).contains(&elapsed), "{resumed:?}");
+    for (before, after) in applied.iter_mut().zip(&resumed) {
+        assert_eq!(
+            (after.effect, after.amplifier),
+            (before.effect, before.amplifier)
+        );
+        assert_eq!(after.duration, before.duration - elapsed);
+        assert_eq!(
+            after.flags,
+            play::EffectFlags {
+                blend: false,
+                ..before.flags
+            }
+        );
+        before.entity_id = 0;
+    }
+    for _ in 0..2 {
+        poison_damage(&mut client, &resumed[1]);
+    }
+    drop(client);
+    server.wait_for("FishEater left the game");
+    applied
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_pufferfish_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food-pufferfish");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let fish = Compound::from_iter([
+        ("id", Nbt::from("minecraft:pufferfish")),
+        ("count", Nbt::Int(1)),
+    ]);
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("foodLevel", Nbt::Int(10)),
+        ("foodSaturationLevel", Nbt::Float(0.0)),
+        ("equipment", Compound::from_iter([("offhand", fish)]).into()),
+    ]);
+    let uuid = offline_uuid("FishEater");
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), uuid, &data).unwrap();
+    }
+    let expected = exercise_pufferfish(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_pufferfish(&mut server, other), expected);
+    stop(&mut server);
+
+    for dir in [&vanilla, &harpas] {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), uuid)
+            .unwrap()
+            .unwrap();
+        let Some(Nbt::List(List::Compound(effects))) = saved.get("active_effects") else {
+            panic!("missing saved pufferfish effects");
+        };
+        let poison = effects
+            .iter()
+            .find(|effect| effect.get("id") == Some(&Nbt::from("minecraft:poison")))
+            .unwrap();
+        let Some(Nbt::Int(remaining)) = poison.get("duration") else {
+            panic!("missing saved Poison duration");
+        };
+        // Damage runs before the duration counts down, once per 12 ticks at level II.
+        let hits = expected[1].duration / 12 - remaining / 12;
+        assert!((3..19).contains(&hits), "{hits} ticks of Poison damage");
+        assert_eq!(saved.get("Health"), Some(&Nbt::Float(20.0 - hits as f32)));
     }
 }
 

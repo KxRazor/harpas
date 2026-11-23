@@ -80,6 +80,8 @@ pub enum EffectKind {
     Hunger,
     /// Deals periodic magic damage while health is above one point.
     Poison,
+    /// Distorts the player's view on the client.
+    Nausea,
 }
 
 impl EffectKind {
@@ -88,10 +90,12 @@ impl EffectKind {
         match self {
             Self::Hunger => "minecraft:hunger",
             Self::Poison => "minecraft:poison",
+            Self::Nausea => "minecraft:nausea",
         }
     }
 
-    pub(crate) const ALL: [Self; 2] = [Self::Hunger, Self::Poison];
+    /// The effects implemented by the engine, in storage order.
+    pub const ALL: [Self; 3] = [Self::Hunger, Self::Poison, Self::Nausea];
 }
 
 /// The visible state of a player's status effect.

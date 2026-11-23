@@ -311,6 +311,13 @@ fn run() -> io::Result<()> {
                 None
             }
         },
+        climbable_blocks: match worldgen_data.block_tag_states("minecraft:climbable") {
+            Ok(states) => states,
+            Err(error) => {
+                warn!("Climbable block rules will be unavailable: {error}");
+                Vec::new()
+            }
+        },
         items: Some(Arc::new(items)),
     };
     let mut server_info = server_info(&properties);

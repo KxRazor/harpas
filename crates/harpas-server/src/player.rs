@@ -737,6 +737,11 @@ pub(crate) fn send(
                 connection.send_environmental_damage(entity_id, source);
                 continue;
             }
+            Output::CriticalHit(entity_id) => clientbound::EntityAnimation {
+                entity_id,
+                animation: play::Animation::CriticalHit,
+            }
+            .into(),
             Output::Death {
                 entity_id,
                 uuid,

@@ -6,6 +6,7 @@ use crate::inventory::{ArmorSlot, ItemStack};
 use crate::item_data::{Consumable, ConsumeEffect, FoodProperties, ItemCodec};
 use crate::player::{DamageKind, Effect, EffectKind, GameMode, Output, PlayerState, Position};
 use crate::world::{ChunkPos, ChunkState, World};
+use harpas_core::math::{cos_f32, sin_f32, wrap_degrees_f32};
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_core::random::RandomSource;
 
@@ -767,9 +768,11 @@ impl Game {
         let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
         let recharge_ticks = 20.0 / speed as f32;
         let charge = ((f32::from(source.attack_charge_ticks) + 0.5) / recharge_ticks).min(1.0);
+        let charged = charge > 0.9;
+        let sprint_hit = charged && source.sprinting;
         let mut damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
         let position = source.player.position;
-        let critical = charge > 0.9
+        let critical = charged
             && source.fall_distance > 0.0
             && !position.on_ground
             && !source.sprinting
@@ -801,7 +804,11 @@ impl Game {
             }
         }
         self.players[attacker].vitals.exhaust(0.1);
+        if sprint_hit {
+            self.players[attacker].sprinting = false;
+        }
         let target = &mut self.players[defender];
+        let on_ground = target.player.position.on_ground;
         if fresh_hit {
             while dx * dx + dz * dz < 1.0e-5 {
                 dx = (target.random.next_double() - 0.5) * 0.02;
@@ -809,14 +816,27 @@ impl Game {
             }
             let horizontal = 0.4 / dx.hypot(dz);
             // A standing player already carries one tick's downward gravity before the hit.
-            let vertical = if target.player.position.on_ground {
+            let vertical = if on_ground {
                 0.4 - 0.08 * 0.98 / 2.0
             } else {
                 0.0
             };
+            let mut velocity = [dx * horizontal, vertical, dz * horizontal];
+            if sprint_hit {
+                // A second knockback halves the horizontal motion before pushing along
+                // the attacker's facing and caps the lift on the ground.
+                let yaw = wrap_degrees_f32(position.yaw).to_radians();
+                let (x, z) = (-f64::from(sin_f32(yaw)), f64::from(cos_f32(yaw)));
+                let push = 0.5 / x.hypot(z);
+                velocity[0] = velocity[0] * 0.5 + x * push;
+                velocity[2] = velocity[2] * 0.5 + z * push;
+                if on_ground {
+                    velocity[1] = 0.4;
+                }
+            }
             target.send(Output::EntityVelocity {
                 entity_id: target_id,
-                velocity: [dx * horizontal, vertical, dz * horizontal],
+                velocity,
             });
         }
         if health != target.vitals.health {

@@ -1363,6 +1363,207 @@ fn bare_hand_combat_matches_vanilla() {
     }
 }
 
+fn exercise_sprint_attacks(port: u16, names: [&str; 3], damage: f32) -> [[f64; 3]; 6] {
+    let join = |name| {
+        let mut client = Client::join(port, name);
+        client.stream.set_nodelay(true).unwrap();
+        let id = client.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let position = confirm_position(&mut client);
+        assert_eq!(health(&mut client).health, 20.0);
+        (client, id, position)
+    };
+    let [attacker, defender, reserve] = names;
+    let (mut attacker, attacker_id, [x, y, z]) = join(attacker);
+    let (mut defender, defender_id, _) = join(defender);
+    let (mut reserve, reserve_id, _) = join(reserve);
+    move_player(&mut attacker, [x, y, z], true);
+    move_player(&mut defender, [x + 1.5, y, z], true);
+    move_player(&mut reserve, [x - 1.5, y, z], true);
+
+    let face = |attacker: &mut Client, yaw| {
+        play_packet(
+            attacker,
+            play::serverbound::SetPlayerRotation {
+                yaw,
+                pitch: 0.0,
+                flags: play::MovementFlags {
+                    on_ground: true,
+                    ..Default::default()
+                },
+            },
+        );
+    };
+    let start = play::serverbound::PlayerCommand {
+        entity_id: attacker_id,
+        action: play::PlayerCommandAction::StartSprinting,
+        data: 0,
+    };
+    let attack = play::serverbound::Attack {
+        entity_id: defender_id,
+    };
+    let attack_reserve = play::serverbound::Attack {
+        entity_id: reserve_id,
+    };
+    let recharge = || std::thread::sleep(Duration::from_millis(800));
+    let velocity = |packet: &Packet, id| match packet {
+        Packet::SetEntityVelocity(packet) if packet.entity_id == id => {
+            let v = packet.velocity;
+            Some([v.x, v.y, v.z])
+        }
+        _ => None,
+    };
+    let hit = |target: &mut Client, id| {
+        let mut motion = None;
+        let mut health = None;
+        target.matching("health and velocity after a strike", |packet| {
+            motion = velocity(&packet, id).or(motion);
+            if let Packet::SetHealth(packet) = packet {
+                health = Some(packet.health);
+            }
+            Some((motion?, health?))
+        })
+    };
+
+    // Keep the target to the side to distinguish the attacker's facing from the line to the target.
+    face(&mut attacker, 0.0);
+    recharge();
+    play_packet(&mut attacker, attack.clone());
+    let (walking, health) = hit(&mut defender, defender_id);
+    assert_eq!(health, 20.0 - damage);
+
+    recharge();
+    play_packet(&mut attacker, start.clone());
+    play_packet(&mut attacker, attack.clone());
+    let (sprinting, health) = hit(&mut defender, defender_id);
+    assert_eq!(health, 20.0 - 2.0 * damage);
+
+    recharge();
+    // The previous strike should have stopped the sprint. Start again between these two attacks
+    // so that the second strike tests the sprint with the charge just reset.
+    let mut frames = Vec::new();
+    for packet in [
+        attack.clone().into(),
+        start.clone().into(),
+        attack_reserve.clone().into(),
+    ] {
+        write_frame(&mut frames, |buf| {
+            play::serverbound::Packet::encode(&packet, buf);
+        });
+    }
+    attacker.stream.write_all(&frames).unwrap();
+    let (after_sprint, health) = hit(&mut defender, defender_id);
+    assert_eq!(health, 20.0 - 3.0 * damage);
+    let (partial, partial_health) = hit(&mut reserve, reserve_id);
+    assert!(partial_health > 20.0 - damage && partial_health < 20.0);
+
+    // The partially charged strike should have left the sprint active.
+    face(&mut attacker, 100_000.0 * 360.0 + 132.0);
+    recharge();
+    play_packet(&mut attacker, attack_reserve.clone());
+    let (after_partial, reserve_health) = hit(&mut reserve, reserve_id);
+    assert_eq!(reserve_health, partial_health - damage);
+
+    // Give the defender damage immunity with an uncharged punch, then deal more damage within it.
+    face(&mut attacker, 0.0);
+    recharge();
+    frames.clear();
+    for entity_id in [attacker_id, defender_id] {
+        let packet = play::serverbound::Packet::from(play::serverbound::Attack { entity_id });
+        write_frame(&mut frames, |buf| packet.encode(buf));
+    }
+    reserve.stream.write_all(&frames).unwrap();
+    let (_, primed_health) = hit(&mut defender, defender_id);
+    let previous = 20.0 - 3.0 * damage;
+    assert!(primed_health > previous - 1.0 && primed_health < previous);
+    play_packet(&mut attacker, start);
+    play_packet(&mut attacker, attack);
+    let check_velocity = |packet: &Packet| {
+        assert_eq!(
+            velocity(packet, defender_id),
+            None,
+            "knockback during damage immunity"
+        );
+    };
+    let cooldown_health = defender.matching(
+        "health after a stronger sprint attack during damage immunity",
+        |packet| {
+            check_velocity(&packet);
+            match packet {
+                Packet::SetHealth(packet) => Some(packet.health),
+                _ => None,
+            }
+        },
+    );
+    assert!((cooldown_health - (previous - damage)).abs() < 0.0001);
+    defender.send_command("list");
+    defender.matching("list after a hit during damage immunity", |packet| {
+        check_velocity(&packet);
+        match packet {
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                    if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+            {
+                Some(())
+            }
+            _ => None,
+        }
+    });
+    recharge();
+    play_packet(&mut attacker, attack_reserve);
+    let (after_cooldown_hit, health) = hit(&mut reserve, reserve_id);
+    assert_eq!(health, reserve_health - damage);
+    [
+        walking,
+        sprinting,
+        after_sprint,
+        partial,
+        after_partial,
+        after_cooldown_hit,
+    ]
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn sprint_knockback_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("sprint-knockback");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let sword = Compound::from_iter([
+        ("Slot", Nbt::Byte(0)),
+        ("id", Nbt::from("minecraft:wooden_sword")),
+    ]);
+    let sword_player = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Inventory", List::Compound(vec![sword]).into()),
+    ]);
+    let sword_names = ["SwordFighter", "SwordTarget", "SwordReserve"];
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(
+            &dir.join("world"),
+            offline_uuid(sword_names[0]),
+            &sword_player,
+        )
+        .unwrap();
+    }
+    let exercise = |port| {
+        [
+            exercise_sprint_attacks(port, ["FistFighter", "FistTarget", "FistReserve"], 1.0),
+            exercise_sprint_attacks(port, sword_names, 4.0),
+        ]
+    };
+    let expected = exercise(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise(other), expected);
+    stop(&mut server);
+}
+
 fn attack_speed(client: &mut Client, equipped: bool) -> play::AttributeProperty {
     client.matching("main-hand attack speed", |packet| match packet {
         Packet::UpdateAttributes(packet) => packet.attributes.into_iter().find(|property| {

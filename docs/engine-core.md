@@ -128,15 +128,16 @@ food and saturation from its item components. Mushroom stew, rabbit stew and bee
 The returned item takes the place of the last food in the hand. If food remains there, the item goes into the
 inventory or drops when there is no room. Releasing use, changing away from the active hotbar slot or replacing
 the held item cancels the action. Completing rotten flesh or raw chicken use rolls the chance of applying
-Hunger from the item's defaults. Hunger starts adding exhaustion on the next player tick, before the food
-tick. The Java client receives effect changes on application, login and expiry. The remaining duration
-persists in player data.
+Hunger from the item's defaults. Spider eyes and poisonous potatoes can apply Poison from their defaults.
+Hunger adds exhaustion before the food tick. Poison deals one point of magic damage every 25 ticks at
+level I while health is above one point. The Java client receives effect changes on application, login and
+expiry. The remaining durations persist in player data.
 The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is
 above 10 health on Easy or Peaceful, or above 1 on Normal. On Hard the damage can be lethal. On Peaceful,
-natural regeneration restores one food point every 10 player ticks, before the starvation check. Falls and
-starvation share the damage cooldown and death handling, with messages specific to the cause.
+natural regeneration restores one food point every 10 player ticks, before the starvation check. Falls,
+starvation and Poison share the damage cooldown, and death messages give the cause.
 
 ### 2. Parallel only where it cannot be observed
 

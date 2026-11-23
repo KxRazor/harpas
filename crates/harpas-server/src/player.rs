@@ -648,6 +648,7 @@ pub(crate) fn send(
                 let source = match kind {
                     DamageKind::Fall => "minecraft:fall",
                     DamageKind::Starvation => "minecraft:starve",
+                    DamageKind::Magic => "minecraft:magic",
                 };
                 connection.send_environmental_damage(entity_id, source);
                 continue;
@@ -662,6 +663,7 @@ pub(crate) fn send(
                     let translation = match kind {
                         DamageKind::Fall => "death.fell.accident.generic",
                         DamageKind::Starvation => "death.attack.starve",
+                        DamageKind::Magic => "death.attack.magic",
                     };
                     Nbt::Compound(
                         [

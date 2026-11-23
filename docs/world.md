@@ -153,7 +153,7 @@ supported item records are retained. The current and previous modes use `playerG
 `previousPlayerGameType`. Play Login, the player list and the starting abilities use the resolved mode.
 The first health packet uses the saved `Health`, `foodLevel` and `foodSaturationLevel`. The food tick also
 resumes with `foodExhaustionLevel` and `foodTickTimer`. Missing values use zero for exhaustion and the timer.
-Hunger resumes from its remaining duration in `active_effects`. Other saved effects are retained in the
+Hunger and Poison resume from their remaining durations in `active_effects`. Other saved effects are retained in the
 player document.
 
 Autosave every 6,000 ticks, departure and shutdown take immutable player snapshots on the logic thread.
@@ -238,7 +238,7 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
   before the data was added, the server warns about missing block entity IDs, built-in registries or food
   defaults. Apples remain available as a fallback until the food defaults are generated. Older food defaults
-  continue to work for basic foods. To add foods that return a container or apply Hunger, or to generate
+  continue to work for basic foods. To add foods that return a container or apply Hunger or Poison, or to generate
   missing data, install Java 25
   and run `harpas vanilla-data generate-registry`. To reuse a downloaded jar, run
   `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA and the jar hash.

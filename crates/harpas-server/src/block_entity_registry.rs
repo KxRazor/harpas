@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_core::item::items;
 use harpas_engine::inventory::ItemStack;
-use harpas_engine::item_data::{FoodHunger, FoodProperties};
+use harpas_engine::item_data::{FoodEffect, FoodProperties};
+use harpas_engine::player::EffectKind;
 use serde_json::{Map, Value, json};
 
 use crate::vanilla_data::{SERVER_JAR_SHA1, VERSION};
@@ -96,10 +97,19 @@ impl Builtin {
     }
 
     pub(crate) fn has_food_effects(&self) -> bool {
-        self.foods
-            .as_ref()
-            .and_then(|foods| foods.get(&items().id("minecraft:rotten_flesh")?))
-            .is_some_and(|food| food.hunger.is_some())
+        [
+            ("minecraft:rotten_flesh", EffectKind::Hunger),
+            ("minecraft:spider_eye", EffectKind::Poison),
+            ("minecraft:poisonous_potato", EffectKind::Poison),
+        ]
+        .into_iter()
+        .all(|(name, kind)| {
+            self.foods
+                .as_ref()
+                .and_then(|foods| foods.get(&items().id(name)?))
+                .and_then(|food| food.effect)
+                .is_some_and(|effect| effect.kind == kind)
+        })
     }
 }
 
@@ -166,7 +176,7 @@ fn food_reports(directory: &Path) -> io::Result<Map<String, Value>> {
         );
         if food.is_object()
             && consumable.is_object()
-            && food_hunger(consumable).is_ok()
+            && food_effect(consumable).is_ok()
             && components
                 .get("minecraft:suspicious_stew_effects")
                 .is_none()
@@ -210,7 +220,7 @@ fn food_defaults(value: &Value) -> io::Result<HashMap<u32, FoodProperties>> {
                 .ok_or_else(bad)? as f32;
             let ticks = seconds * 20.0;
             let remainder = entry.get("use_remainder").map(food_remainder).transpose()?;
-            let hunger = food_hunger(&entry["consumable"])?;
+            let effect = food_effect(&entry["consumable"])?;
             if !saturation.is_finite()
                 || saturation < 0.0
                 || !(0.0..u32::MAX as f32).contains(&ticks)
@@ -225,14 +235,14 @@ fn food_defaults(value: &Value) -> io::Result<HashMap<u32, FoodProperties>> {
                     can_always_eat,
                     use_ticks: ticks as u32,
                     remainder,
-                    hunger,
+                    effect,
                 },
             ))
         })
         .collect()
 }
 
-fn food_hunger(consumable: &Value) -> io::Result<Option<FoodHunger>> {
+fn food_effect(consumable: &Value) -> io::Result<Option<FoodEffect>> {
     let bad = || invalid("unsupported default food effect");
     let Some(value) = consumable.get("on_consume_effects") else {
         return Ok(None);
@@ -245,8 +255,11 @@ fn food_hunger(consumable: &Value) -> io::Result<Option<FoodHunger>> {
     let [effect] = apply["effects"].as_array().ok_or_else(bad)?.as_slice() else {
         return Err(bad());
     };
+    let kind = [EffectKind::Hunger, EffectKind::Poison]
+        .into_iter()
+        .find(|kind| effect["id"] == kind.id())
+        .ok_or_else(bad)?;
     if apply["type"] != "minecraft:apply_effects"
-        || effect["id"] != "minecraft:hunger"
         || effect
             .get("amplifier")
             .is_some_and(|value| value.as_i64() != Some(0))
@@ -273,7 +286,8 @@ fn food_hunger(consumable: &Value) -> io::Result<Option<FoodHunger>> {
         .map_or(Some(1.0), Value::as_f64)
         .filter(|value| (0.0..=1.0).contains(value))
         .ok_or_else(bad)? as f32;
-    Ok(Some(FoodHunger {
+    Ok(Some(FoodEffect {
+        kind,
         duration,
         probability,
     }))

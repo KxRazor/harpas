@@ -69,6 +69,29 @@ pub enum DamageKind {
     Fall,
     /// Running out of food.
     Starvation,
+    /// Direct magic damage, such as from Poison.
+    Magic,
+}
+
+/// The status effects the engine can apply to a player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectKind {
+    /// Increases food exhaustion.
+    Hunger,
+    /// Deals periodic magic damage while health is above one point.
+    Poison,
+}
+
+impl EffectKind {
+    /// The vanilla registry name and saved NBT identifier.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Hunger => "minecraft:hunger",
+            Self::Poison => "minecraft:poison",
+        }
+    }
+
+    pub(crate) const ALL: [Self; 2] = [Self::Hunger, Self::Poison];
 }
 
 /// The visible state of a player's status effect.
@@ -751,7 +774,8 @@ pub(crate) struct PlayerState {
     pub(crate) peaceful_food_ticks: u8,
     pub(crate) sprinting: bool,
     pub(crate) food_use: Option<crate::survival::FoodUse>,
-    pub(crate) hunger_effect: Option<crate::survival::HungerEffect>,
+    pub(crate) effects: crate::survival::ActiveEffects,
+    pub(crate) ticks_alive: i32,
     pub(crate) random: LegacyRandom,
     pub(crate) fall_distance: f64,
     pub(crate) last_damage: f32,
@@ -852,7 +876,8 @@ impl PlayerState {
             peaceful_food_ticks: 0,
             sprinting: false,
             food_use: None,
-            hunger_effect: None,
+            effects: Default::default(),
+            ticks_alive: 0,
             random: LegacyRandom::new(seed),
             fall_distance: 0.0,
             last_damage: 0.0,

@@ -539,6 +539,9 @@ as shown by the parity report.
   - [x] Protection on equipped armor reduces melee damage between Java Survival players. The combined level,
         reduction limit, breakage on impact and interaction with Resistance and Absorption are compared with
         vanilla (`protection_matches_vanilla`).
+  - [x] Sharpness on the main-hand sword increases Java Survival melee damage before armor mitigation.
+        Levels I and V are compared with vanilla for full and partial charge against unarmored players and
+        players wearing iron chestplates (`sharpness_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

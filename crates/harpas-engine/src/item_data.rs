@@ -208,7 +208,7 @@ impl ItemCodec {
         (!stack.is_empty() && armor.slot == slot).then_some(armor)
     }
 
-    pub(crate) fn protection_level(&self, stack: &ItemStack) -> i32 {
+    pub(crate) fn enchantment_level(&self, stack: &ItemStack, enchantment: &str) -> i32 {
         if stack.is_empty() {
             return 0;
         }
@@ -216,7 +216,7 @@ impl ItemCodec {
         else {
             return 0;
         };
-        match levels.get("minecraft:protection") {
+        match levels.get(enchantment) {
             Some(Nbt::Int(level)) => *level,
             _ => 0,
         }

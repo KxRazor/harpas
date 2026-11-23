@@ -1826,6 +1826,136 @@ fn protection_matches_vanilla() {
     assert_eq!(with_effects, 20.0);
 }
 
+fn exercise_sharpness(port: u16) -> Vec<f32> {
+    let mut attacker = Client::join(port, "Attacker");
+    attacker.stream.set_nodelay(true).unwrap();
+    let [x, y, z] = confirm_position(&mut attacker);
+    move_player(&mut attacker, [x, y, z], true);
+    let mut defenders = [("Unarmored", x - 1.0), ("IronArmor", x + 1.0)].map(|(name, x)| {
+        let mut client = Client::join(port, name);
+        client.stream.set_nodelay(true).unwrap();
+        let entity_id = client.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        confirm_position(&mut client);
+        assert_eq!(health(&mut client).health, 20.0);
+        move_player(&mut client, [x, y, z], true);
+        (client, entity_id)
+    });
+    let speed = attack_speed(&mut attacker, true);
+    let recharge_ticks = 20.0 / (speed.base_value + speed.modifiers[0].amount) as f32;
+    let mut remaining = [20.0; 2];
+    let mut full_hits = Vec::new();
+    for (slot, bonus) in [(0, 1.0), (1, 3.0)] {
+        play_packet(&mut attacker, play::serverbound::SetHeldItem { slot });
+        for full in 0..defenders.len() {
+            std::thread::sleep(Duration::from_millis(800));
+            let partial = 1 - full;
+            // The first attack resets the charge. A different target lets the second take damage immediately.
+            let mut frames = Vec::new();
+            for index in [full, partial] {
+                let packet = play::serverbound::Packet::from(play::serverbound::Attack {
+                    entity_id: defenders[index].1,
+                });
+                write_frame(&mut frames, |buf| packet.encode(buf));
+            }
+            attacker.stream.write_all(&frames).unwrap();
+
+            let after_full = health(&mut defenders[full].0).health;
+            let damage = remaining[full] - after_full;
+            if full == 0 {
+                assert!((damage - (4.0 + bonus)).abs() < 0.0001);
+            } else {
+                assert!(damage < 4.0 + bonus);
+            }
+            full_hits.push(damage);
+            remaining[full] = after_full;
+
+            let after_partial = health(&mut defenders[partial].0).health;
+            // Both frames are sent together, but a server tick may fall between their handlers.
+            assert!(
+                (0..3).any(|ticks| {
+                    let charge = (ticks as f32 + 0.5) / recharge_ticks;
+                    let raw = 4.0 * (0.2 + charge * charge * 0.8) + bonus * charge;
+                    let damage = if partial == 1 {
+                        // The iron chestplate gives six armor points and no toughness.
+                        raw * (1.0 - (6.0 - raw / 2.0) / 25.0)
+                    } else {
+                        raw
+                    };
+                    (after_partial - (remaining[partial] - damage)).abs() < 0.0001
+                }),
+                "unexpected partial damage with Sharpness bonus {bonus} on defender {partial}: {}",
+                remaining[partial] - after_partial
+            );
+            remaining[partial] = after_partial;
+        }
+    }
+    full_hits
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn sharpness_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("sharpness");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let sword = |level: i32| {
+        Compound::from_iter([
+            ("id", Nbt::from("minecraft:wooden_sword")),
+            (
+                "components",
+                Compound::from_iter([(
+                    "minecraft:enchantments",
+                    Compound::from_iter([("minecraft:sharpness", level)]),
+                )])
+                .into(),
+            ),
+        ])
+    };
+    let hotbar = [(0_i8, 1), (1, 5)].map(|(slot, level)| {
+        let mut stack = sword(level);
+        stack.insert("Slot", slot);
+        stack
+    });
+    let attacker = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Inventory", List::Compound(hotbar.into()).into()),
+        (
+            "equipment",
+            Compound::from_iter([("offhand", sword(5))]).into(),
+        ),
+    ]);
+    let armor = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "equipment",
+            Compound::from_iter([(
+                "chest",
+                Compound::from_iter([("id", "minecraft:iron_chestplate")]),
+            )])
+            .into(),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        let world = dir.join("world");
+        harpas_anvil::write_player(&world, offline_uuid("Attacker"), &attacker).unwrap();
+        harpas_anvil::write_player(&world, offline_uuid("IronArmor"), &armor).unwrap();
+    }
+    let expected = exercise_sharpness(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    let actual = exercise_sharpness(other);
+    stop(&mut server);
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 0.0001, "{actual} != {expected}");
+    }
+}
+
 fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets

@@ -533,6 +533,9 @@ as shown by the parity report.
   - [x] Java Survival players can fight with swords. The locally generated item defaults supply attack damage,
         attack speed and durability. Wooden and iron swords are compared with vanilla for damage, recharge,
         switching the held item and saved wear (`sword_combat_matches_vanilla`).
+  - [x] Unenchanted armor reduces Java Survival melee damage between players and wears on impact. Health,
+        chestplate breakage, the armor bar and saved equipment are compared with vanilla for unarmored, iron
+        and diamond defenders (`armored_combat_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

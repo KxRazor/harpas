@@ -23,6 +23,27 @@ pub(crate) const CHEST_SLOTS: usize = 27;
 /// The most items a stack can hold with its components (`ItemStack.MAX_STACK_SIZE`).
 const MAX_STACK_SIZE: i32 = 99;
 
+/// A player's armor equipment slot, in inventory menu order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmorSlot {
+    /// Helmet slot.
+    Head,
+    /// Chestplate slot.
+    Chest,
+    /// Leggings slot.
+    Legs,
+    /// Boots slot.
+    Feet,
+}
+
+impl ArmorSlot {
+    pub(crate) const ALL: [Self; 4] = [Self::Head, Self::Chest, Self::Legs, Self::Feet];
+
+    pub(crate) const fn menu_slot(self) -> usize {
+        5 + self as usize
+    }
+}
+
 /// The changes to an item's default data components, in the Java network encoding of their values, which are not
 /// decoded yet.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

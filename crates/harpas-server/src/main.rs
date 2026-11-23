@@ -251,6 +251,13 @@ fn run() -> io::Result<()> {
                 "Sword combat needs the sword defaults from `harpas vanilla-data generate-registry`"
             );
         }
+        if let Some(armor) = builtin.armor {
+            codec = codec.with_armor(armor);
+        } else {
+            warn!(
+                "Armor mitigation needs the armor defaults from `harpas vanilla-data generate-registry`"
+            );
+        }
         match builtin.consumables {
             Some(consumables) => {
                 if !has_food_remainders {

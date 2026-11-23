@@ -1528,7 +1528,7 @@ impl Game {
             if mode == player::GameMode::Survival {
                 match mining.wear(world.block_item_codec(), &mut inventory.slots[slot]) {
                     Ok(true) => {
-                        Self::send_main_hand_item_broken(&self.players, breaker);
+                        Self::send_item_broken(&self.players, breaker, None);
                     }
                     Ok(false) => {}
                     Err(error) => log::warn!("Cannot apply mining wear to item {slot}: {error}"),
@@ -1550,12 +1550,19 @@ impl Game {
         true
     }
 
-    fn send_main_hand_item_broken(players: &[player::PlayerState], entity_id: i32) {
+    fn send_item_broken(
+        players: &[player::PlayerState],
+        entity_id: i32,
+        armor: Option<inventory::ArmorSlot>,
+    ) {
         for player in players {
             if !player.disconnecting
                 && (player.player.entity_id == entity_id || player.tracked.contains(&entity_id))
             {
-                player.send(player::Output::MainHandItemBroken(entity_id));
+                player.send(match armor {
+                    Some(slot) => player::Output::ArmorBroken { entity_id, slot },
+                    None => player::Output::MainHandItemBroken(entity_id),
+                });
             }
         }
     }

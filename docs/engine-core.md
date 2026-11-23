@@ -166,6 +166,10 @@ item's attack modifiers. The server sends attack speed changes for the client's 
 damage cooldown determines whether the attack deals damage.
 A successful strike wears the sword by one point, and a fresh hit sends knockback velocity to the target.
 Damage events and lethal hit messages identify the attacker.
+Unenchanted armor uses armor, toughness and durability from the locally generated item defaults. A hit that
+passes the damage cooldown wears the equipped pieces using the damage before mitigation. Armor then reduces
+that damage before Resistance and Absorption. A piece protects against the hit that breaks it. The player's
+tick sends the resulting attribute and inventory changes, and the new equipment state saves in player data.
 
 ### 2. Parallel only where it cannot be observed
 

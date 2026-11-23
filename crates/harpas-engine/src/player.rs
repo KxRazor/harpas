@@ -11,7 +11,7 @@ use std::time::Duration;
 use harpas_anvil::Chunk;
 
 use crate::block::{BlockPos, DigAction};
-use crate::inventory::{HashedStack, Inventory, ItemStack};
+use crate::inventory::{ArmorSlot, HashedStack, Inventory, ItemStack};
 use crate::light::Light;
 use crate::world::{ChunkPos, World};
 use harpas_core::block_behavior::Face;
@@ -619,6 +619,20 @@ pub enum Output {
     SetCarried(ItemStack),
     /// The entity's main-hand item broke.
     MainHandItemBroken(i32),
+    /// A piece of equipment broke in an armor slot.
+    ArmorBroken {
+        /// Entity that was wearing the item.
+        entity_id: i32,
+        /// Slot of the item that broke.
+        slot: ArmorSlot,
+    },
+    /// The local player's armor and toughness modifiers changed.
+    ArmorAttributes {
+        /// Entity whose protection changed.
+        entity_id: i32,
+        /// Armor and toughness for each equipped piece, ordered from head to feet.
+        modifiers: [Option<[f64; 2]>; 4],
+    },
     /// The local player's main-hand attack speed modifier for the attack indicator.
     AttackSpeed {
         /// Entity whose attack speed changed.
@@ -848,6 +862,7 @@ pub(crate) struct PlayerState {
     pub(crate) last_main_hand_item: u32,
     pub(crate) attack_damage_modifier: f64,
     pub(crate) attack_speed_modifier: Option<f64>,
+    pub(crate) armor_modifiers: [Option<[f64; 2]>; 4],
     pub(crate) death_location: Option<BlockPos>,
     pub(crate) force_game_mode_on_login: Option<bool>,
     pub(crate) tick_start: Position,
@@ -954,6 +969,7 @@ impl PlayerState {
             last_main_hand_item: 0,
             attack_damage_modifier: 0.0,
             attack_speed_modifier: None,
+            armor_modifiers: [None; 4],
             death_location: None,
             force_game_mode_on_login: None,
             tick_start: position,

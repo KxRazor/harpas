@@ -6,7 +6,7 @@ use harpas_core::block_behavior::Face;
 use harpas_core::nbt::List;
 use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
-use harpas_engine::inventory::{ComponentPatch, HashedStack, ItemStack};
+use harpas_engine::inventory::{ArmorSlot, ComponentPatch, HashedStack, ItemStack};
 use harpas_engine::player::{self, DamageKind, Input, Movement, Output, Position, Profile};
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
@@ -642,6 +642,32 @@ pub(crate) fn send(
                 }],
             }
             .into(),
+            Output::ArmorAttributes {
+                entity_id,
+                modifiers,
+            } => clientbound::UpdateAttributes {
+                entity_id,
+                attributes: [play::Attribute::Armor, play::Attribute::ArmorToughness]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, attribute)| play::AttributeProperty {
+                        attribute,
+                        base_value: 0.0,
+                        modifiers: ["helmet", "chestplate", "leggings", "boots"]
+                            .into_iter()
+                            .zip(modifiers)
+                            .filter_map(|(piece, values)| {
+                                Some(play::AttributeModifier {
+                                    id: format!("minecraft:armor.{piece}"),
+                                    amount: values?[index],
+                                    operation: play::AttributeOperation::AddValue,
+                                })
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+            .into(),
             Output::OnFire { entity_id, burning } => clientbound::SetEntityMetadata {
                 entity_id,
                 metadata: play::EntityMetadata {
@@ -988,6 +1014,16 @@ pub(crate) fn send(
             Output::MainHandItemBroken(entity_id) => clientbound::EntityEvent {
                 entity_id,
                 event: 47, // MAINHAND_BREAK in Java 26.1.
+            }
+            .into(),
+            Output::ArmorBroken { entity_id, slot } => clientbound::EntityEvent {
+                entity_id,
+                event: match slot {
+                    ArmorSlot::Head => 49,
+                    ArmorSlot::Chest => 50,
+                    ArmorSlot::Legs => 51,
+                    ArmorSlot::Feet => 52,
+                },
             }
             .into(),
             Output::SetSlot {

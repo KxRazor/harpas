@@ -770,7 +770,12 @@ impl Game {
         let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
         let recharge_ticks = 20.0 / speed as f32;
         let charge = ((f32::from(source.attack_charge_ticks) + 0.5) / recharge_ticks).min(1.0);
-        let damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
+        let mut damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
+        let sharpness = codec.enchantment_level(main_hand, "minecraft:sharpness");
+        if sharpness > 0 {
+            // The enchantment bonus scales linearly with charge, unlike the base damage.
+            damage += (1.0 + (sharpness - 1) as f32 * 0.5) * charge;
+        }
         self.players[attacker].attack_charge_ticks = 0;
         let fresh_hit = self.players[defender].hurt_cooldown <= 10;
         let health = self.players[defender].vitals.health;
@@ -898,7 +903,10 @@ impl Game {
             // Enchantments use the equipment left after armor wear, before absorption is spent.
             let protection = ArmorSlot::ALL
                 .into_iter()
-                .map(|slot| codec.protection_level(&player.inventory.slots[slot.menu_slot()]))
+                .map(|slot| {
+                    let stack = &player.inventory.slots[slot.menu_slot()];
+                    codec.enchantment_level(stack, "minecraft:protection")
+                })
                 .sum::<i32>()
                 .min(20);
             taken * (1.0 - protection as f32 / 25.0)

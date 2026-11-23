@@ -162,8 +162,10 @@ Java Survival players can punch or strike with a sword when the saved `minecraft
 Reach is measured from the attacker's eyes to the target player's hitbox. An attack uses the current charge
 and starts recharging it. Swords use attack damage, attack speed and durability from the locally generated
 item defaults. The player tick resets the charge if the main-hand item type changed and applies the equipped
-item's attack modifiers. The server sends attack speed changes for the client's attack indicator. The target's
-damage cooldown determines whether the attack deals damage.
+item's attack modifiers. The server sends attack speed changes for the client's attack indicator. Sharpness
+on the sword in the main hand adds one damage point at level I and half a point for each further level. The
+bonus scales linearly with the attack's charge and adds to the base damage before the target's damage cooldown
+and armor apply.
 A successful strike wears the sword by one point, and a fresh hit sends knockback velocity to the target.
 Damage events and lethal hit messages identify the attacker.
 Armor points, toughness and durability come from the locally generated item defaults. A hit that passes

@@ -2279,6 +2279,174 @@ fn absorption_packets(client: &mut Client, entity_id: i32, amount: f32, max: f64
     panic!("missing absorption amount or capacity");
 }
 
+fn exercise_milk_bucket(server: &mut Server, port: u16) -> Vec<i32> {
+    let mut client = Client::join(port, "MilkDrinker");
+    client.stream.set_nodelay(true).unwrap();
+    let entity_id = client.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    confirm_position(&mut client);
+    let initial = health(&mut client);
+    assert_eq!(
+        (initial.health, initial.food, initial.saturation),
+        (1.0, 20, 3.0)
+    );
+    let bucket = harpas_core::item::items().id("minecraft:bucket").unwrap() as i32;
+
+    use_food(&mut client, play::Hand::OffHand, 1);
+    cancel_food(&mut client, entity_id);
+
+    let started = Instant::now();
+    use_food(&mut client, play::Hand::OffHand, 2);
+    let mut removed = Vec::new();
+    let (mut amount_cleared, mut capacity_cleared, mut returned_bucket) = (false, false, false);
+    for _ in 0..1000 {
+        let bytes = client.next("milk effects and offhand bucket");
+        amount_cleared |= absorption_metadata(&bytes, entity_id) == Some(0.0);
+        match Packet::decode(&bytes) {
+            Ok(Packet::RemoveEntityEffect(effect)) if effect.entity_id == entity_id => {
+                removed.push(effect.effect);
+            }
+            Ok(Packet::UpdateAttributes(packet)) if packet.entity_id == entity_id => {
+                capacity_cleared |= packet.attributes.iter().any(|attribute| {
+                    attribute.attribute == play::Attribute::MaxAbsorption
+                        && attribute.base_value == 0.0
+                        && attribute.modifiers.is_empty()
+                });
+            }
+            Ok(Packet::SetContainerSlot(change)) if change.window_id == 0 && change.slot == 45 => {
+                assert_eq!((change.item.item, change.item.count), (bucket, 1));
+                returned_bucket = true;
+                assert!(
+                    started.elapsed().abs_diff(Duration::from_millis(1600))
+                        < Duration::from_millis(400)
+                );
+            }
+            _ => {}
+        }
+        if amount_cleared && capacity_cleared && returned_bucket && removed.len() == 2 {
+            break;
+        }
+    }
+    assert!(amount_cleared && capacity_cleared && returned_bucket);
+    removed.sort_unstable();
+    removed.dedup();
+    assert_eq!(removed.len(), 2);
+
+    use_food(&mut client, play::Hand::MainHand, 3);
+    client.matching("main hand bucket", |packet| match packet {
+        Packet::SetContainerSlot(change) if change.window_id == 0 && change.slot == 36 => {
+            assert_eq!((change.item.item, change.item.count), (bucket, 1));
+            Some(())
+        }
+        _ => None,
+    });
+    drop(client);
+    server.wait_for("MilkDrinker left the game");
+
+    let mut client = Client::join(port, "MilkDrinker");
+    confirm_position(&mut client);
+    client.send_command("list");
+    let (mut synced_inventory, mut synced_health) = (false, false);
+    client.matching("milk inventory and health after reconnect", |packet| {
+        match packet {
+            Packet::EntityEffect(effect) => {
+                panic!("effect returned after drinking milk: {effect:?}")
+            }
+            Packet::SetContainerContent(contents) if contents.window_id == 0 => {
+                for slot in [36, 45] {
+                    let stack = &contents.slots[slot];
+                    assert_eq!((stack.item, stack.count), (bucket, 1));
+                }
+                synced_inventory = true;
+            }
+            Packet::SetHealth(update) => {
+                assert_eq!(update, initial);
+                synced_health = true;
+            }
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+            {
+                assert!(synced_inventory && synced_health);
+                return Some(());
+            }
+            _ => {}
+        }
+        None
+    });
+    drop(client);
+    server.wait_for("MilkDrinker left the game");
+    removed
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn milk_bucket_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("milk-bucket");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let milk = Compound::from_iter([
+        ("id", Nbt::from("minecraft:milk_bucket")),
+        ("count", Nbt::Int(1)),
+    ]);
+    let mut main_hand = milk.clone();
+    main_hand.insert("Slot", 0_i8);
+    let mut poison = Compound::from_iter([("id", "minecraft:poison")]);
+    poison.insert("duration", 1200_i32);
+    poison.insert("amplifier", 1_i32);
+    poison.insert(
+        "hidden_effect",
+        Compound::from_iter([("duration", 2400_i32)]),
+    );
+    let mut absorption = Compound::from_iter([("id", "minecraft:absorption")]);
+    absorption.insert("duration", 1200_i32);
+    let modifier = Compound::from_iter([
+        ("id", Nbt::from("minecraft:effect.absorption")),
+        ("amount", Nbt::Double(4.0)),
+        ("operation", Nbt::from("add_value")),
+    ]);
+    let attribute = Compound::from_iter([
+        ("id", Nbt::from("minecraft:max_absorption")),
+        ("base", Nbt::Double(0.0)),
+        ("modifiers", Nbt::List(List::Compound(vec![modifier]))),
+    ]);
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Health", Nbt::Float(1.0)),
+        ("foodLevel", Nbt::Int(20)),
+        ("foodSaturationLevel", Nbt::Float(3.0)),
+        ("AbsorptionAmount", Nbt::Float(3.0)),
+        ("Inventory", List::Compound(vec![main_hand]).into()),
+        ("equipment", Compound::from_iter([("offhand", milk)]).into()),
+        ("attributes", List::Compound(vec![attribute]).into()),
+        (
+            "active_effects",
+            List::Compound(vec![poison, absorption]).into(),
+        ),
+    ]);
+    let uuid = offline_uuid("MilkDrinker");
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), uuid, &data).unwrap();
+    }
+    let expected = exercise_milk_bucket(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_milk_bucket(&mut server, other), expected);
+    stop(&mut server);
+    for dir in [&vanilla, &harpas] {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), uuid)
+            .unwrap()
+            .unwrap();
+        assert!(saved.get("active_effects").is_none(), "{dir:?}");
+        assert_eq!(saved.get("AbsorptionAmount"), Some(&Nbt::Float(0.0)));
+    }
+}
+
 fn golden_apple_use(
     client: &mut Client,
     sequence: i32,

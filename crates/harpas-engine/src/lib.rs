@@ -855,7 +855,7 @@ impl TickWork for Game {
                                     let player = &self.players[index];
                                     if player.inventory.selected != selected
                                         && player
-                                            .food_use
+                                            .item_use
                                             .as_ref()
                                             .is_some_and(|using| !using.off_hand)
                                     {
@@ -1575,7 +1575,7 @@ impl Game {
                     (true, false) => {
                         let target = &self.players[target];
                         let spawned = target.player.clone();
-                        let using = target.food_use.as_ref().map(|using| using.off_hand);
+                        let using = target.item_use.as_ref().map(|using| using.off_hand);
                         let burning = target.is_burning();
                         let viewer = &mut self.players[viewer];
                         viewer.tracked.insert(entity_id);
@@ -1765,7 +1765,7 @@ mod tests {
         input(&mut game, 1, Input::SelectHotbarSlot(1));
         input(&mut game, 1, Input::SelectHotbarSlot(0));
         game.connections();
-        assert!(game.players[0].food_use.is_none());
+        assert!(game.players[0].item_use.is_none());
 
         input(
             &mut game,
@@ -1795,14 +1795,14 @@ mod tests {
             },
         );
         game.connections();
-        assert!(game.players[0].food_use.is_none());
+        assert!(game.players[0].item_use.is_none());
     }
 
     #[test]
     fn hunger_rolls_only_when_food_is_finished_and_exhausts_until_expiry() {
         use harpas_core::random::LegacyRandom;
         use inventory::{HOTBAR, ItemStack};
-        use item_data::{FoodEffect, FoodEffects, FoodProperties, ItemCodec};
+        use item_data::{Consumable, ConsumeEffect, FoodEffect, FoodProperties, ItemCodec};
         use player::EffectKind::{Hunger, Nausea};
 
         let mut game = game();
@@ -1817,16 +1817,18 @@ mod tests {
         world.set_item_codec(Arc::new(
             ItemCodec::default()
                 .with_mob_effects(&[Hunger.id().to_owned(), Nausea.id().to_owned()])
-                .with_foods(
+                .with_consumables(
                     [(
                         flesh,
-                        FoodProperties {
-                            nutrition: 4,
-                            saturation: 0.8,
-                            can_always_eat: false,
+                        Consumable {
+                            food: Some(FoodProperties {
+                                nutrition: 4,
+                                saturation: 0.8,
+                                can_always_eat: false,
+                            }),
                             use_ticks: 2,
                             remainder: None,
-                            effects: Some(FoodEffects {
+                            effect: Some(ConsumeEffect::Apply {
                                 effects: vec![
                                     FoodEffect {
                                         kind: Hunger,
@@ -1982,7 +1984,7 @@ mod tests {
     #[test]
     fn food_use_honors_the_configured_duration_and_cancels_on_item_replacement() {
         use inventory::{ItemStack, OFF_HAND};
-        use item_data::{FoodProperties, ItemCodec};
+        use item_data::{Consumable, FoodProperties, ItemCodec};
 
         let mut game = game();
         let _received = join(&mut game, 1, "Eating", 2);
@@ -1992,16 +1994,18 @@ mod tests {
             .unwrap();
         let path = std::env::temp_dir().join(format!("harpas-food-use-{}", std::process::id()));
         let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
-        world.set_item_codec(Arc::new(ItemCodec::default().with_foods(
+        world.set_item_codec(Arc::new(ItemCodec::default().with_consumables(
             std::collections::HashMap::from([(
                 kelp,
-                FoodProperties {
-                    nutrition: 3,
-                    saturation: 4.0,
-                    can_always_eat: false,
+                Consumable {
+                    food: Some(FoodProperties {
+                        nutrition: 3,
+                        saturation: 4.0,
+                        can_always_eat: false,
+                    }),
                     use_ticks: 16,
                     remainder: None,
-                    effects: None,
+                    effect: None,
                 },
             )]),
         )));
@@ -2023,7 +2027,7 @@ mod tests {
         game.players[0].inventory.slots[OFF_HAND] = ItemStack::empty();
         let rules = survival::SurvivalRules::default();
         game.tick_survival(rules);
-        assert!(game.players[0].food_use.is_none());
+        assert!(game.players[0].item_use.is_none());
 
         game.players[0].inventory.slots[OFF_HAND] = stack;
         game.use_item(0, true, 2);
@@ -2041,7 +2045,7 @@ mod tests {
     #[test]
     fn stacked_food_returns_its_container_to_the_inventory_or_drops_it() {
         use inventory::{HOTBAR, ItemStack, OFF_HAND};
-        use item_data::{FoodProperties, ItemCodec};
+        use item_data::{Consumable, FoodProperties, ItemCodec};
 
         let stack = |name, count| ItemStack {
             item: harpas_core::item::items().id(name).unwrap(),
@@ -2056,16 +2060,18 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
         world.set_item_codec(Arc::new(
-            ItemCodec::default().with_foods(
+            ItemCodec::default().with_consumables(
                 [(
                     stew.item,
-                    FoodProperties {
-                        nutrition: 6,
-                        saturation: 7.2,
-                        can_always_eat: false,
+                    Consumable {
+                        food: Some(FoodProperties {
+                            nutrition: 6,
+                            saturation: 7.2,
+                            can_always_eat: false,
+                        }),
                         use_ticks: 1,
                         remainder: Some(bowl.clone()),
-                        effects: None,
+                        effect: None,
                     },
                 )]
                 .into(),

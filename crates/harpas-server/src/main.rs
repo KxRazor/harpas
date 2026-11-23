@@ -227,6 +227,7 @@ fn run() -> io::Result<()> {
         let has_food_remainders = builtin.has_food_remainders();
         let has_food_effects = builtin.has_food_effects();
         let has_suspicious_stew = builtin.has_suspicious_stew();
+        let has_milk_bucket = builtin.has_milk_bucket();
         let entries = |name| {
             builtin
                 .registries
@@ -241,8 +242,8 @@ fn run() -> io::Result<()> {
                 )
                 .with_potions(entries("minecraft:potion"))
                 .with_mob_effects(entries("minecraft:mob_effect"));
-        match builtin.foods {
-            Some(foods) => {
+        match builtin.consumables {
+            Some(consumables) => {
                 if !has_food_remainders {
                     warn!(
                         "Update the food defaults with `harpas vanilla-data generate-registry` to enable foods that return containers"
@@ -258,11 +259,16 @@ fn run() -> io::Result<()> {
                         "Update the food defaults with `harpas vanilla-data generate-registry` to enable suspicious stew"
                     );
                 }
-                codec.with_foods(foods)
+                if !has_milk_bucket {
+                    warn!(
+                        "Update the consumable defaults with `harpas vanilla-data generate-registry` to enable milk buckets"
+                    );
+                }
+                codec.with_consumables(consumables)
             }
             None => {
                 warn!(
-                    "Only apples can be eaten until the food defaults are generated. Install Java 25 and run `harpas vanilla-data generate-registry`"
+                    "Only apples can be consumed until the consumable defaults are generated. Install Java 25 and run `harpas vanilla-data generate-registry`"
                 );
                 codec
             }

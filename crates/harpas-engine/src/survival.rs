@@ -22,6 +22,10 @@ pub(crate) struct ActiveEffect {
 }
 
 impl ActiveEffect {
+    pub(crate) fn absorption_limit(&self) -> f32 {
+        4.0 * (f32::from(self.visible.amplifier) + 1.0)
+    }
+
     pub(crate) fn read(tag: &Compound) -> Option<Self> {
         let duration = match tag.get("duration") {
             Some(Nbt::Int(duration)) if *duration == -1 || *duration > 0 => *duration,
@@ -135,6 +139,7 @@ impl ActiveEffect {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Vitals {
     pub(crate) health: f32,
+    pub(crate) absorption: f32,
     pub(crate) food: i32,
     pub(crate) saturation: f32,
     pub(crate) exhaustion: f32,
@@ -145,6 +150,7 @@ impl Default for Vitals {
     fn default() -> Self {
         Self {
             health: MAX_HEALTH,
+            absorption: 0.0,
             food: MAX_FOOD,
             saturation: 5.0,
             exhaustion: 0.0,
@@ -291,6 +297,33 @@ impl PlayerState {
         )
     }
 
+    pub(crate) fn max_absorption(&self) -> f32 {
+        self.effects[EffectKind::Absorption as usize]
+            .as_ref()
+            .map_or(0.0, ActiveEffect::absorption_limit)
+    }
+
+    pub(crate) fn send_max_absorption(&self) {
+        self.send(Output::MaxAbsorption {
+            entity_id: self.player.entity_id,
+            amount: self.max_absorption(),
+        });
+    }
+
+    pub(crate) fn send_absorption(&self) {
+        self.send(Output::Absorption {
+            entity_id: self.player.entity_id,
+            amount: self.vitals.absorption,
+        });
+    }
+
+    fn set_absorption(&mut self, amount: f32) {
+        if self.vitals.absorption != amount {
+            self.vitals.absorption = amount;
+            self.send_absorption();
+        }
+    }
+
     pub(crate) fn send_effect(&self, kind: EffectKind, effect_id: Option<i32>, blend: bool) {
         if let Some(effect_id) = effect_id {
             self.send(Output::EntityEffect {
@@ -401,6 +434,7 @@ impl Game {
             {
                 for effect in group.effects {
                     let slot = &mut player.effects[effect.kind as usize];
+                    let new = slot.is_none();
                     let changed = if let Some(active) = slot {
                         active.refresh_from_food(effect.duration, effect.amplifier)
                     } else {
@@ -408,7 +442,11 @@ impl Game {
                         true
                     };
                     if changed {
-                        player.send_effect(effect.kind, effect_ids[effect.kind as usize], true);
+                        player.send_effect(effect.kind, effect_ids[effect.kind as usize], new);
+                        if effect.kind == EffectKind::Absorption {
+                            player.send_max_absorption();
+                            player.set_absorption(player.max_absorption());
+                        }
                     }
                 }
             }
@@ -433,31 +471,47 @@ impl Game {
                 continue;
             };
             let effect = active.visible;
+            let tick = if effect.duration == -1 {
+                player.ticks_alive
+            } else {
+                effect.duration
+            };
+            let interval = |base: i32| {
+                base.checked_shr(u32::from(effect.amplifier))
+                    .unwrap_or(0)
+                    .max(1)
+            };
             match kind {
                 EffectKind::Hunger if player.uses_food() => {
                     player
                         .vitals
                         .exhaust(0.005 * (f32::from(effect.amplifier) + 1.0));
                 }
-                EffectKind::Poison if player.uses_food() && player.vitals.health > 1.0 => {
-                    let interval = 25_i32
-                        .checked_shr(u32::from(effect.amplifier))
-                        .unwrap_or(0)
-                        .max(1);
-                    let tick = if effect.duration == -1 {
-                        player.ticks_alive
-                    } else {
-                        effect.duration
-                    };
-                    if tick % interval == 0 {
-                        self.hurt_player(index, 1.0, DamageKind::Magic, rules);
-                    }
+                EffectKind::Poison
+                    if player.uses_food()
+                        && player.vitals.health > 1.0
+                        && tick % interval(25) == 0 =>
+                {
+                    self.hurt_player(index, 1.0, DamageKind::Magic, rules);
                 }
+                EffectKind::Regeneration if tick % interval(50) == 0 => player.vitals.heal(1.0),
                 _ => {}
             }
             let player = &mut self.players[index];
-            if ActiveEffect::tick(&mut player.effects[kind as usize]) {
-                player.send_effect(kind, effect_id, true);
+            let slot = &mut player.effects[kind as usize];
+            let changed = if kind == EffectKind::Absorption && player.vitals.absorption == 0.0 {
+                // Spending the last absorption heart ends the effect on the next effect tick.
+                *slot = None;
+                true
+            } else {
+                ActiveEffect::tick(slot)
+            };
+            if changed {
+                player.send_effect(kind, effect_id, false);
+                if kind == EffectKind::Absorption {
+                    player.send_max_absorption();
+                    player.set_absorption(player.vitals.absorption.min(player.max_absorption()));
+                }
             }
         }
     }
@@ -473,27 +527,23 @@ impl Game {
             if !player.data_ready || player.disconnecting || player.is_dead() {
                 continue;
             }
+            let before = player.vitals;
             player.ticks_alive = player.ticks_alive.wrapping_add(1);
             self.tick_effects(index, effect_ids, rules);
-            let player = &self.players[index];
-            if !player.uses_food() {
-                continue;
-            }
-            let before = player.vitals;
-            self.tick_food_use(index, effect_ids);
-            let player = &mut self.players[index];
-            // On Peaceful, natural regeneration restores food before the starvation check.
-            if rules.difficulty == Difficulty::Peaceful && rules.natural_regeneration {
-                player.peaceful_food_ticks += 1;
-                if player.peaceful_food_ticks == 10 {
-                    player.peaceful_food_ticks = 0;
-                    player.vitals.food = (player.vitals.food + 1).min(MAX_FOOD);
+            if self.players[index].uses_food() {
+                self.tick_food_use(index, effect_ids);
+                let player = &mut self.players[index];
+                // On Peaceful, natural regeneration restores food before the starvation check.
+                if rules.difficulty == Difficulty::Peaceful && rules.natural_regeneration {
+                    player.peaceful_food_ticks += 1;
+                    if player.peaceful_food_ticks == 10 {
+                        player.peaceful_food_ticks = 0;
+                        player.vitals.food = (player.vitals.food + 1).min(MAX_FOOD);
+                    }
                 }
-            }
-            if player.vitals.tick_food(rules)
-                && self.hurt_player(index, 1.0, DamageKind::Starvation, rules)
-            {
-                continue;
+                if player.vitals.tick_food(rules) {
+                    self.hurt_player(index, 1.0, DamageKind::Starvation, rules);
+                }
             }
             let player = &self.players[index];
             if player.vitals.health != before.health
@@ -531,20 +581,19 @@ impl Game {
             let distance = std::mem::take(&mut player.fall_distance) + down;
             let damage = (distance - SAFE_FALL_DISTANCE).ceil().max(0.0) as f32;
             if damage > 0.0 {
+                let health = player.vitals.health;
                 self.hurt_player(index, damage, DamageKind::Fall, rules);
+                let player = &self.players[index];
+                if health != player.vitals.health {
+                    player.send(player.vitals.update());
+                }
             }
         } else {
             player.fall_distance += down;
         }
     }
 
-    fn hurt_player(
-        &mut self,
-        index: usize,
-        damage: f32,
-        kind: DamageKind,
-        rules: SurvivalRules,
-    ) -> bool {
+    fn hurt_player(&mut self, index: usize, damage: f32, kind: DamageKind, rules: SurvivalRules) {
         let player = &mut self.players[index];
         // Only the part above the previous hit applies during the first ten ticks of damage immunity.
         let taken = if player.hurt_cooldown > 10 {
@@ -554,22 +603,22 @@ impl Game {
             damage
         };
         if taken <= 0.0 {
-            return false;
+            return;
         }
         player.last_damage = damage;
-        player.vitals.health = (player.vitals.health - taken).max(0.0);
+        let absorbed = player.vitals.absorption.min(taken);
+        player.vitals.health = (player.vitals.health - (taken - absorbed)).max(0.0);
         let entity_id = player.player.entity_id;
         for viewer in &self.players {
             if viewer.player.entity_id == entity_id || viewer.tracked.contains(&entity_id) {
                 viewer.send(Output::Damage { entity_id, kind });
             }
         }
+        let player = &mut self.players[index];
+        player.set_absorption(player.vitals.absorption - absorbed);
         if self.players[index].is_dead() {
             self.die(index, kind, rules);
         }
-        let player = &self.players[index];
-        player.send(player.vitals.update());
-        true
     }
 
     fn die(&mut self, index: usize, kind: DamageKind, rules: SurvivalRules) {

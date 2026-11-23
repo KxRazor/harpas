@@ -157,6 +157,11 @@ impl PlayerInventory {
         }
         if let Some(vitals) = self.vitals {
             root.insert("Health", Nbt::Float(vitals.health));
+            root.insert("AbsorptionAmount", Nbt::Float(vitals.absorption));
+            save_absorption_modifier(
+                &mut root,
+                self.effects[EffectKind::Absorption as usize].as_ref(),
+            );
             root.insert("foodLevel", Nbt::Int(vitals.food));
             root.insert("foodSaturationLevel", Nbt::Float(vitals.saturation));
             root.insert("foodExhaustionLevel", Nbt::Float(vitals.exhaustion));
@@ -235,6 +240,11 @@ impl PlayerInventory {
         {
             player.vitals.health = health.clamp(0.0, 20.0);
         }
+        if let Some(Nbt::Float(absorption)) = self.root.get("AbsorptionAmount")
+            && absorption.is_finite()
+        {
+            player.vitals.absorption = absorption.max(0.0);
+        }
         if let Some(Nbt::Int(food)) = self.root.get("foodLevel") {
             player.vitals.food = (*food).clamp(0, 20);
         }
@@ -259,6 +269,49 @@ impl PlayerInventory {
                 .and_then(ActiveEffect::read)
         });
     }
+}
+
+fn save_absorption_modifier(root: &mut Compound, effect: Option<&ActiveEffect>) {
+    const ATTRIBUTE: &str = "minecraft:max_absorption";
+    const MODIFIER: &str = "minecraft:effect.absorption";
+    let mut attributes = match root.get("attributes") {
+        Some(Nbt::List(List::Compound(attributes))) => attributes.clone(),
+        None | Some(Nbt::List(List::Empty)) if effect.is_some() => Vec::new(),
+        _ => return,
+    };
+    let has_id =
+        |tag: &Compound, name: &str| matches!(tag.get("id"), Some(Nbt::String(id)) if id == name);
+    let index = match attributes.iter().position(|tag| has_id(tag, ATTRIBUTE)) {
+        Some(index) => index,
+        None if effect.is_some() => {
+            attributes.push(Compound::from_iter([
+                ("id", Nbt::from(ATTRIBUTE)),
+                ("base", Nbt::Double(0.0)),
+            ]));
+            attributes.len() - 1
+        }
+        None => return,
+    };
+    let attribute = &mut attributes[index];
+    let mut modifiers = match attribute.get("modifiers") {
+        Some(Nbt::List(List::Compound(modifiers))) => modifiers.clone(),
+        None | Some(Nbt::List(List::Empty)) if effect.is_some() => Vec::new(),
+        _ => return,
+    };
+    modifiers.retain(|tag| !has_id(tag, MODIFIER));
+    if let Some(effect) = effect {
+        modifiers.push(Compound::from_iter([
+            ("id", Nbt::from(MODIFIER)),
+            ("amount", Nbt::Double(f64::from(effect.absorption_limit()))),
+            ("operation", Nbt::from("add_value")),
+        ]));
+    }
+    if modifiers.is_empty() {
+        attribute.remove("modifiers");
+    } else {
+        attribute.insert("modifiers", Nbt::List(List::Compound(modifiers)));
+    }
+    root.insert("attributes", Nbt::List(List::Compound(attributes)));
 }
 
 fn active_effects(root: &Compound) -> &[Compound] {
@@ -851,14 +904,19 @@ mod autosave_tests {
             ("id", Nbt::from(EffectKind::Hunger.id())),
             ("duration", Nbt::Int(15)),
         ]);
+        let absorption = Compound::from_iter([
+            ("id", Nbt::from(EffectKind::Absorption.id())),
+            ("duration", Nbt::Int(30)),
+        ]);
         let other = Compound::from_iter([
             ("id", Nbt::from("minecraft:blindness")),
             ("duration", Nbt::Int(100)),
         ]);
         root.insert(
             "active_effects",
-            Nbt::List(List::Compound(vec![hunger, other.clone()])),
+            Nbt::List(List::Compound(vec![hunger, absorption, other.clone()])),
         );
+        root.insert("AbsorptionAmount", Nbt::Float(2.0));
         let document = Arc::new(PlayerInventory::read(root, &ItemCodec::default()).unwrap());
         crate::Game::restore_inventory(&mut player, document);
         player.inventory.slots[36] = ItemStack {
@@ -891,6 +949,7 @@ mod autosave_tests {
         game.autosave();
         game.players[0].inventory.slots[36].count = 15;
         game.players[0].vitals.health = 9.0;
+        game.players[0].vitals.absorption = 0.0;
         game.players[0].vitals.exhaustion = 0.0;
         game.players[0].vitals.food_timer = 0;
         game.players[0].effects[EffectKind::Hunger as usize] = None;
@@ -904,9 +963,26 @@ mod autosave_tests {
             .unwrap();
         let snapshot = writes.lock().unwrap()[0].clone();
         assert_eq!(snapshot.get("Health"), Some(&Nbt::Float(16.0)));
+        assert_eq!(snapshot.get("AbsorptionAmount"), Some(&Nbt::Float(2.0)));
+        let Some(Nbt::List(List::Compound(attributes))) = snapshot.get("attributes") else {
+            panic!("missing absorption attribute");
+        };
+        assert_eq!(
+            attributes[0].get("id"),
+            Some(&Nbt::from("minecraft:max_absorption"))
+        );
+        assert_eq!(
+            attributes[0].get("modifiers"),
+            Some(&Nbt::List(List::Compound(vec![Compound::from_iter([
+                ("id", Nbt::from("minecraft:effect.absorption")),
+                ("amount", Nbt::Double(4.0)),
+                ("operation", Nbt::from("add_value")),
+            ]),])))
+        );
         assert_eq!(active_effects(&snapshot)[0], other);
         let inventory = PlayerInventory::read(snapshot, &ItemCodec::default()).unwrap();
         inventory.restore_vitals(&mut game.players[0]);
+        assert_eq!(game.players[0].vitals.absorption, 2.0);
         assert_eq!(game.players[0].vitals.exhaustion, 3.5);
         assert_eq!(game.players[0].vitals.food_timer, 9);
         assert_eq!(

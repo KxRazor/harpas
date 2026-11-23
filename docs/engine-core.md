@@ -132,7 +132,11 @@ Hunger from the item's defaults. Spider eyes and poisonous potatoes can apply Po
 Pufferfish apply Poison II, Hunger III and Nausea from one consume action. Hunger adds exhaustion before
 the food tick. Poison deals one point of magic damage every 25 ticks at level I and every 12 at level II
 while health is above one point. The Java client receives effect changes on application, login and expiry.
-The remaining durations persist in player data.
+Normal golden apples can be eaten at full hunger and grant Regeneration II and Absorption. Regeneration II
+heals one point every 25 ticks, independently of the natural regeneration rule. Absorption takes damage before
+regular health and ends when spent or expired. Eating another apple restores the spent absorption, and the Java
+client receives the remaining amount and its capacity. The effect durations, absorption amount and modifier
+persist in player data.
 The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is

@@ -2089,6 +2089,268 @@ fn food_pufferfish_matches_vanilla() {
     }
 }
 
+fn absorption_metadata(bytes: &[u8], entity_id: i32) -> Option<f32> {
+    let mut fields = bytes;
+    if codec::read_varint(&mut fields).ok()? != 0x63
+        || codec::read_varint(&mut fields).ok()? != entity_id
+    {
+        return None;
+    }
+    // Absorption is the last tracked field in these player packets. Vanilla may pack it
+    // together with effect particles, whose serializer is still missing from the decoder.
+    match fields {
+        [.., 17, 3, a, b, c, d, 255] => Some(f32::from_be_bytes([*a, *b, *c, *d])),
+        _ => None,
+    }
+}
+
+fn absorption_packets(client: &mut Client, entity_id: i32, amount: f32, max: f64) {
+    let mut amount_seen = false;
+    let mut max_seen = false;
+    for _ in 0..1000 {
+        let bytes = client.next("absorption hearts and capacity");
+        if let Some(value) = absorption_metadata(&bytes, entity_id) {
+            assert_eq!(value, amount);
+            amount_seen = true;
+        }
+        if let Ok(Packet::UpdateAttributes(packet)) = Packet::decode(&bytes)
+            && packet.entity_id == entity_id
+            && let Some(attribute) = packet
+                .attributes
+                .iter()
+                .find(|attribute| attribute.attribute == play::Attribute::MaxAbsorption)
+        {
+            assert_eq!(attribute.base_value, 0.0);
+            if max == 0.0 {
+                assert!(attribute.modifiers.is_empty());
+            } else {
+                assert_eq!(
+                    attribute.modifiers,
+                    [play::AttributeModifier {
+                        id: "minecraft:effect.absorption".into(),
+                        amount: max,
+                        operation: play::AttributeOperation::AddValue,
+                    }]
+                );
+            }
+            max_seen = true;
+        }
+        if amount_seen && max_seen {
+            return;
+        }
+    }
+    panic!("missing absorption amount or capacity");
+}
+
+fn golden_apple_use(
+    client: &mut Client,
+    sequence: i32,
+    before: i32,
+    saturation: f32,
+) -> [play::clientbound::EntityEffect; 2] {
+    use_food(client, play::Hand::OffHand, sequence);
+    let mut effects = std::array::from_fn(|_| {
+        client.matching("golden apple effect", |packet| match packet {
+            Packet::EntityEffect(effect) => Some(effect),
+            _ => None,
+        })
+    });
+    let [regen, absorption] = &effects;
+    assert_eq!((regen.amplifier, regen.duration), (1, 100));
+    assert_eq!((absorption.amplifier, absorption.duration), (0, 2400));
+    assert!(regen.flags.blend);
+    assert_eq!(absorption.flags.blend, sequence == 1);
+    absorption_packets(client, regen.entity_id, 4.0, 4.0);
+    for points in (before + 1)..=(before + 4) {
+        let update = client.matching("Regeneration healing", |packet| match packet {
+            Packet::SetHealth(health) if health.health > before as f32 => Some(health),
+            _ => None,
+        });
+        assert_eq!(
+            (update.health, update.food, update.saturation),
+            (points as f32, 20, saturation)
+        );
+    }
+    client.matching("Regeneration expiry", |packet| match packet {
+        Packet::RemoveEntityEffect(effect) => {
+            assert_eq!(
+                (effect.entity_id, effect.effect),
+                (regen.entity_id, regen.effect)
+            );
+            Some(())
+        }
+        _ => None,
+    });
+    for effect in &mut effects {
+        effect.entity_id = 0;
+    }
+    effects
+}
+
+fn exercise_golden_apple(
+    server: &mut Server,
+    port: u16,
+) -> [[play::clientbound::EntityEffect; 2]; 2] {
+    let mut client = Client::join(port, "AppleEater");
+    let spawn = confirm_position(&mut client);
+    let initial = health(&mut client);
+    assert_eq!((initial.health, initial.food), (12.0, 20));
+    let first = golden_apple_use(&mut client, 1, 12, 9.6);
+    fall(&mut client, spawn, 5);
+    client.matching("absorbed fall damage", |packet| match packet {
+        Packet::DamageEvent(event) => {
+            let types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+            assert_eq!(types[event.source_type as usize], "minecraft:fall");
+            Some(())
+        }
+        _ => None,
+    });
+    client.matching("remaining absorption after a fall", |packet| match packet {
+        Packet::SetEntityMetadata(packet)
+            if packet
+                .metadata
+                .entries
+                .contains(&(17, play::MetadataValue::Float(2.0))) =>
+        {
+            Some(())
+        }
+        Packet::SetHealth(update) => panic!("absorbed fall changed health: {update:?}"),
+        _ => None,
+    });
+    assert_no_damage_until_list_reply(&mut client, "after the absorbed fall");
+    drop(client);
+    server.wait_for("AppleEater left the game");
+
+    let mut client = Client::join(port, "AppleEater");
+    let spawn = confirm_position(&mut client);
+    let resumed = client.matching("Absorption on reconnect", |packet| match packet {
+        Packet::EntityEffect(effect) => Some(effect),
+        _ => None,
+    });
+    assert_eq!((resumed.effect, resumed.amplifier), (first[1].effect, 0));
+    assert!(!resumed.flags.blend);
+    assert!((2000..2300).contains(&resumed.duration), "{resumed:?}");
+    absorption_packets(&mut client, resumed.entity_id, 2.0, 4.0);
+
+    let second = golden_apple_use(&mut client, 2, 16, 19.2);
+    fall(&mut client, spawn, 8);
+    let mut hurt = false;
+    let mut depleted = false;
+    client.matching(
+        "health and effect after spending the remaining absorption",
+        |packet| {
+            match packet {
+                Packet::SetHealth(update) => {
+                    assert_eq!(update.health, 19.0);
+                    hurt = true;
+                }
+                Packet::RemoveEntityEffect(effect) => {
+                    assert_eq!(
+                        (effect.entity_id, effect.effect),
+                        (resumed.entity_id, resumed.effect)
+                    );
+                    depleted = true;
+                }
+                _ => {}
+            }
+            (hurt && depleted).then_some(())
+        },
+    );
+    drop(client);
+    server.wait_for("AppleEater left the game");
+
+    let mut expiring = Client::join(port, "ExpiringApple");
+    confirm_position(&mut expiring);
+    let removed = expiring.matching("Absorption expiry", |packet| match packet {
+        Packet::RemoveEntityEffect(effect) => Some(effect),
+        _ => None,
+    });
+    assert_eq!(removed.effect, first[1].effect);
+    absorption_packets(&mut expiring, removed.entity_id, 0.0, 0.0);
+    drop(expiring);
+    server.wait_for("ExpiringApple left the game");
+    [first, second]
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn food_golden_apple_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("food-golden-apple");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let apple = Compound::from_iter([
+        ("id", Nbt::from("minecraft:golden_apple")),
+        ("count", Nbt::Int(2)),
+    ]);
+    let eater = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Health", Nbt::Float(12.0)),
+        ("foodLevel", Nbt::Int(20)),
+        ("foodSaturationLevel", Nbt::Float(0.0)),
+        (
+            "equipment",
+            Compound::from_iter([("offhand", apple)]).into(),
+        ),
+    ]);
+    let effect = Compound::from_iter([
+        ("id", Nbt::from("minecraft:absorption")),
+        ("duration", Nbt::Int(40)),
+    ]);
+    let modifier = Compound::from_iter([
+        ("id", Nbt::from("minecraft:effect.absorption")),
+        ("amount", Nbt::Double(4.0)),
+        ("operation", Nbt::from("add_value")),
+    ]);
+    let attribute = Compound::from_iter([
+        ("id", Nbt::from("minecraft:max_absorption")),
+        ("base", Nbt::Double(0.0)),
+        ("modifiers", Nbt::List(List::Compound(vec![modifier]))),
+    ]);
+    let expiring = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("AbsorptionAmount", Nbt::Float(3.0)),
+        (
+            "attributes",
+            Nbt::List(List::Compound(vec![attribute.clone()])),
+        ),
+        ("active_effects", Nbt::List(List::Compound(vec![effect]))),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        for (name, data) in [("AppleEater", &eater), ("ExpiringApple", &expiring)] {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), data).unwrap();
+        }
+    }
+    let expected = exercise_golden_apple(&mut reference, port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_golden_apple(&mut server, other), expected);
+    stop(&mut server);
+
+    for dir in [&vanilla, &harpas] {
+        for name in ["AppleEater", "ExpiringApple"] {
+            let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.get("AbsorptionAmount"), Some(&Nbt::Float(0.0)));
+            assert!(saved.get("active_effects").is_none(), "{dir:?}, {name}");
+            if let Some(Nbt::List(List::Compound(attributes))) = saved.get("attributes")
+                && let Some(max) = attributes
+                    .iter()
+                    .find(|tag| tag.get("id") == attribute.get("id"))
+            {
+                assert!(max.get("modifiers").is_none(), "{dir:?}, {name}: {max:?}");
+            }
+            if name == "AppleEater" {
+                assert_eq!(saved.get("Health"), Some(&Nbt::Float(19.0)));
+                assert!(saved.get("equipment").is_none());
+            }
+        }
+    }
+}
+
 fn starvation_damage(client: &mut Client) {
     client.matching("starvation damage", |packet| match packet {
         Packet::DamageEvent(event) => {

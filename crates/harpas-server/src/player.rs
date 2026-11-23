@@ -598,6 +598,29 @@ pub(crate) fn send(
                 saturation,
             }
             .into(),
+            Output::Absorption { entity_id, amount } => clientbound::SetEntityMetadata {
+                entity_id,
+                metadata: play::EntityMetadata {
+                    entries: vec![(17, play::MetadataValue::Float(amount))],
+                },
+            }
+            .into(),
+            Output::MaxAbsorption { entity_id, amount } => clientbound::UpdateAttributes {
+                entity_id,
+                attributes: vec![play::AttributeProperty {
+                    attribute: play::Attribute::MaxAbsorption,
+                    base_value: 0.0,
+                    modifiers: (amount > 0.0)
+                        .then(|| play::AttributeModifier {
+                            id: "minecraft:effect.absorption".to_owned(),
+                            amount: f64::from(amount),
+                            operation: play::AttributeOperation::AddValue,
+                        })
+                        .into_iter()
+                        .collect(),
+                }],
+            }
+            .into(),
             Output::EntityEffect {
                 entity_id,
                 effect_id,

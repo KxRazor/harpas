@@ -97,13 +97,14 @@ impl Builtin {
     }
 
     pub(crate) fn has_food_effects(&self) -> bool {
-        use EffectKind::{Hunger, Nausea, Poison};
+        use EffectKind::{Absorption, Hunger, Nausea, Poison, Regeneration};
 
         [
             ("minecraft:rotten_flesh", &[Hunger][..]),
             ("minecraft:spider_eye", &[Poison][..]),
             ("minecraft:poisonous_potato", &[Poison][..]),
             ("minecraft:pufferfish", &[Poison, Hunger, Nausea][..]),
+            ("minecraft:golden_apple", &[Regeneration, Absorption][..]),
         ]
         .into_iter()
         .all(|(name, kinds)| {

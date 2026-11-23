@@ -208,6 +208,20 @@ impl ItemCodec {
         (!stack.is_empty() && armor.slot == slot).then_some(armor)
     }
 
+    pub(crate) fn protection_level(&self, stack: &ItemStack) -> i32 {
+        if stack.is_empty() {
+            return 0;
+        }
+        let Some(Nbt::Compound(levels)) = self.saved_component(stack, "minecraft:enchantments")
+        else {
+            return 0;
+        };
+        match levels.get("minecraft:protection") {
+            Some(Nbt::Int(level)) => *level,
+            _ => 0,
+        }
+    }
+
     pub(crate) fn consumable(&self, stack: &ItemStack) -> Option<Consumable> {
         if stack.is_empty() || self.component_removed(stack, CONSUMABLE) {
             return None;

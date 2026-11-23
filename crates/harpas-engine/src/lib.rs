@@ -1132,6 +1132,10 @@ impl Game {
                     player.send_effect(kind, effect_id, false);
                 }
             }
+            if player.max_absorption() > 0.0 {
+                player.send_max_absorption();
+                player.send_absorption();
+            }
             if player.is_dead() {
                 player.send(player::Output::Death {
                     entity_id: player.player.entity_id,
@@ -1924,6 +1928,47 @@ mod tests {
             assert_eq!(game.players[0].vitals.health, 1.0);
             assert!(game.players[0].effects[Poison as usize].is_none());
         }
+    }
+
+    #[test]
+    fn regeneration_heals_every_twenty_five_ticks_at_level_two() {
+        use harpas_core::nbt::Compound;
+        use player::EffectKind::Regeneration;
+
+        let mut game = game();
+        let received = join(&mut game, 1, "Healing", 2);
+        game.connections();
+        let player = &mut game.players[0];
+        player.player.profile.game_mode = GameMode::Survival;
+        player.vitals.health = 17.0;
+        player.effects[Regeneration as usize] =
+            survival::ActiveEffect::read(&Compound::from_iter([
+                ("duration", 100_i32),
+                ("amplifier", 1_i32),
+            ]));
+        let rules = Compound::from_iter([("minecraft:natural_health_regeneration", 0_i8)]);
+        let rules = survival::SurvivalRules::read(Some(&rules), None);
+        for tick in 1..=100 {
+            game.tick_survival(rules);
+            let updates: Vec<_> = received
+                .try_iter()
+                .filter_map(|output| match output {
+                    Output::Health { health, .. } => Some(health),
+                    _ => None,
+                })
+                .collect();
+            match tick {
+                1 => assert_eq!(updates, [18.0]),
+                26 => assert_eq!(updates, [19.0]),
+                51 => assert_eq!(updates, [20.0]),
+                _ => assert!(
+                    updates.is_empty(),
+                    "unexpected health update on tick {tick}"
+                ),
+            }
+        }
+        assert_eq!(game.players[0].vitals.health, 20.0);
+        assert!(game.players[0].effects[Regeneration as usize].is_none());
     }
 
     #[test]

@@ -509,6 +509,9 @@ as shown by the parity report.
         (`food_poison_matches_vanilla`).
   - [x] Pufferfish apply Poison II, Hunger III and Nausea together. Effect packets, remaining durations on
         reconnect and the Poison II damage interval are compared with vanilla (`food_pufferfish_matches_vanilla`).
+  - [x] Normal golden apples can be eaten at full hunger and grant Regeneration II and Absorption. Healing,
+        absorbed fall damage, eating again, reconnecting and expiry are compared with vanilla
+        (`food_golden_apple_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

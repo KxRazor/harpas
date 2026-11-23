@@ -82,6 +82,10 @@ pub enum EffectKind {
     Poison,
     /// Distorts the player's view on the client.
     Nausea,
+    /// Restores health at regular intervals.
+    Regeneration,
+    /// Grants temporary health that takes damage first.
+    Absorption,
 }
 
 impl EffectKind {
@@ -91,11 +95,19 @@ impl EffectKind {
             Self::Hunger => "minecraft:hunger",
             Self::Poison => "minecraft:poison",
             Self::Nausea => "minecraft:nausea",
+            Self::Regeneration => "minecraft:regeneration",
+            Self::Absorption => "minecraft:absorption",
         }
     }
 
     /// The effects implemented by the engine, in storage order.
-    pub const ALL: [Self; 3] = [Self::Hunger, Self::Poison, Self::Nausea];
+    pub const ALL: [Self; 5] = [
+        Self::Hunger,
+        Self::Poison,
+        Self::Nausea,
+        Self::Regeneration,
+        Self::Absorption,
+    ];
 }
 
 /// The visible state of a player's status effect.
@@ -408,6 +420,20 @@ pub enum Output {
         food: i32,
         /// Food saturation.
         saturation: f32,
+    },
+    /// Update the local player's temporary hearts.
+    Absorption {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Remaining absorption in half-hearts.
+        amount: f32,
+    },
+    /// Update the local player's absorption capacity granted by the effect.
+    MaxAbsorption {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Maximum absorption in half-hearts.
+        amount: f32,
     },
     /// Add, refresh or remove a status effect on the local player.
     EntityEffect {

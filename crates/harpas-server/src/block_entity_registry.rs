@@ -1,4 +1,4 @@
-//! Built-in registries and food defaults generated locally from the owner's verified Minecraft server jar.
+//! Built-in registries and consumable defaults generated from the owner's verified Minecraft server jar.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -130,6 +130,19 @@ impl Builtin {
             })
     }
 
+    pub(crate) fn has_drinkable_potions(&self) -> bool {
+        items()
+            .id("minecraft:potion")
+            .zip(self.consumables.as_ref())
+            .and_then(|(id, consumables)| consumables.get(&id))
+            .is_some_and(|potion| {
+                potion.food.is_none()
+                    && potion.effect.is_none()
+                    && potion.remainder.as_ref().and_then(ItemStack::name)
+                        == Some("minecraft:glass_bottle")
+            })
+    }
+
     pub(crate) fn has_food_effects(&self) -> bool {
         use EffectKind::{
             Absorption, FireResistance, Hunger, Nausea, Poison, Regeneration, Resistance,
@@ -224,7 +237,7 @@ fn consumable_reports(directory: &Path) -> io::Result<Map<String, Value>> {
             &components["minecraft:food"],
             &components["minecraft:consumable"],
         );
-        if (food.is_object() || name == "milk_bucket")
+        if (food.is_object() || matches!(name, "milk_bucket" | "potion"))
             && consumable.is_object()
             && consume_effect(consumable).is_ok()
             && components.get("minecraft:use_cooldown").is_none()
@@ -421,7 +434,7 @@ pub(crate) fn load(server: &Path) -> io::Result<Option<Registry>> {
     Registry::entries(&data["entries"]).map(Some)
 }
 
-/// Runs Mojang's data generator, storing the registries and supported food defaults on this machine.
+/// Runs Mojang's data generator, storing the registries and supported consumable defaults on this machine.
 /// The caller must verify the jar before calling this function.
 pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
     let path = registry_path(server);
@@ -568,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_milk_as_a_consumable_without_food_properties() {
+    fn extracts_milk_and_potions_as_consumables_without_food_properties() {
         let scratch = Scratch::new(&std::env::temp_dir()).unwrap();
         for (name, components) in [
             (
@@ -588,23 +601,28 @@ mod tests {
                     "minecraft:use_remainder": {"id": "minecraft:bucket"},
                 }),
             ),
-            ("potion", json!({"minecraft:consumable": {}})),
+            (
+                "potion",
+                json!({
+                    "minecraft:consumable": {},
+                    "minecraft:use_remainder": {"id": "minecraft:glass_bottle"},
+                }),
+            ),
         ] {
             let report = json!({"components": components});
             fs::write(scratch.0.join(format!("{name}.json")), report.to_string()).unwrap();
         }
         let reports = consumable_reports(&scratch.0).unwrap();
-        assert_eq!(reports.len(), 2);
+        assert_eq!(reports.len(), 3);
         let consumables = consumable_defaults(&Value::Object(reports)).unwrap();
         let milk = &consumables[&items().id("minecraft:milk_bucket").unwrap()];
         assert_eq!(milk.use_ticks, 30);
-        assert!(
-            Builtin {
-                consumables: Some(consumables),
-                ..Builtin::default()
-            }
-            .has_milk_bucket()
-        );
+        let builtin = Builtin {
+            consumables: Some(consumables),
+            ..Builtin::default()
+        };
+        assert!(builtin.has_milk_bucket());
+        assert!(builtin.has_drinkable_potions());
     }
 
     #[test]
@@ -663,6 +681,7 @@ mod tests {
         assert!(!loaded.has_food_remainders());
         assert!(!loaded.has_milk_bucket());
         assert!(!loaded.has_honey_bottle());
+        assert!(!loaded.has_drinkable_potions());
         assert_eq!(loaded.consumables.unwrap().len(), 1);
         data["foods"]["minecraft:mushroom_stew"] = json!({
             "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {},

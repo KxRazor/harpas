@@ -46,7 +46,7 @@ pub struct Consumable {
     pub effect: Option<ConsumeEffect>,
 }
 
-/// A supported action from a vanilla `consumable` component.
+/// An effect applied or removed when a supported item is consumed.
 #[derive(Debug, Clone)]
 pub enum ConsumeEffect {
     /// Apply the whole group of effects after a successful roll.
@@ -56,6 +56,8 @@ pub enum ConsumeEffect {
         /// Probability of applying the group, from zero to one.
         probability: f32,
     },
+    /// Apply the effect stored in a drinkable potion.
+    ApplyPotion(FoodEffect),
     /// Remove the specified active status effects.
     Remove(Vec<EffectKind>),
     /// Remove all active status effects.
@@ -161,6 +163,25 @@ impl ItemCodec {
         }
         if self.component_removed(stack, USE_REMAINDER) {
             consumable.remainder = None;
+        }
+        if stack.name() == Some("minecraft:potion") {
+            let Nbt::Compound(contents) = self.saved_component(stack, POTION_CONTENTS)? else {
+                return None;
+            };
+            let Some(Nbt::String(name)) = contents.get("potion") else {
+                return None;
+            };
+            let (duration, amplifier) = match name.as_str() {
+                "minecraft:regeneration" => (900, 0),
+                "minecraft:long_regeneration" => (1800, 0),
+                "minecraft:strong_regeneration" => (450, 1),
+                _ => return None,
+            };
+            consumable.effect = Some(ConsumeEffect::ApplyPotion(FoodEffect {
+                kind: EffectKind::Regeneration,
+                duration,
+                amplifier,
+            }));
         }
         Some(consumable)
     }
@@ -1085,6 +1106,40 @@ mod tests {
         assert!(codec.read(&saved).is_err());
         Arc::make_mut(&mut potion.components).added[0].1 = vec![0, 0, 1, 0];
         assert!(codec.write(&potion).is_err());
+    }
+
+    #[test]
+    fn only_supported_potion_contents_can_be_drunk() {
+        let codec = ItemCodec::new(&[POTION_CONTENTS.to_owned(), USE_REMAINDER.to_owned()])
+            .with_potions(&[
+                "minecraft:regeneration".to_owned(),
+                "minecraft:water_breathing".to_owned(),
+            ])
+            .with_consumables(HashMap::from([(
+                items().id("minecraft:potion").unwrap(),
+                Consumable {
+                    food: None,
+                    use_ticks: 32,
+                    remainder: Some(ItemStack {
+                        item: items().id("minecraft:glass_bottle").unwrap(),
+                        count: 1,
+                        ..ItemStack::empty()
+                    }),
+                    effect: None,
+                },
+            )]));
+        let mut stack = codec
+            .read(&Compound::from_iter([("id", "minecraft:potion")]))
+            .unwrap();
+        assert!(codec.consumable(&stack).is_none());
+        codec.set_potion(&mut stack, "water_breathing").unwrap();
+        assert!(codec.consumable(&stack).is_none());
+        codec.set_potion(&mut stack, "regeneration").unwrap();
+        assert!(codec.consumable(&stack).unwrap().remainder.is_some());
+        Arc::make_mut(&mut stack.components).removed.push(1);
+        let drink = codec.consumable(&stack).unwrap();
+        assert!(drink.remainder.is_none());
+        assert!(matches!(drink.effect, Some(ConsumeEffect::ApplyPotion(_))));
     }
 
     #[test]

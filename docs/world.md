@@ -238,8 +238,8 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
   before the data was added, the server warns about missing block entity IDs, built-in registries or consumable
   defaults. Apples remain available as a fallback until the consumable defaults are generated. Older registry
-  files still provide the foods they already include. To add newly supported items such as honey bottles,
-  install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a
+  files still provide the consumables they already include. To add newly supported items such as Regeneration
+  potions, install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a
   downloaded jar, run `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA
   and the jar hash.
 

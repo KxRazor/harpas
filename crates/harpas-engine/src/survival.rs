@@ -790,6 +790,8 @@ impl Game {
             // The enchantment bonus scales linearly with charge, unlike the base damage.
             damage += (1.0 + (sharpness - 1) as f32 * 0.5) * charge;
         }
+        let knockback_level = codec.enchantment_level(main_hand, "minecraft:knockback");
+        let extra_knockback = 0.5 * f64::from(knockback_level + i32::from(sprint_hit));
         self.players[attacker].attack_charge_ticks = 0;
         let fresh_hit = self.players[defender].hurt_cooldown <= 10;
         let health = self.players[defender].vitals.health;
@@ -804,7 +806,7 @@ impl Game {
             }
         }
         self.players[attacker].vitals.exhaust(0.1);
-        if sprint_hit {
+        if extra_knockback > 0.0 {
             self.players[attacker].sprinting = false;
         }
         let target = &mut self.players[defender];
@@ -822,12 +824,12 @@ impl Game {
                 0.0
             };
             let mut velocity = [dx * horizontal, vertical, dz * horizontal];
-            if sprint_hit {
+            if extra_knockback > 0.0 {
                 // A second knockback halves the horizontal motion before pushing along
                 // the attacker's facing and caps the lift on the ground.
                 let yaw = wrap_degrees_f32(position.yaw).to_radians();
                 let (x, z) = (-f64::from(sin_f32(yaw)), f64::from(cos_f32(yaw)));
-                let push = 0.5 / x.hypot(z);
+                let push = extra_knockback / x.hypot(z);
                 velocity[0] = velocity[0] * 0.5 + x * push;
                 velocity[2] = velocity[2] * 0.5 + z * push;
                 if on_ground {

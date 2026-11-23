@@ -171,6 +171,9 @@ percent charge and positive fall distance while off the ground. Sprinting, climb
 prevent it. The fall damage rule controls landing damage independently of fall distance. A successful critical
 strike sends the critical hit animation for the target.
 A successful strike wears the sword by one point, and a fresh hit sends knockback velocity to the target.
+When the attacker is sprinting and the attack has more than 90 percent charge, a successful hit ends the
+sprint. On a fresh hit, a second knockback halves the target's horizontal velocity before adding a push
+along the attacker's facing direction, and caps a grounded target's upward velocity at 0.4.
 Damage events and lethal hit messages identify the attacker.
 Armor points, toughness and durability come from the locally generated item defaults. A hit that passes
 the damage cooldown wears the equipped pieces using the damage before mitigation. Armor and toughness

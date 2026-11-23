@@ -545,6 +545,9 @@ as shown by the parity report.
   - [x] Charged punches and sword strikes can critically hit while falling in Java Survival. Damage and
         the critical animation are compared with vanilla, including sprinting, partial charge, disabled fall
         damage and Sharpness against armor (`critical_hits_match_vanilla`).
+  - [x] Charged punches and sword strikes while sprinting add knockback in the attacker's facing direction
+        and end the sprint in Java Survival. The defender's velocity, attack charge and sprint state are
+        compared with vanilla (`sprint_knockback_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

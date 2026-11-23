@@ -2,7 +2,7 @@
 
 use crate::Game;
 use crate::block::BlockPos;
-use crate::inventory::ItemStack;
+use crate::inventory::{ArmorSlot, ItemStack};
 use crate::item_data::{Consumable, ConsumeEffect, FoodProperties, ItemCodec};
 use crate::player::{DamageKind, Effect, EffectKind, GameMode, Output, PlayerState, Position};
 use crate::world::{ChunkPos, ChunkState, World};
@@ -605,6 +605,20 @@ impl Game {
                     modifier,
                 });
             }
+            let modifiers = ArmorSlot::ALL.map(|slot| {
+                let stack = &player.inventory.slots[slot.menu_slot()];
+                codec
+                    .armor(stack, slot)
+                    .filter(|_| !codec.component_removed(stack, "minecraft:attribute_modifiers"))
+                    .map(|armor| armor.modifiers)
+            });
+            if player.armor_modifiers != modifiers {
+                player.armor_modifiers = modifiers;
+                player.send(Output::ArmorAttributes {
+                    entity_id: player.player.entity_id,
+                    modifiers,
+                });
+            }
             self.tick_fire(index, rules);
             if self.players[index].is_dead() {
                 self.players[index].send(self.players[index].vitals.update());
@@ -793,12 +807,47 @@ impl Game {
             let stack = &mut self.players[attacker].inventory.slots[slot];
             if !codec.component_removed(stack, "minecraft:weapon") {
                 match codec.wear_tool(stack, sword.durability) {
-                    Ok(true) => Self::send_main_hand_item_broken(&self.players, source_id),
+                    Ok(true) => Self::send_item_broken(&self.players, source_id, None),
                     Ok(false) => {}
                     Err(error) => log::warn!("Cannot apply sword wear to item {slot}: {error}"),
                 }
             }
         }
+    }
+
+    fn hurt_armor(&mut self, index: usize, damage: f32) -> f32 {
+        let codec = self
+            .world
+            .as_ref()
+            .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+        let entity_id = self.players[index].player.entity_id;
+        let wear = ((damage / 4.0) as i32).max(1);
+        for slot in ArmorSlot::ALL {
+            let stack = &mut self.players[index].inventory.slots[slot.menu_slot()];
+            if let Some(armor) = codec.armor(stack, slot)
+                && !codec.component_removed(stack, "minecraft:equippable")
+            {
+                match codec.wear_item(stack, armor.durability, wear) {
+                    Ok(true) => Self::send_item_broken(&self.players, entity_id, Some(slot)),
+                    Ok(false) => {}
+                    Err(error) => log::warn!("Cannot apply wear to armor in {slot:?}: {error}"),
+                }
+            }
+        }
+        // A broken piece still protects against the hit that broke it. Attributes update on the player tick.
+        let [armor, toughness] = self.players[index]
+            .armor_modifiers
+            .into_iter()
+            .flatten()
+            .fold([0.0, 0.0], |[armor, toughness], [points, extra]| {
+                [armor + points, toughness + extra]
+            });
+        let armor = armor as f32;
+        let toughness = toughness as f32;
+        let effective = (armor - damage / (2.0 + toughness / 4.0))
+            .max(armor * 0.2)
+            .min(20.0);
+        damage * (1.0 - effective / 25.0)
     }
 
     fn hurt_player(
@@ -827,6 +876,12 @@ impl Game {
             return false;
         }
         player.last_damage = damage;
+        let taken = if matches!(kind, DamageKind::PlayerAttack(_)) {
+            self.hurt_armor(index, taken)
+        } else {
+            taken
+        };
+        let player = &mut self.players[index];
         let taken = match &player.effects[EffectKind::Resistance as usize] {
             Some(effect) if kind != DamageKind::Starvation => {
                 let remaining = (25 - 5 * (i32::from(effect.visible.amplifier) + 1)).max(0);
@@ -922,6 +977,7 @@ impl Game {
         player.last_main_hand_item = 0;
         player.attack_damage_modifier = 0.0;
         player.attack_speed_modifier = None;
+        player.armor_modifiers = [None; 4];
         player.last_damage = 0.0;
         player.peaceful_food_ticks = 0;
         player.effects = Default::default();

@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use harpas_core::item::items;
 use harpas_core::nbt::{Compound, List, Nbt};
 
-use crate::inventory::{ComponentPatch, ItemStack};
+use crate::inventory::{ArmorSlot, ComponentPatch, ItemStack};
 use crate::player::EffectKind;
 
 const POTION_CONTENTS: &str = "minecraft:potion_contents";
@@ -86,6 +86,17 @@ pub struct Sword {
     pub durability: i32,
 }
 
+/// The default protection and durability of an ordinary piece of player armor.
+#[derive(Debug, Clone, Copy)]
+pub struct Armor {
+    /// Equipment slot in which the piece provides protection.
+    pub slot: ArmorSlot,
+    /// Additive armor and armor toughness modifiers, in that order.
+    pub modifiers: [f64; 2],
+    /// Maximum durability of the item before stack overrides.
+    pub durability: i32,
+}
+
 /// Converts the supported item component values between their network bytes and vanilla's saved NBT.
 #[derive(Debug)]
 pub struct ItemCodec {
@@ -97,6 +108,7 @@ pub struct ItemCodec {
     effect_ids: [Option<i32>; EffectKind::ALL.len()],
     consumables: HashMap<u32, Consumable>,
     swords: HashMap<u32, Sword>,
+    armor: HashMap<u32, Armor>,
 }
 
 impl Default for ItemCodec {
@@ -139,6 +151,7 @@ impl ItemCodec {
             mob_effects: Vec::new(),
             effect_ids: Default::default(),
             swords: HashMap::new(),
+            armor: HashMap::new(),
             consumables: HashMap::from([(
                 items().id("minecraft:apple").expect("registered apple"),
                 Consumable {
@@ -182,6 +195,17 @@ impl ItemCodec {
             sword.attack_speed_modifier = 0.0;
         }
         Some(sword)
+    }
+
+    /// Loads the player armor defaults from the owner's server jar, keyed by item ID.
+    pub fn with_armor(mut self, armor: HashMap<u32, Armor>) -> Self {
+        self.armor = armor;
+        self
+    }
+
+    pub(crate) fn armor(&self, stack: &ItemStack, slot: ArmorSlot) -> Option<Armor> {
+        let armor = *self.armor.get(&stack.item)?;
+        (!stack.is_empty() && armor.slot == slot).then_some(armor)
     }
 
     pub(crate) fn consumable(&self, stack: &ItemStack) -> Option<Consumable> {
@@ -298,6 +322,16 @@ impl ItemCodec {
 
     /// Applies one durability point to the held tool. Returns whether it broke.
     pub(crate) fn wear_tool(&self, stack: &mut ItemStack, default_max: i32) -> io::Result<bool> {
+        self.wear_item(stack, default_max, 1)
+    }
+
+    /// Applies the requested durability loss. Returns whether an item broke.
+    pub(crate) fn wear_item(
+        &self,
+        stack: &mut ItemStack,
+        default_max: i32,
+        amount: i32,
+    ) -> io::Result<bool> {
         let Some(&damage_id) = self.ids.get(DAMAGE) else {
             return Ok(false);
         };
@@ -314,7 +348,7 @@ impl ItemCodec {
                 .map_or(Ok(default), |mut bytes| read_varint(&mut bytes))
         };
         let maximum = number(MAX_DAMAGE, default_max)?;
-        let next_damage = number(DAMAGE, 0)?.saturating_add(1).min(maximum);
+        let next_damage = number(DAMAGE, 0)?.saturating_add(amount).min(maximum);
         let broken = next_damage >= maximum;
         if broken && stack.count == 1 {
             *stack = ItemStack::empty();

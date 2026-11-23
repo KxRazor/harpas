@@ -1508,6 +1508,151 @@ fn sword_combat_matches_vanilla() {
     }
 }
 
+fn exercise_armored_combat(server: &mut Server, port: u16) -> [[f32; 2]; 3] {
+    let mut attacker = Client::join(port, "Attacker");
+    attacker.stream.set_nodelay(true).unwrap();
+    confirm_position(&mut attacker);
+    ["Unarmored", "IronArmor", "DiamondArmor"].map(|name| {
+        let mut defender = Client::join(port, name);
+        defender.stream.set_nodelay(true).unwrap();
+        let entity_id = defender.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let [x, y, z] = confirm_position(&mut defender);
+        assert_eq!(health(&mut defender).health, 20.0);
+        move_player(&mut defender, [x, y, z], true);
+        move_player(&mut attacker, [x + 2.0, y, z], true);
+        let mut result = [0.0; 2];
+        for (hit, remaining) in result.iter_mut().enumerate() {
+            std::thread::sleep(Duration::from_millis(800));
+            play_packet(&mut attacker, play::serverbound::Attack { entity_id });
+            if name == "DiamondArmor" && hit == 0 {
+                let (mut broken, mut empty, mut updated, mut health) = (false, false, false, None);
+                *remaining =
+                    defender.matching("broken chestplate, inventory, armor and health", |packet| {
+                        match packet {
+                            Packet::EntityEvent(event)
+                                if event.entity_id == entity_id && event.event == 50 =>
+                            {
+                                broken = true
+                            }
+                            Packet::SetContainerSlot(change)
+                                if change.window_id == 0 && change.slot == 6 =>
+                            {
+                                assert_eq!(change.item.count, 0);
+                                empty = true;
+                            }
+                            Packet::UpdateAttributes(packet) if packet.entity_id == entity_id => {
+                                updated |= packet.attributes.iter().any(|attr| {
+                                    attr.attribute == play::Attribute::Armor
+                                        && attr.base_value
+                                            + attr.modifiers.iter().map(|m| m.amount).sum::<f64>()
+                                            == 12.0
+                                });
+                            }
+                            Packet::SetHealth(change) => health = Some(change.health),
+                            _ => {}
+                        }
+                        if broken && empty && updated {
+                            health
+                        } else {
+                            None
+                        }
+                    });
+            } else {
+                *remaining = health(&mut defender).health;
+            }
+        }
+        drop(defender);
+        server.wait_for(&format!("{name} left the game"));
+        let mut defender = Client::join(port, name);
+        confirm_position(&mut defender);
+        assert_eq!(health(&mut defender).health, result[1]);
+        drop(defender);
+        server.wait_for(&format!("{name} left the game"));
+        result
+    })
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn armored_combat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("armored-combat");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let slots = [
+        ("head", "helmet"),
+        ("chest", "chestplate"),
+        ("legs", "leggings"),
+        ("feet", "boots"),
+    ];
+    for dir in [&vanilla, &harpas] {
+        let write = |name, field, value| {
+            let data = Compound::from_iter([
+                ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+                (field, value),
+            ]);
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), &data).unwrap();
+        };
+        write(
+            "Attacker",
+            "Inventory",
+            Nbt::List(List::Compound(vec![Compound::from_iter([
+                ("Slot", Nbt::Byte(0)),
+                ("id", "minecraft:netherite_sword".into()),
+            ])])),
+        );
+        for (name, material) in [("IronArmor", "iron"), ("DiamondArmor", "diamond")] {
+            let equipment = Compound::from_iter(slots.map(|(slot, piece)| {
+                let mut stack =
+                    Compound::from_iter([("id", format!("minecraft:{material}_{piece}"))]);
+                if name == "DiamondArmor" && slot == "chest" {
+                    stack.insert(
+                        "components",
+                        Compound::from_iter([("minecraft:max_damage", 2)]),
+                    );
+                }
+                (slot, stack)
+            }));
+            write(name, "equipment", equipment.into());
+        }
+    }
+
+    let expected = exercise_armored_combat(&mut reference, port);
+    assert_eq!(expected[0], [12.0, 4.0]);
+    assert!(expected[0][0] < expected[1][0] && expected[1][0] < expected[2][0]);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_armored_combat(&mut server, other), expected);
+    stop(&mut server);
+    for (name, piece_count) in [("IronArmor", 4), ("DiamondArmor", 3)] {
+        let [expected, actual] = [&vanilla, &harpas].map(|dir| {
+            let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+                .unwrap()
+                .unwrap();
+            let Some(Nbt::Compound(equipment)) = saved.get("equipment") else {
+                panic!("missing saved armor for {name}");
+            };
+            equipment.clone()
+        });
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), piece_count);
+        for (_, stack) in actual.iter() {
+            let Nbt::Compound(stack) = stack else {
+                panic!("invalid saved armor for {name}");
+            };
+            assert_eq!(
+                stack.get("components"),
+                Some(&Nbt::from(Compound::from_iter([("minecraft:damage", 4)])))
+            );
+        }
+    }
+}
+
 fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets

@@ -8,8 +8,10 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_core::item::items;
-use harpas_engine::inventory::ItemStack;
-use harpas_engine::item_data::{Consumable, ConsumeEffect, FoodEffect, FoodProperties, Sword};
+use harpas_engine::inventory::{ArmorSlot, ItemStack};
+use harpas_engine::item_data::{
+    Armor, Consumable, ConsumeEffect, FoodEffect, FoodProperties, Sword,
+};
 use harpas_engine::player::EffectKind;
 use serde_json::{Map, Value, json};
 
@@ -89,6 +91,8 @@ pub(crate) struct Builtin {
     pub(crate) consumables: Option<HashMap<u32, Consumable>>,
     /// Absent in installations generated before sword defaults were read.
     pub(crate) swords: Option<HashMap<u32, Sword>>,
+    /// Absent in installations generated before armor defaults were read.
+    pub(crate) armor: Option<HashMap<u32, Armor>>,
 }
 
 impl Builtin {
@@ -224,32 +228,62 @@ pub(crate) fn load_builtin(server: &Path) -> io::Result<Option<Builtin>> {
             .map(consumable_defaults)
             .transpose()?,
         swords: data.get("swords").map(sword_defaults).transpose()?,
+        armor: data.get("armor").map(armor_defaults).transpose()?,
     }))
 }
 
-fn sword_reports(directory: &Path) -> io::Result<Map<String, Value>> {
+fn equipment_reports(directory: &Path) -> io::Result<(Value, Value)> {
     let mut swords = Map::new();
+    let mut armor = Map::new();
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
             continue;
         };
-        if name.ends_with("_sword") {
+        let sword = name.ends_with("_sword");
+        let armor_piece = ["_helmet", "_chestplate", "_leggings", "_boots"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix));
+        if sword || armor_piece {
             let report: Value = serde_json::from_reader(File::open(&path)?).map_err(invalid)?;
             let components = &report["components"];
-            swords.insert(
-                format!("minecraft:{name}"),
-                json!({
-                    "attribute_modifiers": components["minecraft:attribute_modifiers"],
-                    "max_damage": components["minecraft:max_damage"],
-                }),
-            );
+            let mut defaults = json!({
+                "attribute_modifiers": components["minecraft:attribute_modifiers"],
+                "max_damage": components["minecraft:max_damage"],
+            });
+            let entries = if sword {
+                &mut swords
+            } else {
+                defaults["slot"] = components["minecraft:equippable"]["slot"].clone();
+                &mut armor
+            };
+            entries.insert(format!("minecraft:{name}"), defaults);
         }
     }
     if !swords.contains_key("minecraft:wooden_sword") {
         return Err(invalid("the item reports have no wooden sword defaults"));
     }
-    Ok(swords)
+    if !armor.contains_key("minecraft:iron_chestplate") {
+        return Err(invalid("the item reports have no iron chestplate defaults"));
+    }
+    Ok((Value::Object(swords), Value::Object(armor)))
+}
+
+fn equipment_modifier(entry: &Value, attribute: &str, slot: &str) -> Option<f64> {
+    entry["attribute_modifiers"]
+        .as_array()?
+        .iter()
+        .find(|value| {
+            value["type"] == attribute && value["operation"] == "add_value" && value["slot"] == slot
+        })?
+        .get("amount")?
+        .as_f64()
+}
+
+fn equipment_durability(entry: &Value) -> Option<i32> {
+    i32::try_from(entry["max_damage"].as_i64()?)
+        .ok()
+        .filter(|&value| value > 0)
 }
 
 fn sword_defaults(value: &Value) -> io::Result<HashMap<u32, Sword>> {
@@ -260,29 +294,47 @@ fn sword_defaults(value: &Value) -> io::Result<HashMap<u32, Sword>> {
         .map(|(name, entry)| {
             let bad = || invalid(format!("invalid sword defaults for {name}"));
             let id = items().id(name).ok_or_else(bad)?;
-            let modifiers = entry["attribute_modifiers"].as_array().ok_or_else(bad)?;
-            let modifier = |attribute: &str| {
-                modifiers
-                    .iter()
-                    .find(|value| {
-                        value["type"] == attribute
-                            && value["operation"] == "add_value"
-                            && value["slot"] == "mainhand"
-                    })
-                    .and_then(|value| value["amount"].as_f64())
-                    .ok_or_else(bad)
-            };
-            let durability = entry["max_damage"]
-                .as_i64()
-                .and_then(|value| i32::try_from(value).ok())
-                .filter(|&value| value > 0)
-                .ok_or_else(bad)?;
+            let modifier =
+                |attribute| equipment_modifier(entry, attribute, "mainhand").ok_or_else(bad);
             Ok((
                 id,
                 Sword {
                     attack_damage_modifier: modifier("minecraft:attack_damage")?,
                     attack_speed_modifier: modifier("minecraft:attack_speed")?,
-                    durability,
+                    durability: equipment_durability(entry).ok_or_else(bad)?,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn armor_defaults(value: &Value) -> io::Result<HashMap<u32, Armor>> {
+    value
+        .as_object()
+        .ok_or_else(|| invalid("armor defaults are not an object"))?
+        .iter()
+        .map(|(name, entry)| {
+            let bad = || invalid(format!("invalid armor defaults for {name}"));
+            let id = items().id(name).ok_or_else(bad)?;
+            let slot_name = entry["slot"].as_str().ok_or_else(bad)?;
+            let slot = match slot_name {
+                "head" => ArmorSlot::Head,
+                "chest" => ArmorSlot::Chest,
+                "legs" => ArmorSlot::Legs,
+                "feet" => ArmorSlot::Feet,
+                _ => return Err(bad()),
+            };
+            let modifier =
+                |attribute| equipment_modifier(entry, attribute, slot_name).ok_or_else(bad);
+            Ok((
+                id,
+                Armor {
+                    slot,
+                    modifiers: [
+                        modifier("minecraft:armor")?,
+                        modifier("minecraft:armor_toughness")?,
+                    ],
+                    durability: equipment_durability(entry).ok_or_else(bad)?,
                 },
             ))
         })
@@ -531,8 +583,9 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
         .0
         .join("generated/reports/minecraft/components/item");
     let consumables = consumable_reports(&item_reports)?;
-    let swords = Value::Object(sword_reports(&item_reports)?);
+    let (swords, armor) = equipment_reports(&item_reports)?;
     sword_defaults(&swords)?;
+    armor_defaults(&armor)?;
     write(
         &scratch,
         &builtin_path(server),
@@ -542,6 +595,7 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
             "registries": builtin,
             "consumables": consumables,
             "swords": swords,
+            "armor": armor,
         }),
     )?;
     write(

@@ -237,13 +237,20 @@ fn run() -> io::Result<()> {
                 .map(Vec::as_slice)
                 .unwrap_or_default()
         };
-        let codec =
+        let mut codec =
             harpas_engine::item_data::ItemCodec::new(entries("minecraft:data_component_type"))
                 .with_enchantments(
                     harpas_java::registry_names("minecraft:enchantment").unwrap_or(&[]),
                 )
                 .with_potions(entries("minecraft:potion"))
                 .with_mob_effects(entries("minecraft:mob_effect"));
+        if let Some(swords) = builtin.swords {
+            codec = codec.with_swords(swords);
+        } else {
+            warn!(
+                "Sword combat needs the sword defaults from `harpas vanilla-data generate-registry`"
+            );
+        }
         match builtin.consumables {
             Some(consumables) => {
                 if !has_food_remainders {

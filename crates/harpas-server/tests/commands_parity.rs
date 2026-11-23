@@ -1363,6 +1363,151 @@ fn bare_hand_combat_matches_vanilla() {
     }
 }
 
+fn attack_speed(client: &mut Client, equipped: bool) -> play::AttributeProperty {
+    client.matching("main-hand attack speed", |packet| match packet {
+        Packet::UpdateAttributes(packet) => packet.attributes.into_iter().find(|property| {
+            property.attribute == play::Attribute::AttackSpeed
+                && property.modifiers.is_empty() != equipped
+        }),
+        _ => None,
+    })
+}
+
+fn exercise_swords(port: u16) -> [play::AttributeProperty; 2] {
+    let mut attacker = Client::join(port, "Attacker");
+    let mut defender = Client::join(port, "Defender");
+    attacker.stream.set_nodelay(true).unwrap();
+    defender.stream.set_nodelay(true).unwrap();
+    confirm_position(&mut attacker);
+    let defender_id = defender.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    let [x, y, z] = confirm_position(&mut defender);
+    assert_eq!(health(&mut defender).health, 20.0);
+    move_player(&mut defender, [x, y, z], true);
+    move_player(&mut attacker, [x + 2.0, y, z], true);
+
+    let select =
+        |client: &mut Client, slot| play_packet(client, play::serverbound::SetHeldItem { slot });
+    let hit = play::serverbound::Attack {
+        entity_id: defender_id,
+    };
+    let attack = |client: &mut Client| play_packet(client, hit.clone());
+    select(&mut attacker, 1);
+    let equipped = attack_speed(&mut attacker, true);
+    std::thread::sleep(Duration::from_millis(800));
+    attack(&mut attacker);
+    attack(&mut attacker);
+    assert_eq!(health(&mut defender).health, 16.0);
+    attacker.command("list", 1);
+    assert_no_damage_until_list_reply(&mut defender, "after the rapid sword attack");
+
+    select(&mut attacker, 0);
+    let unarmed = attack_speed(&mut attacker, false);
+    std::thread::sleep(Duration::from_millis(800));
+    select(&mut attacker, 2);
+    assert_eq!(attack_speed(&mut attacker, true), equipped);
+    attack(&mut attacker);
+    let after_partial = health(&mut defender).health;
+    let recharge_ticks = 20.0 / (equipped.base_value + equipped.modifiers[0].amount) as f32;
+    let partial_hit = |before: f32, after: f32| {
+        // The attack crosses the network, so it can arrive on any of these early charge ticks.
+        (0..6).any(|ticks| {
+            let charge = (ticks as f32 + 0.5) / recharge_ticks;
+            let expected = before - 6.0 * (0.2 + charge * charge * 0.8);
+            (after - expected).abs() < 0.0001
+        })
+    };
+    assert!(
+        partial_hit(16.0, after_partial),
+        "unexpected partially charged hit: {after_partial}"
+    );
+
+    std::thread::sleep(Duration::from_millis(800));
+    // The same item type in a new slot keeps its charge. This second iron sword breaks on hit.
+    select(&mut attacker, 3);
+    std::thread::sleep(Duration::from_millis(150));
+    attack(&mut attacker);
+    let after_break = health(&mut defender).health;
+    assert_eq!(after_break, after_partial - 6.0);
+    assert_eq!(attack_speed(&mut attacker, false), unarmed);
+
+    std::thread::sleep(Duration::from_millis(800));
+    // Before the equipment tick, the hit uses the old attributes and wears the newly selected sword.
+    let mut frames = Vec::new();
+    let select_iron: play::serverbound::Packet = play::serverbound::SetHeldItem { slot: 2 }.into();
+    let hit: play::serverbound::Packet = hit.into();
+    write_frame(&mut frames, |buf| select_iron.encode(buf));
+    write_frame(&mut frames, |buf| hit.encode(buf));
+    attacker.stream.write_all(&frames).unwrap();
+    let after_swap = health(&mut defender).health;
+    assert!(
+        after_swap == after_break - 1.0 || partial_hit(after_break, after_swap),
+        "unexpected hit during equipment change: {}",
+        after_break - after_swap
+    );
+    [equipped, unarmed]
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn sword_combat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("sword-combat");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let sword =
+        |slot: i8, id: &str| Compound::from_iter([("Slot", Nbt::Byte(slot)), ("id", id.into())]);
+    let mut fragile = sword(3, "minecraft:iron_sword");
+    fragile.insert(
+        "components",
+        Compound::from_iter([("minecraft:max_damage", 1)]),
+    );
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "Inventory",
+            Nbt::List(List::Compound(vec![
+                sword(1, "minecraft:wooden_sword"),
+                sword(2, "minecraft:iron_sword"),
+                fragile,
+            ])),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), offline_uuid("Attacker"), &data).unwrap();
+    }
+    let expected = exercise_swords(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_swords(other), expected);
+    stop(&mut server);
+
+    let [expected, actual] = [&vanilla, &harpas].map(|dir| {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid("Attacker"))
+            .unwrap()
+            .unwrap();
+        saved.get("Inventory").unwrap().clone()
+    });
+    assert_eq!(actual, expected);
+    let Nbt::List(List::Compound(swords)) = actual else {
+        panic!("missing saved sword stacks");
+    };
+    assert_eq!(swords.len(), 2);
+    for (sword, damage) in swords.iter().zip([1, 2]) {
+        assert_eq!(
+            sword.get("components"),
+            Some(&Nbt::from(Compound::from_iter([(
+                "minecraft:damage",
+                damage
+            )])))
+        );
+    }
+}
+
 fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets

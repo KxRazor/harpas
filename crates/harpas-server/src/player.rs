@@ -622,6 +622,26 @@ pub(crate) fn send(
                 }],
             }
             .into(),
+            Output::AttackSpeed {
+                entity_id,
+                base_speed,
+                modifier,
+            } => clientbound::UpdateAttributes {
+                entity_id,
+                attributes: vec![play::AttributeProperty {
+                    attribute: play::Attribute::AttackSpeed,
+                    base_value: base_speed,
+                    modifiers: modifier
+                        .map(|amount| play::AttributeModifier {
+                            id: "minecraft:base_attack_speed".to_owned(),
+                            amount,
+                            operation: play::AttributeOperation::AddValue,
+                        })
+                        .into_iter()
+                        .collect(),
+                }],
+            }
+            .into(),
             Output::OnFire { entity_id, burning } => clientbound::SetEntityMetadata {
                 entity_id,
                 metadata: play::EntityMetadata {

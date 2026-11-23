@@ -619,6 +619,15 @@ pub enum Output {
     SetCarried(ItemStack),
     /// The entity's main-hand item broke.
     MainHandItemBroken(i32),
+    /// The local player's main-hand attack speed modifier for the attack indicator.
+    AttackSpeed {
+        /// Entity whose attack speed changed.
+        entity_id: i32,
+        /// Attacks per second before equipment modifiers.
+        base_speed: f64,
+        /// Additive modifier, or none for the player's base speed.
+        modifier: Option<f64>,
+    },
     /// One slot of a menu changed.
     SetSlot {
         /// The menu: 0 for the player's inventory.
@@ -837,6 +846,8 @@ pub(crate) struct PlayerState {
     pub(crate) hurt_cooldown: u8,
     pub(crate) attack_charge_ticks: u8,
     pub(crate) last_main_hand_item: u32,
+    pub(crate) attack_damage_modifier: f64,
+    pub(crate) attack_speed_modifier: Option<f64>,
     pub(crate) death_location: Option<BlockPos>,
     pub(crate) force_game_mode_on_login: Option<bool>,
     pub(crate) tick_start: Position,
@@ -941,6 +952,8 @@ impl PlayerState {
             hurt_cooldown: 0,
             attack_charge_ticks: 0,
             last_main_hand_item: 0,
+            attack_damage_modifier: 0.0,
+            attack_speed_modifier: None,
             death_location: None,
             force_game_mode_on_login: None,
             tick_start: position,

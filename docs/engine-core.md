@@ -144,6 +144,10 @@ Lava contact and the burning it leaves share the player damage cooldown. Fire Re
 Suspicious stew can be eaten at full hunger and returns a bowl. Its `suspicious_stew_effects` component gives
 each stack its own list of effects and durations. Completing use applies the effects supported by the engine
 at level I.
+Milk can be drunk from either hand at any food level. It uses the same timed use and cancellation as food.
+Completing a drink returns an empty bucket and clears the active effects the engine tracks, including hidden
+weaker effects. Absorption loses its remaining hearts and its capacity. The client receives the removals, and
+the cleared effects and returned bucket persist in player data.
 The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is

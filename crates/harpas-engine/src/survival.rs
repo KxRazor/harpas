@@ -3,7 +3,7 @@
 use crate::Game;
 use crate::block::BlockPos;
 use crate::inventory::ItemStack;
-use crate::item_data::{FoodProperties, ItemCodec};
+use crate::item_data::{Consumable, ConsumeEffect, FoodProperties, ItemCodec};
 use crate::player::{DamageKind, Effect, EffectKind, GameMode, Output, PlayerState, Position};
 use crate::world::{ChunkPos, ChunkState, World};
 use harpas_core::nbt::{Compound, Nbt};
@@ -283,11 +283,11 @@ impl SurvivalRules {
     }
 }
 
-pub(crate) struct FoodUse {
+pub(crate) struct ItemUse {
     pub(crate) off_hand: bool,
     ticks_left: u32,
     stack: ItemStack,
-    food: FoodProperties,
+    consumable: Consumable,
 }
 
 impl PlayerState {
@@ -345,6 +345,18 @@ impl PlayerState {
             });
         }
     }
+
+    fn clear_effects(&mut self, effect_ids: [Option<i32>; EffectKind::ALL.len()]) {
+        for (kind, effect_id) in EffectKind::ALL.into_iter().zip(effect_ids) {
+            if self.effects[kind as usize].take().is_some() {
+                self.send_effect(kind, effect_id, false);
+                if kind == EffectKind::Absorption {
+                    self.send_max_absorption();
+                    self.set_absorption(0.0);
+                }
+            }
+        }
+    }
 }
 
 impl Game {
@@ -373,7 +385,7 @@ impl Game {
         if !player.acknowledge_block_changes(sequence)
             || player.awaiting_teleport.is_some()
             || !player.uses_food()
-            || player.food_use.is_some()
+            || player.item_use.is_some()
         {
             return;
         }
@@ -383,23 +395,28 @@ impl Game {
             .world
             .as_ref()
             .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
-        let Some(food) = codec.food(stack) else {
+        let Some(consumable) = codec.consumable(stack) else {
             return;
         };
-        if player.vitals.food >= MAX_FOOD && !food.can_always_eat {
+        if player.vitals.food >= MAX_FOOD
+            && consumable
+                .food
+                .as_ref()
+                .is_some_and(|food| !food.can_always_eat)
+        {
             return;
         }
-        player.food_use = Some(FoodUse {
+        player.item_use = Some(ItemUse {
             off_hand,
-            ticks_left: food.use_ticks,
+            ticks_left: consumable.use_ticks,
             stack: stack.clone(),
-            food,
+            consumable,
         });
         self.send_using_item(index, Some(off_hand));
     }
 
     pub(crate) fn stop_using_item(&mut self, index: usize) {
-        if self.players[index].food_use.take().is_some() {
+        if self.players[index].item_use.take().is_some() {
             self.send_using_item(index, None);
         }
     }
@@ -416,9 +433,9 @@ impl Game {
         }
     }
 
-    fn tick_food_use(&mut self, index: usize, effect_ids: [Option<i32>; EffectKind::ALL.len()]) {
+    fn tick_item_use(&mut self, index: usize, effect_ids: [Option<i32>; EffectKind::ALL.len()]) {
         let player = &mut self.players[index];
-        let Some(using) = &mut player.food_use else {
+        let Some(using) = &mut player.item_use else {
             return;
         };
         let slot = player.inventory.hand_slot(using.off_hand);
@@ -437,19 +454,25 @@ impl Game {
                 .as_ref()
                 .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
             let stew_effects = codec.stew_effects(held);
-            let mut remainder = using.food.remainder.clone().unwrap_or_default();
+            let mut remainder = using.consumable.remainder.take().unwrap_or_default();
             held.count -= 1;
             if held.is_empty() {
                 *held = std::mem::take(&mut remainder);
             }
-            player.vitals.eat(&using.food);
-            let default_effects = using
-                .food
-                .effects
-                .take()
-                .filter(|group| player.random.next_float() < group.probability)
-                .into_iter()
-                .flat_map(|group| group.effects);
+            if let Some(food) = &using.consumable.food {
+                player.vitals.eat(food);
+            }
+            let default_effects = match using.consumable.effect.take() {
+                Some(ConsumeEffect::Apply {
+                    effects,
+                    probability,
+                }) if player.random.next_float() < probability => effects,
+                Some(ConsumeEffect::ClearAll) => {
+                    player.clear_effects(effect_ids);
+                    Vec::new()
+                }
+                _ => Vec::new(),
+            };
             for effect in stew_effects.into_iter().chain(default_effects) {
                 let slot = &mut player.effects[effect.kind as usize];
                 let new = slot.is_none();
@@ -553,7 +576,7 @@ impl Game {
             }
             self.tick_effects(index, effect_ids, rules);
             if self.players[index].uses_food() {
-                self.tick_food_use(index, effect_ids);
+                self.tick_item_use(index, effect_ids);
                 let player = &mut self.players[index];
                 // On Peaceful, natural regeneration restores food before the starvation check.
                 if rules.difficulty == Difficulty::Peaceful && rules.natural_regeneration {
@@ -885,9 +908,6 @@ mod tests {
             nutrition: 1,
             saturation: 0.0,
             can_always_eat: false,
-            use_ticks: 1,
-            remainder: None,
-            effects: None,
         });
         assert!(!vitals.tick_food(rules));
         assert_eq!(vitals.food_timer, 0);

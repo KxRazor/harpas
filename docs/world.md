@@ -232,14 +232,14 @@ They are provisioned like the JVM runtime ([jvm.md](jvm.md#runtime-provisioning)
   `.harpas/vanilla-data/<version>-block-entity-types.json`, and the entries of every built-in registry, in the
   order of their numeric IDs, in `.harpas/vanilla-data/<version>-registries.json`: the tags sent to Java clients
   need the IDs of blocks, items, fluids and other built-in registries
-  ([java-connection.md](java-connection.md#tags)). The registry file also stores the `food`, `consumable` and
-  optional `use_remainder` defaults for supported foods. The generator removes the other reports, unpacked
+  ([java-connection.md](java-connection.md#tags)). The registry file also stores `consumable` defaults and,
+  when present, `food` and `use_remainder` for supported foods and drinks. The generator removes the other reports, unpacked
   executable files and downloaded jar afterwards. Neither the jar nor the generated data is committed or redistributed.
 - Java is not required to start Harpas. If it is unavailable during installation, or for installations made
-  before the data was added, the server warns about missing block entity IDs, built-in registries or food
-  defaults. Apples remain available as a fallback until the food defaults are generated. Older food defaults
-  continue to work with the foods they already include. To add foods such as golden apples and suspicious stew,
-  or to generate missing data, install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a
+  before the data was added, the server warns about missing block entity IDs, built-in registries or consumable
+  defaults. Apples remain available as a fallback until the consumable defaults are generated. Older registry
+  files still provide the foods they already include. To add milk buckets and other newly supported items,
+  install Java 25 and run `harpas vanilla-data generate-registry`. To reuse a
   downloaded jar, run `harpas vanilla-data generate-registry --from <server.jar>`. Both commands check the EULA
   and the jar hash.
 

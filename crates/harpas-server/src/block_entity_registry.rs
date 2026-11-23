@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use harpas_core::item::items;
 use harpas_engine::inventory::ItemStack;
-use harpas_engine::item_data::{FoodEffect, FoodEffects, FoodProperties};
+use harpas_engine::item_data::{Consumable, ConsumeEffect, FoodEffect, FoodProperties};
 use harpas_engine::player::EffectKind;
 use serde_json::{Map, Value, json};
 
@@ -86,21 +86,35 @@ pub(crate) struct Builtin {
     /// The entries of each built-in registry in the order of their numeric IDs.
     pub(crate) registries: HashMap<String, Vec<String>>,
     /// Absent in installations generated before the item component reports were read.
-    pub(crate) foods: Option<HashMap<u32, FoodProperties>>,
+    pub(crate) consumables: Option<HashMap<u32, Consumable>>,
 }
 
 impl Builtin {
     pub(crate) fn has_food_remainders(&self) -> bool {
-        self.foods
-            .as_ref()
-            .is_some_and(|foods| foods.values().any(|food| food.remainder.is_some()))
+        self.consumables.as_ref().is_some_and(|consumables| {
+            consumables
+                .values()
+                .any(|item| item.food.is_some() && item.remainder.is_some())
+        })
     }
 
     pub(crate) fn has_suspicious_stew(&self) -> bool {
         items()
             .id("minecraft:suspicious_stew")
-            .zip(self.foods.as_ref())
-            .is_some_and(|(id, foods)| foods.contains_key(&id))
+            .zip(self.consumables.as_ref())
+            .is_some_and(|(id, consumables)| consumables.contains_key(&id))
+    }
+
+    pub(crate) fn has_milk_bucket(&self) -> bool {
+        items()
+            .id("minecraft:milk_bucket")
+            .zip(self.consumables.as_ref())
+            .and_then(|(id, consumables)| consumables.get(&id))
+            .is_some_and(|milk| {
+                milk.food.is_none()
+                    && matches!(milk.effect, Some(ConsumeEffect::ClearAll))
+                    && milk.remainder.as_ref().and_then(ItemStack::name) == Some("minecraft:bucket")
+            })
     }
 
     pub(crate) fn has_food_effects(&self) -> bool {
@@ -121,17 +135,13 @@ impl Builtin {
         ]
         .into_iter()
         .all(|(name, kinds)| {
-            self.foods
+            let effect = self
+                .consumables
                 .as_ref()
-                .and_then(|foods| foods.get(&items().id(name)?))
-                .and_then(|food| food.effects.as_ref())
-                .is_some_and(|group| {
-                    group
-                        .effects
-                        .iter()
-                        .map(|effect| effect.kind)
-                        .eq(kinds.iter().copied())
-                })
+                .and_then(|consumables| consumables.get(&items().id(name)?))
+                .and_then(|item| item.effect.as_ref());
+            matches!(effect, Some(ConsumeEffect::Apply { effects, .. })
+                if effects.iter().map(|effect| effect.kind).eq(kinds.iter().copied()))
         })
     }
 }
@@ -180,12 +190,16 @@ pub(crate) fn load_builtin(server: &Path) -> io::Result<Option<Builtin>> {
     }
     Ok(Some(Builtin {
         registries: serde_json::from_value(data["registries"].clone()).map_err(invalid)?,
-        foods: data.get("foods").map(food_defaults).transpose()?,
+        consumables: data
+            .get("consumables")
+            .or_else(|| data.get("foods"))
+            .map(consumable_defaults)
+            .transpose()?,
     }))
 }
 
-fn food_reports(directory: &Path) -> io::Result<Map<String, Value>> {
-    let mut foods = Map::new();
+fn consumable_reports(directory: &Path) -> io::Result<Map<String, Value>> {
+    let mut consumables = Map::new();
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
@@ -197,97 +211,109 @@ fn food_reports(directory: &Path) -> io::Result<Map<String, Value>> {
             &components["minecraft:food"],
             &components["minecraft:consumable"],
         );
-        if food.is_object()
+        if (food.is_object() || name == "milk_bucket")
             && consumable.is_object()
-            && food_effects(consumable).is_ok()
+            && consume_effect(consumable).is_ok()
             && components.get("minecraft:use_cooldown").is_none()
         {
-            let mut defaults = json!({"food": food, "consumable": consumable});
+            let mut defaults = json!({"consumable": consumable});
+            if food.is_object() {
+                defaults["food"] = food.clone();
+            }
             if let Some(remainder) = components.get("minecraft:use_remainder") {
                 defaults["use_remainder"] = remainder.clone();
             }
-            foods.insert(format!("minecraft:{name}"), defaults);
+            consumables.insert(format!("minecraft:{name}"), defaults);
         }
     }
-    if !foods.contains_key("minecraft:apple") {
+    if !consumables.contains_key("minecraft:apple") {
         return Err(invalid("the item reports have no apple food defaults"));
     }
-    Ok(foods)
+    Ok(consumables)
 }
 
-fn food_defaults(value: &Value) -> io::Result<HashMap<u32, FoodProperties>> {
+fn consumable_defaults(value: &Value) -> io::Result<HashMap<u32, Consumable>> {
     value
         .as_object()
-        .ok_or_else(|| invalid("food defaults are not an object"))?
+        .ok_or_else(|| invalid("consumable defaults are not an object"))?
         .iter()
         .map(|(name, entry)| {
-            let bad = || invalid(format!("invalid food defaults for {name}"));
+            let bad = || invalid(format!("invalid consumable defaults for {name}"));
             let id = items().id(name).ok_or_else(bad)?;
-            let food = &entry["food"];
-            let nutrition = food["nutrition"]
-                .as_u64()
-                .and_then(|value| i32::try_from(value).ok())
-                .ok_or_else(bad)?;
-            let saturation = food["saturation"].as_f64().ok_or_else(bad)? as f32;
-            let can_always_eat = food
-                .get("can_always_eat")
-                .map_or(Some(false), Value::as_bool)
-                .ok_or_else(bad)?;
+            let food = entry.get("food").map(food_properties).transpose()?;
             let consumable = entry["consumable"].as_object().ok_or_else(bad)?;
             let seconds = consumable
                 .get("consume_seconds")
                 .map_or(Some(1.6), Value::as_f64)
                 .ok_or_else(bad)? as f32;
             let ticks = seconds * 20.0;
-            let remainder = entry.get("use_remainder").map(food_remainder).transpose()?;
-            let effects = food_effects(&entry["consumable"])?;
-            if !saturation.is_finite()
-                || saturation < 0.0
-                || !(0.0..u32::MAX as f32).contains(&ticks)
-            {
+            let remainder = entry.get("use_remainder").map(use_remainder).transpose()?;
+            let effect = consume_effect(&entry["consumable"])?;
+            if !(0.0..u32::MAX as f32).contains(&ticks) {
                 return Err(bad());
             }
             Ok((
                 id,
-                FoodProperties {
-                    nutrition,
-                    saturation,
-                    can_always_eat,
+                Consumable {
+                    food,
                     use_ticks: ticks as u32,
                     remainder,
-                    effects,
+                    effect,
                 },
             ))
         })
         .collect()
 }
 
-fn food_effects(consumable: &Value) -> io::Result<Option<FoodEffects>> {
-    let bad = || invalid("unsupported default food effect");
+fn food_properties(food: &Value) -> io::Result<FoodProperties> {
+    let bad = || invalid("invalid default food properties");
+    let nutrition = food["nutrition"]
+        .as_u64()
+        .and_then(|value| i32::try_from(value).ok())
+        .ok_or_else(bad)?;
+    let saturation = food["saturation"].as_f64().ok_or_else(bad)? as f32;
+    if !saturation.is_finite() || saturation < 0.0 {
+        return Err(bad());
+    }
+    let can_always_eat = food
+        .get("can_always_eat")
+        .map_or(Some(false), Value::as_bool)
+        .ok_or_else(bad)?;
+    Ok(FoodProperties {
+        nutrition,
+        saturation,
+        can_always_eat,
+    })
+}
+
+fn consume_effect(consumable: &Value) -> io::Result<Option<ConsumeEffect>> {
+    let bad = || invalid("unsupported default consume effect");
     let Some(value) = consumable.get("on_consume_effects") else {
         return Ok(None);
     };
-    let apply = match value.as_array().ok_or_else(bad)?.as_slice() {
+    let action = match value.as_array().ok_or_else(bad)?.as_slice() {
         [] => return Ok(None),
-        [apply] => apply,
+        [action] => action,
         _ => return Err(bad()),
     };
-    if apply["type"] != "minecraft:apply_effects" {
-        return Err(bad());
+    match action["type"].as_str() {
+        Some("minecraft:clear_all_effects") => return Ok(Some(ConsumeEffect::ClearAll)),
+        Some("minecraft:apply_effects") => {}
+        _ => return Err(bad()),
     }
-    let effects = apply["effects"]
+    let effects = action["effects"]
         .as_array()
         .filter(|effects| !effects.is_empty())
         .ok_or_else(bad)?
         .iter()
         .map(food_effect)
         .collect::<io::Result<_>>()?;
-    let probability = apply
+    let probability = action
         .get("probability")
         .map_or(Some(1.0), Value::as_f64)
         .filter(|value| (0.0..=1.0).contains(value))
         .ok_or_else(bad)? as f32;
-    Ok(Some(FoodEffects {
+    Ok(Some(ConsumeEffect::Apply {
         effects,
         probability,
     }))
@@ -329,8 +355,8 @@ fn food_effect(effect: &Value) -> io::Result<FoodEffect> {
     })
 }
 
-fn food_remainder(value: &Value) -> io::Result<ItemStack> {
-    let bad = || invalid("invalid default food remainder");
+fn use_remainder(value: &Value) -> io::Result<ItemStack> {
+    let bad = || invalid("invalid default use remainder");
     let item = value["id"]
         .as_str()
         .and_then(|name| items().id(name))
@@ -396,7 +422,7 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
     let report: Value = serde_json::from_slice(&report).map_err(invalid)?;
     let registry = Registry::from_report(&report)?;
     let builtin = builtin_from_report(&report)?;
-    let foods = food_reports(
+    let consumables = consumable_reports(
         &scratch
             .0
             .join("generated/reports/minecraft/components/item"),
@@ -408,7 +434,7 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
             "version": VERSION,
             "server_sha1": SERVER_JAR_SHA1,
             "registries": builtin,
-            "foods": foods,
+            "consumables": consumables,
         }),
     )?;
     write(
@@ -515,6 +541,46 @@ mod tests {
     }
 
     #[test]
+    fn extracts_milk_as_a_consumable_without_food_properties() {
+        let scratch = Scratch::new(&std::env::temp_dir()).unwrap();
+        for (name, components) in [
+            (
+                "apple",
+                json!({
+                    "minecraft:food": {"nutrition": 2, "saturation": 0.5},
+                    "minecraft:consumable": {},
+                }),
+            ),
+            (
+                "milk_bucket",
+                json!({
+                    "minecraft:consumable": {
+                        "consume_seconds": 1.5,
+                        "on_consume_effects": [{"type": "minecraft:clear_all_effects"}],
+                    },
+                    "minecraft:use_remainder": {"id": "minecraft:bucket"},
+                }),
+            ),
+            ("potion", json!({"minecraft:consumable": {}})),
+        ] {
+            let report = json!({"components": components});
+            fs::write(scratch.0.join(format!("{name}.json")), report.to_string()).unwrap();
+        }
+        let reports = consumable_reports(&scratch.0).unwrap();
+        assert_eq!(reports.len(), 2);
+        let consumables = consumable_defaults(&Value::Object(reports)).unwrap();
+        let milk = &consumables[&items().id("minecraft:milk_bucket").unwrap()];
+        assert_eq!(milk.use_ticks, 30);
+        assert!(
+            Builtin {
+                consumables: Some(consumables),
+                ..Builtin::default()
+            }
+            .has_milk_bucket()
+        );
+    }
+
+    #[test]
     fn loaded_registry_must_match_the_pinned_version_and_jar() {
         let scratch = Scratch::new(&std::env::temp_dir()).unwrap();
         assert!(load(&scratch.0).unwrap().is_none());
@@ -529,14 +595,15 @@ mod tests {
         fs::write(&builtin, data.to_string()).unwrap();
         let loaded = load_builtin(&scratch.0).unwrap().unwrap();
         assert_eq!(loaded.registries["minecraft:fluid"], ["minecraft:empty"]);
-        assert!(loaded.foods.is_none());
+        assert!(loaded.consumables.is_none());
         data["foods"] = json!({"minecraft:apple": {
             "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {}
         }});
         fs::write(&builtin, data.to_string()).unwrap();
         let loaded = load_builtin(&scratch.0).unwrap().unwrap();
         assert!(!loaded.has_food_remainders());
-        assert_eq!(loaded.foods.unwrap().len(), 1);
+        assert!(!loaded.has_milk_bucket());
+        assert_eq!(loaded.consumables.unwrap().len(), 1);
         data["foods"]["minecraft:mushroom_stew"] = json!({
             "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {},
             "use_remainder": {"id": "minecraft:bowl"}

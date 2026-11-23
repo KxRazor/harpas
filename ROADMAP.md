@@ -518,6 +518,9 @@ as shown by the parity report.
   - [x] Suspicious stew can be eaten at full hunger, returns a bowl and applies the supported effects stored on
         the stack. Regeneration and Poison are compared with vanilla, including both hands and reconnects
         (`food_suspicious_stew_matches_vanilla`).
+  - [x] Milk can be drunk from either hand at full hunger. A finished drink returns an empty bucket and
+        clears active status effects, including Absorption hearts. Cancellation, effect removal and
+        reconnecting are compared with vanilla (`milk_bucket_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

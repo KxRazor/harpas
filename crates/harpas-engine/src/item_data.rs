@@ -22,7 +22,7 @@ const FOOD: &str = "minecraft:food";
 const CONSUMABLE: &str = "minecraft:consumable";
 const USE_REMAINDER: &str = "minecraft:use_remainder";
 
-/// The default components of a supported food.
+/// The default `food` component of a supported item.
 #[derive(Debug, Clone)]
 pub struct FoodProperties {
     /// Food points restored by one item.
@@ -31,21 +31,33 @@ pub struct FoodProperties {
     pub saturation: f32,
     /// Whether this food can be eaten with a full food bar.
     pub can_always_eat: bool,
-    /// Number of ticks use must be held.
-    pub use_ticks: u32,
-    /// The default stack left after consumption, such as a bowl.
-    pub remainder: Option<ItemStack>,
-    /// Effects applied together when the food is finished.
-    pub effects: Option<FoodEffects>,
 }
 
-/// The effects of one vanilla `apply_effects` consume action.
+/// The default components of a supported item that can be eaten or drunk.
 #[derive(Debug, Clone)]
-pub struct FoodEffects {
-    /// Effects applied in order on a successful roll.
-    pub effects: Vec<FoodEffect>,
-    /// Probability of applying the group, from zero to one.
-    pub probability: f32,
+pub struct Consumable {
+    /// Nutrition and the hunger requirement for foods.
+    pub food: Option<FoodProperties>,
+    /// Number of ticks use must be held.
+    pub use_ticks: u32,
+    /// The default stack left after consumption, such as a bowl or bucket.
+    pub remainder: Option<ItemStack>,
+    /// Action taken when consumption finishes.
+    pub effect: Option<ConsumeEffect>,
+}
+
+/// A supported action from a vanilla `consumable` component.
+#[derive(Debug, Clone)]
+pub enum ConsumeEffect {
+    /// Apply the whole group of effects after a successful roll.
+    Apply {
+        /// Effects applied in order.
+        effects: Vec<FoodEffect>,
+        /// Probability of applying the group, from zero to one.
+        probability: f32,
+    },
+    /// Remove all active status effects.
+    ClearAll,
 }
 
 /// A supported effect configured on a vanilla consumable.
@@ -68,7 +80,7 @@ pub struct ItemCodec {
     potions: Vec<String>,
     mob_effects: Vec<String>,
     effect_ids: [Option<i32>; EffectKind::ALL.len()],
-    foods: HashMap<u32, FoodProperties>,
+    consumables: HashMap<u32, Consumable>,
 }
 
 impl Default for ItemCodec {
@@ -110,15 +122,17 @@ impl ItemCodec {
             potions: Vec::new(),
             mob_effects: Vec::new(),
             effect_ids: Default::default(),
-            foods: HashMap::from([(
+            consumables: HashMap::from([(
                 items().id("minecraft:apple").expect("registered apple"),
-                FoodProperties {
-                    nutrition: 4,
-                    saturation: 2.4,
-                    can_always_eat: false,
+                Consumable {
+                    food: Some(FoodProperties {
+                        nutrition: 4,
+                        saturation: 2.4,
+                        can_always_eat: false,
+                    }),
                     use_ticks: 32,
                     remainder: None,
-                    effects: None,
+                    effect: None,
                 },
             )]),
         }
@@ -129,24 +143,24 @@ impl ItemCodec {
         DEFAULT.get_or_init(Self::default)
     }
 
-    /// Loads the supported food defaults generated locally from the owner's server jar, keyed by item ID.
-    pub fn with_foods(mut self, foods: HashMap<u32, FoodProperties>) -> Self {
-        self.foods = foods;
+    /// Loads the supported consumable defaults from the owner's server jar, keyed by item ID.
+    pub fn with_consumables(mut self, consumables: HashMap<u32, Consumable>) -> Self {
+        self.consumables = consumables;
         self
     }
 
-    pub(crate) fn food(&self, stack: &ItemStack) -> Option<FoodProperties> {
-        if stack.is_empty()
-            || self.component_removed(stack, FOOD)
-            || self.component_removed(stack, CONSUMABLE)
-        {
+    pub(crate) fn consumable(&self, stack: &ItemStack) -> Option<Consumable> {
+        if stack.is_empty() || self.component_removed(stack, CONSUMABLE) {
             return None;
         }
-        let mut food = self.foods.get(&stack.item)?.clone();
-        if self.component_removed(stack, USE_REMAINDER) {
-            food.remainder = None;
+        let mut consumable = self.consumables.get(&stack.item)?.clone();
+        if consumable.food.is_some() && self.component_removed(stack, FOOD) {
+            return None;
         }
-        Some(food)
+        if self.component_removed(stack, USE_REMAINDER) {
+            consumable.remainder = None;
+        }
+        Some(consumable)
     }
 
     pub(crate) fn stew_effects(&self, stack: &ItemStack) -> Vec<FoodEffect> {

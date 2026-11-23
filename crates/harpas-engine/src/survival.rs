@@ -465,6 +465,7 @@ impl Game {
                     effects,
                     probability,
                 }) if player.random.next_float() < probability => effects,
+                Some(ConsumeEffect::ApplyPotion(effect)) => vec![effect],
                 Some(ConsumeEffect::Remove(kinds)) => {
                     for kind in kinds {
                         player.remove_effect(kind, effect_ids[kind as usize]);

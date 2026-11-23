@@ -2226,6 +2226,205 @@ fn food_pufferfish_matches_vanilla() {
     }
 }
 
+fn exercise_regeneration_potion(
+    server: &mut Server,
+    port: u16,
+    name: &str,
+    hand: play::Hand,
+    cancel: bool,
+) -> play::clientbound::EntityEffect {
+    let mut client = Client::join(port, name);
+    client.stream.set_nodelay(true).unwrap();
+    let entity_id = client.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    confirm_position(&mut client);
+    let initial = health(&mut client);
+    assert_eq!(
+        (initial.health, initial.food, initial.saturation),
+        (10.0, 20, 3.0)
+    );
+    if cancel {
+        use_food(&mut client, hand, 1);
+        cancel_food(&mut client, entity_id);
+    }
+
+    let slot = if hand == play::Hand::OffHand { 45 } else { 36 };
+    let bottle = harpas_core::item::items()
+        .id("minecraft:glass_bottle")
+        .unwrap() as i32;
+    let started = Instant::now();
+    use_food(&mut client, hand, 2);
+    let (mut applied, mut returned_bottle, mut healed) = (None, false, 10.0);
+    let mut applied = client.matching("potion effect, healing and returned bottle", |packet| {
+        match packet {
+            Packet::EntityEffect(effect) if effect.entity_id == entity_id => {
+                assert!(applied.replace(effect).is_none());
+            }
+            Packet::SetContainerSlot(change) if change.window_id == 0 && change.slot == slot => {
+                assert_eq!((change.item.item, change.item.count), (bottle, 1));
+                assert!(
+                    started.elapsed().abs_diff(Duration::from_millis(1600))
+                        < Duration::from_millis(400)
+                );
+                returned_bottle = true;
+            }
+            Packet::SetHealth(update) => {
+                healed += 1.0;
+                assert_eq!(
+                    update,
+                    play::clientbound::SetHealth {
+                        health: healed,
+                        ..initial.clone()
+                    }
+                );
+            }
+            _ => {}
+        }
+        if returned_bottle && healed >= 12.0 {
+            applied.take()
+        } else {
+            None
+        }
+    });
+    drop(client);
+    server.wait_for(&format!("{name} left the game"));
+
+    let mut client = Client::join(port, name);
+    confirm_position(&mut client);
+    let (mut resumed, mut bottle_synced) = (false, false);
+    client.matching("potion effect and bottle after reconnect", |packet| {
+        match packet {
+            Packet::EntityEffect(effect) => {
+                assert_eq!(
+                    (effect.effect, effect.amplifier),
+                    (applied.effect, applied.amplifier)
+                );
+                assert!(
+                    (1..applied.duration).contains(&effect.duration),
+                    "{effect:?}"
+                );
+                assert_eq!(
+                    effect.flags,
+                    play::EffectFlags {
+                        blend: false,
+                        ..applied.flags
+                    }
+                );
+                resumed = true;
+            }
+            Packet::SetContainerContent(contents) if contents.window_id == 0 => {
+                let stack = &contents.slots[slot as usize];
+                assert_eq!((stack.item, stack.count), (bottle, 1));
+                bottle_synced = true;
+            }
+            _ => {}
+        }
+        (resumed && bottle_synced).then_some(())
+    });
+    drop(client);
+    server.wait_for(&format!("{name} left the game"));
+    applied.entity_id = 0;
+    applied
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn regeneration_potions_match_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("regeneration-potions");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let cases = [
+        (
+            "RegenDrinker",
+            "minecraft:regeneration",
+            play::Hand::OffHand,
+            true,
+        ),
+        (
+            "LongRegen",
+            "minecraft:long_regeneration",
+            play::Hand::MainHand,
+            false,
+        ),
+        (
+            "StrongRegen",
+            "minecraft:strong_regeneration",
+            play::Hand::MainHand,
+            false,
+        ),
+    ];
+    for (name, potion, hand, _) in cases {
+        let mut drink = Compound::from_iter([
+            ("id", Nbt::from("minecraft:potion")),
+            ("count", Nbt::Int(1)),
+            (
+                "components",
+                Compound::from_iter([(
+                    "minecraft:potion_contents",
+                    Compound::from_iter([("potion", potion)]),
+                )])
+                .into(),
+            ),
+        ]);
+        let mut data = Compound::from_iter([
+            ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+            ("Health", Nbt::Float(10.0)),
+            ("foodLevel", Nbt::Int(20)),
+            ("foodSaturationLevel", Nbt::Float(3.0)),
+        ]);
+        if hand == play::Hand::MainHand {
+            drink.insert("Slot", 0_i8);
+            data.insert("Inventory", List::Compound(vec![drink]));
+        } else {
+            data.insert("equipment", Compound::from_iter([("offhand", drink)]));
+        }
+        for dir in [&vanilla, &harpas] {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), &data).unwrap();
+        }
+    }
+    let expected = cases.map(|(name, _, hand, cancel)| {
+        exercise_regeneration_potion(&mut reference, port, name, hand, cancel)
+    });
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(
+        cases.map(|(name, _, hand, cancel)| {
+            exercise_regeneration_potion(&mut server, other, name, hand, cancel)
+        }),
+        expected
+    );
+    stop(&mut server);
+
+    for ((name, _, _, _), effect) in cases.into_iter().zip(expected) {
+        for dir in [&vanilla, &harpas] {
+            let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+                .unwrap()
+                .unwrap();
+            let Some(Nbt::List(List::Compound(effects))) = saved.get("active_effects") else {
+                panic!("missing saved potion effect for {name}");
+            };
+            assert_eq!(effects.len(), 1);
+            assert_eq!(
+                effects[0].get("id"),
+                Some(&Nbt::from("minecraft:regeneration"))
+            );
+            let Some(Nbt::Int(remaining)) = effects[0].get("duration") else {
+                panic!("missing saved potion effect duration for {name}");
+            };
+            // Regeneration heals at multiples of its interval before the duration counts down.
+            let interval = 50 >> effect.amplifier;
+            let heals = effect.duration / interval - remaining / interval;
+            assert!(heals >= 2);
+            assert_eq!(saved.get("Health"), Some(&Nbt::Float(10.0 + heals as f32)));
+        }
+    }
+}
+
 fn absorption_metadata(bytes: &[u8], entity_id: i32) -> Option<f32> {
     let mut fields = bytes;
     if codec::read_varint(&mut fields).ok()? != 0x63

@@ -94,7 +94,8 @@ fn generate_if_possible(server: &Path, jar: &Path) {
                 && data.has_food_effects()
                 && data.has_suspicious_stew()
                 && data.has_milk_bucket()
-                && data.has_honey_bottle())
+                && data.has_honey_bottle()
+                && data.has_drinkable_potions())
     {
         return;
     }

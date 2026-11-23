@@ -503,10 +503,9 @@ impl World {
         v[2] *= f64::from(factor);
     }
 
-    /// The highest fluid of one kind the entity's box reaches into above its bottom (`updateFluidHeightAndDoFluidPushing`,
+    /// The highest fluid of one kind the given box reaches into above its bottom (`updateFluidHeightAndDoFluidPushing`,
     /// without the push of flowing fluid).
-    fn entity_fluid_height(&self, i: usize, water: bool) -> f64 {
-        let b = self.entities.item_box(i);
+    pub(crate) fn entity_fluid_height(&self, b: Aabb, water: bool) -> f64 {
         let b = [
             [b[0][0] + 0.001, b[0][1] + 0.001, b[0][2] + 0.001],
             [b[1][0] - 0.001, b[1][1] - 0.001, b[1][2] - 0.001],
@@ -599,7 +598,7 @@ impl World {
             return false;
         }
         // `Entity.baseTick`: lava burns the item, 4 health a tick.
-        let in_lava = self.entity_fluid_height(i, false) > 0.0;
+        let in_lava = self.entity_fluid_height(self.entities.item_box(i), false) > 0.0;
         if in_lava {
             let item = self.entities.item_mut(handle).expect("an item");
             item.health -= 4.0;
@@ -614,8 +613,9 @@ impl World {
         }
         self.entities.old_position[i] = self.entities.position[i];
         let before = self.entities.velocity[i];
-        let water = self.entity_fluid_height(i, true);
-        let lava = self.entity_fluid_height(i, false);
+        let bounds = self.entities.item_box(i);
+        let water = self.entity_fluid_height(bounds, true);
+        let lava = self.entity_fluid_height(bounds, false);
         let v = &mut self.entities.velocity[i];
         if water > 0.1 {
             // `setUnderwaterMovement`.

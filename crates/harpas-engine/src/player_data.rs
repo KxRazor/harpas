@@ -157,6 +157,7 @@ impl PlayerInventory {
         }
         if let Some(vitals) = self.vitals {
             root.insert("Health", Nbt::Float(vitals.health));
+            root.insert("Fire", Nbt::Short(vitals.fire_ticks));
             root.insert("AbsorptionAmount", Nbt::Float(vitals.absorption));
             save_absorption_modifier(
                 &mut root,
@@ -239,6 +240,9 @@ impl PlayerInventory {
             && health.is_finite()
         {
             player.vitals.health = health.clamp(0.0, 20.0);
+        }
+        if let Some(Nbt::Short(fire)) = self.root.get("Fire") {
+            player.vitals.fire_ticks = (*fire).max(0);
         }
         if let Some(Nbt::Float(absorption)) = self.root.get("AbsorptionAmount")
             && absorption.is_finite()

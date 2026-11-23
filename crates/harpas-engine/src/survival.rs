@@ -12,6 +12,7 @@ use harpas_core::random::RandomSource;
 const MAX_HEALTH: f32 = 20.0;
 const MAX_FOOD: i32 = 20;
 const SAFE_FALL_DISTANCE: f64 = 3.0;
+const LAVA_FIRE_TICKS: i16 = 15 * 20;
 
 pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
 
@@ -140,6 +141,7 @@ impl ActiveEffect {
 pub(crate) struct Vitals {
     pub(crate) health: f32,
     pub(crate) absorption: f32,
+    pub(crate) fire_ticks: i16,
     pub(crate) food: i32,
     pub(crate) saturation: f32,
     pub(crate) exhaustion: f32,
@@ -151,6 +153,7 @@ impl Default for Vitals {
         Self {
             health: MAX_HEALTH,
             absorption: 0.0,
+            fire_ticks: 0,
             food: MAX_FOOD,
             saturation: 5.0,
             exhaustion: 0.0,
@@ -241,6 +244,7 @@ impl Difficulty {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SurvivalRules {
     fall_damage: bool,
+    fire_damage: bool,
     keep_inventory: bool,
     show_death_messages: bool,
     natural_regeneration: bool,
@@ -270,6 +274,7 @@ impl SurvivalRules {
         };
         Self {
             fall_damage: boolean("minecraft:fall_damage", true),
+            fire_damage: boolean("minecraft:fire_damage", true),
             keep_inventory: boolean("minecraft:keep_inventory", false),
             show_death_messages: boolean("minecraft:show_death_messages", true),
             natural_regeneration: boolean("minecraft:natural_health_regeneration", true),
@@ -301,6 +306,10 @@ impl PlayerState {
         self.effects[EffectKind::Absorption as usize]
             .as_ref()
             .map_or(0.0, ActiveEffect::absorption_limit)
+    }
+
+    pub(crate) fn is_burning(&self) -> bool {
+        self.vitals.fire_ticks > 0 && self.player.profile.game_mode != GameMode::Spectator
     }
 
     pub(crate) fn send_max_absorption(&self) {
@@ -529,6 +538,11 @@ impl Game {
             }
             let before = player.vitals;
             player.ticks_alive = player.ticks_alive.wrapping_add(1);
+            self.tick_fire(index, rules);
+            if self.players[index].is_dead() {
+                self.players[index].send(self.players[index].vitals.update());
+                continue;
+            }
             self.tick_effects(index, effect_ids, rules);
             if self.players[index].uses_food() {
                 self.tick_food_use(index, effect_ids);
@@ -552,6 +566,43 @@ impl Game {
             {
                 player.send(player.vitals.update());
             }
+        }
+    }
+
+    fn tick_fire(&mut self, index: usize, rules: SurvivalRules) {
+        let Some(world) = &self.world else { return };
+        let player = &mut self.players[index];
+        let was_burning = player.vitals.fire_ticks > 0;
+        let Position { x, y, z, .. } = player.player.position;
+        let bounds = [[x - 0.3, y, z - 0.3], [x + 0.3, y + 1.8, z + 0.3]];
+        let hit = if player.player.profile.game_mode == GameMode::Spectator {
+            player.vitals.fire_ticks = 0;
+            None
+        } else if world.entity_fluid_height(bounds, false) > 0.0 {
+            player.fall_distance *= 0.5;
+            player.vitals.fire_ticks = player.vitals.fire_ticks.max(LAVA_FIRE_TICKS);
+            Some((4.0, DamageKind::Lava))
+        } else if was_burning && world.entity_fluid_height(bounds, true) > 0.0 {
+            player.vitals.fire_ticks = 0;
+            None
+        } else if was_burning {
+            let pulse = player.vitals.fire_ticks % 20 == 0;
+            player.vitals.fire_ticks -= 1;
+            pulse.then_some((1.0, DamageKind::OnFire))
+        } else {
+            None
+        };
+        let burning = player.is_burning();
+        if burning != was_burning {
+            let entity_id = player.player.entity_id;
+            for viewer in &self.players {
+                if viewer.player.entity_id == entity_id || viewer.tracked.contains(&entity_id) {
+                    viewer.send(Output::OnFire { entity_id, burning });
+                }
+            }
+        }
+        if let Some((damage, kind)) = hit {
+            self.hurt_player(index, damage, kind, rules);
         }
     }
 
@@ -595,6 +646,13 @@ impl Game {
 
     fn hurt_player(&mut self, index: usize, damage: f32, kind: DamageKind, rules: SurvivalRules) {
         let player = &mut self.players[index];
+        if matches!(kind, DamageKind::Lava | DamageKind::OnFire)
+            && (!rules.fire_damage
+                || !player.uses_food()
+                || player.effects[EffectKind::FireResistance as usize].is_some())
+        {
+            return;
+        }
         // Only the part above the previous hit applies during the first ten ticks of damage immunity.
         let taken = if player.hurt_cooldown > 10 {
             damage - player.last_damage
@@ -606,6 +664,13 @@ impl Game {
             return;
         }
         player.last_damage = damage;
+        let taken = match &player.effects[EffectKind::Resistance as usize] {
+            Some(effect) if kind != DamageKind::Starvation => {
+                let remaining = (25 - 5 * (i32::from(effect.visible.amplifier) + 1)).max(0);
+                taken * remaining as f32 / 25.0
+            }
+            _ => taken,
+        };
         let absorbed = player.vitals.absorption.min(taken);
         player.vitals.health = (player.vitals.health - (taken - absorbed)).max(0.0);
         let entity_id = player.player.entity_id;

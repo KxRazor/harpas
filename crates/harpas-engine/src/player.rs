@@ -75,6 +75,8 @@ pub enum DamageKind {
     Lava,
     /// Burning after leaving lava.
     OnFire,
+    /// A melee hit, with the attacking player's entity ID.
+    PlayerAttack(i32),
 }
 
 /// The status effects the engine can apply to a player.
@@ -255,6 +257,8 @@ pub enum Input {
     SecondaryUse(bool),
     /// Whether the player is sprinting.
     Sprinting(bool),
+    /// The player tried to attack an entity by its runtime ID.
+    Attack(i32),
     /// The player tried to use the item in a hand.
     UseItem {
         /// Whether the item is in the off hand.
@@ -491,6 +495,8 @@ pub enum Output {
         name: String,
         /// The cause for the death message, if shown.
         kind: Option<DamageKind>,
+        /// The attacker's UUID and display name for a player-caused death.
+        attacker: Option<(u128, String)>,
     },
     /// Play the death animation for a tracked player.
     PlayerDied(i32),
@@ -829,6 +835,8 @@ pub(crate) struct PlayerState {
     pub(crate) fall_distance: f64,
     pub(crate) last_damage: f32,
     pub(crate) hurt_cooldown: u8,
+    pub(crate) attack_charge_ticks: u8,
+    pub(crate) last_main_hand_item: u32,
     pub(crate) death_location: Option<BlockPos>,
     pub(crate) force_game_mode_on_login: Option<bool>,
     pub(crate) tick_start: Position,
@@ -931,6 +939,8 @@ impl PlayerState {
             fall_distance: 0.0,
             last_damage: 0.0,
             hurt_cooldown: 0,
+            attack_charge_ticks: 0,
+            last_main_hand_item: 0,
             death_location: None,
             force_game_mode_on_login: None,
             tick_start: position,

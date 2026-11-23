@@ -454,14 +454,23 @@ impl Connection {
 
     /// Sends damage without an attacker, using a name from the synchronized damage registry.
     pub fn send_environmental_damage(&mut self, entity_id: i32, source: &str) {
+        self.send_damage(entity_id, source, 0);
+    }
+
+    /// Sends melee damage with the player as both the direct and causing entity.
+    pub fn send_melee_damage(&mut self, entity_id: i32, attacker_id: i32) {
+        self.send_damage(entity_id, "minecraft:player_attack", attacker_id + 1);
+    }
+
+    fn send_damage(&mut self, entity_id: i32, source: &str, attacker: i32) {
         let source_type = registries::entry_id("minecraft:damage_type", source)
             .expect("the damage type is synchronized");
         self.send_play_packet(
             play::clientbound::DamageEvent {
                 entity_id,
                 source_type,
-                source_cause: 0,
-                source_direct: 0,
+                source_cause: attacker,
+                source_direct: attacker,
                 source_position: None,
             }
             .into(),
@@ -1344,6 +1353,7 @@ impl Connection {
             | Packet::SetPlayerMovementFlags(_)
             | Packet::PlayerCommand(_)
             | Packet::SetHeldItem(_)
+            | Packet::Attack(_)
             | Packet::UseItem(_)
             | Packet::ChatCommand(_)
             | Packet::CommandSuggestionsRequest(_)

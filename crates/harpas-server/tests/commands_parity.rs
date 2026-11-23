@@ -1260,6 +1260,109 @@ fn fall_damage_and_respawn_match_vanilla() {
     assert_eq!(exercise_falls(&mut server, other), expected);
 }
 
+fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
+    let mut attacker = Client::join(port, "Attacker");
+    let mut defender = Client::join(port, "Defender");
+    let join = |client: &mut Client| {
+        client.stream.set_nodelay(true).unwrap();
+        let id = client.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        (id, confirm_position(client))
+    };
+    let (attacker_id, _) = join(&mut attacker);
+    let (defender_id, [x, y, z]) = join(&mut defender);
+    assert_eq!(health(&mut defender).health, 2.0);
+    move_player(&mut defender, [x, y, z], true);
+    move_player(&mut attacker, [x + 3.2, y, z], true);
+    std::thread::sleep(Duration::from_millis(400));
+
+    let punch = play::serverbound::Attack {
+        entity_id: defender_id,
+    };
+    play_packet(&mut attacker, punch.clone());
+    play_packet(&mut attacker, punch.clone());
+    let mut knockback = None;
+    let mut damage = false;
+    let mut injured = false;
+    let motion = defender.matching("damage, knockback and injured health", |packet| {
+        match packet {
+            Packet::DamageEvent(event) => {
+                let types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+                assert_eq!(types[event.source_type as usize], "minecraft:player_attack");
+                assert_eq!(event.entity_id, defender_id);
+                assert_eq!(event.source_cause, attacker_id + 1);
+                assert_eq!(event.source_direct, attacker_id + 1);
+                assert!(!damage, "the rapid punch dealt damage");
+                damage = true;
+            }
+            Packet::SetEntityVelocity(packet) if packet.entity_id == defender_id => {
+                let velocity = packet.velocity;
+                assert!(velocity.x < 0.0 && velocity.y > 0.0);
+                knockback = Some([velocity.x, velocity.y, velocity.z]);
+            }
+            Packet::SetHealth(packet) => {
+                assert_eq!(packet.health, 1.0);
+                injured = true;
+            }
+            _ => {}
+        }
+        if damage && injured { knockback } else { None }
+    });
+    attacker.command("list", 1);
+    assert_no_damage_until_list_reply(&mut defender, "after the rapid punch");
+
+    std::thread::sleep(Duration::from_millis(650));
+    move_player(&mut attacker, [x + 3.35, y, z], true);
+    play_packet(&mut attacker, punch.clone());
+    attacker.command("list", 1);
+    assert_no_damage_until_list_reply(&mut defender, "after the out-of-range punch");
+
+    move_player(&mut attacker, [x + 2.0, y, z], true);
+    play_packet(&mut attacker, punch);
+    let message = defender.matching("CombatDeath", |packet| match packet {
+        Packet::CombatDeath(death) => {
+            assert_eq!(death.player_id, defender_id);
+            Some(death.message)
+        }
+        _ => None,
+    });
+    assert_eq!(health(&mut defender).health, 0.0);
+    (motion, message)
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn bare_hand_combat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("bare-hand-combat");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Health", Nbt::Float(2.0)),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), offline_uuid("Defender"), &data).unwrap();
+    }
+    let expected = exercise_punches(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_punches(other), expected);
+    stop(&mut server);
+    for dir in [&vanilla, &harpas] {
+        for name in ["Attacker", "Defender"] {
+            let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.get("foodExhaustionLevel"), Some(&Nbt::Float(0.2)));
+        }
+    }
+}
+
 fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets

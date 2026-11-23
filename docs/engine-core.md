@@ -158,6 +158,12 @@ above 10 health on Easy or Peaceful, or above 1 on Normal. On Hard the damage ca
 natural regeneration restores one food point every 10 player ticks, before the starvation check. Falls,
 starvation and Poison also use the damage cooldown, and death messages give the cause.
 
+Java Survival players can punch with an empty main hand when the saved `minecraft:pvp` rule allows it.
+Reach is measured from the attacker's eyes to the target player's hitbox. A punch uses the attacker's
+current charge and starts recharging it. The player's damage cooldown determines whether the punch deals
+damage, and a fresh hit sends knockback velocity to the target. Damage events and lethal hit messages
+identify the attacker.
+
 ### 2. Parallel only where it cannot be observed
 
 Running regions of the world in parallel, as Folia does, scales further but changes behavior: its README

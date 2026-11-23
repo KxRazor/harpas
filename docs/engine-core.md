@@ -141,6 +141,9 @@ Enchanted golden apples also work at full hunger and grant Regeneration II, Resi
 Absorption IV. Resistance reduces damage before it spends absorption. Starvation bypasses Resistance.
 Lava contact and the burning it leaves share the player damage cooldown. Fire Resistance and the
 `minecraft:fire_damage` rule block that damage. The remaining time on fire is saved with the player.
+Suspicious stew can be eaten at full hunger and returns a bowl. Its `suspicious_stew_effects` component gives
+each stack its own list of effects and durations. Completing use applies the effects supported by the engine
+at level I.
 The `minecraft:natural_health_regeneration` world rule controls food-based healing. Full food with saturation
 can heal every 10 ticks, and at least 18 food allows healing every 80 ticks when the faster rate is unavailable.
 At zero food, the same saved timer triggers one point of starvation damage every 80 ticks if the player is

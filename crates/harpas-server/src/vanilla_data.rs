@@ -89,7 +89,7 @@ fn verify_jar(jar: &Path) -> io::Result<()> {
 /// Generate missing IDs during data installation without making Java a startup requirement.
 fn generate_if_possible(server: &Path, jar: &Path) {
     if matches!(crate::block_entity_registry::load(server), Ok(Some(_)))
-        && matches!(crate::block_entity_registry::load_builtin(server), Ok(Some(data)) if data.has_food_remainders() && data.has_food_effects())
+        && matches!(crate::block_entity_registry::load_builtin(server), Ok(Some(data)) if data.has_food_remainders() && data.has_food_effects() && data.has_suspicious_stew())
     {
         return;
     }

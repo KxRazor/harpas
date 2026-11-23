@@ -149,6 +149,32 @@ impl ItemCodec {
         Some(food)
     }
 
+    pub(crate) fn stew_effects(&self, stack: &ItemStack) -> Vec<FoodEffect> {
+        let Some(Nbt::List(List::Compound(entries))) = self.saved_component(stack, STEW_EFFECTS)
+        else {
+            return Vec::new();
+        };
+        entries
+            .into_iter()
+            .filter_map(|entry| {
+                let Some(Nbt::String(name)) = entry.get("id") else {
+                    return None;
+                };
+                let kind = EffectKind::ALL.into_iter().find(|kind| kind.id() == name)?;
+                let duration = match entry.get("duration") {
+                    Some(Nbt::Int(duration)) if *duration == -1 || *duration > 0 => *duration,
+                    None => DEFAULT_STEW_DURATION,
+                    _ => return None,
+                };
+                Some(FoodEffect {
+                    kind,
+                    duration,
+                    amplifier: 0,
+                })
+            })
+            .collect()
+    }
+
     /// Adds the enchantment registry in the same numeric order sent to clients during Configuration.
     pub fn with_enchantments(mut self, names: &[&str]) -> Self {
         self.enchantments = names.iter().map(|name| (*name).to_owned()).collect();
@@ -1047,12 +1073,16 @@ mod tests {
 
     #[test]
     fn saved_stew_can_contain_multiple_effects_and_default_duration() {
-        let codec = ItemCodec::new(&[STEW_EFFECTS.to_owned()])
-            .with_mob_effects(&["minecraft:first".to_owned(), "minecraft:second".to_owned()]);
+        let codec = ItemCodec::new(&[STEW_EFFECTS.to_owned()]).with_mob_effects(&[
+            "minecraft:regeneration".to_owned(),
+            "minecraft:blindness".to_owned(),
+            "minecraft:poison".to_owned(),
+        ]);
         let effects = List::Compound(vec![
-            Compound::from_iter([("id", "minecraft:first")]),
+            Compound::from_iter([("id", "minecraft:regeneration")]),
+            Compound::from_iter([("id", "minecraft:blindness")]),
             Compound::from_iter([
-                ("id", Nbt::from("minecraft:second")),
+                ("id", Nbt::from("minecraft:poison")),
                 ("duration", Nbt::Int(5)),
             ]),
         ]);
@@ -1062,8 +1092,27 @@ mod tests {
         ]);
         tag.insert("components", Compound::from_iter([(STEW_EFFECTS, effects)]));
         let stack = codec.read(&tag).unwrap();
-        assert_eq!(stack.components.added, [(0, vec![2, 0, 160, 1, 1, 5])]);
+        assert_eq!(
+            stack.components.added,
+            [(0, vec![3, 0, 160, 1, 1, 160, 1, 2, 5])]
+        );
         assert_eq!(codec.write(&stack).unwrap(), tag);
+        assert_eq!(
+            codec
+                .stew_effects(&stack)
+                .into_iter()
+                .map(|effect| (effect.kind, effect.duration, effect.amplifier))
+                .collect::<Vec<_>>(),
+            [
+                (EffectKind::Regeneration, 160, 0),
+                (EffectKind::Poison, 5, 0)
+            ]
+        );
+        tag.insert(
+            "components",
+            Compound::from_iter([(format!("!{STEW_EFFECTS}"), Compound::new())]),
+        );
+        assert!(codec.stew_effects(&codec.read(&tag).unwrap()).is_empty());
     }
 }
 

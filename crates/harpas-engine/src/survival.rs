@@ -432,30 +432,38 @@ impl Game {
         }
         using.ticks_left = using.ticks_left.saturating_sub(1);
         if using.ticks_left == 0 {
+            let codec = self
+                .world
+                .as_ref()
+                .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+            let stew_effects = codec.stew_effects(held);
             let mut remainder = using.food.remainder.clone().unwrap_or_default();
             held.count -= 1;
             if held.is_empty() {
                 *held = std::mem::take(&mut remainder);
             }
             player.vitals.eat(&using.food);
-            if let Some(group) = using.food.effects.take()
-                && player.random.next_float() < group.probability
-            {
-                for effect in group.effects {
-                    let slot = &mut player.effects[effect.kind as usize];
-                    let new = slot.is_none();
-                    let changed = if let Some(active) = slot {
-                        active.refresh_from_food(effect.duration, effect.amplifier)
-                    } else {
-                        *slot = Some(ActiveEffect::from_food(effect.duration, effect.amplifier));
-                        true
-                    };
-                    if changed {
-                        player.send_effect(effect.kind, effect_ids[effect.kind as usize], new);
-                        if effect.kind == EffectKind::Absorption {
-                            player.send_max_absorption();
-                            player.set_absorption(player.max_absorption());
-                        }
+            let default_effects = using
+                .food
+                .effects
+                .take()
+                .filter(|group| player.random.next_float() < group.probability)
+                .into_iter()
+                .flat_map(|group| group.effects);
+            for effect in stew_effects.into_iter().chain(default_effects) {
+                let slot = &mut player.effects[effect.kind as usize];
+                let new = slot.is_none();
+                let changed = if let Some(active) = slot {
+                    active.refresh_from_food(effect.duration, effect.amplifier)
+                } else {
+                    *slot = Some(ActiveEffect::from_food(effect.duration, effect.amplifier));
+                    true
+                };
+                if changed {
+                    player.send_effect(effect.kind, effect_ids[effect.kind as usize], new);
+                    if effect.kind == EffectKind::Absorption {
+                        player.send_max_absorption();
+                        player.set_absorption(player.max_absorption());
                     }
                 }
             }

@@ -695,16 +695,13 @@ impl Game {
         if player.fall_distance == 0.0 && down == 0.0 {
             return;
         }
-        if !rules.fall_damage
-            || matches!(
-                player.player.profile.game_mode,
-                GameMode::Creative | GameMode::Spectator
-            )
-            || !matches!(
-                world.chunk(ChunkPos::at(after.x, after.z)),
-                Some(ChunkState::Loaded(_))
-            )
-            || world.point_in_water([after.x, after.y, after.z])
+        if matches!(
+            player.player.profile.game_mode,
+            GameMode::Creative | GameMode::Spectator
+        ) || !matches!(
+            world.chunk(ChunkPos::at(after.x, after.z)),
+            Some(ChunkState::Loaded(_))
+        ) || world.point_in_water([after.x, after.y, after.z])
         {
             player.fall_distance = 0.0;
             return;
@@ -712,7 +709,7 @@ impl Game {
         if after.on_ground && supports(world, after) {
             let distance = std::mem::take(&mut player.fall_distance) + down;
             let damage = (distance - SAFE_FALL_DISTANCE).ceil().max(0.0) as f32;
-            if damage > 0.0 {
+            if rules.fall_damage && damage > 0.0 {
                 let health = player.vitals.health;
                 self.hurt_player(index, damage, DamageKind::Fall, rules);
                 let player = &self.players[index];
@@ -771,6 +768,20 @@ impl Game {
         let recharge_ticks = 20.0 / speed as f32;
         let charge = ((f32::from(source.attack_charge_ticks) + 0.5) / recharge_ticks).min(1.0);
         let mut damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
+        let position = source.player.position;
+        let critical = charge > 0.9
+            && source.fall_distance > 0.0
+            && !position.on_ground
+            && !source.sprinting
+            && source.effects[EffectKind::Blindness as usize].is_none()
+            && !self.world.as_ref().is_some_and(|world| {
+                let Position { x, y, z, .. } = position;
+                let bounds = [[x - 0.3, y, z - 0.3], [x + 0.3, y + 1.8, z + 0.3]];
+                world.on_climbable(position) || world.entity_fluid_height(bounds, true) > 0.0
+            });
+        if critical {
+            damage *= 1.5;
+        }
         let sharpness = codec.enchantment_level(main_hand, "minecraft:sharpness");
         if sharpness > 0 {
             // The enchantment bonus scales linearly with charge, unlike the base damage.
@@ -781,6 +792,13 @@ impl Game {
         let health = self.players[defender].vitals.health;
         if !self.hurt_player(defender, damage, DamageKind::PlayerAttack(source_id), rules) {
             return;
+        }
+        if critical {
+            for viewer in &self.players {
+                if viewer.player.entity_id == source_id || viewer.tracked.contains(&source_id) {
+                    viewer.send(Output::CriticalHit(target_id));
+                }
+            }
         }
         self.players[attacker].vitals.exhaust(0.1);
         let target = &mut self.players[defender];

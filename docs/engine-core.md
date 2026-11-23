@@ -166,6 +166,10 @@ item's attack modifiers. The server sends attack speed changes for the client's 
 on the sword in the main hand adds one damage point at level I and half a point for each further level. The
 bonus scales linearly with the attack's charge and adds to the base damage before the target's damage cooldown
 and armor apply.
+A critical strike multiplies the charged base damage by 1.5 before adding Sharpness. It requires more than 90
+percent charge and positive fall distance while off the ground. Sprinting, climbing, being in water and Blindness
+prevent it. The fall damage rule controls landing damage independently of fall distance. A successful critical
+strike sends the critical hit animation for the target.
 A successful strike wears the sword by one point, and a fresh hit sends knockback velocity to the target.
 Damage events and lethal hit messages identify the attacker.
 Armor points, toughness and durability come from the locally generated item defaults. A hit that passes

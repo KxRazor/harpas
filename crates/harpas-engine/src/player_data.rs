@@ -913,7 +913,7 @@ mod autosave_tests {
             ("duration", Nbt::Int(30)),
         ]);
         let other = Compound::from_iter([
-            ("id", Nbt::from("minecraft:blindness")),
+            ("id", Nbt::from("minecraft:glowing")),
             ("duration", Nbt::Int(100)),
         ]);
         root.insert(

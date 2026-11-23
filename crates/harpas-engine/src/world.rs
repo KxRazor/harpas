@@ -508,6 +508,7 @@ pub struct World {
     /// The crafting recipes, smelting recipes and furnace fuels.
     pub(crate) recipes: Option<Arc<crate::recipe::Recipes>>,
     pub(crate) mining: Option<Arc<crate::mining::MiningRules>>,
+    pub(crate) climbable_blocks: Vec<bool>,
     pub(crate) player_store: Option<crate::player_data::PlayerStore>,
     /// The world's named random sequences (`RandomSequences`), which loot tables draw from.
     pub(crate) random_sequences: HashMap<String, harpas_core::random::RandomSequence>,
@@ -708,6 +709,7 @@ impl World {
             seed,
             recipes: None,
             mining: None,
+            climbable_blocks: Vec::new(),
             player_store: Some(crate::player_data::PlayerStore::start(world_dir, spawn)?),
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),
@@ -878,6 +880,45 @@ impl World {
             }),
         )
         .is_some_and(|height| f64::from(pos.y) + f64::from(height) > y)
+    }
+
+    pub(crate) fn on_climbable(&self, position: crate::player::Position) -> bool {
+        let pos = BlockPos {
+            x: position.x.floor() as i32,
+            y: position.y.floor() as i32,
+            z: position.z.floor() as i32,
+        };
+        let Some(state) = self.block_state(pos) else {
+            return false;
+        };
+        if self.climbable_blocks.get(state as usize) == Some(&true) {
+            return true;
+        }
+        let states = block_states();
+        if !states
+            .name(state)
+            .is_some_and(|name| name.ends_with("_trapdoor"))
+        {
+            return false;
+        }
+        // An open trapdoor continues the ladder directly below it when both face the same way.
+        let Some((_, trapdoor)) = states.properties(state) else {
+            return false;
+        };
+        if !trapdoor.contains(&("open", "true")) {
+            return false;
+        }
+        self.block_state(BlockPos {
+            y: pos.y - 1,
+            ..pos
+        })
+        .and_then(|state| states.properties(state))
+        .is_some_and(|(name, ladder)| {
+            name == "minecraft:ladder"
+                && ladder
+                    .iter()
+                    .any(|property| property.0 == "facing" && trapdoor.contains(property))
+        })
     }
 
     /// Sets the block state at `pos` in a loaded chunk, as vanilla's `LevelChunk.setBlockState`, and records
@@ -1962,6 +2003,7 @@ mod tests {
             seed: 0,
             recipes: None,
             mining: None,
+            climbable_blocks: Vec::new(),
             player_store: None,
             random_sequences: HashMap::new(),
             unlit: HashSet::new(),

@@ -340,6 +340,8 @@ pub struct GameData {
     pub recipes: Option<Arc<recipe::Recipes>>,
     /// Mining speed and harvest rules for pickaxes, resolved from the installed block tags.
     pub mining: Option<Arc<mining::MiningRules>>,
+    /// Membership in the climbable block tag, indexed by block state ID.
+    pub climbable_blocks: Vec<bool>,
     /// Saved item component codecs, using the owner's generated component registry.
     pub items: Option<Arc<item_data::ItemCodec>>,
 }
@@ -380,6 +382,7 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
     }
     world.recipes = data.recipes;
     world.mining = data.mining;
+    world.climbable_blocks = data.climbable_blocks;
     if let Some(items) = data.items {
         world.set_item_codec(items);
     }

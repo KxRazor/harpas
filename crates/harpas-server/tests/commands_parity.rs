@@ -1956,6 +1956,240 @@ fn sharpness_matches_vanilla() {
     }
 }
 
+fn expect_critical_animation(attacker: &mut Client, expected: Option<i32>) {
+    attacker.send_command("list");
+    let mut critical = None;
+    attacker.matching("list after the attack", |packet| match packet {
+        Packet::EntityAnimation(packet) if packet.animation == play::Animation::CriticalHit => {
+            assert!(
+                critical.replace(packet.entity_id).is_none(),
+                "extra critical hit"
+            );
+            None
+        }
+        Packet::SystemChatMessage(reply)
+            if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+        {
+            Some(())
+        }
+        _ => None,
+    });
+    assert_eq!(critical, expected);
+}
+
+fn exercise_critical_hits(port: u16) -> Vec<f32> {
+    let join = |name| {
+        let mut client = Client::join(port, name);
+        client.stream.set_nodelay(true).unwrap();
+        let id = client.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let position = confirm_position(&mut client);
+        assert_eq!(health(&mut client).health, 20.0);
+        (client, id, position)
+    };
+    let (mut attacker, attacker_id, [x, y, z]) = join("Attacker");
+    let (mut defender, defender_id, _) = join("Defender");
+    let (mut armored, armored_id, _) = join("Armored");
+    move_player(&mut defender, [x - 1.5, y, z], true);
+    move_player(&mut armored, [x + 1.5, y, z], true);
+    let sprint = |attacker: &mut Client, action| {
+        play_packet(
+            attacker,
+            play::serverbound::PlayerCommand {
+                entity_id: attacker_id,
+                action,
+                data: 0,
+            },
+        );
+    };
+    let jump = |attacker: &mut Client, z, heights: &[f64]| {
+        for &height in heights {
+            move_player(attacker, [x, y + height, z], height == 0.0);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    let descent = &[0.42, 0.75, 0.60][..];
+    let mut health_after = Vec::new();
+    for (case, heights, offset, sprinting, damage) in [
+        ("on the ground", &[][..], 0.0, false, 1.0),
+        ("rising", &[0.42][..], 0.0, false, 1.0),
+        ("descending", descent, 0.0, false, 1.5),
+        ("sprinting", descent, 0.0, true, 1.0),
+        (
+            "after landing",
+            &[0.42, 0.75, 0.60, 0.0][..],
+            0.0,
+            false,
+            1.0,
+        ),
+        ("on a ladder", descent, 1.0, false, 1.0),
+        ("on the trapdoor", &[0.5, 1.5, 1.25][..], 1.0, false, 1.0),
+    ] {
+        move_player(&mut attacker, [x, y, z], true);
+        std::thread::sleep(Duration::from_millis(800));
+        if sprinting {
+            sprint(&mut attacker, play::PlayerCommandAction::StartSprinting);
+        }
+        jump(&mut attacker, z + offset, heights);
+        play_packet(
+            &mut attacker,
+            play::serverbound::Attack {
+                entity_id: defender_id,
+            },
+        );
+        let before = health_after.last().copied().unwrap_or(20.0);
+        let after = health(&mut defender).health;
+        assert_eq!(after, before - damage, "punch {case}");
+        health_after.push(after);
+        expect_critical_animation(&mut attacker, (damage > 1.0).then_some(defender_id));
+        if sprinting {
+            sprint(&mut attacker, play::PlayerCommandAction::StopSprinting);
+        }
+    }
+
+    let (mut blinded, _, _) = join("Blinded");
+    std::thread::sleep(Duration::from_millis(800));
+    jump(&mut blinded, z, descent);
+    play_packet(
+        &mut blinded,
+        play::serverbound::Attack {
+            entity_id: defender_id,
+        },
+    );
+    let before = *health_after.last().unwrap();
+    let after = health(&mut defender).health;
+    assert_eq!(after, before - 1.0, "punch with Blindness");
+    health_after.push(after);
+    expect_critical_animation(&mut blinded, None);
+    drop(blinded);
+
+    move_player(&mut attacker, [x, y, z], true);
+    play_packet(&mut attacker, play::serverbound::SetHeldItem { slot: 1 });
+    let speed = attack_speed(&mut attacker, true);
+    std::thread::sleep(Duration::from_millis(800));
+    jump(&mut attacker, z, descent);
+    let mut frames = Vec::new();
+    // The charged hit resets the cooldown. A second target can take an immediate uncharged hit.
+    for entity_id in [armored_id, defender_id] {
+        let packet = play::serverbound::Packet::from(play::serverbound::Attack { entity_id });
+        write_frame(&mut frames, |buf| packet.encode(buf));
+    }
+    attacker.stream.write_all(&frames).unwrap();
+    let armored_health = health(&mut armored).health;
+    let raw = 4.0 * 1.5 + 3.0;
+    let expected = 20.0 - raw * (1.0 - (6.0 - raw / 2.0) / 25.0);
+    assert!(
+        (armored_health - expected).abs() < 0.0001,
+        "armored critical hit left {armored_health} health, expected {expected}"
+    );
+    let partial = health(&mut defender).health;
+    let recharge_ticks = 20.0 / (speed.base_value + speed.modifiers[0].amount) as f32;
+    assert!(
+        (0..3).any(|ticks| {
+            let charge = (ticks as f32 + 0.5) / recharge_ticks;
+            let damage = 4.0 * (0.2 + charge * charge * 0.8) + 3.0 * charge;
+            (partial - (after - damage)).abs() < 0.0001
+        }),
+        "unexpected uncharged sword damage: {}",
+        after - partial
+    );
+    expect_critical_animation(&mut attacker, Some(armored_id));
+    health_after.push(armored_health);
+    health_after
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn critical_hits_match_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("critical-hits");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let mut setup = Client::join(port, "TerrainSetup");
+    confirm_position(&mut setup);
+    setup.matching(
+        "chunk containing the ladder fixture",
+        |packet| match packet {
+            Packet::ChunkDataAndUpdateLight(chunk) if (chunk.x, chunk.z) == (0, 0) => Some(()),
+            _ => None,
+        },
+    );
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "gamerule minecraft:fall_damage false\n\
+         setblock 0 -60 2 minecraft:stone\n\
+         setblock 0 -60 1 minecraft:ladder[facing=north]\n\
+         setblock 0 -59 1 minecraft:oak_trapdoor[facing=north,open=true]\n\
+         save-all flush"
+    )
+    .unwrap();
+    reference.wait_for("fall_damage is now set to: false");
+    for _ in 0..3 {
+        reference.wait_for("Changed the block");
+    }
+    reference.wait_for("Saved the game");
+    drop(setup);
+    reference.wait_for("TerrainSetup left the game");
+    let sword = Compound::from_iter([
+        ("Slot", Nbt::Byte(1)),
+        ("id", Nbt::from("minecraft:wooden_sword")),
+        (
+            "components",
+            Compound::from_iter([(
+                "minecraft:enchantments",
+                Compound::from_iter([("minecraft:sharpness", 5)]),
+            )])
+            .into(),
+        ),
+    ]);
+    let attacker = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Inventory", List::Compound(vec![sword]).into()),
+    ]);
+    let armored = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "equipment",
+            Compound::from_iter([(
+                "chest",
+                Compound::from_iter([("id", "minecraft:iron_chestplate")]),
+            )])
+            .into(),
+        ),
+    ]);
+    let blinded = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "active_effects",
+            List::Compound(vec![Compound::from_iter([
+                ("id", Nbt::from("minecraft:blindness")),
+                ("duration", Nbt::Int(-1)),
+            ])])
+            .into(),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        for (name, data) in [
+            ("Attacker", &attacker),
+            ("Armored", &armored),
+            ("Blinded", &blinded),
+        ] {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), data).unwrap();
+        }
+    }
+    let expected = exercise_critical_hits(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_critical_hits(other), expected);
+    stop(&mut server);
+}
+
 fn flat_survival_servers(vanilla: &Path, harpas: &Path, eula: &str, difficulty: &str) -> [u16; 2] {
     let sockets = [(); 2].map(|()| TcpListener::bind(("127.0.0.1", 0)).unwrap());
     let [port, other] = sockets

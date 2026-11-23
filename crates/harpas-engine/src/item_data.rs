@@ -1225,12 +1225,12 @@ mod tests {
     fn saved_stew_can_contain_multiple_effects_and_default_duration() {
         let codec = ItemCodec::new(&[STEW_EFFECTS.to_owned()]).with_mob_effects(&[
             "minecraft:regeneration".to_owned(),
-            "minecraft:blindness".to_owned(),
+            "minecraft:glowing".to_owned(),
             "minecraft:poison".to_owned(),
         ]);
         let effects = List::Compound(vec![
             Compound::from_iter([("id", "minecraft:regeneration")]),
-            Compound::from_iter([("id", "minecraft:blindness")]),
+            Compound::from_iter([("id", "minecraft:glowing")]),
             Compound::from_iter([
                 ("id", Nbt::from("minecraft:poison")),
                 ("duration", Nbt::Int(5)),

@@ -96,6 +96,8 @@ pub enum EffectKind {
     Resistance,
     /// Prevents damage from fire sources, including lava.
     FireResistance,
+    /// Obscures vision and prevents critical attacks.
+    Blindness,
 }
 
 impl EffectKind {
@@ -109,11 +111,12 @@ impl EffectKind {
             Self::Absorption => "minecraft:absorption",
             Self::Resistance => "minecraft:resistance",
             Self::FireResistance => "minecraft:fire_resistance",
+            Self::Blindness => "minecraft:blindness",
         }
     }
 
     /// The effects implemented by the engine, in storage order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Hunger,
         Self::Poison,
         Self::Nausea,
@@ -121,6 +124,7 @@ impl EffectKind {
         Self::Absorption,
         Self::Resistance,
         Self::FireResistance,
+        Self::Blindness,
     ];
 }
 
@@ -485,6 +489,8 @@ pub enum Output {
         /// The source of the damage.
         kind: DamageKind,
     },
+    /// Show the critical hit particles on the struck entity.
+    CriticalHit(i32),
     /// A player died or joined while dead.
     Death {
         /// The player who died.

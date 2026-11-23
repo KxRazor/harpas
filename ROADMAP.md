@@ -542,6 +542,9 @@ as shown by the parity report.
   - [x] Sharpness on the main-hand sword increases Java Survival melee damage before armor mitigation.
         Levels I and V are compared with vanilla for full and partial charge against unarmored players and
         players wearing iron chestplates (`sharpness_matches_vanilla`).
+  - [x] Charged punches and sword strikes can critically hit while falling in Java Survival. Damage and
+        the critical animation are compared with vanilla, including sprinting, partial charge, disabled fall
+        damage and Sharpness against armor (`critical_hits_match_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

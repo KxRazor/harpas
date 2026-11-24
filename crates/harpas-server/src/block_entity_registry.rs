@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use harpas_core::item::items;
 use harpas_engine::inventory::{ArmorSlot, ItemStack};
 use harpas_engine::item_data::{
-    Armor, Consumable, ConsumeEffect, FoodEffect, FoodProperties, Sword,
+    Armor, Consumable, ConsumeEffect, FoodEffect, FoodProperties, MeleeWeapon,
 };
 use harpas_engine::player::EffectKind;
 use serde_json::{Map, Value, json};
@@ -89,13 +89,20 @@ pub(crate) struct Builtin {
     pub(crate) registries: HashMap<String, Vec<String>>,
     /// Absent in installations generated before the item component reports were read.
     pub(crate) consumables: Option<HashMap<u32, Consumable>>,
-    /// Absent in installations generated before sword defaults were read.
-    pub(crate) swords: Option<HashMap<u32, Sword>>,
+    /// Absent in installations generated before melee weapon defaults were read.
+    pub(crate) melee_weapons: Option<HashMap<u32, MeleeWeapon>>,
     /// Absent in installations generated before armor defaults were read.
     pub(crate) armor: Option<HashMap<u32, Armor>>,
 }
 
 impl Builtin {
+    pub(crate) fn has_axe_defaults(&self) -> bool {
+        items()
+            .id("minecraft:wooden_axe")
+            .zip(self.melee_weapons.as_ref())
+            .is_some_and(|(id, weapons)| weapons.contains_key(&id))
+    }
+
     pub(crate) fn has_food_remainders(&self) -> bool {
         self.consumables.as_ref().is_some_and(|consumables| {
             consumables
@@ -227,32 +234,37 @@ pub(crate) fn load_builtin(server: &Path) -> io::Result<Option<Builtin>> {
             .or_else(|| data.get("foods"))
             .map(consumable_defaults)
             .transpose()?,
-        swords: data.get("swords").map(sword_defaults).transpose()?,
+        melee_weapons: data
+            .get("melee_weapons")
+            .or_else(|| data.get("swords"))
+            .map(melee_weapon_defaults)
+            .transpose()?,
         armor: data.get("armor").map(armor_defaults).transpose()?,
     }))
 }
 
 fn equipment_reports(directory: &Path) -> io::Result<(Value, Value)> {
-    let mut swords = Map::new();
+    let mut melee_weapons = Map::new();
     let mut armor = Map::new();
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
             continue;
         };
-        let sword = name.ends_with("_sword");
+        let melee_weapon = name.ends_with("_sword") || name.ends_with("_axe");
         let armor_piece = ["_helmet", "_chestplate", "_leggings", "_boots"]
             .iter()
             .any(|suffix| name.ends_with(suffix));
-        if sword || armor_piece {
+        if melee_weapon || armor_piece {
             let report: Value = serde_json::from_reader(File::open(&path)?).map_err(invalid)?;
             let components = &report["components"];
             let mut defaults = json!({
                 "attribute_modifiers": components["minecraft:attribute_modifiers"],
                 "max_damage": components["minecraft:max_damage"],
             });
-            let entries = if sword {
-                &mut swords
+            let entries = if melee_weapon {
+                defaults["weapon"] = components["minecraft:weapon"].clone();
+                &mut melee_weapons
             } else {
                 defaults["slot"] = components["minecraft:equippable"]["slot"].clone();
                 &mut armor
@@ -260,13 +272,15 @@ fn equipment_reports(directory: &Path) -> io::Result<(Value, Value)> {
             entries.insert(format!("minecraft:{name}"), defaults);
         }
     }
-    if !swords.contains_key("minecraft:wooden_sword") {
-        return Err(invalid("the item reports have no wooden sword defaults"));
+    for name in ["minecraft:wooden_sword", "minecraft:wooden_axe"] {
+        if !melee_weapons.contains_key(name) {
+            return Err(invalid(format!("the item reports have no {name} defaults")));
+        }
     }
     if !armor.contains_key("minecraft:iron_chestplate") {
         return Err(invalid("the item reports have no iron chestplate defaults"));
     }
-    Ok((Value::Object(swords), Value::Object(armor)))
+    Ok((Value::Object(melee_weapons), Value::Object(armor)))
 }
 
 fn equipment_modifier(entry: &Value, attribute: &str, slot: &str) -> Option<f64> {
@@ -286,22 +300,35 @@ fn equipment_durability(entry: &Value) -> Option<i32> {
         .filter(|&value| value > 0)
 }
 
-fn sword_defaults(value: &Value) -> io::Result<HashMap<u32, Sword>> {
+fn melee_weapon_defaults(value: &Value) -> io::Result<HashMap<u32, MeleeWeapon>> {
     value
         .as_object()
-        .ok_or_else(|| invalid("sword defaults are not an object"))?
+        .ok_or_else(|| invalid("melee weapon defaults are not an object"))?
         .iter()
         .map(|(name, entry)| {
-            let bad = || invalid(format!("invalid sword defaults for {name}"));
+            let bad = || invalid(format!("invalid melee weapon defaults for {name}"));
             let id = items().id(name).ok_or_else(bad)?;
             let modifier =
                 |attribute| equipment_modifier(entry, attribute, "mainhand").ok_or_else(bad);
+            let weapon = &entry["weapon"];
+            let damage_per_attack = weapon
+                .get("item_damage_per_attack")
+                .map_or(Some(1), |value| i32::try_from(value.as_i64()?).ok())
+                .filter(|&damage| damage >= 0)
+                .ok_or_else(bad)?;
+            let shield_disable_seconds = weapon
+                .get("disable_blocking_for_seconds")
+                .map_or(Some(0.0), Value::as_f64)
+                .filter(|&seconds| (0.0..=f64::from(i32::MAX) / 20.0).contains(&seconds))
+                .ok_or_else(bad)?;
             Ok((
                 id,
-                Sword {
+                MeleeWeapon {
                     attack_damage_modifier: modifier("minecraft:attack_damage")?,
                     attack_speed_modifier: modifier("minecraft:attack_speed")?,
                     durability: equipment_durability(entry).ok_or_else(bad)?,
+                    damage_per_attack,
+                    shield_disable_ticks: (shield_disable_seconds * 20.0).round() as i32,
                 },
             ))
         })
@@ -583,8 +610,8 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
         .0
         .join("generated/reports/minecraft/components/item");
     let consumables = consumable_reports(&item_reports)?;
-    let (swords, armor) = equipment_reports(&item_reports)?;
-    sword_defaults(&swords)?;
+    let (melee_weapons, armor) = equipment_reports(&item_reports)?;
+    melee_weapon_defaults(&melee_weapons)?;
     armor_defaults(&armor)?;
     write(
         &scratch,
@@ -594,7 +621,7 @@ pub(crate) fn generate(server: &Path, jar: &Path) -> io::Result<()> {
             "server_sha1": SERVER_JAR_SHA1,
             "registries": builtin,
             "consumables": consumables,
-            "swords": swords,
+            "melee_weapons": melee_weapons,
             "armor": armor,
         }),
     )?;
@@ -794,6 +821,20 @@ mod tests {
         let loaded = load_builtin(&scratch.0).unwrap().unwrap();
         assert_eq!(loaded.registries["minecraft:fluid"], ["minecraft:empty"]);
         assert!(loaded.consumables.is_none());
+        data["swords"] = json!({"minecraft:wooden_sword": {
+            "attribute_modifiers": [
+                {"type": "minecraft:attack_damage", "operation": "add_value", "slot": "mainhand", "amount": 2},
+                {"type": "minecraft:attack_speed", "operation": "add_value", "slot": "mainhand", "amount": -1}
+            ],
+            "max_damage": 10
+        }});
+        fs::write(&builtin, data.to_string()).unwrap();
+        let loaded = load_builtin(&scratch.0).unwrap().unwrap();
+        assert!(!loaded.has_axe_defaults());
+        let weapons = loaded.melee_weapons.unwrap();
+        let sword = weapons[&items().id("minecraft:wooden_sword").unwrap()];
+        assert_eq!(sword.damage_per_attack, 1);
+        assert_eq!(sword.shield_disable_ticks, 0);
         data["foods"] = json!({"minecraft:apple": {
             "food": {"nutrition": 2, "saturation": 0.5}, "consumable": {}
         }});

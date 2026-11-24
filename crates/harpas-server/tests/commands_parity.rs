@@ -2102,6 +2102,152 @@ fn shield_blocking_matches_vanilla() {
     }
 }
 
+fn shield_cooldown(client: &mut Client) -> i32 {
+    client.matching("shield cooldown", |packet| match packet {
+        Packet::SetCooldown(cooldown) if cooldown.group == "minecraft:shield" => {
+            Some(cooldown.ticks)
+        }
+        Packet::SetHealth(health) => {
+            panic!("unexpected health waiting for shield cooldown: {health:?}")
+        }
+        _ => None,
+    })
+}
+
+fn exercise_axes(port: u16) -> [play::AttributeProperty; 2] {
+    let mut attacker = Client::join(port, "AxeAttacker");
+    attacker.stream.set_nodelay(true).unwrap();
+    let attacker_id = attacker.matching("attacker Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    confirm_position(&mut attacker);
+    let mut previous_speed = None;
+
+    [
+        ("AxeShieldMain", play::Hand::MainHand, 1, 7.0),
+        ("AxeShieldOff", play::Hand::OffHand, 2, 9.0),
+    ]
+    .map(|(name, hand, slot, damage)| {
+        let mut defender = Client::join(port, name);
+        defender.stream.set_nodelay(true).unwrap();
+        let entity_id = defender.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let [x, y, z] = confirm_position(&mut defender);
+        assert_eq!(health(&mut defender).health, 20.0);
+        move_player(&mut defender, [x, y, z], true);
+        move_player(&mut attacker, [x, y, z + 2.0], true);
+
+        play_packet(
+            &mut defender,
+            play::serverbound::SetPlayerRotation {
+                yaw: 0.0,
+                pitch: 0.0,
+                flags: play::MovementFlags {
+                    on_ground: true,
+                    ..Default::default()
+                },
+            },
+        );
+        use_food(&mut defender, hand, 1);
+        std::thread::sleep(Duration::from_millis(400));
+        play_packet(&mut attacker, play::serverbound::SetHeldItem { slot });
+        let speed = attacker.matching("new axe attack speed", |packet| match packet {
+            Packet::UpdateAttributes(update) if update.entity_id == attacker_id => {
+                update.attributes.into_iter().find(|attribute| {
+                    attribute.attribute == play::Attribute::AttackSpeed
+                        && !attribute.modifiers.is_empty()
+                        && previous_speed.as_ref() != Some(attribute)
+                })
+            }
+            _ => None,
+        });
+        previous_speed = Some(speed.clone());
+        if hand == play::Hand::MainHand {
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        let attack =
+            |client: &mut Client| play_packet(client, play::serverbound::Attack { entity_id });
+        attack(&mut attacker);
+        assert_eq!(shield_cooldown(&mut defender), 100);
+        assert_no_damage_until_list_reply(&mut defender, "after the disabling hit");
+
+        // Try to raise the shield during its cooldown, then strike again at full charge.
+        use_food(&mut defender, hand, 2);
+        std::thread::sleep(Duration::from_millis(1500));
+        attack(&mut attacker);
+        assert_eq!(health(&mut defender).health, 20.0 - damage);
+
+        assert_eq!(shield_cooldown(&mut defender), 0);
+        use_food(&mut defender, hand, 3);
+        std::thread::sleep(Duration::from_millis(400));
+        attack(&mut attacker);
+        assert_eq!(shield_cooldown(&mut defender), 100);
+        assert_no_damage_until_list_reply(&mut defender, "after blocking with a recovered shield");
+        speed
+    })
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn axe_combat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("axe-combat");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let item = |slot, id| Compound::from_iter([("Slot", Nbt::Byte(slot)), ("id", Nbt::from(id))]);
+    let players: [(&str, &str, Nbt); 3] = [
+        (
+            "AxeAttacker",
+            "Inventory",
+            List::Compound(vec![
+                item(1, "minecraft:wooden_axe"),
+                item(2, "minecraft:iron_axe"),
+            ])
+            .into(),
+        ),
+        (
+            "AxeShieldMain",
+            "Inventory",
+            List::Compound(vec![item(0, "minecraft:shield")]).into(),
+        ),
+        (
+            "AxeShieldOff",
+            "equipment",
+            Compound::from_iter([("offhand", Compound::from_iter([("id", "minecraft:shield")]))])
+                .into(),
+        ),
+    ];
+    for dir in [&vanilla, &harpas] {
+        for (name, key, value) in &players {
+            let saved = Compound::from_iter([
+                ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+                (*key, value.clone()),
+            ]);
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), &saved).unwrap();
+        }
+    }
+    let expected = exercise_axes(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_axes(other), expected);
+    stop(&mut server);
+
+    for (name, key, _) in players {
+        let [vanilla, harpas] = [&vanilla, &harpas].map(|dir| {
+            let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+                .unwrap()
+                .unwrap();
+            saved.get(key).cloned()
+        });
+        assert_eq!(harpas, vanilla, "{name} {key}");
+    }
+}
+
 fn exercise_armored_combat(server: &mut Server, port: u16) -> [[f32; 2]; 3] {
     let mut attacker = Client::join(port, "Attacker");
     attacker.stream.set_nodelay(true).unwrap();

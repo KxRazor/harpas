@@ -415,6 +415,9 @@ impl Game {
             .as_ref()
             .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
         let (kind, ticks_left) = if codec.is_shield(stack) {
+            if player.shield_cooldown > 0 {
+                return;
+            }
             (ItemUseKind::Shield, SHIELD_RAISE_TICKS)
         } else if let Some(consumable) = codec.consumable(stack) {
             if player.vitals.food >= MAX_FOOD
@@ -601,6 +604,12 @@ impl Game {
             }
             let before = player.vitals;
             player.ticks_alive = player.ticks_alive.wrapping_add(1);
+            if player.shield_cooldown > 0 {
+                player.shield_cooldown -= 1;
+                if player.shield_cooldown == 0 {
+                    player.send(Output::ShieldCooldown(0));
+                }
+            }
             let main_hand = &player.inventory.slots[player.inventory.hand_slot(false)];
             if player.last_main_hand_item == main_hand.item {
                 player.attack_charge_ticks = player.attack_charge_ticks.saturating_add(1);
@@ -612,10 +621,11 @@ impl Game {
                 .world
                 .as_ref()
                 .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
-            let sword = codec.sword(main_hand);
-            player.attack_damage_modifier = sword.map_or(0.0, |sword| sword.attack_damage_modifier);
-            let modifier = sword
-                .map(|sword| sword.attack_speed_modifier)
+            let weapon = codec.melee_weapon(main_hand);
+            player.attack_damage_modifier =
+                weapon.map_or(0.0, |weapon| weapon.attack_damage_modifier);
+            let modifier = weapon
+                .map(|weapon| weapon.attack_speed_modifier)
                 .filter(|&modifier| modifier != 0.0);
             if player.attack_speed_modifier != modifier {
                 player.attack_speed_modifier = modifier;
@@ -763,14 +773,14 @@ impl Game {
             .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
         let slot = source.inventory.hand_slot(false);
         let main_hand = &source.inventory.slots[slot];
-        let sword = codec.sword(main_hand);
+        let weapon = codec.melee_weapon(main_hand);
         if !rules.pvp
             || attacker == defender
             || source.player.profile.game_mode != GameMode::Survival
             || !target.uses_food()
             || source.awaiting_teleport.is_some()
             || target.awaiting_teleport.is_some()
-            || (!main_hand.is_empty() && sword.is_none())
+            || (!main_hand.is_empty() && weapon.is_none())
         {
             return;
         }
@@ -818,7 +828,8 @@ impl Game {
         let extra_knockback = 0.5 * f64::from(knockback_level + i32::from(sprint_hit));
         let fire_aspect = codec.enchantment_level(main_hand, "minecraft:fire_aspect") as i16;
         self.players[attacker].attack_charge_ticks = 0;
-        if self.block_melee_attack(defender, attacker, damage) {
+        let shield_disable_ticks = weapon.map_or(0, |weapon| weapon.shield_disable_ticks);
+        if self.block_melee_attack(defender, attacker, damage, shield_disable_ticks) {
             return;
         }
         let fresh_hit = self.players[defender].hurt_cooldown <= 10;
@@ -882,27 +893,31 @@ impl Game {
                 self.send_burning(defender);
             }
         }
-        if let Some(sword) = sword {
+        if let Some(weapon) = weapon.filter(|weapon| weapon.damage_per_attack > 0) {
             let codec = self
                 .world
                 .as_ref()
                 .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
             let stack = &mut self.players[attacker].inventory.slots[slot];
-            if !codec.component_removed(stack, "minecraft:weapon") {
-                match codec.wear_tool(stack, sword.durability) {
-                    Ok(true) => Self::send_item_broken(
-                        &self.players,
-                        source_id,
-                        Output::MainHandItemBroken(source_id),
-                    ),
-                    Ok(false) => {}
-                    Err(error) => log::warn!("Cannot apply sword wear to item {slot}: {error}"),
-                }
+            match codec.wear_item(stack, weapon.durability, weapon.damage_per_attack) {
+                Ok(true) => Self::send_item_broken(
+                    &self.players,
+                    source_id,
+                    Output::MainHandItemBroken(source_id),
+                ),
+                Ok(false) => {}
+                Err(error) => log::warn!("Cannot apply melee weapon wear to item {slot}: {error}"),
             }
         }
     }
 
-    fn block_melee_attack(&mut self, defender: usize, attacker: usize, damage: f32) -> bool {
+    fn block_melee_attack(
+        &mut self,
+        defender: usize,
+        attacker: usize,
+        damage: f32,
+        shield_disable_ticks: i32,
+    ) -> bool {
         let source = self.players[attacker].player.position;
         let target = &mut self.players[defender];
         let Some(using) = &mut target.item_use else {
@@ -925,8 +940,6 @@ impl Game {
         }
 
         let entity_id = target.player.entity_id;
-        let pitch = 0.8 + target.random.next_float() * 0.4;
-        let seed = target.random.next_long();
         if damage >= SHIELD_WEAR_THRESHOLD {
             let codec = self
                 .world
@@ -946,6 +959,22 @@ impl Game {
                 Err(error) => log::warn!("Cannot apply shield wear to item {slot}: {error}"),
             }
         }
+        if shield_disable_ticks > 0 && self.players[defender].item_use.is_some() {
+            let target = &mut self.players[defender];
+            target.shield_cooldown = shield_disable_ticks;
+            target.send(Output::ShieldCooldown(shield_disable_ticks));
+            self.stop_using_item(defender);
+            self.play_shield_sound(defender, true);
+        }
+        self.play_shield_sound(defender, false);
+        true
+    }
+
+    fn play_shield_sound(&mut self, defender: usize, disabled: bool) {
+        let target = &mut self.players[defender];
+        let position = target.player.position;
+        let pitch = 0.8 + target.random.next_float() * 0.4;
+        let seed = target.random.next_long();
         for nearby in &self.players {
             let listener = nearby.player.position;
             if (listener.x - position.x).powi(2)
@@ -953,14 +982,14 @@ impl Game {
                 + (listener.z - position.z).powi(2)
                 < 16.0_f64.powi(2)
             {
-                nearby.send(Output::ShieldBlock {
+                nearby.send(Output::ShieldSound {
                     position,
+                    disabled,
                     pitch,
                     seed,
                 });
             }
         }
-        true
     }
 
     fn hurt_armor(&mut self, index: usize, damage: f32) -> f32 {
@@ -1145,6 +1174,7 @@ impl Game {
         player.sprinting = false;
         player.fall_distance = 0.0;
         player.hurt_cooldown = 0;
+        player.shield_cooldown = 0;
         player.attack_charge_ticks = 0;
         player.last_main_hand_item = 0;
         player.attack_damage_modifier = 0.0;

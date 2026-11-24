@@ -482,15 +482,19 @@ pub enum Output {
     },
     /// The local player finished using an item.
     FinishUsingItem(i32),
-    /// A shield blocked an attack and made a sound at the defender's position.
-    ShieldBlock {
+    /// Play a shield's sound at the defender's position.
+    ShieldSound {
         /// Position of the player holding the shield.
         position: Position,
-        /// Pitch of the blocking sound.
+        /// Whether the sound is for a shield being disabled.
+        disabled: bool,
+        /// Pitch of the sound.
         pitch: f32,
         /// Seed for the sound's variations.
         seed: i64,
     },
+    /// Set or clear the local player's cooldown for shields.
+    ShieldCooldown(i32),
     /// A player took damage.
     Damage {
         /// The player who was hurt.
@@ -869,6 +873,7 @@ pub(crate) struct PlayerState {
     pub(crate) peaceful_food_ticks: u8,
     pub(crate) sprinting: bool,
     pub(crate) item_use: Option<crate::survival::ItemUse>,
+    pub(crate) shield_cooldown: i32,
     pub(crate) effects: crate::survival::ActiveEffects,
     pub(crate) ticks_alive: i32,
     pub(crate) random: LegacyRandom,
@@ -976,6 +981,7 @@ impl PlayerState {
             peaceful_food_ticks: 0,
             sprinting: false,
             item_use: None,
+            shield_cooldown: 0,
             effects: Default::default(),
             ticks_alive: 0,
             random: LegacyRandom::new(seed),

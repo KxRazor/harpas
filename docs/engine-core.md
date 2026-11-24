@@ -158,9 +158,9 @@ above 10 health on Easy or Peaceful, or above 1 on Normal. On Hard the damage ca
 natural regeneration restores one food point every 10 player ticks, before the starvation check. Falls,
 starvation and Poison also use the damage cooldown, and death messages give the cause.
 
-Java Survival players can punch or strike with a sword when the saved `minecraft:pvp` rule allows it.
+Java Survival players can punch or strike with a sword or axe when the saved `minecraft:pvp` rule allows it.
 Reach is measured from the attacker's eyes to the target player's hitbox. An attack uses the current charge
-and starts recharging it. Swords use attack damage, attack speed and durability from the locally generated
+and starts recharging it. Swords and axes use attack damage, attack speed and durability from the locally generated
 item defaults. The player tick resets the charge if the main-hand item type changed and applies the equipped
 item's attack modifiers. The server sends attack speed changes for the client's attack indicator. Sharpness
 on the sword in the main hand adds one damage point at level I and half a point for each further level. The
@@ -170,7 +170,8 @@ A critical strike multiplies the charged base damage by 1.5 before adding Sharpn
 percent charge and positive fall distance while off the ground. Sprinting, climbing, being in water and Blindness
 prevent it. The fall damage rule controls landing damage independently of fall distance. A successful critical
 strike sends the critical hit animation for the target.
-A successful strike wears the sword by one point, and a fresh hit sends knockback velocity to the target.
+A successful strike wears a sword by one point or an axe by two, and a fresh hit sends knockback velocity
+to the target.
 Knockback on the main-hand sword adds 0.5 horizontal push per level at any charge. Sprinting adds another
 0.5 when the attack has more than 90 percent charge. A successful hit with extra knockback ends the sprint,
 including during the damage cooldown. On a fresh hit, the extra knockback halves the target's horizontal
@@ -192,6 +193,9 @@ Holding use raises a shield in either hand. It blocks frontal player melee hits 
 hit spends the attack charge and prevents damage, armor wear, defender knockback and Fire Aspect. A block
 of at least three damage wears the shield by one plus the whole damage points blocked. A shield that breaks
 still blocks that hit. Releasing use, changing the held shield or breaking it lowers the shield.
+A blocked axe strike lowers the shield and starts a five-second cooldown shared by both hands. The
+server sends the cooldown and its expiry to the defender, who can raise a shield again once it expires.
+Existing installations can load axe defaults by rerunning `harpas vanilla-data generate-registry`.
 
 ### 2. Parallel only where it cannot be observed
 

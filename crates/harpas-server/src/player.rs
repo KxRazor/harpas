@@ -722,22 +722,32 @@ pub(crate) fn send(
                 event: 9,
             }
             .into(),
-            Output::ShieldBlock {
+            Output::ShieldSound {
                 position,
+                disabled,
                 pitch,
                 seed,
             } => clientbound::SoundEffect {
                 sound: Holder::Direct(play::SoundEvent {
-                    id: "minecraft:item.shield.block".into(),
+                    id: if disabled {
+                        "minecraft:item.shield.break".into()
+                    } else {
+                        "minecraft:item.shield.block".into()
+                    },
                     fixed_range: None,
                 }),
                 source: play::SoundSource::Player,
                 x: (position.x * 8.0) as i32,
                 y: (position.y * 8.0) as i32,
                 z: (position.z * 8.0) as i32,
-                volume: 1.0,
+                volume: if disabled { 0.8 } else { 1.0 },
                 pitch,
                 seed,
+            }
+            .into(),
+            Output::ShieldCooldown(ticks) => clientbound::SetCooldown {
+                group: "minecraft:shield".into(),
+                ticks,
             }
             .into(),
             Output::Damage { entity_id, kind } => {

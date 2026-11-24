@@ -473,7 +473,9 @@ as shown by the parity report.
         data, enchantments, stored enchantments, potion contents without custom effects and suspicious stew
         effects, map decorations, and removed components. Unsupported values are refused without overwriting the player's data.
   - [x] The Commands packet encodes the permission-filtered Brigadier tree sent to Java players.
-  - [ ] The remaining data component values, the other serializers, and the other 14 packets.
+  - [x] Level Particles carries the type ID and its options as wire bytes. Sword sweep particles are compared
+        with vanilla (`sweeping_attacks_match_vanilla`).
+  - [ ] The remaining data component values, particle options, the other serializers, and the other 13 packets.
 - [ ] Entity physics and collisions, ported one to one.
   - [x] Entity storage as the design describes, and item entities: gravity, collisions with blocks, friction,
         floating, burning in lava, merging and despawning, sent to the players who see them, and dropped by
@@ -560,6 +562,9 @@ as shown by the parity report.
   - [x] Axes use their own attack damage, speed and wear, and disable a raised shield for five seconds
         when it blocks an axe strike. Wooden and iron axes at full and partial charge, shields in both
         hands, cooldown expiry and saved wear are compared with vanilla (`axe_combat_matches_vanilla`).
+  - [x] A charged grounded sword strike can sweep nearby players for one point of damage and extra knockback.
+        Target bounds, reach, movement, partial charge, sprinting, critical hits and the sound and particles
+        are compared with vanilla (`sweeping_attacks_match_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

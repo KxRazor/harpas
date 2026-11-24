@@ -197,6 +197,13 @@ A blocked axe strike lowers the shield and starts a five-second cooldown shared 
 server sends the cooldown and its expiry to the defender, who can raise a shield again once it expires.
 Existing installations can load axe defaults by rerunning `harpas vanilla-data generate-registry`.
 
+A successful sword strike can sweep when its charge exceeds 90 percent and the attacker is grounded, with
+no sprint bonus and less than a quarter block of horizontal displacement in the most recent movement report.
+The sweep deals one damage point to each eligible player whose hitbox intersects the primary target's expanded
+hitbox and whose position is within the attacker's reach. It adds a push in the attacker's facing direction after
+the damage knockback. Nearby clients receive the sweep sound and a particle in front of the attacker.
+[Mojang's sword overview](https://www.minecraft.net/en-us/article/taking-inventory--sword).
+
 ### 2. Parallel only where it cannot be observed
 
 Running regions of the world in parallel, as Folia does, scales further but changes behavior: its README

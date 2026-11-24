@@ -6,6 +6,40 @@ use crate::v26_1::play::{ProfileProperty, PublicKeyData};
 mod commands;
 pub use commands::{CommandNode, CommandNodeKind, CommandTree};
 
+/// A particle type and its options at the end of a Level Particles packet.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Particle {
+    /// Numeric ID in the particle type registry.
+    pub id: i32,
+    /// Type-specific options, kept in their wire format.
+    pub options: Vec<u8>,
+}
+
+impl Particle {
+    /// The `minecraft:sweep_attack` particle type, which carries no options.
+    pub const SWEEP_ATTACK: i32 = 67;
+}
+
+impl Encode for Particle {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        codec::write_varint(buf, self.id);
+        codec::write_rest(buf, &self.options);
+    }
+}
+
+impl Decode for Particle {
+    fn decode(input: &mut &[u8]) -> Result<Self, DecodeError> {
+        let id = codec::read_varint(input)?;
+        if id < 0 {
+            return Err(DecodeError::InvalidRegistryId(id));
+        }
+        Ok(Self {
+            id,
+            options: codec::read_rest(input, 1_048_576)?,
+        })
+    }
+}
+
 /// The body of a Player Info Update: which actions it carries, and one entry per player.
 ///
 /// The actions are a bit set, and every entry has the fields of the actions that are set, in the order of

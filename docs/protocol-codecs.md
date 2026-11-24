@@ -6,8 +6,9 @@ hand-written exceptions, testing, and the constraints on the sources. Bedrock tr
 [nethernet.md](nethernet.md); translation and gameplay in [bedrock-interop.md](bedrock-interop.md).
 
 Status: in progress. The Java 26.1 Handshaking, Status, Login and Configuration codecs are generated from the
-schema, and so is Play except for 14 packets that need item stacks, entity metadata, particles or debug
-subscriptions ([Prototype results](#prototype-results)). The Commands packet uses a hand-written tree codec.
+schema, and so is Play except for 13 packets that need item stacks, entity metadata or debug subscriptions
+([Prototype results](#prototype-results)). The Commands packet uses a hand-written tree codec. Level Particles
+has a hand-written type that preserves particle-specific options as wire bytes.
 Item stacks are written by hand, with the values of their data components kept as the bytes the client sent, which a
 client in Creative sends each with its length. The engine now converts 29 component values between saved
 NBT and network bytes for player inventory persistence ([world.md](world.md#player-inventories)); the other

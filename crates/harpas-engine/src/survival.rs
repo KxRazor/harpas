@@ -21,6 +21,20 @@ const BASE_ATTACK_DAMAGE: f64 = 1.0;
 const SHIELD_RAISE_TICKS: u32 = 5;
 const SHIELD_DURABILITY: i32 = 336;
 const SHIELD_WEAR_THRESHOLD: f32 = 3.0;
+const SWEEP_MAX_HORIZONTAL_MOVEMENT: f64 = 0.25;
+const SWEEP_DAMAGE: f32 = 1.0;
+const HIT_KNOCKBACK: f64 = 0.4;
+// A standing player already carries one tick's downward gravity before a hit.
+const GROUNDED_HIT_LIFT: f64 = HIT_KNOCKBACK - 0.08 * 0.98 / 2.0;
+
+fn hit_push(target: &mut PlayerState, mut dx: f64, mut dz: f64) -> [f64; 2] {
+    while dx * dx + dz * dz < 1.0e-5 {
+        dx = (target.random.next_double() - 0.5) * 0.02;
+        dz = (target.random.next_double() - 0.5) * 0.02;
+    }
+    let scale = HIT_KNOCKBACK / dx.hypot(dz);
+    [dx * scale, dz * scale]
+}
 
 pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
 
@@ -795,8 +809,8 @@ impl Game {
         }
 
         let source_id = source.player.entity_id;
-        let mut dx = x - source.player.position.x;
-        let mut dz = z - source.player.position.z;
+        let dx = x - source.player.position.x;
+        let dz = z - source.player.position.z;
         // Equipment attributes change on the player tick. Wear applies to the item held at the hit.
         let speed = BASE_ATTACK_SPEED + source.attack_speed_modifier.unwrap_or_default();
         let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
@@ -816,6 +830,14 @@ impl Game {
                 let bounds = [[x - 0.3, y, z - 0.3], [x + 0.3, y + 1.8, z + 0.3]];
                 world.on_climbable(position) || world.entity_fluid_height(bounds, true) > 0.0
             });
+        let sweeping = charged
+            && !sprint_hit
+            && position.on_ground
+            && weapon.is_some()
+            && main_hand
+                .name()
+                .is_some_and(|name| name.ends_with("_sword"))
+            && source.horizontal_movement_squared < SWEEP_MAX_HORIZONTAL_MOVEMENT.powi(2);
         if critical {
             damage *= 1.5;
         }
@@ -851,18 +873,9 @@ impl Game {
         let target = &mut self.players[defender];
         let on_ground = target.player.position.on_ground;
         if fresh_hit {
-            while dx * dx + dz * dz < 1.0e-5 {
-                dx = (target.random.next_double() - 0.5) * 0.02;
-                dz = (target.random.next_double() - 0.5) * 0.02;
-            }
-            let horizontal = 0.4 / dx.hypot(dz);
-            // A standing player already carries one tick's downward gravity before the hit.
-            let vertical = if on_ground {
-                0.4 - 0.08 * 0.98 / 2.0
-            } else {
-                0.0
-            };
-            let mut velocity = [dx * horizontal, vertical, dz * horizontal];
+            let [dx, dz] = hit_push(target, dx, dz);
+            let vertical = if on_ground { GROUNDED_HIT_LIFT } else { 0.0 };
+            let mut velocity = [dx, vertical, dz];
             if extra_knockback > 0.0 {
                 // A second knockback halves the horizontal motion before pushing along
                 // the attacker's facing and caps the lift on the ground.
@@ -872,7 +885,7 @@ impl Game {
                 velocity[0] = velocity[0] * 0.5 + x * push;
                 velocity[2] = velocity[2] * 0.5 + z * push;
                 if on_ground {
-                    velocity[1] = 0.4;
+                    velocity[1] = HIT_KNOCKBACK;
                 }
             }
             target.send(Output::EntityVelocity {
@@ -893,6 +906,9 @@ impl Game {
                 self.send_burning(defender);
             }
         }
+        if sweeping {
+            self.sweep_attack(attacker, defender, rules);
+        }
         if let Some(weapon) = weapon.filter(|weapon| weapon.damage_per_attack > 0) {
             let codec = self
                 .world
@@ -907,6 +923,102 @@ impl Game {
                 ),
                 Ok(false) => {}
                 Err(error) => log::warn!("Cannot apply melee weapon wear to item {slot}: {error}"),
+            }
+        }
+    }
+
+    fn sweep_attack(&mut self, attacker: usize, defender: usize, rules: SurvivalRules) {
+        let source = self.players[attacker].player.position;
+        let primary = self.players[defender].player.position;
+        let source_id = self.players[attacker].player.entity_id;
+        let player_width = f64::from(0.6_f32);
+        let player_height = f64::from(1.8_f32);
+        let yaw = wrap_degrees_f32(source.yaw).to_radians();
+        let direction = [-sin_f32(yaw), cos_f32(yaw)];
+        let [x, z] = direction.map(f64::from);
+        let push = HIT_KNOCKBACK / x.hypot(z);
+        for index in 0..self.players.len() {
+            let target = &self.players[index];
+            let position = target.player.position;
+            let dx = position.x - source.x;
+            let dy = position.y - source.y;
+            let dz = position.z - source.z;
+            // The primary player's box is inflated by one block horizontally and a quarter vertically.
+            if index == attacker
+                || index == defender
+                || !target.data_ready
+                || target.disconnecting
+                || target.is_dead()
+                || !target.uses_food()
+                || target.awaiting_teleport.is_some()
+                || (position.x - primary.x).abs() >= player_width + 1.0
+                || (position.y - primary.y).abs() >= player_height + 0.25
+                || (position.z - primary.z).abs() >= player_width + 1.0
+                || dx * dx + dy * dy + dz * dz >= SURVIVAL_ENTITY_REACH.powi(2)
+            {
+                continue;
+            }
+            let fresh_hit = target.hurt_cooldown <= 10;
+            let health = target.vitals.health;
+            let entity_id = target.player.entity_id;
+            if self.block_melee_attack(index, attacker, SWEEP_DAMAGE, 0)
+                || !self.hurt_player(
+                    index,
+                    SWEEP_DAMAGE,
+                    DamageKind::PlayerAttack(source_id),
+                    rules,
+                )
+            {
+                continue;
+            }
+            let target = &mut self.players[index];
+            let [dx, dz] = if fresh_hit {
+                hit_push(target, dx, dz)
+            } else {
+                [0.0; 2]
+            };
+            let vertical = match (position.on_ground, fresh_hit) {
+                (true, true) => HIT_KNOCKBACK,
+                (true, false) => GROUNDED_HIT_LIFT,
+                (false, _) => 0.0,
+            };
+            // The sweep adds a second push along the attacker's facing, halving the first.
+            let velocity = [dx * 0.5 + x * push, vertical, dz * 0.5 + z * push];
+            target.send(Output::EntityVelocity {
+                entity_id,
+                velocity,
+            });
+            if health != target.vitals.health {
+                target.send(target.vitals.update());
+            }
+        }
+
+        let seed = self
+            .world
+            .as_mut()
+            .map_or(0, |world| world.random.next_long());
+        let particle = [source.x + x, source.y + player_height * 0.5, source.z + z];
+        for viewer in &self.players {
+            let position = viewer.player.position;
+            if (position.x - source.x).powi(2)
+                + (position.y - source.y).powi(2)
+                + (position.z - source.z).powi(2)
+                < 16.0_f64.powi(2)
+            {
+                viewer.send(Output::SweepAttackSound {
+                    position: source,
+                    seed,
+                });
+            }
+            if (position.x.floor() + 0.5 - particle[0]).powi(2)
+                + (position.y.floor() + 0.5 - particle[1]).powi(2)
+                + (position.z.floor() + 0.5 - particle[2]).powi(2)
+                < 32.0_f64.powi(2)
+            {
+                viewer.send(Output::SweepAttackParticle {
+                    position: particle,
+                    direction,
+                });
             }
         }
     }

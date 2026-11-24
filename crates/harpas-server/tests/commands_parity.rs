@@ -1261,8 +1261,6 @@ fn fall_damage_and_respawn_match_vanilla() {
 }
 
 fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
-    let mut attacker = Client::join(port, "Attacker");
-    let mut defender = Client::join(port, "Defender");
     let join = |client: &mut Client| {
         client.stream.set_nodelay(true).unwrap();
         let id = client.matching("Play Login", |packet| match packet {
@@ -1271,16 +1269,30 @@ fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
         });
         (id, confirm_position(client))
     };
-    let (attacker_id, _) = join(&mut attacker);
-    let (defender_id, [x, y, z]) = join(&mut defender);
+    // Place the attacker before the defender joins so the players do not overlap at spawn.
+    let mut attacker = Client::join(port, "Attacker");
+    let (attacker_id, [x, y, z]) = join(&mut attacker);
+    let out_of_range = [x + 7.0, y, z];
+    move_player(&mut attacker, out_of_range, true);
+    attacker.command("list", 1);
+
+    let mut defender = Client::join(port, "Defender");
+    let (defender_id, defender_position) = join(&mut defender);
+    assert_eq!(defender_position, [x, y, z]);
     assert_eq!(health(&mut defender).health, 2.0);
     move_player(&mut defender, [x, y, z], true);
-    move_player(&mut attacker, [x + 3.2, y, z], true);
-    std::thread::sleep(Duration::from_millis(400));
+    defender.command("list", 1);
 
     let punch = play::serverbound::Attack {
         entity_id: defender_id,
     };
+    // Check reach before a successful hit starts the damage cooldown.
+    play_packet(&mut attacker, punch.clone());
+    attacker.command("list", 1);
+    assert_no_damage_until_list_reply(&mut defender, "after the out-of-range punch");
+
+    move_player(&mut attacker, [x + 3.2, y, z], true);
+    std::thread::sleep(Duration::from_millis(400));
     play_packet(&mut attacker, punch.clone());
     play_packet(&mut attacker, punch.clone());
     let mut knockback = None;
@@ -1314,11 +1326,6 @@ fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
     assert_no_damage_until_list_reply(&mut defender, "after the rapid punch");
 
     std::thread::sleep(Duration::from_millis(650));
-    move_player(&mut attacker, [x + 3.35, y, z], true);
-    play_packet(&mut attacker, punch.clone());
-    attacker.command("list", 1);
-    assert_no_damage_until_list_reply(&mut defender, "after the out-of-range punch");
-
     move_player(&mut attacker, [x + 2.0, y, z], true);
     play_packet(&mut attacker, punch);
     let message = defender.matching("CombatDeath", |packet| match packet {

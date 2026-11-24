@@ -482,6 +482,15 @@ pub enum Output {
     },
     /// The local player finished using an item.
     FinishUsingItem(i32),
+    /// A shield blocked an attack and made a sound at the defender's position.
+    ShieldBlock {
+        /// Position of the player holding the shield.
+        position: Position,
+        /// Pitch of the blocking sound.
+        pitch: f32,
+        /// Seed for the sound's variations.
+        seed: i64,
+    },
     /// A player took damage.
     Damage {
         /// The player who was hurt.
@@ -625,6 +634,8 @@ pub enum Output {
     SetCarried(ItemStack),
     /// The entity's main-hand item broke.
     MainHandItemBroken(i32),
+    /// The entity's off-hand item broke.
+    OffHandItemBroken(i32),
     /// A piece of equipment broke in an armor slot.
     ArmorBroken {
         /// Entity that was wearing the item.

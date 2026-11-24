@@ -1957,6 +1957,151 @@ fn fire_aspect_matches_vanilla() {
     stop(&mut server);
 }
 
+fn exercise_shields(port: u16) {
+    let mut attacker = Client::join(port, "ShieldAttacker");
+    attacker.stream.set_nodelay(true).unwrap();
+    confirm_position(&mut attacker);
+
+    for (name, hand, blocks) in [
+        ("ShieldMain", play::Hand::MainHand, 2),
+        ("ShieldOffhand", play::Hand::OffHand, 1),
+    ] {
+        let mut defender = Client::join(port, name);
+        defender.stream.set_nodelay(true).unwrap();
+        let entity_id = defender.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let [x, y, z] = confirm_position(&mut defender);
+        assert_eq!(health(&mut defender).health, 20.0);
+        move_player(&mut defender, [x, y, z], true);
+        move_player(&mut attacker, [x, y, z + 2.0], true);
+        play_packet(
+            &mut defender,
+            play::serverbound::SetPlayerRotation {
+                yaw: 0.0,
+                pitch: 0.0,
+                flags: play::MovementFlags {
+                    on_ground: true,
+                    ..Default::default()
+                },
+            },
+        );
+        play_packet(&mut attacker, play::serverbound::SetHeldItem { slot: 0 });
+        use_food(&mut defender, hand, 1);
+        let attack = play::serverbound::Attack { entity_id };
+        for _ in 0..blocks {
+            std::thread::sleep(Duration::from_millis(800));
+            play_packet(&mut attacker, attack.clone());
+            attacker.command("list", 1);
+            std::thread::sleep(Duration::from_millis(100));
+            defender.send_command("list");
+            let mut broke = false;
+            defender.matching("packets following a shield block", |packet| {
+                assert_ne!(fire_flag(&packet, entity_id), Some(true), "blocked Fire Aspect");
+                match packet {
+                    Packet::SetHealth(health) => panic!("blocked hit changed health: {health:?}"),
+                    Packet::SetEntityVelocity(velocity) if velocity.entity_id == entity_id => {
+                        panic!("blocked hit pushed the defender: {velocity:?}");
+                    }
+                    Packet::EntityEvent(event) if event.entity_id == entity_id && event.event == 48 => {
+                        broke = true;
+                    }
+                    Packet::SystemChatMessage(reply)
+                        if matches!(&reply.content, codec::Nbt::Compound(text)
+                            if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+                    {
+                        return Some(());
+                    }
+                    _ => {}
+                }
+                None
+            });
+            assert_eq!(broke, hand == play::Hand::OffHand);
+        }
+        if hand == play::Hand::MainHand {
+            move_player(&mut attacker, [x, y, z - 2.0], true);
+        }
+        play_packet(&mut attacker, play::serverbound::SetHeldItem { slot: 1 });
+        std::thread::sleep(Duration::from_millis(800));
+        play_packet(&mut attacker, attack);
+        assert_eq!(health(&mut defender).health, 16.0);
+    }
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn shield_blocking_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("shield-blocking");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let item = |slot, id| Compound::from_iter([("Slot", Nbt::Byte(slot)), ("id", Nbt::from(id))]);
+    let mut sword = item(0, "minecraft:wooden_sword");
+    sword.insert(
+        "components",
+        Compound::from_iter([(
+            "minecraft:enchantments",
+            Compound::from_iter([("minecraft:fire_aspect", 1), ("minecraft:knockback", 2)]),
+        )]),
+    );
+    let mut fragile = Compound::from_iter([("id", "minecraft:shield")]);
+    fragile.insert(
+        "components",
+        Compound::from_iter([("minecraft:max_damage", 5)]),
+    );
+    let players = [
+        (
+            "ShieldAttacker",
+            "Inventory",
+            Nbt::List(List::Compound(vec![
+                sword,
+                item(1, "minecraft:wooden_sword"),
+            ])),
+        ),
+        (
+            "ShieldMain",
+            "Inventory",
+            Nbt::List(List::Compound(vec![item(0, "minecraft:shield")])),
+        ),
+        (
+            "ShieldOffhand",
+            "equipment",
+            Compound::from_iter([("offhand", fragile)]).into(),
+        ),
+    ];
+    for dir in [&vanilla, &harpas] {
+        for (name, key, value) in &players {
+            let saved = Compound::from_iter([
+                ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+                (*key, value.clone()),
+            ]);
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), &saved).unwrap();
+        }
+    }
+    exercise_shields(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    exercise_shields(other);
+    stop(&mut server);
+
+    let saved_items = |dir: &Path, name, key| {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), offline_uuid(name))
+            .unwrap()
+            .unwrap();
+        saved.get(key).cloned()
+    };
+    for (name, key, _) in players {
+        assert_eq!(
+            saved_items(&harpas, name, key),
+            saved_items(&vanilla, name, key),
+            "{name} {key}"
+        );
+    }
+}
+
 fn exercise_armored_combat(server: &mut Server, port: u16) -> [[f32; 2]; 3] {
     let mut attacker = Client::join(port, "Attacker");
     attacker.stream.set_nodelay(true).unwrap();

@@ -21,6 +21,7 @@ const UNBREAKABLE: &str = "minecraft:unbreakable";
 const FOOD: &str = "minecraft:food";
 const CONSUMABLE: &str = "minecraft:consumable";
 const USE_REMAINDER: &str = "minecraft:use_remainder";
+const BLOCKS_ATTACKS: &str = "minecraft:blocks_attacks";
 
 /// The default `food` component of a supported item.
 #[derive(Debug, Clone)]
@@ -253,6 +254,12 @@ impl ItemCodec {
             }));
         }
         Some(consumable)
+    }
+
+    pub(crate) fn is_shield(&self, stack: &ItemStack) -> bool {
+        !stack.is_empty()
+            && stack.name() == Some("minecraft:shield")
+            && !self.component_removed(stack, BLOCKS_ATTACKS)
     }
 
     pub(crate) fn stew_effects(&self, stack: &ItemStack) -> Vec<FoodEffect> {

@@ -1531,7 +1531,11 @@ impl Game {
             if mode == player::GameMode::Survival {
                 match mining.wear(world.block_item_codec(), &mut inventory.slots[slot]) {
                     Ok(true) => {
-                        Self::send_item_broken(&self.players, breaker, None);
+                        Self::send_item_broken(
+                            &self.players,
+                            breaker,
+                            player::Output::MainHandItemBroken(breaker),
+                        );
                     }
                     Ok(false) => {}
                     Err(error) => log::warn!("Cannot apply mining wear to item {slot}: {error}"),
@@ -1553,19 +1557,12 @@ impl Game {
         true
     }
 
-    fn send_item_broken(
-        players: &[player::PlayerState],
-        entity_id: i32,
-        armor: Option<inventory::ArmorSlot>,
-    ) {
+    fn send_item_broken(players: &[player::PlayerState], entity_id: i32, output: player::Output) {
         for player in players {
             if !player.disconnecting
                 && (player.player.entity_id == entity_id || player.tracked.contains(&entity_id))
             {
-                player.send(match armor {
-                    Some(slot) => player::Output::ArmorBroken { entity_id, slot },
-                    None => player::Output::MainHandItemBroken(entity_id),
-                });
+                player.send(output.clone());
             }
         }
     }
@@ -1810,6 +1807,93 @@ mod tests {
         input(&mut game, 1, Input::Attack(2));
         game.connections();
         assert_eq!(game.players[1].vitals.health, 18.0 - 0.208);
+    }
+
+    #[test]
+    fn shield_blocks_after_five_ticks_until_release() {
+        use harpas_core::nbt::Nbt;
+        use inventory::{HOTBAR, ItemStack};
+        use item_data::ItemCodec;
+
+        let mut game = game();
+        let _attacker = join(&mut game, 1, "Attacker", 2);
+        let defender = join(&mut game, 2, "Defender", 2);
+        game.connections();
+        for player in &mut game.players {
+            player.player.profile.game_mode = GameMode::Survival;
+            player.awaiting_teleport = None;
+        }
+        game.players[0].player.position.z += 2.0;
+        game.players[1].player.position.yaw = 0.0;
+        game.players[1].inventory.slots[HOTBAR] = ItemStack {
+            item: harpas_core::item::items().id("minecraft:shield").unwrap(),
+            count: 1,
+            ..ItemStack::empty()
+        };
+        let rules = survival::SurvivalRules::read(
+            Some(&harpas_core::nbt::Compound::from_iter([(
+                "minecraft:natural_health_regeneration",
+                0_i8,
+            )])),
+            None,
+        );
+        game.tick_survival(rules);
+        input(
+            &mut game,
+            2,
+            Input::UseItem {
+                off_hand: false,
+                sequence: 1,
+            },
+        );
+        game.connections();
+        for _ in 0..4 {
+            game.tick_survival(rules);
+        }
+        game.attack_player(0, 2);
+        assert_eq!(game.players[1].vitals.health, 19.0);
+        assert!(
+            !defender
+                .try_iter()
+                .any(|output| matches!(output, Output::ShieldBlock { .. }))
+        );
+        game.tick_survival(rules);
+        game.attack_player(0, 2);
+        assert!(
+            defender
+                .try_iter()
+                .any(|output| matches!(output, Output::ShieldBlock { .. }))
+        );
+        assert_eq!(game.players[1].vitals.health, 19.0);
+        assert_eq!(game.players[0].attack_charge_ticks, 0);
+        assert!(
+            game.players[1].inventory.slots[HOTBAR]
+                .components
+                .added
+                .is_empty()
+        );
+
+        for _ in 0..10 {
+            game.tick_survival(rules);
+        }
+        game.players[0].attack_damage_modifier = 3.0;
+        game.attack_player(0, 2);
+        assert_eq!(game.players[1].vitals.health, 19.0);
+        assert_eq!(
+            ItemCodec::fallback()
+                .saved_component(&game.players[1].inventory.slots[HOTBAR], "minecraft:damage"),
+            Some(Nbt::Int(5))
+        );
+        game.tick_survival(rules);
+        assert!(game.players[1].item_use.is_some());
+
+        input(&mut game, 2, Input::StopUsingItem);
+        game.connections();
+        for _ in 0..10 {
+            game.tick_survival(rules);
+        }
+        game.attack_player(0, 2);
+        assert_eq!(game.players[1].vitals.health, 18.0);
     }
 
     #[test]

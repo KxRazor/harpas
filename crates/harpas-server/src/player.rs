@@ -722,6 +722,24 @@ pub(crate) fn send(
                 event: 9,
             }
             .into(),
+            Output::ShieldBlock {
+                position,
+                pitch,
+                seed,
+            } => clientbound::SoundEffect {
+                sound: Holder::Direct(play::SoundEvent {
+                    id: "minecraft:item.shield.block".into(),
+                    fixed_range: None,
+                }),
+                source: play::SoundSource::Player,
+                x: (position.x * 8.0) as i32,
+                y: (position.y * 8.0) as i32,
+                z: (position.z * 8.0) as i32,
+                volume: 1.0,
+                pitch,
+                seed,
+            }
+            .into(),
             Output::Damage { entity_id, kind } => {
                 let source = match kind {
                     DamageKind::Fall => "minecraft:fall",
@@ -1019,6 +1037,11 @@ pub(crate) fn send(
             Output::MainHandItemBroken(entity_id) => clientbound::EntityEvent {
                 entity_id,
                 event: 47, // MAINHAND_BREAK in Java 26.1.
+            }
+            .into(),
+            Output::OffHandItemBroken(entity_id) => clientbound::EntityEvent {
+                entity_id,
+                event: 48,
             }
             .into(),
             Output::ArmorBroken { entity_id, slot } => clientbound::EntityEvent {

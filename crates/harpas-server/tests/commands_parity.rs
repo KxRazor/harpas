@@ -2168,9 +2168,16 @@ enum SweepCase {
     Sprint,
     Critical,
     PartialCharge,
+    SweepingEdge(i16),
+    SweepingEdgeWithSharpness,
+    EquipmentChange,
 }
 
-fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[SweepEffects; 3]> {
+fn exercise_sweeps(
+    port: u16,
+    names: [&str; 3],
+    cases: &[SweepCase],
+) -> Vec<(SweepCase, [SweepEffects; 3])> {
     use SweepCase::*;
     let join = |name| {
         let mut client = Client::join(port, name);
@@ -2207,7 +2214,7 @@ fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[Swe
     let attack = |entity_id| play::serverbound::Attack { entity_id };
     cases
         .iter()
-        .map(|&case| {
+        .filter_map(|&case| {
             move_player(&mut attacker, [x, y, z], true);
             // A second position report records zero movement after returning to the starting position.
             move_player(&mut attacker, [x, y, z], true);
@@ -2218,6 +2225,14 @@ fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[Swe
                 _ => [0.8, 1.5],
             };
             move_player(&mut secondary, [x + neighbor_x, y, z + neighbor_z], true);
+            let slot = match case {
+                SweepingEdge(level) => level,
+                SweepingEdgeWithSharpness => 4,
+                _ => 0,
+            };
+            if slot != 0 {
+                play_packet(&mut attacker, play::serverbound::SetHeldItem { slot });
+            }
             std::thread::sleep(Duration::from_millis(800));
             match case {
                 Sprint => play_packet(&mut attacker, sprint.clone()),
@@ -2234,22 +2249,19 @@ fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[Swe
                 }
                 _ => {}
             }
-            if case == PartialCharge {
+            let before_attack = match case {
                 // Spend the charge on a sprint strike before the immediate hit on the other player.
-                let mut frames = Vec::new();
-                for packet in [
-                    sprint.clone().into(),
-                    attack(secondary_id).into(),
-                    attack(primary_id).into(),
-                ] {
-                    write_frame(&mut frames, |buf| {
-                        play::serverbound::Packet::encode(&packet, buf)
-                    });
-                }
-                attacker.stream.write_all(&frames).unwrap();
-            } else {
-                play_packet(&mut attacker, attack(primary_id));
+                PartialCharge => vec![sprint.clone().into(), attack(secondary_id).into()],
+                EquipmentChange => vec![play::serverbound::SetHeldItem { slot: 4 }.into()],
+                _ => Vec::new(),
+            };
+            let mut frames = Vec::new();
+            for packet in before_attack.into_iter().chain([attack(primary_id).into()]) {
+                write_frame(&mut frames, |buf| {
+                    play::serverbound::Packet::encode(&packet, buf)
+                });
             }
+            attacker.stream.write_all(&frames).unwrap();
             // Let the attack run and vanilla flush its end-of-tick player velocity before the list barriers.
             std::thread::sleep(Duration::from_millis(200));
             let mut effects = [
@@ -2257,7 +2269,18 @@ fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[Swe
                 sweep_effects(&mut primary, primary_id),
                 sweep_effects(&mut secondary, secondary_id),
             ];
-            let sweeps = matches!(case, Near | OutsideBox | OutsideReach | Walking);
+            // A hit before the equipment tick uses the wooden sword's charged attributes and the held
+            // iron sword's Sharpness. After that tick the different weapon is still recharging.
+            let before_equipment_tick = case == EquipmentChange && effects[1].health == Some(3.0);
+            let sweeps = before_equipment_tick
+                || matches!(
+                    case,
+                    Near | OutsideBox
+                        | OutsideReach
+                        | Walking
+                        | SweepingEdge(_)
+                        | SweepingEdgeWithSharpness
+                );
             for (name, effect) in names.into_iter().zip(&effects) {
                 assert_eq!(
                     effect.particles.len(),
@@ -2272,15 +2295,34 @@ fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[Swe
             }
             assert_eq!(effects[0].health, None, "{case:?} attacker health");
             assert!(effects[1].health.is_some(), "{case:?} primary health");
-            if case == PartialCharge {
-                // A tick can fall between the two attack packets.
-                assert!((1.0..1.2).contains(&effects[1].health.take().unwrap()));
-            } else if matches!(case, Near | Walking) {
-                assert_eq!(effects[2].health, Some(19.0), "{case:?} secondary health");
-            } else {
-                assert_eq!(effects[2].health, None, "{case:?} secondary health");
+            match case {
+                PartialCharge => {
+                    // A tick can fall between the two attack packets.
+                    assert!((1.0..1.2).contains(&effects[1].health.take().unwrap()));
+                }
+                Near | Walking => {
+                    assert_eq!(effects[2].health, Some(19.0), "{case:?} secondary health");
+                }
+                SweepingEdge(level) => {
+                    assert_eq!(effects[1].health, Some(20.0 - 4.0 * f32::from(level)));
+                    assert!(effects[2].health.is_some(), "{case:?} secondary health");
+                }
+                SweepingEdgeWithSharpness => {
+                    assert_eq!(effects[1].health, Some(1.0));
+                    assert!(effects[2].health.is_some(), "{case:?} secondary health");
+                }
+                EquipmentChange => {
+                    if before_equipment_tick {
+                        assert_eq!(effects[2].health, Some(17.0));
+                    } else {
+                        assert!((6.0..7.0).contains(&effects[1].health.unwrap()));
+                        assert_eq!(effects[2].health, None);
+                    }
+                    return None;
+                }
+                _ => assert_eq!(effects[2].health, None, "{case:?} secondary health"),
             }
-            effects
+            Some((case, effects))
         })
         .collect()
 }
@@ -2298,10 +2340,30 @@ fn sweeping_attacks_match_vanilla() {
         ("Slot", Nbt::Byte(0)),
         ("id", Nbt::from("minecraft:wooden_sword")),
     ]);
-    let data = Compound::from_iter([
-        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
-        ("Inventory", List::Compound(vec![sword]).into()),
-    ]);
+    let enchanted = |slot: i8, material, enchantments: Compound| {
+        Compound::from_iter([
+            ("Slot", Nbt::Byte(slot)),
+            ("id", Nbt::from(material)),
+            (
+                "components",
+                Compound::from_iter([("minecraft:enchantments", enchantments)]).into(),
+            ),
+        ])
+    };
+    let mut enchanted_hotbar: Vec<_> = (1_i8..=3)
+        .map(|level| {
+            enchanted(
+                level,
+                "minecraft:wooden_sword",
+                Compound::from_iter([("minecraft:sweeping_edge", i32::from(level))]),
+            )
+        })
+        .collect();
+    enchanted_hotbar.push(enchanted(
+        4,
+        "minecraft:iron_sword",
+        Compound::from_iter([("minecraft:sweeping_edge", 3), ("minecraft:sharpness", 1)]),
+    ));
     use SweepCase::*;
     let trials = [
         (
@@ -2310,12 +2372,32 @@ fn sweeping_attacks_match_vanilla() {
         ),
         (
             ["WalkingSweeper", "WalkingTarget", "WalkingNeighbor"],
-            &[Walking, FastMovement, OutsideReach][..],
+            &[Walking, FastMovement, OutsideReach, EquipmentChange][..],
+        ),
+        (
+            ["EdgeSweeper", "EdgeTarget", "EdgeNeighbor"],
+            &[
+                SweepingEdge(1),
+                SweepingEdge(2),
+                SweepingEdge(3),
+                SweepingEdgeWithSharpness,
+            ][..],
         ),
     ];
+    let mut offhand = enchanted_hotbar[2].clone();
+    offhand.remove("Slot");
+    let data = |hotbar| {
+        Compound::from_iter([
+            ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+            ("Inventory", List::Compound(hotbar).into()),
+        ])
+    };
+    let mut walking = data(vec![sword.clone(), enchanted_hotbar[3].clone()]);
+    walking.insert("equipment", Compound::from_iter([("offhand", offhand)]));
+    let inventories = [data(vec![sword]), walking, data(enchanted_hotbar)];
     for dir in [&vanilla, &harpas] {
-        for (names, _) in trials {
-            harpas_anvil::write_player(&dir.join("world"), offline_uuid(names[0]), &data).unwrap();
+        for ((names, _), data) in trials.into_iter().zip(&inventories) {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(names[0]), data).unwrap();
         }
     }
     let expected = trials.map(|(names, cases)| exercise_sweeps(port, names, cases));
@@ -2323,7 +2405,7 @@ fn sweeping_attacks_match_vanilla() {
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
     for ((names, cases), expected) in trials.into_iter().zip(expected) {
         let actual = exercise_sweeps(other, names, cases);
-        for ((case, actual), expected) in cases.iter().zip(actual).zip(expected) {
+        for ((case, actual), (_, expected)) in actual.into_iter().zip(expected) {
             assert_eq!(actual, expected, "{case:?}");
         }
     }

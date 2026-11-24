@@ -22,7 +22,7 @@ const SHIELD_RAISE_TICKS: u32 = 5;
 const SHIELD_DURABILITY: i32 = 336;
 const SHIELD_WEAR_THRESHOLD: f32 = 3.0;
 const SWEEP_MAX_HORIZONTAL_MOVEMENT: f64 = 0.25;
-const SWEEP_DAMAGE: f32 = 1.0;
+const SWEEP_BASE_DAMAGE: f32 = 1.0;
 const HIT_KNOCKBACK: f64 = 0.4;
 // A standing player already carries one tick's downward gravity before a hit.
 const GROUNDED_HIT_LIFT: f64 = HIT_KNOCKBACK - 0.08 * 0.98 / 2.0;
@@ -638,6 +638,10 @@ impl Game {
             let weapon = codec.melee_weapon(main_hand);
             player.attack_damage_modifier =
                 weapon.map_or(0.0, |weapon| weapon.attack_damage_modifier);
+            let sweeping_edge = codec
+                .enchantment_level(main_hand, "minecraft:sweeping_edge")
+                .max(0) as f32;
+            player.sweeping_damage_ratio = sweeping_edge / (sweeping_edge + 1.0);
             let modifier = weapon
                 .map(|weapon| weapon.attack_speed_modifier)
                 .filter(|&modifier| modifier != 0.0);
@@ -818,7 +822,7 @@ impl Game {
         let charge = ((f32::from(source.attack_charge_ticks) + 0.5) / recharge_ticks).min(1.0);
         let charged = charge > 0.9;
         let sprint_hit = charged && source.sprinting;
-        let mut damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
+        let charged_damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
         let position = source.player.position;
         let critical = charged
             && source.fall_distance > 0.0
@@ -838,14 +842,16 @@ impl Game {
                 .name()
                 .is_some_and(|name| name.ends_with("_sword"))
             && source.horizontal_movement_squared < SWEEP_MAX_HORIZONTAL_MOVEMENT.powi(2);
-        if critical {
-            damage *= 1.5;
-        }
-        let sharpness = codec.enchantment_level(main_hand, "minecraft:sharpness");
-        if sharpness > 0 {
-            // The enchantment bonus scales linearly with charge, unlike the base damage.
-            damage += (1.0 + (sharpness - 1) as f32 * 0.5) * charge;
-        }
+        let sharpness_level = codec.enchantment_level(main_hand, "minecraft:sharpness");
+        let sharpness_bonus = if sharpness_level > 0 {
+            1.0 + (sharpness_level - 1) as f32 * 0.5
+        } else {
+            0.0
+        };
+        let critical_multiplier = if critical { 1.5 } else { 1.0 };
+        // Sharpness scales linearly with charge on the primary hit.
+        let damage = charged_damage * critical_multiplier + sharpness_bonus * charge;
+        let sweeping_damage_ratio = source.sweeping_damage_ratio;
         let knockback_level = codec.enchantment_level(main_hand, "minecraft:knockback");
         let extra_knockback = 0.5 * f64::from(knockback_level + i32::from(sprint_hit));
         let fire_aspect = codec.enchantment_level(main_hand, "minecraft:fire_aspect") as i16;
@@ -907,7 +913,9 @@ impl Game {
             }
         }
         if sweeping {
-            self.sweep_attack(attacker, defender, rules);
+            let sweep_damage = SWEEP_BASE_DAMAGE + sweeping_damage_ratio * charged_damage;
+            // Secondary targets take the full Sharpness bonus.
+            self.sweep_attack(attacker, defender, sweep_damage + sharpness_bonus, rules);
         }
         if let Some(weapon) = weapon.filter(|weapon| weapon.damage_per_attack > 0) {
             let codec = self
@@ -927,7 +935,13 @@ impl Game {
         }
     }
 
-    fn sweep_attack(&mut self, attacker: usize, defender: usize, rules: SurvivalRules) {
+    fn sweep_attack(
+        &mut self,
+        attacker: usize,
+        defender: usize,
+        damage: f32,
+        rules: SurvivalRules,
+    ) {
         let source = self.players[attacker].player.position;
         let primary = self.players[defender].player.position;
         let source_id = self.players[attacker].player.entity_id;
@@ -961,13 +975,8 @@ impl Game {
             let fresh_hit = target.hurt_cooldown <= 10;
             let health = target.vitals.health;
             let entity_id = target.player.entity_id;
-            if self.block_melee_attack(index, attacker, SWEEP_DAMAGE, 0)
-                || !self.hurt_player(
-                    index,
-                    SWEEP_DAMAGE,
-                    DamageKind::PlayerAttack(source_id),
-                    rules,
-                )
+            if self.block_melee_attack(index, attacker, damage, 0)
+                || !self.hurt_player(index, damage, DamageKind::PlayerAttack(source_id), rules)
             {
                 continue;
             }
@@ -1291,6 +1300,7 @@ impl Game {
         player.last_main_hand_item = 0;
         player.attack_damage_modifier = 0.0;
         player.attack_speed_modifier = None;
+        player.sweeping_damage_ratio = 0.0;
         player.armor_modifiers = [None; 4];
         player.last_damage = 0.0;
         player.peaceful_food_ticks = 0;

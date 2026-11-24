@@ -199,9 +199,12 @@ Existing installations can load axe defaults by rerunning `harpas vanilla-data g
 
 A successful sword strike can sweep when its charge exceeds 90 percent and the attacker is grounded, with
 no sprint bonus and less than a quarter block of horizontal displacement in the most recent movement report.
-The sweep deals one damage point to each eligible player whose hitbox intersects the primary target's expanded
-hitbox and whose position is within the attacker's reach. It adds a push in the attacker's facing direction after
-the damage knockback. Nearby clients receive the sweep sound and a particle in front of the attacker.
+The sweep deals one base damage point to each eligible player whose hitbox intersects the primary target's
+expanded hitbox and whose position is within the attacker's reach. Sweeping Edge on the main-hand sword adds
+half, two thirds or three quarters of the charged base attack damage at levels I, II and III. The ratio updates
+with the other equipment attributes on the player tick. Sharpness adds its bonus separately. The sweep adds a
+push in the attacker's facing direction after the damage knockback.
+Nearby clients receive the sweep sound and a particle in front of the attacker.
 [Mojang's sword overview](https://www.minecraft.net/en-us/article/taking-inventory--sword).
 
 ### 2. Parallel only where it cannot be observed

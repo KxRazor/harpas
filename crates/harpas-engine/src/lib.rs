@@ -1810,6 +1810,90 @@ mod tests {
     }
 
     #[test]
+    fn sweeping_edge_changes_on_the_equipment_tick() {
+        use harpas_core::nbt::{Compound, Nbt};
+        use item_data::{ItemCodec, MeleeWeapon};
+
+        let sword = "minecraft:wooden_sword";
+        let enchantment = "minecraft:sweeping_edge";
+        let item = harpas_core::item::items().id(sword).unwrap();
+        let codec = ItemCodec::new(&["minecraft:enchantments".into()])
+            .with_enchantments(&[enchantment])
+            .with_melee_weapons(
+                [(
+                    item,
+                    MeleeWeapon {
+                        attack_damage_modifier: 3.0,
+                        attack_speed_modifier: -2.4,
+                        durability: 59,
+                        damage_per_attack: 1,
+                        shield_disable_ticks: 0,
+                    },
+                )]
+                .into(),
+            );
+        let sword_with_edge = |level: i32| {
+            codec
+                .read(&Compound::from_iter([
+                    ("id", Nbt::from(sword)),
+                    (
+                        "components",
+                        Compound::from_iter([(
+                            "minecraft:enchantments",
+                            Compound::from_iter([(enchantment, level)]),
+                        )])
+                        .into(),
+                    ),
+                ]))
+                .unwrap()
+        };
+        let mut game = game();
+        let _attacker = join(&mut game, 1, "Attacker", 2);
+        let _primary = join(&mut game, 2, "Primary", 2);
+        let _secondary = join(&mut game, 3, "Secondary", 2);
+        game.connections();
+        for (player, (x, z)) in game
+            .players
+            .iter_mut()
+            .zip([(0.0, 0.0), (0.0, 1.5), (0.8, 1.5)])
+        {
+            player.player.profile.game_mode = GameMode::Survival;
+            player.awaiting_teleport = None;
+            player.player.position.x += x;
+            player.player.position.z += z;
+            player.player.position.on_ground = true;
+        }
+        let slots = &mut game.players[0].inventory.slots;
+        slots[inventory::HOTBAR] = sword_with_edge(1);
+        slots[inventory::HOTBAR + 1] = sword_with_edge(3);
+        let path =
+            std::env::temp_dir().join(format!("harpas-sweeping-edge-{}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
+        world.set_item_codec(Arc::new(codec));
+        game.world = Some(world);
+
+        let game_rules = Compound::from_iter([("minecraft:natural_health_regeneration", 0_i8)]);
+        let rules = survival::SurvivalRules::read(Some(&game_rules), None);
+        let recharge = |game: &mut Game| {
+            for _ in 0..14 {
+                game.tick_survival(rules);
+            }
+        };
+        recharge(&mut game);
+        input(&mut game, 1, Input::SelectHotbarSlot(1));
+        input(&mut game, 1, Input::Attack(2));
+        game.connections();
+        assert_eq!(game.players[2].vitals.health, 17.0);
+
+        recharge(&mut game);
+        game.attack_player(0, 2);
+        assert_eq!(game.players[2].vitals.health, 13.0);
+        drop(game);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn shield_blocks_after_five_ticks_until_release() {
         use harpas_core::nbt::Nbt;
         use inventory::{HOTBAR, ItemStack};

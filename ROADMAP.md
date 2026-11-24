@@ -557,6 +557,9 @@ as shown by the parity report.
   - [x] Shields raised in either hand block sword strikes from the front in Java Survival. Frontal blocks,
         rear hits, health, defender knockback, Fire Aspect, shield breakage and saved wear are compared with
         vanilla (`shield_blocking_matches_vanilla`).
+  - [x] Axes use their own attack damage, speed and wear, and disable a raised shield for five seconds
+        when it blocks an axe strike. Wooden and iron axes at full and partial charge, shields in both
+        hands, cooldown expiry and saved wear are compared with vanilla (`axe_combat_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

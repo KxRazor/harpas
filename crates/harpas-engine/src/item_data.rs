@@ -76,15 +76,19 @@ pub struct FoodEffect {
     pub amplifier: u8,
 }
 
-/// The default main-hand modifiers and durability of an ordinary vanilla sword.
+/// The default main-hand modifiers and weapon properties of a vanilla sword or axe.
 #[derive(Debug, Clone, Copy)]
-pub struct Sword {
+pub struct MeleeWeapon {
     /// Additive modifier to the player's attack damage.
     pub attack_damage_modifier: f64,
     /// Additive modifier to the player's attack speed.
     pub attack_speed_modifier: f64,
     /// Maximum durability of the item before stack overrides.
     pub durability: i32,
+    /// Durability consumed when a hit deals damage.
+    pub damage_per_attack: i32,
+    /// Duration of a shield cooldown inflicted by this weapon, in ticks.
+    pub shield_disable_ticks: i32,
 }
 
 /// The default protection and durability of an ordinary piece of player armor.
@@ -108,7 +112,7 @@ pub struct ItemCodec {
     mob_effects: Vec<String>,
     effect_ids: [Option<i32>; EffectKind::ALL.len()],
     consumables: HashMap<u32, Consumable>,
-    swords: HashMap<u32, Sword>,
+    melee_weapons: HashMap<u32, MeleeWeapon>,
     armor: HashMap<u32, Armor>,
 }
 
@@ -151,7 +155,7 @@ impl ItemCodec {
             potions: Vec::new(),
             mob_effects: Vec::new(),
             effect_ids: Default::default(),
-            swords: HashMap::new(),
+            melee_weapons: HashMap::new(),
             armor: HashMap::new(),
             consumables: HashMap::from([(
                 items().id("minecraft:apple").expect("registered apple"),
@@ -180,22 +184,26 @@ impl ItemCodec {
         self
     }
 
-    /// Loads the sword defaults from the owner's server jar, keyed by item ID.
-    pub fn with_swords(mut self, swords: HashMap<u32, Sword>) -> Self {
-        self.swords = swords;
+    /// Loads the melee weapon defaults from the owner's server jar, keyed by item ID.
+    pub fn with_melee_weapons(mut self, weapons: HashMap<u32, MeleeWeapon>) -> Self {
+        self.melee_weapons = weapons;
         self
     }
 
-    pub(crate) fn sword(&self, stack: &ItemStack) -> Option<Sword> {
+    pub(crate) fn melee_weapon(&self, stack: &ItemStack) -> Option<MeleeWeapon> {
         if stack.is_empty() {
             return None;
         }
-        let mut sword = *self.swords.get(&stack.item)?;
+        let mut weapon = *self.melee_weapons.get(&stack.item)?;
         if self.component_removed(stack, "minecraft:attribute_modifiers") {
-            sword.attack_damage_modifier = 0.0;
-            sword.attack_speed_modifier = 0.0;
+            weapon.attack_damage_modifier = 0.0;
+            weapon.attack_speed_modifier = 0.0;
         }
-        Some(sword)
+        if self.component_removed(stack, "minecraft:weapon") {
+            weapon.damage_per_attack = 0;
+            weapon.shield_disable_ticks = 0;
+        }
+        Some(weapon)
     }
 
     /// Loads the player armor defaults from the owner's server jar, keyed by item ID.

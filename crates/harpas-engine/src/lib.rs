@@ -1855,14 +1855,14 @@ mod tests {
         assert!(
             !defender
                 .try_iter()
-                .any(|output| matches!(output, Output::ShieldBlock { .. }))
+                .any(|output| matches!(output, Output::ShieldSound { .. }))
         );
         game.tick_survival(rules);
         game.attack_player(0, 2);
         assert!(
             defender
                 .try_iter()
-                .any(|output| matches!(output, Output::ShieldBlock { .. }))
+                .any(|output| matches!(output, Output::ShieldSound { .. }))
         );
         assert_eq!(game.players[1].vitals.health, 19.0);
         assert_eq!(game.players[0].attack_charge_ticks, 0);

@@ -230,6 +230,7 @@ fn run() -> io::Result<()> {
         let has_milk_bucket = builtin.has_milk_bucket();
         let has_honey_bottle = builtin.has_honey_bottle();
         let has_drinkable_potions = builtin.has_drinkable_potions();
+        let has_axe_defaults = builtin.has_axe_defaults();
         let entries = |name| {
             builtin
                 .registries
@@ -244,11 +245,16 @@ fn run() -> io::Result<()> {
                 )
                 .with_potions(entries("minecraft:potion"))
                 .with_mob_effects(entries("minecraft:mob_effect"));
-        if let Some(swords) = builtin.swords {
-            codec = codec.with_swords(swords);
+        if let Some(weapons) = builtin.melee_weapons {
+            if !has_axe_defaults {
+                warn!(
+                    "Axe combat needs updated weapon defaults from `harpas vanilla-data generate-registry`"
+                );
+            }
+            codec = codec.with_melee_weapons(weapons);
         } else {
             warn!(
-                "Sword combat needs the sword defaults from `harpas vanilla-data generate-registry`"
+                "Sword and axe combat needs weapon defaults from `harpas vanilla-data generate-registry`"
             );
         }
         if let Some(armor) = builtin.armor {

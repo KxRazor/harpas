@@ -554,9 +554,9 @@ as shown by the parity report.
   - [x] Fire Aspect on the main-hand sword ignites Java Survival players after a successful hit. Both
         levels, a hit rejected during damage immunity and Fire Resistance are compared with vanilla
         (`fire_aspect_matches_vanilla`).
-  - [ ] Shields raised in either hand block sword strikes from the front in Java Survival. Run the network
-        comparison for health, defender knockback, Fire Aspect, shield breakage and saved wear
-        (`shield_blocking_matches_vanilla`).
+  - [x] Shields raised in either hand block sword strikes from the front in Java Survival. Frontal blocks,
+        rear hits, health, defender knockback, Fire Aspect, shield breakage and saved wear are compared with
+        vanilla (`shield_blocking_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

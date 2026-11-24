@@ -19,6 +19,8 @@ use crate::commands::{self, Commands, ConnectedPeer, Source};
 const PLAYER_ENTITY_TYPE: i32 = 155;
 /// `minecraft:item` in minecraft-data's Java 26.1 entity type registry.
 const ITEM_ENTITY_TYPE: i32 = 71;
+/// `minecraft:entity.player.attack.sweep` in the Java 26.1 sound event registry.
+const SWEEP_SOUND_ID: i32 = 1302;
 /// The index of an item entity's stack in its tracked data (`ItemEntity.DATA_ITEM`), after the eight of every
 /// entity.
 const ITEM_DATA_INDEX: u8 = 8;
@@ -768,6 +770,37 @@ pub(crate) fn send(
             Output::CriticalHit(entity_id) => clientbound::EntityAnimation {
                 entity_id,
                 animation: play::Animation::CriticalHit,
+            }
+            .into(),
+            Output::SweepAttackSound { position, seed } => clientbound::SoundEffect {
+                sound: Holder::Reference(SWEEP_SOUND_ID),
+                source: play::SoundSource::Player,
+                x: (position.x * 8.0) as i32,
+                y: (position.y * 8.0) as i32,
+                z: (position.z * 8.0) as i32,
+                volume: 1.0,
+                pitch: 1.0,
+                seed,
+            }
+            .into(),
+            Output::SweepAttackParticle {
+                position: [x, y, z],
+                direction: [offset_x, offset_z],
+            } => clientbound::LevelParticles {
+                override_limiter: false,
+                always_show: false,
+                x,
+                y,
+                z,
+                offset_x,
+                offset_y: 0.0,
+                offset_z,
+                speed: 0.0,
+                count: 0,
+                particle: play::Particle {
+                    id: play::Particle::SWEEP_ATTACK,
+                    options: Vec::new(),
+                },
             }
             .into(),
             Output::Death {

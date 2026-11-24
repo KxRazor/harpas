@@ -504,6 +504,20 @@ pub enum Output {
     },
     /// Show the critical hit particles on the struck entity.
     CriticalHit(i32),
+    /// Play the sword sweep sound at the attacker.
+    SweepAttackSound {
+        /// Position of the attacking player.
+        position: Position,
+        /// Seed for the sound's variations.
+        seed: i64,
+    },
+    /// Show the arc of a sword sweep in front of the attacker.
+    SweepAttackParticle {
+        /// Position of the particle.
+        position: [f64; 3],
+        /// The horizontal components of the attacker's facing direction.
+        direction: [f32; 2],
+    },
     /// A player died or joined while dead.
     Death {
         /// The player who died.
@@ -884,6 +898,8 @@ pub(crate) struct PlayerState {
     pub(crate) last_main_hand_item: u32,
     pub(crate) attack_damage_modifier: f64,
     pub(crate) attack_speed_modifier: Option<f64>,
+    /// Squared horizontal displacement reported by the most recent accepted movement packet.
+    pub(crate) horizontal_movement_squared: f64,
     pub(crate) armor_modifiers: [Option<[f64; 2]>; 4],
     pub(crate) death_location: Option<BlockPos>,
     pub(crate) force_game_mode_on_login: Option<bool>,
@@ -992,6 +1008,7 @@ impl PlayerState {
             last_main_hand_item: 0,
             attack_damage_modifier: 0.0,
             attack_speed_modifier: None,
+            horizontal_movement_squared: 0.0,
             armor_modifiers: [None; 4],
             death_location: None,
             force_game_mode_on_login: None,
@@ -1064,6 +1081,8 @@ impl PlayerState {
             next.yaw = yaw;
             next.pitch = pitch;
         }
+        self.horizontal_movement_squared =
+            (next.x - self.player.position.x).powi(2) + (next.z - self.player.position.z).powi(2);
         next.on_ground = movement.on_ground;
         if movement.position.is_some() {
             // Vanilla's `clientIsFloating`: not falling, off the ground and touching nothing but air, so that
@@ -1101,6 +1120,7 @@ impl PlayerState {
         self.next_teleport = id.checked_add(1).unwrap_or(1);
         self.awaiting_teleport = Some(id);
         self.fall_distance = 0.0;
+        self.horizontal_movement_squared = 0.0;
         id
     }
 

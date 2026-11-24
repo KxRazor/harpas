@@ -2114,6 +2114,222 @@ fn shield_cooldown(client: &mut Client) -> i32 {
     })
 }
 
+const SWEEP_SOUND_ID: i32 = 1302;
+
+#[derive(Debug, Default, PartialEq)]
+struct SweepEffects {
+    particles: Vec<play::clientbound::LevelParticles>,
+    sounds: Vec<play::clientbound::SoundEffect>,
+    health: Option<f32>,
+    velocity: Option<[f64; 3]>,
+}
+
+fn sweep_effects(client: &mut Client, id: i32) -> SweepEffects {
+    let mut effects = SweepEffects::default();
+    client.send_command("list");
+    client.matching("packets after the sword strike", |packet| {
+        match packet {
+            Packet::LevelParticles(particles)
+                if particles.particle.id == play::Particle::SWEEP_ATTACK =>
+            {
+                effects.particles.push(particles);
+            }
+            Packet::SoundEffect(mut sound)
+                if sound.sound == codec::Holder::Reference(SWEEP_SOUND_ID) =>
+            {
+                sound.seed = 0;
+                effects.sounds.push(sound);
+            }
+            Packet::SetHealth(health) => effects.health = Some(health.health),
+            Packet::SetEntityVelocity(velocity) if velocity.entity_id == id => {
+                let codec::LpVec3 { x, y, z } = velocity.velocity;
+                effects.velocity = Some([x, y, z]);
+            }
+            Packet::SystemChatMessage(reply)
+                if matches!(&reply.content, codec::Nbt::Compound(text)
+                    if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))) =>
+            {
+                return Some(());
+            }
+            _ => {}
+        }
+        None
+    });
+    effects
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SweepCase {
+    Near,
+    OutsideBox,
+    OutsideReach,
+    Walking,
+    FastMovement,
+    Sprint,
+    Critical,
+    PartialCharge,
+}
+
+fn exercise_sweeps(port: u16, names: [&str; 3], cases: &[SweepCase]) -> Vec<[SweepEffects; 3]> {
+    use SweepCase::*;
+    let join = |name| {
+        let mut client = Client::join(port, name);
+        client.stream.set_nodelay(true).unwrap();
+        let id = client.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let position = confirm_position(&mut client);
+        assert_eq!(health(&mut client).health, 20.0);
+        (client, id, position)
+    };
+    let [
+        (mut attacker, attacker_id, [x, y, z]),
+        (mut primary, primary_id, _),
+        (mut secondary, secondary_id, _),
+    ] = names.map(join);
+    play_packet(
+        &mut attacker,
+        play::serverbound::SetPlayerRotation {
+            yaw: 0.0,
+            pitch: 0.0,
+            flags: play::MovementFlags {
+                on_ground: true,
+                ..Default::default()
+            },
+        },
+    );
+    let sprint = play::serverbound::PlayerCommand {
+        entity_id: attacker_id,
+        action: play::PlayerCommandAction::StartSprinting,
+        data: 0,
+    };
+    let attack = |entity_id| play::serverbound::Attack { entity_id };
+    cases
+        .iter()
+        .map(|&case| {
+            move_player(&mut attacker, [x, y, z], true);
+            // A second position report records zero movement after returning to the starting position.
+            move_player(&mut attacker, [x, y, z], true);
+            move_player(&mut primary, [x, y, z + 1.5], true);
+            let [neighbor_x, neighbor_z] = match case {
+                OutsideBox => [2.0, 1.5],
+                OutsideReach => [0.0, 3.0],
+                _ => [0.8, 1.5],
+            };
+            move_player(&mut secondary, [x + neighbor_x, y, z + neighbor_z], true);
+            std::thread::sleep(Duration::from_millis(800));
+            match case {
+                Sprint => play_packet(&mut attacker, sprint.clone()),
+                Critical => {
+                    for height in [0.42, 0.75, 0.60] {
+                        move_player(&mut attacker, [x, y + height, z], false);
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                }
+                Walking | FastMovement => {
+                    let dx = if case == Walking { 0.24 } else { 0.26 };
+                    move_player(&mut attacker, [x + dx, y, z], true);
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                _ => {}
+            }
+            if case == PartialCharge {
+                // Spend the charge on a sprint strike before the immediate hit on the other player.
+                let mut frames = Vec::new();
+                for packet in [
+                    sprint.clone().into(),
+                    attack(secondary_id).into(),
+                    attack(primary_id).into(),
+                ] {
+                    write_frame(&mut frames, |buf| {
+                        play::serverbound::Packet::encode(&packet, buf)
+                    });
+                }
+                attacker.stream.write_all(&frames).unwrap();
+            } else {
+                play_packet(&mut attacker, attack(primary_id));
+            }
+            // Let the attack run and vanilla flush its end-of-tick player velocity before the list barriers.
+            std::thread::sleep(Duration::from_millis(200));
+            let mut effects = [
+                sweep_effects(&mut attacker, attacker_id),
+                sweep_effects(&mut primary, primary_id),
+                sweep_effects(&mut secondary, secondary_id),
+            ];
+            let sweeps = matches!(case, Near | OutsideBox | OutsideReach | Walking);
+            for (name, effect) in names.into_iter().zip(&effects) {
+                assert_eq!(
+                    effect.particles.len(),
+                    usize::from(sweeps),
+                    "{case:?} particle for {name}"
+                );
+                assert_eq!(
+                    effect.sounds.len(),
+                    usize::from(sweeps),
+                    "{case:?} sound for {name}"
+                );
+            }
+            assert_eq!(effects[0].health, None, "{case:?} attacker health");
+            assert!(effects[1].health.is_some(), "{case:?} primary health");
+            if case == PartialCharge {
+                // A tick can fall between the two attack packets.
+                assert!((1.0..1.2).contains(&effects[1].health.take().unwrap()));
+            } else if matches!(case, Near | Walking) {
+                assert_eq!(effects[2].health, Some(19.0), "{case:?} secondary health");
+            } else {
+                assert_eq!(effects[2].health, None, "{case:?} secondary health");
+            }
+            effects
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn sweeping_attacks_match_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("sweeping-attacks");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let sword = Compound::from_iter([
+        ("Slot", Nbt::Byte(0)),
+        ("id", Nbt::from("minecraft:wooden_sword")),
+    ]);
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Inventory", List::Compound(vec![sword]).into()),
+    ]);
+    use SweepCase::*;
+    let trials = [
+        (
+            ["Sweeper", "SweepTarget", "SweepNeighbor"],
+            &[Near, OutsideBox, Sprint, Critical, PartialCharge][..],
+        ),
+        (
+            ["WalkingSweeper", "WalkingTarget", "WalkingNeighbor"],
+            &[Walking, FastMovement, OutsideReach][..],
+        ),
+    ];
+    for dir in [&vanilla, &harpas] {
+        for (names, _) in trials {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(names[0]), &data).unwrap();
+        }
+    }
+    let expected = trials.map(|(names, cases)| exercise_sweeps(port, names, cases));
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    for ((names, cases), expected) in trials.into_iter().zip(expected) {
+        let actual = exercise_sweeps(other, names, cases);
+        for ((case, actual), expected) in cases.iter().zip(actual).zip(expected) {
+            assert_eq!(actual, expected, "{case:?}");
+        }
+    }
+    stop(&mut server);
+}
+
 fn exercise_axes(port: u16) -> [play::AttributeProperty; 2] {
     let mut attacker = Client::join(port, "AxeAttacker");
     attacker.stream.set_nodelay(true).unwrap();

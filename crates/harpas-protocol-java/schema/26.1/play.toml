@@ -1,7 +1,7 @@
 # Play state: the game itself.
 #
-# Partial: every packet except 14 that carry item stacks and their data components, entity metadata,
-# particles or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
+# Partial: every packet except 13 that carry item stacks and their data components, entity metadata
+# or debug subscriptions. Those come with the gameplay that uses them (ROADMAP.md,
 # M4) and are pending; the inventory packets carry item stacks whose component values are kept as bytes. Limits follow minecraft.wiki's "Java Edition protocol/Packets". Angles sent as one byte
 # are 1/256 of a turn. Text components are network NBT.
 
@@ -451,6 +451,25 @@ fields = [
     { name = "position", type = "BlockPos" },
     { name = "data", type = "i32" },
     { name = "disable_relative_volume", type = "bool", doc = "Whether the sound is heard at full volume everywhere." },
+]
+
+[[clientbound]]
+id = 0x2f
+name = "LevelParticles"
+mcdata = "world_particles"
+doc = "Spawns particles at a position."
+fields = [
+    { name = "override_limiter", type = "bool" },
+    { name = "always_show", type = "bool" },
+    { name = "x", type = "f64" },
+    { name = "y", type = "f64" },
+    { name = "z", type = "f64" },
+    { name = "offset_x", type = "f32" },
+    { name = "offset_y", type = "f32" },
+    { name = "offset_z", type = "f32" },
+    { name = "speed", type = "f32" },
+    { name = "count", type = "i32" },
+    { name = "particle", type = "Particle" },
 ]
 
 [[clientbound]]
@@ -2242,6 +2261,9 @@ reason = "Each added data component is sent as its type and a hash of its value,
 
 [externs.EntityMetadata]
 reason = "Each entry's value has the wire type its serializer ID names, and the list ends with an index of 255."
+
+[externs.Particle]
+reason = "The particle type determines the format of the remaining bytes."
 
 [externs.PlayerInfoUpdates]
 reason = "The actions are a bit set, and each entry has the fields of the actions that are set."

@@ -2520,6 +2520,73 @@ mod tests {
     }
 
     #[test]
+    fn players_start_and_stop_tracking_saved_pigs() {
+        use entity::{Kind, Pig};
+        use harpas_core::nbt::Compound;
+        use player::PigVariant;
+
+        let mut game = game();
+        let received = join(&mut game, 1, "Viewer", 12);
+        game.connections();
+        received.try_iter().for_each(drop);
+
+        let path = std::env::temp_dir().join(format!("harpas-pig-tracking-{}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
+        let position = [5.5, 65.0, 4.5];
+        let chunk = world::ChunkPos::at(position[0], position[2]);
+        let pig = Pig {
+            rotation: [90.0, -22.5],
+            health: 7.5,
+            variant: PigVariant::Cold,
+            nbt: Arc::new(Compound::from_iter([("NoAI", 1_i8)])),
+        };
+        world
+            .entities
+            .add(2, 42, position, [0.0; 3], Kind::Pig(pig));
+        game.world = Some(world);
+        game.players[0].player.position.z = position[2];
+        game.players[0].player.position.x = position[0] + 100.0;
+
+        game.track_entities(&[]);
+        assert_eq!(received.try_iter().count(), 0);
+        game.players[0].sent_chunks.insert(chunk);
+        game.players[0].player.position.x = position[0] + 161.0;
+        game.track_entities(&[]);
+        assert_eq!(received.try_iter().count(), 0);
+
+        game.players[0].player.position.x = position[0] + 100.0;
+        game.track_entities(&[]);
+        game.track_entities(&[]);
+        let spawn = Output::SpawnPig {
+            entity_id: 2,
+            uuid: 42,
+            position,
+            velocity: [0.0; 3],
+            rotation: [90.0, -22.5],
+            health: 7.5,
+            variant: PigVariant::Cold,
+            no_ai: true,
+        };
+        assert_eq!(received.try_recv().unwrap(), spawn);
+        assert_eq!(received.try_iter().count(), 0);
+
+        game.players[0].view_distance = 6;
+        game.track_entities(&[]);
+        game.track_entities(&[]);
+        assert_eq!(
+            received.try_iter().collect::<Vec<_>>(),
+            [Output::RemoveEntity(2)]
+        );
+        game.players[0].view_distance = 12;
+        game.track_entities(&[]);
+        assert_eq!(received.try_iter().collect::<Vec<_>>(), [spawn]);
+
+        drop(game);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn chat_sessions_precede_messages_and_are_sent_to_late_joiners() {
         let mut game = game();
         let steve = join(&mut game, 1, "Steve", 10);

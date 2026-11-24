@@ -484,6 +484,9 @@ as shown by the parity report.
   - [x] Item entity persistence: stacks and supported components, UUIDs, movement, age and pickup delay
         survive autosave, chunk unload and shutdown in vanilla entity regions. Other saved entities keep
         their NBT. The format round trip is compared with vanilla (`item_entity_parity`).
+  - [x] Saved adult pigs load from Overworld entity regions and appear to Java players tracking their chunk.
+        UUID, position, rotation, health and appearance are compared with vanilla through a save and reopen
+        (`saved_adult_pig_matches_vanilla`). Engine tests cover tracking changes and chunk unload and reload.
   - [ ] The other entity types and their persistence.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.

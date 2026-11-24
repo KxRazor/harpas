@@ -441,6 +441,8 @@ pub enum MetadataValue {
     ItemStack(ItemStack),
     /// Serializer 8.
     Boolean(bool),
+    /// Serializer 28, a VarInt in the synchronized pig variant registry.
+    PigVariant(i32),
 }
 
 impl MetadataValue {
@@ -451,6 +453,7 @@ impl MetadataValue {
             Self::Float(_) => 3,
             Self::ItemStack(_) => 7,
             Self::Boolean(_) => 8,
+            Self::PigVariant(_) => 28,
         }
     }
 }
@@ -472,7 +475,9 @@ impl Encode for EntityMetadata {
             codec::write_varint(buf, value.serializer());
             match value {
                 MetadataValue::Byte(n) => codec::write_u8(buf, *n as u8),
-                MetadataValue::Int(n) => codec::write_varint(buf, *n),
+                MetadataValue::Int(n) | MetadataValue::PigVariant(n) => {
+                    codec::write_varint(buf, *n)
+                }
                 MetadataValue::Float(n) => buf.extend_from_slice(&n.to_be_bytes()),
                 MetadataValue::ItemStack(stack) => stack.encode(buf),
                 MetadataValue::Boolean(b) => codec::write_bool(buf, *b),
@@ -501,6 +506,7 @@ impl Decode for EntityMetadata {
                 }
                 7 => MetadataValue::ItemStack(ItemStack::decode(input)?),
                 8 => MetadataValue::Boolean(codec::read_bool(input)?),
+                28 => MetadataValue::PigVariant(codec::read_varint(input)?),
                 other => {
                     return Err(DecodeError::UnknownEnumValue {
                         name: "EntityDataSerializer",
@@ -561,18 +567,21 @@ mod item_tests {
     #[test]
     fn metadata_lists_end_with_index_255() {
         let metadata = EntityMetadata {
-            entries: vec![(
-                8,
-                MetadataValue::ItemStack(ItemStack {
-                    count: 2,
-                    item: 1,
-                    components: ComponentPatch::default(),
-                }),
-            )],
+            entries: vec![
+                (
+                    8,
+                    MetadataValue::ItemStack(ItemStack {
+                        count: 2,
+                        item: 1,
+                        components: ComponentPatch::default(),
+                    }),
+                ),
+                (19, MetadataValue::PigVariant(2)),
+            ],
         };
         let mut buf = Vec::new();
         metadata.encode(&mut buf);
-        assert_eq!(buf, [8, 7, 2, 1, 0, 0, 255]);
+        assert_eq!(buf, [8, 7, 2, 1, 0, 0, 19, 28, 2, 255]);
         assert_eq!(EntityMetadata::decode(&mut &buf[..]), Ok(metadata));
     }
 

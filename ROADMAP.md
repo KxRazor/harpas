@@ -562,9 +562,13 @@ as shown by the parity report.
   - [x] Axes use their own attack damage, speed and wear, and disable a raised shield for five seconds
         when it blocks an axe strike. Wooden and iron axes at full and partial charge, shields in both
         hands, cooldown expiry and saved wear are compared with vanilla (`axe_combat_matches_vanilla`).
-  - [x] A charged grounded sword strike can sweep nearby players for one point of damage and extra knockback.
+  - [x] A charged grounded sword strike can sweep nearby players for one base damage point and extra knockback.
         Target bounds, reach, movement, partial charge, sprinting, critical hits and the sound and particles
         are compared with vanilla (`sweeping_attacks_match_vanilla`).
+  - [x] Sweeping Edge I–III on the attacking sword add a share of the attack's charged base damage to the
+        sweep. Health of both targets, Sharpness on the same sword, Sweeping Edge in the offhand and a hit
+        during an equipment change are compared with vanilla (`sweeping_attacks_match_vanilla`). An engine
+        test checks which level applies before and after the equipment tick.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

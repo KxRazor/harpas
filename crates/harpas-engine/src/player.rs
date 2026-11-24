@@ -898,6 +898,8 @@ pub(crate) struct PlayerState {
     pub(crate) last_main_hand_item: u32,
     pub(crate) attack_damage_modifier: f64,
     pub(crate) attack_speed_modifier: Option<f64>,
+    /// Sweeping damage modifier applied on the last equipment tick.
+    pub(crate) sweeping_damage_ratio: f32,
     /// Squared horizontal displacement reported by the most recent accepted movement packet.
     pub(crate) horizontal_movement_squared: f64,
     pub(crate) armor_modifiers: [Option<[f64; 2]>; 4],
@@ -1008,6 +1010,7 @@ impl PlayerState {
             last_main_hand_item: 0,
             attack_damage_modifier: 0.0,
             attack_speed_modifier: None,
+            sweeping_damage_ratio: 0.0,
             horizontal_movement_squared: 0.0,
             armor_modifiers: [None; 4],
             death_location: None,

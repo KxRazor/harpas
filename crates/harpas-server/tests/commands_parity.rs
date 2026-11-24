@@ -1363,7 +1363,7 @@ fn bare_hand_combat_matches_vanilla() {
     }
 }
 
-fn exercise_sprint_attacks(port: u16, names: [&str; 3], damage: f32) -> [[f64; 3]; 6] {
+fn exercise_knockback_attacks(port: u16, names: [&str; 3], damage: f32) -> [[f64; 3]; 6] {
     let join = |name| {
         let mut client = Client::join(port, name);
         client.stream.set_nodelay(true).unwrap();
@@ -1459,7 +1459,7 @@ fn exercise_sprint_attacks(port: u16, names: [&str; 3], damage: f32) -> [[f64; 3
     let (partial, partial_health) = hit(&mut reserve, reserve_id);
     assert!(partial_health > 20.0 - damage && partial_health < 20.0);
 
-    // The partially charged strike should have left the sprint active.
+    // A charged follow-up reveals whether the partial strike ended the sprint.
     face(&mut attacker, 100_000.0 * 360.0 + 132.0);
     recharge();
     play_packet(&mut attacker, attack_reserve.clone());
@@ -1553,9 +1553,66 @@ fn sprint_knockback_matches_vanilla() {
     }
     let exercise = |port| {
         [
-            exercise_sprint_attacks(port, ["FistFighter", "FistTarget", "FistReserve"], 1.0),
-            exercise_sprint_attacks(port, sword_names, 4.0),
+            exercise_knockback_attacks(port, ["FistFighter", "FistTarget", "FistReserve"], 1.0),
+            exercise_knockback_attacks(port, sword_names, 4.0),
         ]
+    };
+    let expected = exercise(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise(other), expected);
+    stop(&mut server);
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn knockback_enchantment_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("knockback-enchantment");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let cases = [
+        (["KnockbackOne", "OneTarget", "OneReserve"], 1, false),
+        (["KnockbackTwo", "TwoTarget", "TwoReserve"], 2, false),
+        (
+            ["OffhandFighter", "OffhandTarget", "OffhandReserve"],
+            2,
+            true,
+        ),
+    ];
+    for (names, level, offhand) in cases {
+        let sword = Compound::from_iter([
+            ("id", Nbt::from("minecraft:wooden_sword")),
+            (
+                "components",
+                Compound::from_iter([(
+                    "minecraft:enchantments",
+                    Compound::from_iter([("minecraft:knockback", level)]),
+                )])
+                .into(),
+            ),
+        ]);
+        let mut player =
+            Compound::from_iter([("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION))]);
+        if offhand {
+            player.insert("equipment", Compound::from_iter([("offhand", sword)]));
+        } else {
+            let mut sword = sword;
+            sword.insert("Slot", 0_i8);
+            player.insert("Inventory", List::Compound(vec![sword]));
+        }
+        for dir in [&vanilla, &harpas] {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(names[0]), &player)
+                .unwrap();
+        }
+    }
+    let exercise = |port| {
+        cases.map(|(names, _, offhand)| {
+            let damage = if offhand { 1.0 } else { 4.0 };
+            exercise_knockback_attacks(port, names, damage)
+        })
     };
     let expected = exercise(port);
     stop(&mut reference);

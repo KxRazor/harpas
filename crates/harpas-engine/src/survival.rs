@@ -14,6 +14,7 @@ const MAX_HEALTH: f32 = 20.0;
 const MAX_FOOD: i32 = 20;
 const SAFE_FALL_DISTANCE: f64 = 3.0;
 const LAVA_FIRE_TICKS: i16 = 15 * 20;
+const FIRE_ASPECT_TICKS_PER_LEVEL: i16 = 4 * 20;
 const SURVIVAL_ENTITY_REACH: f64 = 3.0;
 const BASE_ATTACK_SPEED: f64 = 4.0;
 const BASE_ATTACK_DAMAGE: f64 = 1.0;
@@ -674,17 +675,22 @@ impl Game {
         } else {
             None
         };
-        let burning = player.is_burning();
-        if burning != was_burning {
-            let entity_id = player.player.entity_id;
-            for viewer in &self.players {
-                if viewer.player.entity_id == entity_id || viewer.tracked.contains(&entity_id) {
-                    viewer.send(Output::OnFire { entity_id, burning });
-                }
-            }
+        if player.is_burning() != was_burning {
+            self.send_burning(index);
         }
         if let Some((damage, kind)) = hit {
             self.hurt_player(index, damage, kind, rules);
+        }
+    }
+
+    fn send_burning(&self, index: usize) {
+        let player = &self.players[index];
+        let entity_id = player.player.entity_id;
+        let burning = player.is_burning();
+        for viewer in &self.players {
+            if viewer.player.entity_id == entity_id || viewer.tracked.contains(&entity_id) {
+                viewer.send(Output::OnFire { entity_id, burning });
+            }
         }
     }
 
@@ -792,6 +798,7 @@ impl Game {
         }
         let knockback_level = codec.enchantment_level(main_hand, "minecraft:knockback");
         let extra_knockback = 0.5 * f64::from(knockback_level + i32::from(sprint_hit));
+        let fire_aspect = codec.enchantment_level(main_hand, "minecraft:fire_aspect") as i16;
         self.players[attacker].attack_charge_ticks = 0;
         let fresh_hit = self.players[defender].hurt_cooldown <= 10;
         let health = self.players[defender].vitals.health;
@@ -843,6 +850,16 @@ impl Game {
         }
         if health != target.vitals.health {
             target.send(target.vitals.update());
+        }
+        if fire_aspect > 0 {
+            let was_burning = target.is_burning();
+            target.vitals.fire_ticks = target
+                .vitals
+                .fire_ticks
+                .max(FIRE_ASPECT_TICKS_PER_LEVEL * fire_aspect);
+            if !was_burning {
+                self.send_burning(defender);
+            }
         }
         if let Some(sword) = sword {
             let codec = self

@@ -1766,6 +1766,197 @@ fn sword_combat_matches_vanilla() {
     }
 }
 
+fn fire_flag(packet: &Packet, entity_id: i32) -> Option<bool> {
+    let Packet::SetEntityMetadata(packet) = packet else {
+        return None;
+    };
+    if packet.entity_id != entity_id {
+        return None;
+    }
+    packet
+        .metadata
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            (0, play::MetadataValue::Byte(flags)) => Some(flags & 1 != 0),
+            _ => None,
+        })
+}
+
+fn exercise_fire_aspect(port: u16) -> [Vec<f32>; 3] {
+    let mut attacker = Client::join(port, "FireAttacker");
+    attacker.stream.set_nodelay(true).unwrap();
+    confirm_position(&mut attacker);
+    let list_reply = |packet: &Packet| {
+        matches!(packet, Packet::SystemChatMessage(reply)
+            if matches!(&reply.content, codec::Nbt::Compound(text)
+                if text.get("translate") == Some(&codec::Nbt::from("commands.list.players"))))
+    };
+
+    [
+        ("FireTargetOne", 1_u8, false),
+        ("FireTargetTwo", 2, false),
+        ("FireResistant", 1, true),
+    ]
+    .map(|(name, level, resistant)| {
+        let mut defender = Client::join(port, name);
+        defender.stream.set_nodelay(true).unwrap();
+        let entity_id = defender.matching("Play Login", |packet| match packet {
+            Packet::Login(login) => Some(login.entity_id),
+            _ => None,
+        });
+        let [x, y, z] = confirm_position(&mut defender);
+        assert_eq!(health(&mut defender).health, 20.0);
+        move_player(&mut defender, [x, y, z], true);
+        move_player(&mut attacker, [x + 2.0, y, z], true);
+        let attack = play::serverbound::Attack { entity_id };
+        let mut remaining = 20.0;
+
+        if name == "FireTargetOne" {
+            // A plain sword hit grants immunity before the weaker enchanted hit in the same batch.
+            std::thread::sleep(Duration::from_millis(800));
+            let mut frames = Vec::new();
+            for packet in [
+                attack.clone().into(),
+                play::serverbound::SetHeldItem { slot: 2 }.into(),
+                attack.clone().into(),
+            ] {
+                write_frame(&mut frames, |buf| {
+                    play::serverbound::Packet::encode(&packet, buf)
+                });
+            }
+            attacker.stream.write_all(&frames).unwrap();
+            assert_eq!(health(&mut defender).health, 16.0);
+            remaining = 16.0;
+            attacker.command("list", 1);
+        }
+
+        play_packet(
+            &mut attacker,
+            play::serverbound::SetHeldItem {
+                slot: i16::from(level),
+            },
+        );
+        std::thread::sleep(Duration::from_millis(800));
+        defender.send_command("list");
+        defender.matching("list before the enchanted hit", |packet| {
+            assert_ne!(fire_flag(&packet, entity_id), Some(true));
+            match packet {
+                Packet::SetHealth(update) => {
+                    panic!("unexpected health before enchanted hit: {update:?}")
+                }
+                _ => list_reply(&packet).then_some(()),
+            }
+        });
+
+        let strike = Instant::now();
+        play_packet(&mut attacker, attack);
+        attacker.command("list", 1);
+        // Allow the defender's metadata to be sent before checking for ignition.
+        std::thread::sleep(Duration::from_millis(200));
+        defender.send_command("list");
+        let damage_types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+        let mut sources = Vec::new();
+        let mut health_values = Vec::new();
+        let mut ignited = false;
+        let elapsed = defender.matching("Fire Aspect ignition and expiry", |packet| {
+            if list_reply(&packet) {
+                assert!(ignited, "{name} was not ignited by Fire Aspect {level}");
+            }
+            match &packet {
+                Packet::DamageEvent(event) if event.entity_id == entity_id => {
+                    sources.push(damage_types[event.source_type as usize]);
+                }
+                Packet::SetHealth(update) => health_values.push(update.health),
+                _ => {}
+            }
+            match fire_flag(&packet, entity_id) {
+                Some(true) => {
+                    ignited = true;
+                    None
+                }
+                Some(false) if ignited => Some(strike.elapsed()),
+                _ => None,
+            }
+        });
+        assert_no_damage_until_list_reply(&mut defender, "after Fire Aspect expired");
+
+        let duration = Duration::from_secs(4 * u64::from(level));
+        assert!(
+            elapsed >= duration - Duration::from_millis(500),
+            "{name} burned for {elapsed:?}"
+        );
+        let burn_hits = if resistant {
+            0
+        } else {
+            4 * usize::from(level) - 1
+        };
+        assert_eq!(sources.first(), Some(&"minecraft:player_attack"));
+        assert_eq!(sources[1..], vec!["minecraft:on_fire"; burn_hits]);
+        assert_eq!(
+            health_values,
+            (0..=burn_hits)
+                .map(|hit| remaining - 4.0 - hit as f32)
+                .collect::<Vec<_>>()
+        );
+        health_values
+    })
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn fire_aspect_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("fire-aspect");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    let swords = (0..=2)
+        .map(|slot| {
+            let mut sword = Compound::from_iter([
+                ("Slot", Nbt::Byte(slot)),
+                ("id", Nbt::from("minecraft:wooden_sword")),
+            ]);
+            if slot > 0 {
+                sword.insert(
+                    "components",
+                    Compound::from_iter([(
+                        "minecraft:enchantments",
+                        Compound::from_iter([("minecraft:fire_aspect", i32::from(slot))]),
+                    )]),
+                );
+            }
+            sword
+        })
+        .collect();
+    let attacker = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        ("Inventory", List::Compound(swords).into()),
+    ]);
+    let resistant = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "active_effects",
+            List::Compound(vec![Compound::from_iter([
+                ("id", Nbt::from("minecraft:fire_resistance")),
+                ("duration", Nbt::Int(-1)),
+            ])])
+            .into(),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        for (name, data) in [("FireAttacker", &attacker), ("FireResistant", &resistant)] {
+            harpas_anvil::write_player(&dir.join("world"), offline_uuid(name), data).unwrap();
+        }
+    }
+    let expected = exercise_fire_aspect(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(exercise_fire_aspect(other), expected);
+    stop(&mut server);
+}
+
 fn exercise_armored_combat(server: &mut Server, port: u16) -> [[f32; 2]; 3] {
     let mut attacker = Client::join(port, "Attacker");
     attacker.stream.set_nodelay(true).unwrap();

@@ -183,6 +183,10 @@ still apply to the hit that breaks a piece. After armor and Resistance reduce th
 up the levels in the armor slots that still hold equipment. It reduces the remaining melee damage by four
 percent per level up to 80 percent, before Absorption spends its extra hearts. The player tick sends
 attribute and inventory changes, and the new equipment state saves in player data.
+Fire Aspect on the main-hand sword ignites the target for four seconds per level after a hit passes the
+damage cooldown, keeping any longer burn already in progress. The target and its viewers see the fire.
+Burning uses the same damage cooldown, Fire Resistance and `minecraft:fire_damage` checks as burning
+after lava.
 
 ### 2. Parallel only where it cannot be observed
 

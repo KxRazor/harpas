@@ -551,6 +551,9 @@ as shown by the parity report.
   - [x] Knockback I and II on the main-hand sword add push at full and partial charge in Java Survival.
         Velocity, sprint cancellation, damage immunity and an enchanted offhand sword are compared with
         vanilla (`knockback_enchantment_matches_vanilla`).
+  - [x] Fire Aspect on the main-hand sword ignites Java Survival players after a successful hit. Both
+        levels, a hit rejected during damage immunity and Fire Resistance are compared with vanilla
+        (`fire_aspect_matches_vanilla`).
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

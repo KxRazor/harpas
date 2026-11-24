@@ -188,6 +188,11 @@ damage cooldown, keeping any longer burn already in progress. The target and its
 Burning uses the same damage cooldown, Fire Resistance and `minecraft:fire_damage` checks as burning
 after lava.
 
+Holding use raises a shield in either hand. It blocks frontal player melee hits after five ticks. A blocked
+hit spends the attack charge and prevents damage, armor wear, defender knockback and Fire Aspect. A block
+of at least three damage wears the shield by one plus the whole damage points blocked. A shield that breaks
+still blocks that hit. Releasing use, changing the held shield or breaking it lowers the shield.
+
 ### 2. Parallel only where it cannot be observed
 
 Running regions of the world in parallel, as Folia does, scales further but changes behavior: its README

@@ -18,6 +18,9 @@ const FIRE_ASPECT_TICKS_PER_LEVEL: i16 = 4 * 20;
 const SURVIVAL_ENTITY_REACH: f64 = 3.0;
 const BASE_ATTACK_SPEED: f64 = 4.0;
 const BASE_ATTACK_DAMAGE: f64 = 1.0;
+const SHIELD_RAISE_TICKS: u32 = 5;
+const SHIELD_DURABILITY: i32 = 336;
+const SHIELD_WEAR_THRESHOLD: f32 = 3.0;
 
 pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
 
@@ -294,7 +297,18 @@ pub(crate) struct ItemUse {
     pub(crate) off_hand: bool,
     ticks_left: u32,
     stack: ItemStack,
-    consumable: Consumable,
+    kind: ItemUseKind,
+}
+
+enum ItemUseKind {
+    Consume(Consumable),
+    Shield,
+}
+
+impl ItemUse {
+    fn matches(&self, held: &ItemStack) -> bool {
+        !held.is_empty() && held.item == self.stack.item && held.components == self.stack.components
+    }
 }
 
 impl PlayerState {
@@ -400,22 +414,27 @@ impl Game {
             .world
             .as_ref()
             .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
-        let Some(consumable) = codec.consumable(stack) else {
+        let (kind, ticks_left) = if codec.is_shield(stack) {
+            (ItemUseKind::Shield, SHIELD_RAISE_TICKS)
+        } else if let Some(consumable) = codec.consumable(stack) {
+            if player.vitals.food >= MAX_FOOD
+                && consumable
+                    .food
+                    .as_ref()
+                    .is_some_and(|food| !food.can_always_eat)
+            {
+                return;
+            }
+            let ticks = consumable.use_ticks;
+            (ItemUseKind::Consume(consumable), ticks)
+        } else {
             return;
         };
-        if player.vitals.food >= MAX_FOOD
-            && consumable
-                .food
-                .as_ref()
-                .is_some_and(|food| !food.can_always_eat)
-        {
-            return;
-        }
         player.item_use = Some(ItemUse {
             off_hand,
-            ticks_left: consumable.use_ticks,
+            ticks_left,
             stack: stack.clone(),
-            consumable,
+            kind,
         });
         self.send_using_item(index, Some(off_hand));
     }
@@ -445,29 +464,28 @@ impl Game {
         };
         let slot = player.inventory.hand_slot(using.off_hand);
         let held = &mut player.inventory.slots[slot];
-        if held.is_empty()
-            || held.item != using.stack.item
-            || held.components != using.stack.components
-        {
+        if !using.matches(held) {
             self.stop_using_item(index);
             return;
         }
         using.ticks_left = using.ticks_left.saturating_sub(1);
-        if using.ticks_left == 0 {
+        if using.ticks_left == 0
+            && let ItemUseKind::Consume(consumable) = &mut using.kind
+        {
             let codec = self
                 .world
                 .as_ref()
                 .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
             let stew_effects = codec.stew_effects(held);
-            let mut remainder = using.consumable.remainder.take().unwrap_or_default();
+            let mut remainder = consumable.remainder.take().unwrap_or_default();
             held.count -= 1;
             if held.is_empty() {
                 *held = std::mem::take(&mut remainder);
             }
-            if let Some(food) = &using.consumable.food {
+            if let Some(food) = &consumable.food {
                 player.vitals.eat(food);
             }
-            let default_effects = match using.consumable.effect.take() {
+            let default_effects = match consumable.effect.take() {
                 Some(ConsumeEffect::Apply {
                     effects,
                     probability,
@@ -800,6 +818,9 @@ impl Game {
         let extra_knockback = 0.5 * f64::from(knockback_level + i32::from(sprint_hit));
         let fire_aspect = codec.enchantment_level(main_hand, "minecraft:fire_aspect") as i16;
         self.players[attacker].attack_charge_ticks = 0;
+        if self.block_melee_attack(defender, attacker, damage) {
+            return;
+        }
         let fresh_hit = self.players[defender].hurt_cooldown <= 10;
         let health = self.players[defender].vitals.health;
         if !self.hurt_player(defender, damage, DamageKind::PlayerAttack(source_id), rules) {
@@ -869,12 +890,77 @@ impl Game {
             let stack = &mut self.players[attacker].inventory.slots[slot];
             if !codec.component_removed(stack, "minecraft:weapon") {
                 match codec.wear_tool(stack, sword.durability) {
-                    Ok(true) => Self::send_item_broken(&self.players, source_id, None),
+                    Ok(true) => Self::send_item_broken(
+                        &self.players,
+                        source_id,
+                        Output::MainHandItemBroken(source_id),
+                    ),
                     Ok(false) => {}
                     Err(error) => log::warn!("Cannot apply sword wear to item {slot}: {error}"),
                 }
             }
         }
+    }
+
+    fn block_melee_attack(&mut self, defender: usize, attacker: usize, damage: f32) -> bool {
+        let source = self.players[attacker].player.position;
+        let target = &mut self.players[defender];
+        let Some(using) = &mut target.item_use else {
+            return false;
+        };
+        let position = target.player.position;
+        let dx = source.x - position.x;
+        let dz = source.z - position.z;
+        let yaw = wrap_degrees_f32(position.yaw).to_radians();
+        let towards_attacker = -f64::from(sin_f32(yaw)) * dx + f64::from(cos_f32(yaw)) * dz;
+        let off_hand = using.off_hand;
+        let slot = target.inventory.hand_slot(off_hand);
+        let held = &mut target.inventory.slots[slot];
+        if !matches!(using.kind, ItemUseKind::Shield)
+            || using.ticks_left != 0
+            || !using.matches(held)
+            || towards_attacker < 0.0
+        {
+            return false;
+        }
+
+        let entity_id = target.player.entity_id;
+        let pitch = 0.8 + target.random.next_float() * 0.4;
+        let seed = target.random.next_long();
+        if damage >= SHIELD_WEAR_THRESHOLD {
+            let codec = self
+                .world
+                .as_ref()
+                .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+            match codec.wear_item(held, SHIELD_DURABILITY, 1 + damage.floor() as i32) {
+                Ok(true) => {
+                    let broken = if off_hand {
+                        Output::OffHandItemBroken(entity_id)
+                    } else {
+                        Output::MainHandItemBroken(entity_id)
+                    };
+                    Self::send_item_broken(&self.players, entity_id, broken);
+                    self.stop_using_item(defender);
+                }
+                Ok(false) => using.stack = held.clone(),
+                Err(error) => log::warn!("Cannot apply shield wear to item {slot}: {error}"),
+            }
+        }
+        for nearby in &self.players {
+            let listener = nearby.player.position;
+            if (listener.x - position.x).powi(2)
+                + (listener.y - position.y).powi(2)
+                + (listener.z - position.z).powi(2)
+                < 16.0_f64.powi(2)
+            {
+                nearby.send(Output::ShieldBlock {
+                    position,
+                    pitch,
+                    seed,
+                });
+            }
+        }
+        true
     }
 
     fn hurt_armor(&mut self, index: usize, damage: f32) -> f32 {
@@ -890,7 +976,11 @@ impl Game {
                 && !codec.component_removed(stack, "minecraft:equippable")
             {
                 match codec.wear_item(stack, armor.durability, wear) {
-                    Ok(true) => Self::send_item_broken(&self.players, entity_id, Some(slot)),
+                    Ok(true) => Self::send_item_broken(
+                        &self.players,
+                        entity_id,
+                        Output::ArmorBroken { entity_id, slot },
+                    ),
                     Ok(false) => {}
                     Err(error) => log::warn!("Cannot apply wear to armor in {slot:?}: {error}"),
                 }

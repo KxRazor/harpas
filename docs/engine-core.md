@@ -12,7 +12,7 @@ shapes, the chunks around it are lit again, water and lava flow on scheduled flu
 blocks from the Creative inventory, dropped items move as vanilla's item entities, broken blocks drop their
 loot, players pick items up, and they move items in their inventory and craft in its 2x2 grid or at a crafting
 table's 3x3 grid, store items in chests, and smelt items in normal furnaces), saving other world and player data,
-other placements, scheduled block ticks, random ticks,
+other placements, other scheduled block ticks, random ticks,
 and the remaining entity logic are still in progress. Facts about vanilla cite their source in
 [References](#references); everything else is a design decision of this project.
 
@@ -66,9 +66,10 @@ short delays and resets the target after a delay over two seconds. The tick has 
 dimensions, connections and autosave, in that order; autosave is scheduled every 6,000 ticks. The dimension
 phase applies completed chunk reads and saves, and schedules unloading; the autosave phase queues immutable
 chunk snapshots without waiting for disk. Connection and player work is implemented. In the dimension phase,
-the game time advances and the scheduled fluid ticks due in the chunks of the players' views run, at most 65,536,
-in vanilla's order. Normal furnace block entities tick after entities. Scheduled block ticks stay saved as they
-were until blocks use them.
+the game time advances, then scheduled block ticks run before fluid ticks in chunks within players' views,
+up to 65,536 of each. A directly powered redstone lamp lights immediately and schedules a four-tick delay
+when power is removed. The chunk stores the remaining delay and preserves ticks for unsupported blocks.
+Normal furnace block entities tick after entities.
 
 Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting
 messages into edition-specific packets. The logic thread owns each player's profile and position and publishes
@@ -280,21 +281,21 @@ Harpas uses its own storage:
 - **Parallel passes over the hot arrays** for unobservable work: entity tracking, packet encoding, Bedrock
   translation.
 
-Item entities and saved adult pigs live in this storage (`harpas-engine`'s `entity` module). The entity tick
-runs them in insertion order before the separate player tick. Adult pigs have gravity, drag and block
-collisions for dry movement. Pigs with `NoAI` stay still. Tracking runs on the logic thread, and the chunk
+Item entities and saved adult pigs and cows live in this storage (`harpas-engine`'s `entity` module). The entity tick
+runs them in insertion order before the separate player tick. Both species have gravity, drag and block
+collisions for dry movement. Animals with `NoAI` stay still. Tracking runs on the logic thread, and the chunk
 workers handle [entity regions](world.md#entity-regions).
 
-In Java Survival, an empty main hand or a sword can hit an adult pig. The attack measures reach to the pig's
+In Java Survival, an empty main hand or a sword can hit either species. The attack measures reach to the animal's
 hitbox and uses the player's melee damage and recharge. An accepted sword hit wears the sword, including
-on a lethal hit. The pig tracks damage immunity and applies knockback on a fresh hit. Its viewers receive
-the damage, health and death updates. A dead pig stays tracked for its 20-tick death animation and is
+on a lethal hit. The animal tracks damage immunity and applies knockback on a fresh hit. Its viewers receive
+the damage, health and death updates. A dead animal stays tracked for its 20-tick death animation and is
 excluded from entity snapshots as soon as its health reaches zero.
-A lethal hit rolls the installed pig loot table on its named world random sequence when the saved
+A lethal hit rolls the installed species loot table on its named world random sequence when the saved
 `minecraft:mob_drops` rule is enabled. With Looting on the attacking sword, the table draws a separate
 value from that sequence, multiplies it by the enchantment level and rounds it to give the bonus count.
-Raw porkchops spawn at the pig's position as an item entity and can be collected after the pickup delay.
-The item is saved in the same entity snapshot that omits the dead pig.
+Pigs drop raw porkchops and cows roll for raw beef and leather. The drops spawn at the animal's position
+and can be collected after the pickup delay. The entity snapshot saves the drops and omits the dead animal.
 
 ### 6. Chunks
 

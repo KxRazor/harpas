@@ -20,12 +20,12 @@ use crate::{Game, player};
 
 /// How far players see item entities: 6 chunks (`EntityType.ITEM`'s `clientTrackingRange`).
 const ITEM_RANGE: f64 = 96.0;
-/// How far players see pigs (`EntityType.PIG`'s `clientTrackingRange`).
-const PIG_RANGE: f64 = 160.0;
+/// How far players see animals (`EntityType.PIG`'s `clientTrackingRange`).
+const ANIMAL_RANGE: f64 = 160.0;
 /// How often an item entity's viewers are sent its position (`updateInterval`).
 const ITEM_UPDATE_INTERVAL: i32 = 20;
-/// How often a pig's viewers are sent its position (`updateInterval`).
-const PIG_UPDATE_INTERVAL: i32 = 3;
+/// How often a animal's viewers are sent its position (`updateInterval`).
+const ANIMAL_UPDATE_INTERVAL: i32 = 3;
 
 /// What the players who see an entity were last sent of it (`ServerEntity`).
 #[derive(Debug, Clone, Default)]
@@ -211,7 +211,7 @@ impl Game {
             let kind = entities.kind[i].as_ref().expect("live entity");
             let tracking_range = match kind {
                 Kind::Item(_) => ITEM_RANGE,
-                Kind::Pig(_) => PIG_RANGE,
+                Kind::Animal(_) => ANIMAL_RANGE,
             };
             // `updatePlayers`.
             for player in &self.players {
@@ -232,15 +232,16 @@ impl Game {
                             velocity: server.last_velocity,
                             stack: item.stack.clone(),
                         },
-                        Kind::Pig(pig) => player::Output::SpawnPig {
+                        Kind::Animal(animal) => player::Output::SpawnAnimal {
+                            species: animal.species,
                             entity_id: id,
                             uuid: entities.uuid[i],
                             position: server.base,
                             velocity: server.last_velocity,
-                            rotation: pig.rotation,
-                            health: pig.health,
-                            variant: pig.variant,
-                            no_ai: pig.no_ai(),
+                            rotation: animal.rotation,
+                            health: animal.health,
+                            variant: animal.variant,
+                            no_ai: animal.no_ai(),
                         },
                     });
                 } else if !visible && server.seen_by.remove(&viewer) {
@@ -249,8 +250,10 @@ impl Game {
             }
             let (update_interval, rotation) = match kind {
                 Kind::Item(_) => (ITEM_UPDATE_INTERVAL, [0.0; 2]),
-                Kind::Pig(pig) if !pig.no_ai() => (PIG_UPDATE_INTERVAL, pig.rotation),
-                Kind::Pig(_) => continue,
+                Kind::Animal(animal) if !animal.no_ai() => {
+                    (ANIMAL_UPDATE_INTERVAL, animal.rotation)
+                }
+                Kind::Animal(_) => continue,
             };
             // `sendChanges`.
             let on_ground = entities.on_ground[i];

@@ -1,0 +1,1 @@
+- Saved adult cows appear to Java players, keep their health across restarts and drop loot from the installed cow loot table when killed in Survival.

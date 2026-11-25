@@ -412,7 +412,8 @@ as shown by the parity report.
   - [ ] The placements of the other blocks, and clicks on blocks that react to being used.
   - [x] Scheduled ticks in vanilla's order (`LevelTicks`), saved with their chunks, and the fluid ticks of
         water and lava flowing, falling into holes and hardening into obsidian, cobblestone, stone and basalt.
-  - [ ] Scheduled block ticks, for the blocks that schedule them; until then their saved ticks are kept.
+  - [x] Redstone lamp ticks run before fluid ticks and keep their remaining delay across a chunk reload.
+  - [ ] Run ticks for the remaining block types. Their saved tick entries are preserved.
   - [ ] Random ticks.
 - [ ] Light updates from block changes, queued and applied at defined points as vanilla's light engine applies
       them, with their timing compared against vanilla ([docs/engine-core.md](docs/engine-core.md)).
@@ -421,6 +422,8 @@ as shown by the parity report.
         chunk saved before it is lit again is saved without `isLightOn`, so that vanilla lights it.
   - [ ] Compare the timing of light updates against vanilla's light engine.
 - [ ] Redstone components and block events, with tick-by-tick parity harnesses.
+  - [x] A lever directly beside a lamp powers it immediately. After power is removed the lamp turns off
+        four game ticks later, including after a save and reload (`lever_lamp_delay_survives_reload`).
 - [ ] Items and data components, inventories and containers, crafting and smelting, loot tables.
   - [x] The item registry, item stacks, and the player's inventory menu in Creative, with its changes sent to
         the client.
@@ -490,8 +493,12 @@ as shown by the parity report.
   - [x] Saved adult pigs fall and land on solid ground, with motion sent to Java viewers
         (`falling_adult_pig_matches_vanilla`). A pig that crosses a chunk boundary saves in its new chunk
         and reloads once. Pigs with `NoAI` remain suspended in air as in vanilla.
+  - [x] A saved adult cow can be tracked and punched in Java Survival. Health persists across a restart,
+        and a lethal hit rolls the cow loot table (`saved_cow_combat_and_drops_match_vanilla`).
   - [ ] The other entity types and their persistence.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
+  - [ ] Compare natural cow spawning on a fixed grassy platform under matching light, biome and mob-cap
+        conditions. Compare how a cow follows a player holding wheat and stops after the player puts it away.
 - [ ] Combat, damage, health, hunger, effects.
   - [x] Java Survival fall damage on ordinary terrain, saved health on reconnect, and death and respawn at the
         Overworld spawn. Safe, damaging and lethal falls and Creative immunity are compared with vanilla
@@ -622,7 +629,13 @@ as shown by the parity report.
         new operator level and command tree, and commands use the new permissions during the same session.
         Grants, revocations and whitelist enforcement after `deop` are compared with vanilla (`commands_parity`).
 - [ ] Datapack loading on top of vanilla data.
+  - [ ] Override one vanilla crafting recipe by ID in a world datapack. Compare the output and ingredient
+        consumption with vanilla, then disable the pack and verify the original recipe after reload.
 - [ ] Nether and End dimensions.
+  - [ ] Enter the Nether by portal, place a block, save, restart and return through the portal. Compare
+        arrival dimension and position, the block and the return destination with vanilla.
+  - [ ] Enter the End by portal, place a block, save and rejoin there. Compare the arrival platform, saved
+        block and player position, then leave through an active exit portal and compare the destination.
 - [ ] Parity report per subsystem, published with the release ([docs/parity.md](docs/parity.md)).
 
 ## M5 — Bukkit plugins by default (0.4.0)

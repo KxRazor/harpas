@@ -211,7 +211,7 @@ fn run() -> io::Result<()> {
     let loot = match harpas_engine::loot::LootTables::from_zip_path(&data_pack) {
         Ok(loot) => Some(Arc::new(loot)),
         Err(error) => {
-            warn!("Block drops, chest loot and pig drops will be unavailable: {error}");
+            warn!("Block drops, chest loot and animal drops will be unavailable: {error}");
             None
         }
     };

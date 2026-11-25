@@ -20,7 +20,7 @@ use log::{error, warn};
 
 use crate::block::{self, BlockPos};
 use crate::entity::{ItemEntity, Kind};
-use crate::entity_data::{EntityChunk, SavedItem, SavedPig};
+use crate::entity_data::{EntityChunk, SavedAnimal, SavedItem};
 use crate::fluid::FluidType;
 use crate::furnace::Furnace;
 use crate::item_data::ItemCodec;
@@ -414,6 +414,8 @@ struct Snapshot {
     stale_light: bool,
     /// The chunk's fluid ticks as it saves them, or none for a chunk without them.
     fluid_ticks: Option<Nbt>,
+    /// The updated lamp ticks alongside the original entries for other blocks.
+    block_ticks: Option<Nbt>,
     entities: Option<EntityChunk>,
 }
 
@@ -421,15 +423,16 @@ impl Snapshot {
     /// The chunk as it is written: with its light and at vanilla's `light` status, once it has light. A chunk
     /// whose light is out of date is saved without `isLightOn`, so that vanilla lights it again when it loads it.
     fn saved(&self) -> Option<Cow<'_, Chunk>> {
-        let saved = self.saved_light(self.chunk.as_deref()?);
-        Some(match &self.fluid_ticks {
-            Some(ticks) => {
-                let mut chunk = saved.into_owned();
-                chunk.rest.insert("fluid_ticks", ticks.clone());
-                Cow::Owned(chunk)
+        let mut saved = self.saved_light(self.chunk.as_deref()?);
+        for (key, ticks) in [
+            ("fluid_ticks", &self.fluid_ticks),
+            ("block_ticks", &self.block_ticks),
+        ] {
+            if let Some(ticks) = ticks {
+                saved.to_mut().rest.insert(key, ticks.clone());
             }
-            None => saved,
-        })
+        }
+        Some(saved)
     }
 
     fn saved_light<'a>(&self, chunk: &'a Chunk) -> Cow<'a, Chunk> {
@@ -489,9 +492,9 @@ pub struct World {
     light_updates: Vec<(ChunkPos, Arc<Light>)>,
     /// The game time, read from `level.dat` (`Time`) and counted every tick.
     pub(crate) game_time: i64,
-    /// The scheduled fluid ticks of the loaded chunks. Their block ticks stay saved as they were until blocks
-    /// that tick exist.
+    /// Scheduled fluid and supported block ticks for the loaded chunks.
     pub(crate) fluid_ticks: LevelTicks<FluidType>,
+    pub(crate) block_ticks: LevelTicks<&'static str>,
     /// Loaded furnaces that can cook, are burning or have progress left to cool.
     pub(crate) active_furnaces: BTreeSet<BlockPos>,
     /// The level's random source, which lava's spread delay draws from.
@@ -501,7 +504,7 @@ pub struct World {
     pub(crate) entities: crate::entity::Entities,
     entity_data: HashMap<ChunkPos, EntityChunk>,
     item_codec: Arc<RwLock<Arc<ItemCodec>>>,
-    /// Loot tables for broken blocks, supported chests and pigs.
+    /// Loot tables for broken blocks, supported chests and animals.
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     pub(crate) maps: crate::maps::Maps,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
@@ -699,6 +702,7 @@ impl World {
             light_updates: Vec::new(),
             game_time,
             fluid_ticks: LevelTicks::default(),
+            block_ticks: LevelTicks::default(),
             active_furnaces: BTreeSet::new(),
             random: LegacyRandom::new(0),
             item_uuids,
@@ -797,14 +801,14 @@ impl World {
                     health: item.health,
                     rest: Arc::clone(&item.rest),
                 }),
-                Kind::Pig(pig) if pig.health > 0.0 => chunk.pigs.push(SavedPig {
+                Kind::Animal(animal) if animal.health > 0.0 => chunk.animals.push(SavedAnimal {
                     uuid,
                     position,
                     velocity,
                     on_ground,
-                    pig: pig.clone(),
+                    animal: animal.clone(),
                 }),
-                Kind::Pig(_) => {}
+                Kind::Animal(_) => {}
             }
         }
         saved
@@ -815,7 +819,7 @@ impl World {
             .items
             .iter()
             .map(|item| item.uuid)
-            .chain(saved.pigs.iter().map(|pig| pig.uuid));
+            .chain(saved.animals.iter().map(|animal| animal.uuid));
         if uuids.any(|uuid| {
             self.entities
                 .order
@@ -842,22 +846,24 @@ impl World {
                 }),
             )
         });
-        let pigs = std::mem::take(&mut saved.pigs).into_iter().map(|pig| {
-            (
-                pig.uuid,
-                pig.position,
-                pig.velocity,
-                pig.on_ground,
-                Kind::Pig(pig.pig),
-            )
-        });
-        let ids = (0..items.len() + pigs.len())
+        let animals = std::mem::take(&mut saved.animals)
+            .into_iter()
+            .map(|animal| {
+                (
+                    animal.uuid,
+                    animal.position,
+                    animal.velocity,
+                    animal.on_ground,
+                    Kind::Animal(animal.animal),
+                )
+            });
+        let ids = (0..items.len() + animals.len())
             .map(|_| {
                 crate::next_entity_id().ok_or_else(|| io::Error::other("entity IDs exhausted"))
             })
             .collect::<io::Result<Vec<_>>>()?;
         for (id, (uuid, position, velocity, on_ground, kind)) in
-            ids.into_iter().zip(items.chain(pigs))
+            ids.into_iter().zip(items.chain(animals))
         {
             let handle = self.entities.add(id, uuid, position, velocity, kind);
             let i = self.entities.slot(handle);
@@ -1202,11 +1208,23 @@ impl World {
         }
     }
 
-    /// Counts a game tick and runs the scheduled fluid ticks that are due in the chunks some player sees
-    /// (`ServerLevel.tickTime`, then `fluidTicks.tick`). Vanilla runs them in the chunks within the simulation
+    /// Counts a game tick and runs the scheduled block and fluid ticks that are due in the chunks some player sees
+    /// (`ServerLevel.tickTime`, then `blockTicks.tick` and `fluidTicks.tick`). Vanilla runs them in the chunks within the simulation
     /// distance; until it exists, that is every chunk in a player's view.
-    pub(crate) fn tick_scheduled(&mut self) {
+    pub fn tick_scheduled(&mut self) {
         self.game_time += 1;
+        let blocks = self.block_ticks.collect(self.game_time, |pos| {
+            self.wanted_set.contains(&pos)
+                && matches!(self.chunks.get(&pos), Some(ChunkState::Loaded(_)))
+        });
+        for tick in blocks {
+            self.mark_changed(tick.pos.chunk());
+            if let Some(state) = self.block_state(tick.pos)
+                && block_states().name(state) == Some(tick.kind)
+            {
+                self.tick_lamp(tick.pos, state);
+            }
+        }
         let wanted = &self.wanted_set;
         let chunks = &self.chunks;
         let due = self.fluid_ticks.collect(self.game_time, |pos| {
@@ -1249,6 +1267,34 @@ impl World {
         let ticks = self.fluid_ticks.pack(pos, self.game_time);
         (!ticks.is_empty() || chunk.rest.get("fluid_ticks").is_some())
             .then(|| ticks::write_saved(&ticks, |kind| kind.name()))
+    }
+
+    fn saved_block_ticks(&self, pos: ChunkPos, chunk: &Chunk) -> Option<Nbt> {
+        use harpas_core::nbt::List;
+        let pending = self.block_ticks.pack(pos, self.game_time);
+        let mut entries = Vec::new();
+        let mut had_lamp = false;
+        if let Some(Nbt::List(List::Compound(original))) = chunk.rest.get("block_ticks") {
+            for tick in original {
+                if matches!(tick.get("i"), Some(Nbt::String(id)) if crate::redstone::lamp_id(id).is_some())
+                {
+                    had_lamp = true;
+                } else {
+                    entries.push(tick.clone());
+                }
+            }
+        }
+        if pending.is_empty() && !had_lamp {
+            return None;
+        }
+        if let Nbt::List(List::Compound(ticks)) = ticks::write_saved(&pending, |kind| kind) {
+            entries.extend(ticks);
+        }
+        Some(Nbt::List(if entries.is_empty() {
+            List::Empty
+        } else {
+            List::Compound(entries)
+        }))
     }
 
     /// Marks a chunk as changed for the next save without editing it, as when its scheduled ticks change.
@@ -1520,6 +1566,7 @@ impl World {
                         chunk: chunk.cloned(),
                         light: chunk.and_then(|_| self.saved_light(*pos)),
                         stale_light: chunk.is_some() && self.light_pending(*pos),
+                        block_ticks: chunk.and_then(|chunk| self.saved_block_ticks(*pos, chunk)),
                         fluid_ticks: chunk.and_then(|chunk| self.saved_fluid_ticks(*pos, chunk)),
                         entities: entity_snapshots.remove(pos),
                     }
@@ -1649,6 +1696,8 @@ impl World {
         {
             let saved = ticks::read_saved(chunk.rest.get("fluid_ticks"), FluidType::from_name);
             self.fluid_ticks.add_chunk(pos, saved, self.game_time);
+            let saved = ticks::read_saved(chunk.rest.get("block_ticks"), crate::redstone::lamp_id);
+            self.block_ticks.add_chunk(pos, saved, self.game_time);
         }
         if kept {
             self.load_furnaces(pos);
@@ -1731,6 +1780,8 @@ impl World {
         self.light.retain(|pos, _| self.chunks.contains_key(pos));
         self.unlit.retain(|pos| self.chunks.contains_key(pos));
         let chunks = &self.chunks;
+        self.block_ticks
+            .retain_chunks(|pos| chunks.contains_key(&pos));
         self.fluid_ticks
             .retain_chunks(|pos| chunks.contains_key(&pos));
         self.active_furnaces
@@ -2026,6 +2077,7 @@ mod tests {
             light_updates: Vec::new(),
             game_time: 0,
             fluid_ticks: LevelTicks::default(),
+            block_ticks: LevelTicks::default(),
             active_furnaces: BTreeSet::new(),
             random: LegacyRandom::new(0),
             item_uuids: XoroshiroRandom::new(0),
@@ -4344,6 +4396,7 @@ mod tests {
             light: None,
             stale_light: true,
             fluid_ticks: None,
+            block_ticks: None,
             entities: None,
         };
         assert_eq!(
@@ -4784,6 +4837,44 @@ mod tests {
         );
         assert_eq!(block(&game, at(11, -51, 6)), state("minecraft:air", &[]));
 
+        // A floor lever consumes the click even with a lamp in hand. Placing the lamp beside an
+        // already powered lever lights it, and restoring power cancels the pending turn-off.
+        let lever = at(8, -51, 10);
+        let lamp = at(9, -51, 10);
+        place(&mut game, "minecraft:lever", at(8, -52, 10), Face::Up, top);
+        assert_eq!(
+            block(&game, lever),
+            state(
+                "minecraft:lever",
+                &[("face", "floor"), ("facing", "south"), ("powered", "false")]
+            )
+        );
+        place(&mut game, "minecraft:redstone_lamp", lever, Face::Up, top);
+        assert_eq!(block(&game, at(8, -50, 10)), state("minecraft:air", &[]));
+        place(
+            &mut game,
+            "minecraft:redstone_lamp",
+            at(9, -52, 10),
+            Face::Up,
+            top,
+        );
+        let lit = state("minecraft:redstone_lamp", &[("lit", "true")]);
+        assert_eq!(block(&game, lamp), lit);
+        place(&mut game, "minecraft:redstone_lamp", lever, Face::Up, top);
+        assert!(
+            game.world
+                .as_ref()
+                .unwrap()
+                .block_ticks
+                .has_scheduled(crate::redstone::LAMP, lamp)
+        );
+        place(&mut game, "minecraft:redstone_lamp", lever, Face::Up, top);
+        for _ in 0..4 {
+            number += 1;
+            tick(&mut game, number);
+        }
+        assert_eq!(block(&game, lamp), lit);
+
         // In Survival the stack goes down by one, and the client is told at the player's next tick.
         game.players[0].player.profile.game_mode = GameMode::Survival;
         game.players[0]
@@ -4797,7 +4888,7 @@ mod tests {
                 position: at(5, -52, 5),
                 face: Face::Up,
                 cursor: top,
-                sequence: 9,
+                sequence: sequence + 1,
             },
         });
         number += 1;
@@ -6227,7 +6318,7 @@ mod tests {
 
     #[test]
     fn saved_adult_pigs_survive_chunk_unload_and_reload() {
-        use crate::player::PigVariant;
+        use crate::player::AnimalVariant;
         use harpas_core::nbt::List;
 
         let folder = Folder::new();
@@ -6293,9 +6384,9 @@ mod tests {
             .entities
             .kind
             .iter()
-            .position(|kind| matches!(kind, Some(Kind::Pig(_))))
+            .position(|kind| matches!(kind, Some(Kind::Animal(_))))
             .unwrap();
-        let Some(Kind::Pig(loaded)) = &world.entities.kind[i] else {
+        let Some(Kind::Animal(loaded)) = &world.entities.kind[i] else {
             unreachable!()
         };
         let reloaded_id = world.entities.network_id[i];
@@ -6307,12 +6398,12 @@ mod tests {
         assert_eq!(world.entities.position[i], [-0.5, 70.25, -15.5]);
         assert_eq!(
             (loaded.rotation, loaded.health, loaded.variant),
-            ([-90.0, 22.5], 7.5, PigVariant::Warm)
+            ([-90.0, 22.5], 7.5, AnimalVariant::Warm)
         );
 
         // A save during the death animation must already omit the adult pig.
-        let handle = world.entities.pig_target(reloaded_id).unwrap();
-        let Some(Kind::Pig(loaded)) = &mut world.entities.kind[i] else {
+        let handle = world.entities.animal_target(reloaded_id).unwrap();
+        let Some(Kind::Animal(loaded)) = &mut world.entities.kind[i] else {
             unreachable!();
         };
         loaded.health = 0.0;
@@ -6361,11 +6452,12 @@ mod tests {
         world.set_loot_tables(Arc::new(
             crate::loot::LootTables::from_zip_reader(zip.finish().unwrap()).unwrap(),
         ));
-        let pig = crate::entity::Pig::new(
+        let pig = crate::entity::Animal::new(
+            crate::player::AnimalSpecies::Pig,
             [0.0; 2],
             1.5,
             0.0,
-            crate::player::PigVariant::Temperate,
+            crate::player::AnimalVariant::Temperate,
             Arc::new(Compound::from_iter([("NoAI", Nbt::Byte(1))])),
         );
         let position = [3.5, 65.0, 1.5];
@@ -6373,7 +6465,7 @@ mod tests {
         let pig_id = crate::next_entity_id().unwrap();
         let pig_handle = world
             .entities
-            .add(pig_id, 42, position, [0.0; 3], Kind::Pig(pig));
+            .add(pig_id, 42, position, [0.0; 3], Kind::Animal(pig));
         let (output, _received) = crate::player::output_channel();
         let mut player = crate::player::PlayerState::new(
             player_id,
@@ -6405,7 +6497,7 @@ mod tests {
         game.attack_entity(0, pig_id);
         let world = game.world.as_mut().unwrap();
         assert_eq!(world.entities.order, [pig_handle]);
-        assert_eq!(world.entities.pig_target(pig_id), Some(pig_handle));
+        assert_eq!(world.entities.animal_target(pig_id), Some(pig_handle));
         for _ in 0..10 {
             world.tick_entities();
         }
@@ -6416,7 +6508,7 @@ mod tests {
         game.attack_entity(0, pig_id);
         let mut world = game.world.take().unwrap();
         assert!(world.entities.contains(pig_handle));
-        assert!(world.entities.pig_target(pig_id).is_none());
+        assert!(world.entities.animal_target(pig_id).is_none());
         world.flush().unwrap();
         drop(world);
 
@@ -6629,11 +6721,11 @@ mod tests {
         assert_eq!(world.entities.velocity[i][1], -0.0784000015258789);
         world.tick_entities();
         world.flush().unwrap();
-        assert!(entity_document(&folder, from).pigs.is_empty());
-        let [airborne] = &entity_document(&folder, into).pigs[..] else {
+        assert!(entity_document(&folder, from).animals.is_empty());
+        let [airborne] = &entity_document(&folder, into).animals[..] else {
             panic!("expected one airborne pig in the destination");
         };
-        assert_eq!(airborne.pig.fall_distance, 0.07840000092983246);
+        assert_eq!(airborne.animal.fall_distance, 0.07840000092983246);
         assert!(!airborne.on_ground);
 
         for _ in 0..20 {
@@ -6656,7 +6748,9 @@ mod tests {
         assert_eq!(world.entities.position[i], position);
         assert!(world.entities.on_ground[i]);
         assert_eq!(
-            entity_document(&folder, into).pigs[0].pig.fall_distance,
+            entity_document(&folder, into).animals[0]
+                .animal
+                .fall_distance,
             0.0
         );
     }

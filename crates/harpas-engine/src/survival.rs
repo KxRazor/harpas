@@ -4,7 +4,7 @@ use crate::Game;
 use crate::block::BlockPos;
 use crate::entity::Kind;
 use crate::inventory::{ArmorSlot, ItemStack};
-use crate::item_data::{Consumable, ConsumeEffect, FoodProperties, ItemCodec};
+use crate::item_data::{Consumable, ConsumeEffect, FoodProperties, ItemCodec, MeleeWeapon};
 use crate::player::{DamageKind, Effect, EffectKind, GameMode, Output, PlayerState, Position};
 use crate::world::{ChunkPos, ChunkState, World};
 use harpas_core::math::{cos_f32, sin_f32, wrap_degrees_f32};
@@ -815,7 +815,7 @@ impl Game {
 
     pub(crate) fn attack_entity(&mut self, attacker: usize, target_id: i32) {
         let Some(defender) = self.active(target_id) else {
-            self.punch_pig(attacker, target_id);
+            self.attack_pig(attacker, target_id);
             return;
         };
         let rules = self
@@ -942,11 +942,16 @@ impl Game {
             // Secondary targets take the full Sharpness bonus.
             self.sweep_attack(attacker, defender, sweep_damage + sharpness_bonus, rules);
         }
+        self.wear_melee_weapon(attacker, slot, weapon);
+    }
+
+    fn wear_melee_weapon(&mut self, attacker: usize, slot: usize, weapon: Option<MeleeWeapon>) {
         if let Some(weapon) = weapon.filter(|weapon| weapon.damage_per_attack > 0) {
             let codec = self
                 .world
                 .as_ref()
                 .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
+            let source_id = self.players[attacker].player.entity_id;
             let stack = &mut self.players[attacker].inventory.slots[slot];
             match codec.wear_item(stack, weapon.durability, weapon.damage_per_attack) {
                 Ok(true) => Self::send_item_broken(
@@ -960,12 +965,12 @@ impl Game {
         }
     }
 
-    fn punch_pig(&mut self, attacker: usize, entity_id: i32) {
+    fn attack_pig(&mut self, attacker: usize, entity_id: i32) {
         let source = &self.players[attacker];
-        let main_hand = &source.inventory.slots[source.inventory.hand_slot(false)];
+        let hand_slot = source.inventory.hand_slot(false);
+        let main_hand = &source.inventory.slots[hand_slot];
         if source.player.profile.game_mode != GameMode::Survival
             || source.awaiting_teleport.is_some()
-            || !main_hand.is_empty()
         {
             return;
         }
@@ -977,6 +982,17 @@ impl Game {
         let source_id = source.player.entity_id;
         let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
         let Some(world) = &mut self.world else { return };
+        let sword = world
+            .block_item_codec()
+            .melee_weapon(main_hand)
+            .filter(|_| {
+                main_hand
+                    .name()
+                    .is_some_and(|name| name.ends_with("_sword"))
+            });
+        if !main_hand.is_empty() && sword.is_none() {
+            return;
+        }
         let entities = &mut world.entities;
         let Some(handle) = entities.pig_target(entity_id) else {
             return;
@@ -1061,8 +1077,10 @@ impl Game {
             }
         }
         if health == 0.0 && world.survival_rules.mob_drops {
-            world.drop_pig_loot(pig_position);
+            let tool = &self.players[attacker].inventory.slots[hand_slot];
+            world.drop_pig_loot(pig_position, tool);
         }
+        self.wear_melee_weapon(attacker, hand_slot, sword);
     }
 
     fn sweep_attack(

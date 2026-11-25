@@ -3402,9 +3402,22 @@ fn observe_saved_pig(port: u16) -> (play::clientbound::SpawnEntity, play::Entity
 }
 
 fn track_saved_pig(client: &mut Client) -> play::clientbound::SpawnEntity {
+    track_saved_pigs(client, "saved adult pig", 1, |_| true)
+        .pop()
+        .unwrap()
+}
+
+fn track_saved_pigs(
+    client: &mut Client,
+    expected: &str,
+    count: usize,
+    belongs: impl Fn(&play::clientbound::SpawnEntity) -> bool,
+) -> Vec<play::clientbound::SpawnEntity> {
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut has_chunk = false;
-    for _ in 0..1000 {
-        let frame = client.next("saved adult pig spawn");
+    let mut pigs = Vec::with_capacity(count);
+    while Instant::now() < deadline {
+        let frame = client.next(expected);
         match Packet::decode(&frame) {
             Ok(Packet::SynchronizePlayerPosition(position)) => {
                 play_packet(
@@ -3428,14 +3441,20 @@ fn track_saved_pig(client: &mut Client) -> play::clientbound::SpawnEntity {
             Ok(Packet::ChunkDataAndUpdateLight(chunk)) if (chunk.x, chunk.z) == (0, 0) => {
                 has_chunk = true;
             }
-            Ok(Packet::SpawnEntity(spawn)) if spawn.entity_type == 100 => {
+            Ok(Packet::SpawnEntity(spawn)) if spawn.entity_type == 100 && belongs(&spawn) => {
                 assert!(has_chunk, "received the pig before its chunk");
-                return spawn;
+                pigs.push(spawn);
+                if pigs.len() == count {
+                    return pigs;
+                }
             }
             _ => {}
         }
     }
-    panic!("no pig after 1000 play packets");
+    panic!(
+        "received {} of {count} spawns while waiting for {expected}",
+        pigs.len()
+    );
 }
 
 #[test]
@@ -3879,32 +3898,47 @@ fn pig_looting_matches_vanilla() {
         let harpas = folder.0.join("harpas");
         let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
         let mut reference = start_flat_vanilla(&jar, &vanilla, false);
-        let stdin = reference.child.stdin.as_mut().unwrap();
         writeln!(
-            stdin,
-            "gamerule minecraft:mob_drops {drops}\nforceload add 0 0"
+            reference.child.stdin.as_mut().unwrap(),
+            "gamerule minecraft:mob_drops {drops}\nforceload add 0 0\nsave-all flush"
         )
         .unwrap();
+        reference.wait_for("Saved the game");
         let columns = if drops {
             [&main_hand[..], &offhand]
         } else {
             [&no_drops, &[][..]]
         };
+        let mut positions = Vec::new();
         for &(x, _) in columns.into_iter().flatten() {
             for z in PIG_LOOTING_ROWS {
                 writeln!(
-                    stdin,
+                    reference.child.stdin.as_mut().unwrap(),
                     "summon minecraft:pig {x} -60 {z} {{Health:0.5f,NoAI:1b}}"
                 )
                 .unwrap();
+                reference.wait_for("Summoned new Pig");
+                positions.push(List::Double(vec![x, -60.0, z]).into());
             }
         }
-        writeln!(stdin, "save-all flush").unwrap();
+        writeln!(reference.child.stdin.as_mut().unwrap(), "save-all flush").unwrap();
         reference.wait_for("Saved the game");
         let entities = "world/dimensions/minecraft/overworld/entities";
         let initial = harpas_anvil::read_chunk(&vanilla.join(entities), 0, 0)
             .unwrap()
             .unwrap();
+        let Some(Nbt::List(List::Compound(saved))) = initial.get("Entities") else {
+            panic!("missing the saved Looting test pigs");
+        };
+        for position in positions {
+            assert!(
+                saved
+                    .iter()
+                    .any(|tag| tag.get("id") == Some(&Nbt::from("minecraft:pig"))
+                        && tag.get("Pos") == Some(&position)),
+                "missing saved pig at {position:?}"
+            );
+        }
         harpas_anvil::write_chunks(&harpas.join(entities), 0, 0, &[((0, 0), &initial)]).unwrap();
         for (name, inventory) in &hunters {
             let data = Compound::from_iter([
@@ -3916,63 +3950,62 @@ fn pig_looting_matches_vanilla() {
             }
         }
 
-        let hunt = |port| {
-            let mut counts = hunt_pigs_for_looting(port, hunters[0].0, columns[0], drops);
+        let hunt = |port, server| {
+            let mut main = Client::join(port, hunters[0].0);
+            let mut counts = hunt_pigs_for_looting(&mut main, server, columns[0], drops);
             if drops {
-                counts.extend(hunt_pigs_for_looting(port, hunters[1].0, columns[1], true));
+                // Keep the first hunter connected to hold the fixture chunk in view across logins.
+                let mut offhand = Client::join(port, hunters[1].0);
+                counts.extend(hunt_pigs_for_looting(
+                    &mut offhand,
+                    server,
+                    columns[1],
+                    true,
+                ));
             }
             counts
         };
-        let expected = hunt(port);
+        let expected = hunt(port, "vanilla");
         if drops {
             assert!(expected.iter().flatten().any(|&count| count > 3));
         }
         stop(&mut reference);
         let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
-        assert_eq!(hunt(other), expected, "mob_drops={drops}");
+        assert_eq!(hunt(other, "Harpas"), expected, "mob_drops={drops}");
         stop(&mut server);
     }
 }
 
 fn hunt_pigs_for_looting(
-    port: u16,
-    hunter: &str,
+    attacker: &mut Client,
+    server: &str,
     columns: &[(f64, i16)],
     drops: bool,
 ) -> Vec<Option<i32>> {
-    let mut attacker = Client::join(port, hunter);
     attacker.stream.set_nodelay(true).unwrap();
-    let belongs = |pig: &play::clientbound::SpawnEntity| columns.iter().any(|&(x, _)| pig.x == x);
-    let mut pigs = Vec::new();
-    let first = track_saved_pig(&mut attacker);
-    if belongs(&first) {
-        pigs.push(first);
-    }
-    while pigs.len() < columns.len() * PIG_LOOTING_ROWS.len() {
-        pigs.push(
-            attacker.matching("another pig for the Looting test", |packet| match packet {
-                Packet::SpawnEntity(pig) if pig.entity_type == 100 && belongs(&pig) => Some(pig),
-                _ => None,
-            }),
-        );
-    }
+    let mut pigs = track_saved_pigs(
+        attacker,
+        &format!("Looting pigs on {server}, mob_drops={drops}, columns={columns:?}"),
+        columns.len() * PIG_LOOTING_ROWS.len(),
+        |pig| columns.iter().any(|&(x, _)| pig.x == x) && PIG_LOOTING_ROWS.contains(&pig.z),
+    );
     pigs.sort_unstable_by_key(|pig| (pig.x as i32, pig.z as i32));
 
     let mut counts = Vec::new();
     let mut pigs = pigs.into_iter();
     for &(_, slot) in columns {
-        play_packet(&mut attacker, play::serverbound::SetHeldItem { slot });
+        play_packet(attacker, play::serverbound::SetHeldItem { slot });
         std::thread::sleep(Duration::from_millis(150));
         for pig in pigs.by_ref().take(PIG_LOOTING_ROWS.len()) {
-            move_player(&mut attacker, [pig.x - 2.0, pig.y, pig.z], true);
+            move_player(attacker, [pig.x - 2.0, pig.y, pig.z], true);
             play_packet(
-                &mut attacker,
+                attacker,
                 play::serverbound::Attack {
                     entity_id: pig.entity_id,
                 },
             );
             counts.push(collect_pig_loot(
-                &mut attacker,
+                attacker,
                 pig,
                 drops.then_some(3 + i32::from(slot)),
             ));

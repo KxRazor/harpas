@@ -829,7 +829,7 @@ impl TickWork for Game {
                         }
                         player::Input::Attack(target) => {
                             if let Some(index) = self.active(entity_id) {
-                                self.attack_player(index, target);
+                                self.attack_entity(index, target);
                             }
                             continue;
                         }
@@ -1887,7 +1887,7 @@ mod tests {
         assert_eq!(game.players[2].vitals.health, 17.0);
 
         recharge(&mut game);
-        game.attack_player(0, 2);
+        game.attack_entity(0, 2);
         assert_eq!(game.players[2].vitals.health, 13.0);
         drop(game);
         std::fs::remove_dir_all(path).unwrap();
@@ -1934,7 +1934,7 @@ mod tests {
         for _ in 0..4 {
             game.tick_survival(rules);
         }
-        game.attack_player(0, 2);
+        game.attack_entity(0, 2);
         assert_eq!(game.players[1].vitals.health, 19.0);
         assert!(
             !defender
@@ -1942,7 +1942,7 @@ mod tests {
                 .any(|output| matches!(output, Output::ShieldSound { .. }))
         );
         game.tick_survival(rules);
-        game.attack_player(0, 2);
+        game.attack_entity(0, 2);
         assert!(
             defender
                 .try_iter()
@@ -1961,7 +1961,7 @@ mod tests {
             game.tick_survival(rules);
         }
         game.players[0].attack_damage_modifier = 3.0;
-        game.attack_player(0, 2);
+        game.attack_entity(0, 2);
         assert_eq!(game.players[1].vitals.health, 19.0);
         assert_eq!(
             ItemCodec::fallback()
@@ -1976,7 +1976,7 @@ mod tests {
         for _ in 0..10 {
             game.tick_survival(rules);
         }
-        game.attack_player(0, 2);
+        game.attack_entity(0, 2);
         assert_eq!(game.players[1].vitals.health, 18.0);
     }
 
@@ -2535,13 +2535,13 @@ mod tests {
         let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
         let position = [5.5, 65.0, 4.5];
         let chunk = world::ChunkPos::at(position[0], position[2]);
-        let pig = Pig {
-            rotation: [90.0, -22.5],
-            health: 7.5,
-            fall_distance: 0.0,
-            variant: PigVariant::Cold,
-            nbt: Arc::new(Compound::from_iter([("NoAI", 1_i8)])),
-        };
+        let pig = Pig::new(
+            [90.0, -22.5],
+            7.5,
+            0.0,
+            PigVariant::Cold,
+            Arc::new(Compound::from_iter([("NoAI", 1_i8)])),
+        );
         world
             .entities
             .add(2, 42, position, [0.0; 3], Kind::Pig(pig));

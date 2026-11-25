@@ -3525,6 +3525,166 @@ fn observe_pig_landing(
     landing
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn bare_hand_pig_combat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("bare-hand-pig-combat");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        concat!(
+            "forceload add 0 0\n",
+            "summon minecraft:pig 3.5 -60 1.5 ",
+            "{{Health:1.5f,attributes:[{{id:\"minecraft:movement_speed\",base:0d}}]}}"
+        )
+    )
+    .unwrap();
+    reference.wait_for("Summoned new Pig");
+    std::thread::sleep(Duration::from_millis(250));
+    writeln!(reference.child.stdin.as_mut().unwrap(), "save-all flush").unwrap();
+    reference.wait_for("Saved the game");
+    let entities = "world/dimensions/minecraft/overworld/entities";
+    let read_entities = |dir: &Path| harpas_anvil::read_chunk(&dir.join(entities), 0, 0).unwrap();
+    let initial = read_entities(&vanilla).unwrap();
+    harpas_anvil::write_chunks(&harpas.join(entities), 0, 0, &[((0, 0), &initial)]).unwrap();
+
+    let expected = punch_saved_pig(vanilla_port, 1.5);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    let actual = punch_saved_pig(harpas_port, 1.5);
+    assert_eq!(actual, expected);
+    stop(&mut server);
+    for dir in [&vanilla, &harpas] {
+        let saved = read_entities(dir).unwrap();
+        assert_eq!(
+            saved_entity(&saved, "minecraft:pig").get("Health"),
+            Some(&Nbt::Float(0.5))
+        );
+    }
+    let saved = read_entities(&harpas).unwrap();
+    harpas_anvil::write_chunks(&vanilla.join(entities), 0, 0, &[((0, 0), &saved)]).unwrap();
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    punch_saved_pig(vanilla_port, 0.5);
+    stop(&mut reference);
+    let mut server = Server::start(OsStr::new(env!("CARGO_BIN_EXE_harpas")), &[], &harpas);
+    server.wait_for("Done (");
+    punch_saved_pig(harpas_port, 0.5);
+    stop(&mut server);
+    for dir in [&vanilla, &harpas] {
+        if let Some(saved) = read_entities(dir)
+            && let Some(Nbt::List(List::Compound(entities))) = saved.get("Entities")
+        {
+            assert!(
+                entities
+                    .iter()
+                    .all(|tag| tag.get("id") != Some(&Nbt::from("minecraft:pig")))
+            );
+        }
+    }
+}
+
+fn punch_saved_pig(port: u16, initial_health: f32) -> Option<[f64; 3]> {
+    let mut attacker = Client::join(port, "PigHunter");
+    attacker.stream.set_nodelay(true).unwrap();
+    let attacker_id = attacker.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    let pig = track_saved_pig(&mut attacker);
+    let pig_health = |packet: Packet| match packet {
+        Packet::SetEntityMetadata(packet) if packet.entity_id == pig.entity_id => packet
+            .metadata
+            .entries
+            .into_iter()
+            .find_map(|(index, value)| match (index, value) {
+                (9, play::MetadataValue::Float(health)) => Some(health),
+                _ => None,
+            }),
+        _ => None,
+    };
+    assert_eq!(
+        attacker.matching("initial pig health", pig_health),
+        initial_health
+    );
+    let punch = play::serverbound::Attack {
+        entity_id: pig.entity_id,
+    };
+    let lethal = initial_health <= 1.0;
+    if !lethal {
+        move_player(&mut attacker, [pig.x - 7.0, -60.0, pig.z], true);
+        play_packet(&mut attacker, punch.clone());
+        attacker.send_command("list");
+        attacker.matching("list after the out-of-range punch", |packet| match packet {
+            Packet::DamageEvent(event) if event.entity_id == pig.entity_id => {
+                panic!("out-of-range attack damaged the pig")
+            }
+            Packet::SystemChatMessage(_) => Some(()),
+            _ => {
+                assert_eq!(pig_health(packet), None);
+                None
+            }
+        });
+    }
+    let distance = if lethal { 1.5 } else { 5.5 };
+    move_player(&mut attacker, [pig.x - distance, -60.0, pig.z], true);
+    std::thread::sleep(Duration::from_millis(300));
+    let mut frames = Vec::new();
+    for _ in 0..2 {
+        let packet = play::serverbound::Packet::from(punch.clone());
+        write_frame(&mut frames, |buf| packet.encode(buf));
+    }
+    attacker.stream.write_all(&frames).unwrap();
+
+    let mut damaged = false;
+    let mut updated_health = None;
+    let mut velocity = None;
+    let mut died = false;
+    let mut removed = false;
+    attacker.matching("pig damage, health and motion", |packet| {
+        match packet {
+            Packet::DamageEvent(event) if event.entity_id == pig.entity_id => {
+                assert!(!damaged, "rapid repeat should not damage the pig");
+                let types = harpas_java::registry_names("minecraft:damage_type").unwrap();
+                assert_eq!(types[event.source_type as usize], "minecraft:player_attack");
+                assert_eq!(event.source_cause, attacker_id + 1);
+                assert_eq!(event.source_direct, attacker_id + 1);
+                damaged = true;
+            }
+            Packet::SetEntityVelocity(packet)
+                if packet.entity_id == pig.entity_id && packet.velocity.x > 0.0 =>
+            {
+                let motion = packet.velocity;
+                velocity.get_or_insert([motion.x, motion.y, motion.z]);
+            }
+            Packet::EntityEvent(event) if event.entity_id == pig.entity_id && event.event == 3 => {
+                died = true;
+            }
+            Packet::RemoveEntities(packet) if packet.entity_ids.contains(&pig.entity_id) => {
+                removed = true;
+            }
+            _ => {
+                if let Some(health) = pig_health(packet) {
+                    assert!(updated_health.is_none());
+                    updated_health = Some(health);
+                }
+            }
+        }
+        if lethal {
+            removed.then_some(())
+        } else {
+            (damaged && updated_health.is_some() && velocity.is_some()).then_some(())
+        }
+    });
+    assert!(damaged);
+    assert_eq!(died, lethal);
+    assert_eq!(updated_health, (!lethal).then_some(initial_health - 1.0));
+    velocity
+}
+
 fn use_food(client: &mut Client, hand: play::Hand, sequence: i32) {
     play_packet(
         client,

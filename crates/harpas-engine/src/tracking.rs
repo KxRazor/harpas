@@ -33,7 +33,7 @@ pub(crate) struct ServerEntity {
     tick_count: i32,
     /// The position last sent, which moves are relative to (`positionCodec`'s base).
     base: [f64; 3],
-    last_velocity: [f64; 3],
+    pub(crate) last_velocity: [f64; 3],
     was_on_ground: bool,
     teleport_delay: i32,
     /// Whether the stack changed since it was last sent (`EntityData.isDirty`).

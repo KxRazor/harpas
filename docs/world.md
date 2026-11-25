@@ -206,6 +206,8 @@ can span two transactions if the process is interrupted.
 An adult pig retains its UUID, position, motion, ground state, fall distance, rotation, health, variant and
 other saved fields. Its movement updates both affected chunks when it crosses a boundary. Baby pigs and
 other mobs stay inactive and keep their original NBT, as do items with unported components.
+Damage dirties the pig's entity chunk so its health is saved. A killed pig is omitted even if a save
+starts during its death animation.
 `item_entity_parity` reads the updated Harpas region back through vanilla's codecs.
 `saved_adult_pig_matches_vanilla` compares the spawn and metadata of a pig suspended with `NoAI` before
 and after vanilla reopens the region Harpas saved.

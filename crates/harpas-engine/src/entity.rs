@@ -35,6 +35,8 @@ pub struct EntityHandle {
 const ITEM_SIZE: f64 = 0.25;
 /// The width and height of an adult pig.
 const PIG_SIZE: f64 = 0.9_f32 as f64;
+/// The length of a living entity's death animation before removal.
+const DEATH_TICKS: u8 = 20;
 /// How many ticks an item lasts on the ground (`ItemEntity.LIFETIME`).
 const LIFETIME: i32 = 6000;
 /// A pickup delay that never ends (`INFINITE_PICKUP_DELAY`).
@@ -59,12 +61,34 @@ pub(crate) struct Pig {
     /// Yaw and pitch, in degrees.
     pub(crate) rotation: [f32; 2],
     pub(crate) health: f32,
+    pub(crate) hurt_cooldown: u8,
+    pub(crate) last_damage: f32,
+    death_time: u8,
     pub(crate) fall_distance: f64,
     pub(crate) variant: PigVariant,
     pub(crate) nbt: Arc<Compound>,
 }
 
 impl Pig {
+    pub(crate) fn new(
+        rotation: [f32; 2],
+        health: f32,
+        fall_distance: f64,
+        variant: PigVariant,
+        nbt: Arc<Compound>,
+    ) -> Self {
+        Self {
+            rotation,
+            health,
+            hurt_cooldown: 0,
+            last_damage: 0.0,
+            death_time: 0,
+            fall_distance,
+            variant,
+            nbt,
+        }
+    }
+
     pub(crate) fn no_ai(&self) -> bool {
         self.nbt.get("NoAI") == Some(&Nbt::Byte(1))
     }
@@ -172,7 +196,7 @@ impl Entities {
             return;
         }
         let i = handle.index as usize;
-        self.mark_changed(handle.index);
+        self.mark_changed(handle);
         self.removed.push(RemovedEntity {
             network_id: self.network_id[i],
             viewers: self.server[i].seen_by().collect(),
@@ -183,8 +207,8 @@ impl Entities {
         self.order.retain(|h| *h != handle);
     }
 
-    fn mark_changed(&mut self, index: u32) {
-        let [x, _, z] = self.position[index as usize];
+    pub(crate) fn mark_changed(&mut self, handle: EntityHandle) {
+        let [x, _, z] = self.position[self.slot(handle)];
         self.changed_chunks.insert(ChunkPos::at(x, z));
     }
 
@@ -198,7 +222,7 @@ impl Entities {
         if let Some(item) = self.item_mut(handle) {
             item.stack = stack;
             self.server[handle.index as usize].dirty = true;
-            self.mark_changed(handle.index);
+            self.mark_changed(handle);
         }
     }
 
@@ -227,6 +251,18 @@ impl Entities {
 
     fn item_box(&self, i: usize) -> Aabb {
         self.bounds(i, ITEM_SIZE)
+    }
+
+    pub(crate) fn pig_target(&self, entity_id: i32) -> Option<EntityHandle> {
+        self.order.iter().copied().find(|&handle| {
+            let slot = self.slot(handle);
+            self.network_id[slot] == entity_id
+                && matches!(&self.kind[slot], Some(Kind::Pig(pig)) if pig.health > 0.0)
+        })
+    }
+
+    pub(crate) fn pig_box(&self, i: usize) -> Aabb {
+        self.bounds(i, PIG_SIZE)
     }
 
     /// The box of an entity whose width and height are equal (`getBoundingBox`).
@@ -847,7 +883,7 @@ impl World {
         into_item.age = into_item.age.min(from_item.age);
         let into_slot = self.entities.slot(into);
         self.entities.server[into_slot].dirty = true;
-        self.entities.mark_changed(into_slot as u32);
+        self.entities.mark_changed(into);
         let left = from_item.stack.count - moved;
         if left <= 0 {
             self.entities.remove(from);
@@ -855,11 +891,11 @@ impl World {
             self.entities.item_mut(from).expect("an item").stack.count = left;
             let from_slot = self.entities.slot(from);
             self.entities.server[from_slot].dirty = true;
-            self.entities.mark_changed(from_slot as u32);
+            self.entities.mark_changed(from);
         }
     }
 
-    /// Runs the tick of every entity whose chunk a player sees, in order, and removes the items that are gone
+    /// Runs the tick of every entity whose chunk a player sees, in order, and removes expired entities
     /// (`entityTickList.forEach(tickNonPassenger)`). Returns the entities removed.
     pub(crate) fn tick_entities(&mut self) -> Vec<RemovedEntity> {
         for handle in self.entities.order.clone() {
@@ -874,14 +910,24 @@ impl World {
             if !ticking {
                 continue;
             }
-            let changed = match self.entities.kind[i].as_ref().expect("live entity") {
+            let changed = match self.entities.kind[i].as_mut().expect("live entity") {
                 Kind::Item(_) => {
                     if !self.tick_item(handle) {
                         self.entities.remove(handle);
                     }
                     true
                 }
-                Kind::Pig(_) => self.tick_pig(i),
+                Kind::Pig(pig) => {
+                    pig.hurt_cooldown = pig.hurt_cooldown.saturating_sub(1);
+                    if pig.health <= 0.0 {
+                        pig.death_time += 1;
+                        if pig.death_time >= DEATH_TICKS {
+                            self.entities.remove(handle);
+                            continue;
+                        }
+                    }
+                    self.tick_pig(i)
+                }
             };
             if changed {
                 self.entities.changed_chunks.insert(chunk);
@@ -961,7 +1007,7 @@ impl World {
         let handle = self
             .entities
             .add(network_id, uuid, position, velocity, Kind::Item(item));
-        self.entities.mark_changed(handle.index);
+        self.entities.mark_changed(handle);
         handle
     }
 }

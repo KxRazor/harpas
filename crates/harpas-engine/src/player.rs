@@ -506,9 +506,9 @@ pub enum Output {
     },
     /// Set or clear the local player's cooldown for shields.
     ShieldCooldown(i32),
-    /// A player took damage.
+    /// An entity took damage.
     Damage {
-        /// The player who was hurt.
+        /// The entity that was hurt.
         entity_id: i32,
         /// The source of the damage.
         kind: DamageKind,
@@ -593,6 +593,15 @@ pub enum Output {
         /// Whether the saved mob has its AI disabled.
         no_ai: bool,
     },
+    /// A tracked pig's health changed.
+    PigHealth {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Remaining health.
+        health: f32,
+    },
+    /// Play the death animation for a tracked pig.
+    PigDied(i32),
     /// An entity's full position, velocity, rotation and ground state.
     EntitySync {
         /// Runtime entity ID.

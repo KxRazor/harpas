@@ -128,6 +128,7 @@ impl ChestLootTables {
         let mut context = Context {
             state: Some(block_states().default_state("minecraft:air").unwrap()),
             tool: &ItemStack::empty(),
+            looting_level: 0,
             random: &mut *random,
             chest: Some((&self.enchantments, codec)),
             treasure_map,

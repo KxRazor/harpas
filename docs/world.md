@@ -13,7 +13,7 @@ sent, and that light is compared with vanilla's own saved chunks. Changed chunks
 feature definitions are loaded from the datapack, and ores, simple vegetation and the first trees are placed and
 compared with vanilla, but generation through the complete feature stage, live block changes and saving other
 world and player data during play remain in progress. The server persists player inventories, game modes, health and
-dropped items and saved adult pigs. See [Player inventories](#player-inventories) and [Entity regions](#entity-regions).
+dropped items and saved adult pigs and cows. See [Player inventories](#player-inventories) and [Entity regions](#entity-regions).
 Facts about vanilla cite their source in [References](#references); everything else is a design decision of this
 project.
 
@@ -191,22 +191,22 @@ non-blocking I/O, newer snapshots racing older saves, queue saturation and save 
 
 ### Entity regions
 
-The Overworld uses the `entities/` region files for item entities and adult pigs. Workers read entity data
+The Overworld uses the `entities/` region files for item entities, adult pigs and adult cows. Workers read entity data
 with the chunk and save immutable snapshots on autosave, unload and shutdown. An item snapshot includes the
 stack and supported components, UUID, position, velocity, ground state, health, age and pickup delay.
 A loaded item receives a new runtime network ID. New items use UUIDs generated from a fresh seed when the world
 opens. Removing or moving an item also updates its former chunk, so it stays gone when that chunk reloads.
 
-Items and pigs in chunks outside the simulation set pause. A drop made before its chunk arrives waits for
+Items and animals in chunks outside the simulation set pause. A drop made before its chunk arrives waits for
 the saved entities to load before it can be saved. The logic thread keeps the chunk in memory while its saves are
 outstanding. Terrain and entity revisions share the worker queue but are saved only when their respective
 data changes. Entity regions use the same journal recovery as terrain regions. A move across region files
 can span two transactions if the process is interrupted.
 
-An adult pig retains its UUID, position, motion, ground state, fall distance, rotation, health, variant and
-other saved fields. Its movement updates both affected chunks when it crosses a boundary. Baby pigs and
+An adult pig or cow retains its UUID, position, motion, ground state, fall distance, rotation, health, variant and
+other saved fields. Its movement updates both affected chunks when it crosses a boundary. Calves, piglets and
 other mobs stay inactive and keep their original NBT, as do items with unported components.
-Damage dirties the pig's entity chunk so its health is saved. A killed pig is omitted even if a save
+Damage dirties the animal's entity chunk so its health is saved. A killed animal is omitted even if a save
 starts during its death animation.
 `item_entity_parity` reads the updated Harpas region back through vanilla's codecs.
 `saved_adult_pig_matches_vanilla` compares the spawn and metadata of a pig suspended with `NoAI` before

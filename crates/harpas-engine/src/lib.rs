@@ -22,6 +22,7 @@ mod place;
 pub mod player;
 pub mod player_data;
 pub mod recipe;
+mod redstone;
 mod survival;
 pub(crate) mod ticks;
 mod tracking;
@@ -2521,9 +2522,9 @@ mod tests {
 
     #[test]
     fn players_start_and_stop_tracking_saved_pigs() {
-        use entity::{Kind, Pig};
+        use entity::{Animal, Kind};
         use harpas_core::nbt::Compound;
-        use player::PigVariant;
+        use player::AnimalVariant;
 
         let mut game = game();
         let received = join(&mut game, 1, "Viewer", 12);
@@ -2535,16 +2536,17 @@ mod tests {
         let mut world = world::World::open(&path, &["minecraft:plains"]).unwrap();
         let position = [5.5, 65.0, 4.5];
         let chunk = world::ChunkPos::at(position[0], position[2]);
-        let pig = Pig::new(
+        let pig = Animal::new(
+            crate::player::AnimalSpecies::Pig,
             [90.0, -22.5],
             7.5,
             0.0,
-            PigVariant::Cold,
+            AnimalVariant::Cold,
             Arc::new(Compound::from_iter([("NoAI", 1_i8)])),
         );
         world
             .entities
-            .add(2, 42, position, [0.0; 3], Kind::Pig(pig));
+            .add(2, 42, position, [0.0; 3], Kind::Animal(pig));
         game.world = Some(world);
         game.players[0].player.position.z = position[2];
         game.players[0].player.position.x = position[0] + 100.0;
@@ -2559,14 +2561,15 @@ mod tests {
         game.players[0].player.position.x = position[0] + 100.0;
         game.track_entities(&[]);
         game.track_entities(&[]);
-        let spawn = Output::SpawnPig {
+        let spawn = Output::SpawnAnimal {
+            species: crate::player::AnimalSpecies::Pig,
             entity_id: 2,
             uuid: 42,
             position,
             velocity: [0.0; 3],
             rotation: [90.0, -22.5],
             health: 7.5,
-            variant: PigVariant::Cold,
+            variant: AnimalVariant::Cold,
             no_ai: true,
         };
         assert_eq!(received.try_recv().unwrap(), spawn);

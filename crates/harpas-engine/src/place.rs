@@ -92,7 +92,7 @@ pub(crate) fn with(state: u32, changes: &[(&str, &str)]) -> u32 {
         .map_or(state, |(state, _)| state)
 }
 
-fn property(state: u32, key: &str) -> Option<&'static str> {
+pub(crate) fn property(state: u32, key: &str) -> Option<&'static str> {
     block_states()
         .properties(state)?
         .1
@@ -272,6 +272,12 @@ impl Game {
         let secondary = player.secondary_use && has_item;
         if !secondary {
             match block_states().name(clicked) {
+                Some(crate::redstone::LEVER) => {
+                    if let Some(world) = &mut self.world {
+                        world.toggle_lever(hit, clicked);
+                    }
+                    return Placed::No;
+                }
                 Some("minecraft:crafting_table") => self.open_crafting_table(index, hit),
                 Some(CHEST) => self.open_chest(index, hit),
                 Some(FURNACE) => self.open_furnace(index, hit),
@@ -377,6 +383,21 @@ impl Game {
                 && (context.face == Direction::Up || !context.upper_half());
             if bottom { "bottom" } else { "top" }
         };
+        if name == crate::redstone::LEVER {
+            let (face, facing) = match context.face {
+                Direction::Up => ("floor", context.facing),
+                Direction::Down => ("ceiling", context.facing),
+                direction => ("wall", direction),
+            };
+            return Some(with(block, &[("face", face), ("facing", facing.name())]));
+        }
+        if name == crate::redstone::LAMP {
+            let powered = self.world.as_ref()?.lever_signal(context.pos);
+            return Some(with(
+                block,
+                &[("lit", if powered { "true" } else { "false" })],
+            ));
+        }
         if keys.is_empty() {
             return Some(block);
         }

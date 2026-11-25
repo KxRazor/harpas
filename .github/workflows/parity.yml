@@ -61,7 +61,7 @@ jobs:
             exit 0
           fi
           files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-          if grep -qE '^(crates/|ci/|Cargo\.(toml|lock)$|\.github/workflows/parity\.yml$)' <<< "$files"; then
+          if grep -qE '^(crates/|ci/|Cargo\.(toml|lock)$|\.config/nextest\.toml$|\.github/workflows/parity\.yml$)' <<< "$files"; then
             echo 'compare=true' >> "$GITHUB_OUTPUT"
           else
             echo 'compare=false' >> "$GITHUB_OUTPUT"
@@ -112,13 +112,18 @@ jobs:
       # (docs/parity.md#adding-a-harness). The `parity` profile in .config/nextest.toml runs every test even after
       # a failure, so one run reports all the differences. The tests that need the server are `#[ignore]`d, so
       # that a run without it reports them as skipped; `--run-ignored all` runs them with the others.
+      - name: Build and list parity harnesses
+        run: >-
+          cargo nextest list --profile parity --release --workspace --locked --test '*_parity' --test world_loading
+          --run-ignored all --message-format json > "$RUNNER_TEMP/parity-tests.json"
       - name: Parity harnesses
         env:
           HARPAS_VANILLA_SERVER_DIR: ${{ runner.temp }}/vanilla
           HARPAS_PARITY_SAMPLE: ${{ github.event_name == 'pull_request' && 'reduced' || inputs.sample || 'full' }}
-        run: >-
-          cargo nextest run --profile parity --release --workspace --locked --test '*_parity' --test world_loading
-          --run-ignored all --partition slice:${{ matrix.shard }}/${{ strategy.job-total }}
+        run: |
+          filter=$(python3 ci/parity-shard.py "$RUNNER_TEMP/parity-tests.json" ${{ matrix.shard }} ${{ strategy.job-total }})
+          cargo nextest run --profile parity --release --workspace --locked --test '*_parity' --test world_loading \
+            --run-ignored all -E "$filter"
 
   result:
     # Rulesets require checks by name, so this name does not include the version or the shards. A skipped job counts

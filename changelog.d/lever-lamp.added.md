@@ -1,0 +1,1 @@
+- A lever directly beside a redstone lamp lights it immediately. The lamp turns off four game ticks after losing power, including across a save and reload.

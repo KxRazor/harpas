@@ -43,6 +43,12 @@ parity dir sample="reduced" *tests:
         cargo nextest run --profile parity --release --workspace --locked \
         --test '*_parity' --test world_loading --run-ignored all {{ tests }}
 
+# Compare one scenario in one harness with the installed vanilla server.
+parity-case dir crate harness scenario sample="reduced":
+    HARPAS_VANILLA_SERVER_DIR={{ quote(dir) }} HARPAS_PARITY_SAMPLE={{ quote(sample) }} \
+        cargo nextest run --profile parity --release --locked -p {{ quote(crate) }} \
+        --test {{ quote(harness) }} --run-ignored all --no-tests fail -- {{ quote(scenario) }} --exact
+
 # Check the licenses of the dependencies and regenerate THIRD_PARTY_NOTICES.md, after adding or updating one.
 deps:
     cargo deny check licenses bans sources

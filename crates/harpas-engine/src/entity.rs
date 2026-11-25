@@ -21,7 +21,7 @@ use harpas_core::random::RandomSource;
 use crate::block::{self, BlockPos};
 use crate::fluid::FluidState;
 use crate::inventory::ItemStack;
-use crate::player::PigVariant;
+use crate::player::{AnimalSpecies, AnimalVariant};
 use crate::world::{ChunkPos, ChunkState, World};
 
 /// An entity's handle: its slot and the slot's generation, which changes when the slot is reused.
@@ -33,8 +33,8 @@ pub struct EntityHandle {
 
 /// The width and height of an item entity (`EntityType.ITEM`).
 const ITEM_SIZE: f64 = 0.25;
-/// The width and height of an adult pig.
-const PIG_SIZE: f64 = 0.9_f32 as f64;
+/// The width of adult cows and pigs.
+const ANIMAL_WIDTH: f64 = 0.9_f32 as f64;
 /// The length of a living entity's death animation before removal.
 const DEATH_TICKS: u8 = 20;
 /// How many ticks an item lasts on the ground (`ItemEntity.LIFETIME`).
@@ -55,9 +55,10 @@ pub(crate) struct ItemEntity {
     pub(crate) rest: Arc<Compound>,
 }
 
-/// The saved state of a living adult pig.
+/// The saved state of a living adult animal.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Pig {
+pub(crate) struct Animal {
+    pub(crate) species: AnimalSpecies,
     /// Yaw and pitch, in degrees.
     pub(crate) rotation: [f32; 2],
     pub(crate) health: f32,
@@ -65,19 +66,21 @@ pub(crate) struct Pig {
     pub(crate) last_damage: f32,
     death_time: u8,
     pub(crate) fall_distance: f64,
-    pub(crate) variant: PigVariant,
+    pub(crate) variant: AnimalVariant,
     pub(crate) nbt: Arc<Compound>,
 }
 
-impl Pig {
+impl Animal {
     pub(crate) fn new(
+        species: AnimalSpecies,
         rotation: [f32; 2],
         health: f32,
         fall_distance: f64,
-        variant: PigVariant,
+        variant: AnimalVariant,
         nbt: Arc<Compound>,
     ) -> Self {
         Self {
+            species,
             rotation,
             health,
             hurt_cooldown: 0,
@@ -86,6 +89,13 @@ impl Pig {
             fall_distance,
             variant,
             nbt,
+        }
+    }
+
+    fn height(&self) -> f64 {
+        match self.species {
+            AnimalSpecies::Pig => ANIMAL_WIDTH,
+            AnimalSpecies::Cow => 1.4_f32 as f64,
         }
     }
 
@@ -98,7 +108,7 @@ impl Pig {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Kind {
     Item(ItemEntity),
-    Pig(Pig),
+    Animal(Animal),
 }
 
 /// A removal keeps its network identity and viewers even after its storage slot is reused.
@@ -238,38 +248,41 @@ impl Entities {
     pub(crate) fn item(&self, handle: EntityHandle) -> Option<&ItemEntity> {
         match self.kind.get(handle.index as usize)?.as_ref()? {
             Kind::Item(item) => Some(item),
-            Kind::Pig(_) => None,
+            Kind::Animal(_) => None,
         }
     }
 
     fn item_mut(&mut self, handle: EntityHandle) -> Option<&mut ItemEntity> {
         match self.kind.get_mut(handle.index as usize)?.as_mut()? {
             Kind::Item(item) => Some(item),
-            Kind::Pig(_) => None,
+            Kind::Animal(_) => None,
         }
     }
 
     fn item_box(&self, i: usize) -> Aabb {
-        self.bounds(i, ITEM_SIZE)
+        self.bounds(i, ITEM_SIZE, ITEM_SIZE)
     }
 
-    pub(crate) fn pig_target(&self, entity_id: i32) -> Option<EntityHandle> {
+    pub(crate) fn animal_target(&self, entity_id: i32) -> Option<EntityHandle> {
         self.order.iter().copied().find(|&handle| {
             let slot = self.slot(handle);
             self.network_id[slot] == entity_id
-                && matches!(&self.kind[slot], Some(Kind::Pig(pig)) if pig.health > 0.0)
+                && matches!(&self.kind[slot], Some(Kind::Animal(animal)) if animal.health > 0.0)
         })
     }
 
-    pub(crate) fn pig_box(&self, i: usize) -> Aabb {
-        self.bounds(i, PIG_SIZE)
+    pub(crate) fn animal_box(&self, i: usize) -> Aabb {
+        let Some(Kind::Animal(animal)) = &self.kind[i] else {
+            unreachable!()
+        };
+        self.bounds(i, ANIMAL_WIDTH, animal.height())
     }
 
-    /// The box of an entity whose width and height are equal (`getBoundingBox`).
-    fn bounds(&self, i: usize, size: f64) -> Aabb {
+    /// The box of an entity at its feet position (`getBoundingBox`).
+    fn bounds(&self, i: usize, width: f64, height: f64) -> Aabb {
         let [x, y, z] = self.position[i];
-        let half = size / 2.0;
-        [[x - half, y, z - half], [x + half, y + size, z + half]]
+        let half = width / 2.0;
+        [[x - half, y, z - half], [x + half, y + height, z + half]]
     }
 }
 
@@ -470,8 +483,8 @@ impl World {
     }
 
     /// The block collision and support changes of `Entity.move`.
-    fn move_entity(&mut self, i: usize, movement: [f64; 3], size: f64) {
-        let entity = self.entities.bounds(i, size);
+    fn move_entity(&mut self, i: usize, movement: [f64; 3], width: f64, height: f64) {
+        let entity = self.entities.bounds(i, width, height);
         let collided = self.collide(entity, movement);
         let length: f64 = collided.iter().map(|d| d * d).sum();
         let wanted: f64 = movement.iter().map(|d| d * d).sum();
@@ -489,7 +502,7 @@ impl World {
             self.entities.on_ground[i] = on_ground;
             // `checkSupportingBlock`.
             if on_ground {
-                let entity = self.entities.bounds(i, size);
+                let entity = self.entities.bounds(i, width, height);
                 let below = [
                     [entity[0][0], entity[0][1] - 1.0e-6, entity[0][2]],
                     [entity[1][0], entity[0][1], entity[1][2]],
@@ -725,7 +738,7 @@ impl World {
                     self.entities.position[i][axis] += d;
                 }
             } else {
-                self.move_entity(i, v, ITEM_SIZE);
+                self.move_entity(i, v, ITEM_SIZE, ITEM_SIZE);
             }
             let mut f = 0.98_f32;
             if self.entities.on_ground[i] {
@@ -762,15 +775,15 @@ impl World {
         age < LIFETIME
     }
 
-    /// The dry movement of a living adult pig without movement input (`travelInAir`).
-    fn tick_pig(&mut self, i: usize) -> bool {
-        let Some(Kind::Pig(pig)) = &self.entities.kind[i] else {
+    /// The dry movement of a living adult animal without movement input (`travelInAir`).
+    fn tick_animal(&mut self, i: usize) -> bool {
+        let Some(Kind::Animal(animal)) = &self.entities.kind[i] else {
             return false;
         };
-        if pig.no_ai() {
+        if animal.no_ai() {
             return false;
         }
-        let gravity = if pig.nbt.get("NoGravity") == Some(&Nbt::Byte(1)) {
+        let gravity = if animal.nbt.get("NoGravity") == Some(&Nbt::Byte(1)) {
             0.0
         } else {
             0.08
@@ -794,7 +807,7 @@ impl World {
         self.entities.old_position[i] = before;
         self.entities.tick_count[i] += 1;
         self.entities.velocity[i] = [x, y, z];
-        self.move_entity(i, [x, y, z], PIG_SIZE);
+        self.move_entity(i, [x, y, z], ANIMAL_WIDTH, animal.height());
         let v = &mut self.entities.velocity[i];
         *v = [
             v[0] * f64::from(drag),
@@ -803,19 +816,19 @@ impl World {
         ];
         let after = self.entities.position[i];
         let grounded = self.entities.on_ground[i];
-        let Some(Kind::Pig(pig)) = &mut self.entities.kind[i] else {
+        let Some(Kind::Animal(animal)) = &mut self.entities.kind[i] else {
             unreachable!()
         };
-        let fall_distance = pig.fall_distance;
+        let fall_distance = animal.fall_distance;
         if grounded {
-            pig.fall_distance = 0.0;
+            animal.fall_distance = 0.0;
         } else if after[1] < before[1] {
-            pig.fall_distance += f64::from((before[1] - after[1]) as f32);
+            animal.fall_distance += f64::from((before[1] - after[1]) as f32);
         }
         before != after
             || velocity != *v
             || on_ground != grounded
-            || fall_distance != pig.fall_distance
+            || fall_distance != animal.fall_distance
     }
 
     /// `ItemEntity.mergeWithNeighbours`: the stacks of the same item within half a block merge into the larger
@@ -917,16 +930,16 @@ impl World {
                     }
                     true
                 }
-                Kind::Pig(pig) => {
-                    pig.hurt_cooldown = pig.hurt_cooldown.saturating_sub(1);
-                    if pig.health <= 0.0 {
-                        pig.death_time += 1;
-                        if pig.death_time >= DEATH_TICKS {
+                Kind::Animal(animal) => {
+                    animal.hurt_cooldown = animal.hurt_cooldown.saturating_sub(1);
+                    if animal.health <= 0.0 {
+                        animal.death_time += 1;
+                        if animal.death_time >= DEATH_TICKS {
                             self.entities.remove(handle);
                             continue;
                         }
                     }
-                    self.tick_pig(i)
+                    self.tick_animal(i)
                 }
             };
             if changed {
@@ -960,12 +973,17 @@ impl World {
         }
     }
 
-    /// Drops the pig table's stacks at the pig's position on a lethal melee hit.
-    pub(crate) fn drop_pig_loot(&mut self, position: [f64; 3], tool: &ItemStack) {
+    /// Drops the animal table's stacks at the animal's position on a lethal melee hit.
+    pub(crate) fn drop_animal_loot(
+        &mut self,
+        species: AnimalSpecies,
+        position: [f64; 3],
+        tool: &ItemStack,
+    ) {
         let Some(loot) = self.loot.clone() else {
             return;
         };
-        let Some(table) = &loot.pig else {
+        let Some(table) = loot.animals.get(&species) else {
             return;
         };
         let looting_level = self
@@ -983,7 +1001,7 @@ impl World {
                     }
                 }
             }
-            Err(error) => log::warn!("Cannot roll pig loot: {error}"),
+            Err(error) => log::warn!("Cannot roll animal loot: {error}"),
         }
     }
 

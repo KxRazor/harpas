@@ -2,7 +2,7 @@
 //! `updateNeighborsAt`, `BlockStateBase.updateNeighbourShapes` and `CollectingNeighborUpdater`).
 //!
 //! When a block changes with [`UPDATE_NEIGHBORS`], each of its six neighbors is told (`neighborChanged`), in the
-//! order west, east, down, up, north, south; only liquids react so far. Then, unless the shape is known, each
+//! order west, east, down, up, north, south; liquids and redstone lamps react so far. Then, unless the shape is known, each
 //! neighbor is asked for its new shape (`updateShape`) against the new block, in the order west, east, north,
 //! south, down, up. Every update a change adds runs before the next update of the change that caused it, the
 //! first added first, as the collecting updater pushes them. A neighbor whose shape becomes air breaks
@@ -10,7 +10,7 @@
 //! neighbors. The shape rules of each block are those `harpas-worldgen` ports for features and structures
 //! (`ShapeUpdates`); a liquid, or a block that holds water, also schedules its fluid's tick.
 //!
-//! Not done yet: the blocks other than liquids that react to their neighbors, redstone among them, the indirect
+//! Not done yet: the blocks other than liquids and lamps that react to their neighbors, including other redstone components, the indirect
 //! shape updates of redstone wire, `onPlace` for blocks other than liquids, `affectNeighborsAfterRemoval`, and
 //! drops. Vanilla loads a chunk that an update reaches; here a block next to a chunk that is not loaded keeps its
 //! shape, so that it is never broken for missing support the server has not read.
@@ -329,8 +329,14 @@ impl World {
         self.updater.count = 0;
     }
 
-    /// `NeighborUpdater.executeUpdate`: the block's `neighborChanged`, which only liquids react to so far.
+    /// `NeighborUpdater.executeUpdate`: the block's `neighborChanged`, for liquids and directly powered lamps.
     fn neighbor_changed(&mut self, pos: BlockPos) {
+        if let Some(state) = self.block_state(pos)
+            && block_states().name(state) == Some(crate::redstone::LAMP)
+        {
+            self.update_lamp(pos, state);
+            return;
+        }
         if !self.neighborhood_loaded(pos) {
             return;
         }

@@ -1,4 +1,4 @@
-//! Loot tables from the vanilla data pack, evaluated for broken blocks, chests and pig kills.
+//! Loot tables from the vanilla data pack, evaluated for broken blocks, chests and animal kills.
 //!
 //! A table rolls each pool whose conditions pass, as many times as its `rolls`, and each roll picks one of the
 //! entries that expand, by weight; then the entry's, the pool's and the table's functions apply, and stacks over
@@ -816,12 +816,12 @@ impl LootTable {
     }
 }
 
-/// The loot tables for blocks, supported chests and pigs.
+/// The loot tables for blocks, supported chests and supported animals.
 #[derive(Debug, Default)]
 pub struct LootTables {
     blocks: HashMap<String, LootTable>,
     pub(crate) chests: Option<chest::ChestLootTables>,
-    pub(crate) pig: Option<LootTable>,
+    pub(crate) animals: HashMap<crate::player::AnimalSpecies, LootTable>,
 }
 
 impl LootTables {
@@ -852,13 +852,18 @@ impl LootTables {
             Ok(chests) => tables.chests = chests,
             Err(error) => warn!("Chests cannot generate their loot: {error}"),
         }
-        match archive.by_name("data/minecraft/loot_table/entities/pig.json") {
-            Ok(entry) => match serde_json::from_reader(entry) {
-                Ok(json) => tables.pig = Some(LootTable::parse(&json)),
-                Err(error) => warn!("Pigs cannot generate their loot: {error}"),
-            },
-            Err(zip::result::ZipError::FileNotFound) => {}
-            Err(error) => warn!("Pigs cannot generate their loot: {error}"),
+        use crate::player::AnimalSpecies;
+        for (species, name) in [(AnimalSpecies::Pig, "pig"), (AnimalSpecies::Cow, "cow")] {
+            match archive.by_name(&format!("data/minecraft/loot_table/entities/{name}.json")) {
+                Ok(entry) => match serde_json::from_reader(entry) {
+                    Ok(json) => {
+                        tables.animals.insert(species, LootTable::parse(&json));
+                    }
+                    Err(error) => warn!("Cannot read {name} loot: {error}"),
+                },
+                Err(zip::result::ZipError::FileNotFound) => {}
+                Err(error) => warn!("Cannot read {name} loot: {error}"),
+            }
         }
         Ok(tables)
     }

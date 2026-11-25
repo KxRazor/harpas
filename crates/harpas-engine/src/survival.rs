@@ -18,7 +18,7 @@ const LAVA_FIRE_TICKS: i16 = 15 * 20;
 const FIRE_ASPECT_TICKS_PER_LEVEL: i16 = 4 * 20;
 const SURVIVAL_ENTITY_REACH: f64 = 3.0;
 /// Java allows three extra blocks when validating a received attack on a mob.
-const PIG_ATTACK_REACH: f64 = SURVIVAL_ENTITY_REACH + 3.0;
+const ANIMAL_ATTACK_REACH: f64 = SURVIVAL_ENTITY_REACH + 3.0;
 const BASE_ATTACK_SPEED: f64 = 4.0;
 const BASE_ATTACK_DAMAGE: f64 = 1.0;
 const SHIELD_RAISE_TICKS: u32 = 5;
@@ -815,7 +815,7 @@ impl Game {
 
     pub(crate) fn attack_entity(&mut self, attacker: usize, target_id: i32) {
         let Some(defender) = self.active(target_id) else {
-            self.attack_pig(attacker, target_id);
+            self.attack_animal(attacker, target_id);
             return;
         };
         let rules = self
@@ -965,7 +965,7 @@ impl Game {
         }
     }
 
-    fn attack_pig(&mut self, attacker: usize, entity_id: i32) {
+    fn attack_animal(&mut self, attacker: usize, entity_id: i32) {
         let source = &self.players[attacker];
         let hand_slot = source.inventory.hand_slot(false);
         let main_hand = &source.inventory.slots[hand_slot];
@@ -994,18 +994,18 @@ impl Game {
             return;
         }
         let entities = &mut world.entities;
-        let Some(handle) = entities.pig_target(entity_id) else {
+        let Some(handle) = entities.animal_target(entity_id) else {
             return;
         };
         let slot = entities.slot(handle);
         if !within_reach(
             source.eye_position(),
-            entities.pig_box(slot),
-            PIG_ATTACK_REACH,
+            entities.animal_box(slot),
+            ANIMAL_ATTACK_REACH,
         ) {
             return;
         }
-        let Kind::Pig(pig) = entities.kind[slot].as_mut().expect("live pig") else {
+        let Kind::Animal(animal) = entities.kind[slot].as_mut().expect("live animal") else {
             unreachable!()
         };
         self.players[attacker].attack_charge_ticks = 0;
@@ -1013,23 +1013,24 @@ impl Game {
         if critical {
             damage *= 1.5;
         }
-        let fresh_hit = pig.hurt_cooldown <= 10;
+        let fresh_hit = animal.hurt_cooldown <= 10;
         let taken = if fresh_hit {
             damage
         } else {
-            damage - pig.last_damage
+            damage - animal.last_damage
         };
-        if taken <= 0.0 || pig.nbt.get("Invulnerable") == Some(&Nbt::Byte(1)) {
+        if taken <= 0.0 || animal.nbt.get("Invulnerable") == Some(&Nbt::Byte(1)) {
             return;
         }
-        pig.last_damage = damage;
+        animal.last_damage = damage;
         if fresh_hit {
-            pig.hurt_cooldown = 20;
+            animal.hurt_cooldown = 20;
         }
-        pig.health = (pig.health - taken).max(0.0);
-        let health = pig.health;
+        animal.health = (animal.health - taken).max(0.0);
+        let health = animal.health;
+        let species = animal.species;
 
-        let pig_position @ [x, _, z] = entities.position[slot];
+        let animal_position @ [x, _, z] = entities.position[slot];
         let velocity = &mut entities.velocity[slot];
         let on_ground = entities.on_ground[slot];
         if fresh_hit {
@@ -1062,9 +1063,9 @@ impl Game {
                 });
             }
             if health == 0.0 {
-                player.send(Output::PigDied(entity_id));
+                player.send(Output::AnimalDied(entity_id));
             } else {
-                player.send(Output::PigHealth { entity_id, health });
+                player.send(Output::AnimalHealth { entity_id, health });
             }
             if pushed {
                 player.send(Output::EntityVelocity {
@@ -1078,7 +1079,7 @@ impl Game {
         }
         if health == 0.0 && world.survival_rules.mob_drops {
             let tool = &self.players[attacker].inventory.slots[hand_slot];
-            world.drop_pig_loot(pig_position, tool);
+            world.drop_animal_loot(species, animal_position, tool);
         }
         self.wear_melee_weapon(attacker, hand_slot, sword);
     }

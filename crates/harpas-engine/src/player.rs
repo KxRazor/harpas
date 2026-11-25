@@ -62,9 +62,28 @@ impl GameMode {
     }
 }
 
-/// The appearance of a pig.
+/// Species of a tracked adult animal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnimalSpecies {
+    /// Domestic pig.
+    Pig,
+    /// Domestic cow.
+    Cow,
+}
+
+impl AnimalSpecies {
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        match id.strip_prefix("minecraft:").unwrap_or(id) {
+            "pig" => Some(Self::Pig),
+            "cow" => Some(Self::Cow),
+            _ => None,
+        }
+    }
+}
+
+/// The climate variant of a pig or cow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PigVariant {
+pub enum AnimalVariant {
     /// The variant found in cold biomes.
     Cold,
     /// The variant found in temperate biomes.
@@ -574,8 +593,10 @@ pub enum Output {
         /// The stack it holds.
         stack: ItemStack,
     },
-    /// Start seeing a saved adult pig.
-    SpawnPig {
+    /// Start seeing a saved adult animal.
+    SpawnAnimal {
+        /// Species from its saved entity type.
+        species: AnimalSpecies,
         /// Runtime entity ID.
         entity_id: i32,
         /// The entity's saved UUID.
@@ -589,19 +610,19 @@ pub enum Output {
         /// Remaining health.
         health: f32,
         /// Appearance from the saved variant.
-        variant: PigVariant,
+        variant: AnimalVariant,
         /// Whether the saved mob has its AI disabled.
         no_ai: bool,
     },
-    /// A tracked pig's health changed.
-    PigHealth {
+    /// A tracked animal's health changed.
+    AnimalHealth {
         /// Runtime entity ID.
         entity_id: i32,
         /// Remaining health.
         health: f32,
     },
-    /// Play the death animation for a tracked pig.
-    PigDied(i32),
+    /// Play the death animation for a tracked animal.
+    AnimalDied(i32),
     /// An entity's full position, velocity, rotation and ground state.
     EntitySync {
         /// Runtime entity ID.

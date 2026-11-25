@@ -441,6 +441,8 @@ pub enum MetadataValue {
     ItemStack(ItemStack),
     /// Serializer 8.
     Boolean(bool),
+    /// Serializer 23, a VarInt in the synchronized cow variant registry.
+    CowVariant(i32),
     /// Serializer 28, a VarInt in the synchronized pig variant registry.
     PigVariant(i32),
 }
@@ -453,6 +455,7 @@ impl MetadataValue {
             Self::Float(_) => 3,
             Self::ItemStack(_) => 7,
             Self::Boolean(_) => 8,
+            Self::CowVariant(_) => 23,
             Self::PigVariant(_) => 28,
         }
     }
@@ -475,9 +478,9 @@ impl Encode for EntityMetadata {
             codec::write_varint(buf, value.serializer());
             match value {
                 MetadataValue::Byte(n) => codec::write_u8(buf, *n as u8),
-                MetadataValue::Int(n) | MetadataValue::PigVariant(n) => {
-                    codec::write_varint(buf, *n)
-                }
+                MetadataValue::Int(n)
+                | MetadataValue::CowVariant(n)
+                | MetadataValue::PigVariant(n) => codec::write_varint(buf, *n),
                 MetadataValue::Float(n) => buf.extend_from_slice(&n.to_be_bytes()),
                 MetadataValue::ItemStack(stack) => stack.encode(buf),
                 MetadataValue::Boolean(b) => codec::write_bool(buf, *b),
@@ -506,6 +509,7 @@ impl Decode for EntityMetadata {
                 }
                 7 => MetadataValue::ItemStack(ItemStack::decode(input)?),
                 8 => MetadataValue::Boolean(codec::read_bool(input)?),
+                23 => MetadataValue::CowVariant(codec::read_varint(input)?),
                 28 => MetadataValue::PigVariant(codec::read_varint(input)?),
                 other => {
                     return Err(DecodeError::UnknownEnumValue {

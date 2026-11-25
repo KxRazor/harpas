@@ -8,7 +8,7 @@ use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
 use harpas_engine::inventory::{ArmorSlot, ComponentPatch, HashedStack, ItemStack};
 use harpas_engine::player::{
-    self, DamageKind, Input, Movement, Output, PigVariant, Position, Profile,
+    self, AnimalSpecies, AnimalVariant, DamageKind, Input, Movement, Output, Position, Profile,
 };
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
@@ -21,6 +21,8 @@ use crate::commands::{self, Commands, ConnectedPeer, Source};
 const PLAYER_ENTITY_TYPE: i32 = 155;
 /// `minecraft:item` in minecraft-data's Java 26.1 entity type registry.
 const ITEM_ENTITY_TYPE: i32 = 71;
+/// `minecraft:cow` in the Java 26.1 entity type registry.
+const COW_ENTITY_TYPE: i32 = 30;
 /// `minecraft:pig` in the Java 26.1 entity type registry.
 const PIG_ENTITY_TYPE: i32 = 100;
 /// `minecraft:entity.player.attack.sweep` in the Java 26.1 sound event registry.
@@ -28,9 +30,10 @@ const SWEEP_SOUND_ID: i32 = 1302;
 /// The index of an item entity's stack in its tracked data (`ItemEntity.DATA_ITEM`), after the eight of every
 /// entity.
 const ITEM_DATA_INDEX: u8 = 8;
-/// The tracked data indices for living health, mob flags and pig appearance.
+/// The tracked data indices for living health, mob flags and animal appearance.
 const LIVING_HEALTH_INDEX: u8 = 9;
 const MOB_FLAGS_INDEX: u8 = 15;
+const COW_VARIANT_INDEX: u8 = 18;
 const PIG_VARIANT_INDEX: u8 = 19;
 
 pub(crate) fn profile(player: &harpas_java::Player, mode: play::GameMode) -> Profile {
@@ -351,23 +354,38 @@ fn item_metadata(stack: &ItemStack) -> play::EntityMetadata {
     }
 }
 
-fn pig_metadata(health: f32, variant: PigVariant, no_ai: bool) -> play::EntityMetadata {
+fn animal_metadata(
+    species: AnimalSpecies,
+    health: f32,
+    variant: AnimalVariant,
+    no_ai: bool,
+) -> play::EntityMetadata {
     let name = match variant {
-        PigVariant::Cold => "minecraft:cold",
-        PigVariant::Temperate => "minecraft:temperate",
-        PigVariant::Warm => "minecraft:warm",
+        AnimalVariant::Cold => "minecraft:cold",
+        AnimalVariant::Temperate => "minecraft:temperate",
+        AnimalVariant::Warm => "minecraft:warm",
     };
-    let variant_id = harpas_java::registry_names("minecraft:pig_variant")
+    let registry = match species {
+        AnimalSpecies::Pig => "minecraft:pig_variant",
+        AnimalSpecies::Cow => "minecraft:cow_variant",
+    };
+    let variant_id = harpas_java::registry_names(registry)
         .and_then(|entries| entries.iter().position(|&entry| entry == name))
-        .expect("vanilla pig variant");
+        .expect("vanilla animal variant") as i32;
     let mut entries = vec![(LIVING_HEALTH_INDEX, play::MetadataValue::Float(health))];
     if no_ai {
         entries.push((MOB_FLAGS_INDEX, play::MetadataValue::Byte(1)));
     }
-    entries.push((
-        PIG_VARIANT_INDEX,
-        play::MetadataValue::PigVariant(variant_id as i32),
-    ));
+    entries.push(match species {
+        AnimalSpecies::Pig => (
+            PIG_VARIANT_INDEX,
+            play::MetadataValue::PigVariant(variant_id),
+        ),
+        AnimalSpecies::Cow => (
+            COW_VARIANT_INDEX,
+            play::MetadataValue::CowVariant(variant_id),
+        ),
+    });
     play::EntityMetadata { entries }
 }
 
@@ -895,7 +913,7 @@ pub(crate) fn send(
                     continue;
                 }
             }
-            Output::PlayerDied(entity_id) | Output::PigDied(entity_id) => {
+            Output::PlayerDied(entity_id) | Output::AnimalDied(entity_id) => {
                 clientbound::EntityEvent {
                     entity_id,
                     event: 3,
@@ -987,7 +1005,8 @@ pub(crate) fn send(
                 },
                 item_metadata(&stack),
             ),
-            Output::SpawnPig {
+            Output::SpawnAnimal {
+                species,
                 entity_id,
                 uuid,
                 position,
@@ -1001,7 +1020,10 @@ pub(crate) fn send(
                 clientbound::SpawnEntity {
                     entity_id,
                     uuid,
-                    entity_type: PIG_ENTITY_TYPE,
+                    entity_type: match species {
+                        AnimalSpecies::Pig => PIG_ENTITY_TYPE,
+                        AnimalSpecies::Cow => COW_ENTITY_TYPE,
+                    },
                     x: position[0],
                     y: position[1],
                     z: position[2],
@@ -1011,7 +1033,7 @@ pub(crate) fn send(
                     head_yaw: angle(yaw),
                     data: 0,
                 },
-                pig_metadata(health, variant, no_ai),
+                animal_metadata(species, health, variant, no_ai),
             ),
             Output::EntitySync {
                 entity_id,
@@ -1032,7 +1054,7 @@ pub(crate) fn send(
                 on_ground,
             }
             .into(),
-            Output::PigHealth { entity_id, health } => clientbound::SetEntityMetadata {
+            Output::AnimalHealth { entity_id, health } => clientbound::SetEntityMetadata {
                 entity_id,
                 metadata: play::EntityMetadata {
                     entries: vec![(LIVING_HEALTH_INDEX, play::MetadataValue::Float(health))],

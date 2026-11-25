@@ -3894,7 +3894,7 @@ mod tests {
                 };
                 assert_eq!(world.entities.item(handle).unwrap().stack, stack(name, 1));
                 for _ in 0..10 {
-                    world.tick_entities();
+                    world.tick_entities(&[]);
                 }
                 let [x, y, z] = world.entities.position[world.entities.slot(handle)];
                 game.players[0].player.position = crate::player::Position {
@@ -6418,16 +6418,102 @@ mod tests {
         assert!(entries.contains(&baby) && entries.contains(&unknown));
         assert!(!entries.contains(&pig));
         for _ in 0..19 {
-            world.tick_entities();
+            world.tick_entities(&[]);
             assert!(world.entities.contains(handle));
         }
         assert!(
             world
-                .tick_entities()
+                .tick_entities(&[])
                 .iter()
                 .any(|removal| removal.network_id == reloaded_id)
         );
         assert!(!world.entities.contains(handle));
+    }
+
+    #[test]
+    fn adult_cow_follows_held_wheat_unless_no_ai() {
+        use crate::entity::Animal;
+        use crate::inventory::{HOTBAR, ItemStack, OFF_HAND};
+        use crate::player::{AnimalSpecies, AnimalVariant, PlayerState, Position, output_channel};
+
+        let folder = Folder::new();
+        let chunk = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(chunk, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[chunk]);
+        let mut add_cow = |id, position, nbt| {
+            let cow = Animal::new(
+                AnimalSpecies::Cow,
+                [0.0; 2],
+                10.0,
+                0.0,
+                AnimalVariant::Temperate,
+                Arc::new(nbt),
+            );
+            let handle = world
+                .entities
+                .add(id, id as u128, position, [0.0; 3], Kind::Animal(cow));
+            world.entities.slot(handle)
+        };
+        let start = [10.5, -48.0, 1.5];
+        let cow = add_cow(101, start, Compound::new());
+        let frozen = [10.5, -48.0, 2.5];
+        let no_ai = add_cow(102, frozen, Compound::from_iter([("NoAI", Nbt::Byte(1))]));
+        let (output, _received) = output_channel();
+        let mut player = PlayerState::new(103, profile(), 2, false, output);
+        player.data_ready = true;
+        player.player.position = Position {
+            x: 2.5,
+            y: -48.0,
+            z: 1.5,
+            ..Default::default()
+        };
+        let wheat = ItemStack {
+            item: harpas_core::item::items().id("minecraft:wheat").unwrap(),
+            count: 1,
+            ..ItemStack::empty()
+        };
+        player.inventory.slots[HOTBAR + 1] = wheat.clone();
+        let mut players = [player];
+        for _ in 0..8 {
+            world.tick_entities(&players);
+        }
+        assert_eq!(world.entities.position[cow], start, "wheat is not held");
+
+        players[0].inventory.selected = 1;
+        for _ in 0..12 {
+            world.tick_entities(&players);
+        }
+        let approaching = world.entities.position[cow][0];
+        assert!(approaching < start[0] - 1.0);
+        assert!(
+            matches!(&world.entities.kind[cow], Some(Kind::Animal(animal)) if animal.rotation == [90.0, 0.0])
+        );
+        assert_eq!(world.entities.position[no_ai], frozen);
+
+        players[0].inventory.selected = 0;
+        for _ in 0..20 {
+            world.tick_entities(&players);
+        }
+        let stopped = world.entities.position[cow][0];
+        assert!((0.05..0.3).contains(&(approaching - stopped)));
+        assert_eq!(world.entities.velocity[cow][0], 0.0);
+
+        players[0].inventory.slots[OFF_HAND] = wheat;
+        world.tick_entities(&players);
+        assert_eq!(
+            world.entities.position[cow][0], stopped,
+            "goal is cooling down"
+        );
+        for _ in 0..120 {
+            world.tick_entities(&players);
+        }
+        let held_offhand = world.entities.position[cow][0];
+        assert!(
+            (4.65..5.0).contains(&held_offhand),
+            "cow stopped near the holder at {held_offhand}"
+        );
+        assert_eq!(world.entities.position[no_ai], frozen);
     }
 
     #[test]
@@ -6499,7 +6585,7 @@ mod tests {
         assert_eq!(world.entities.order, [pig_handle]);
         assert_eq!(world.entities.animal_target(pig_id), Some(pig_handle));
         for _ in 0..10 {
-            world.tick_entities();
+            world.tick_entities(&[]);
         }
 
         game.players[0].attack_charge_ticks = 5;
@@ -6659,7 +6745,7 @@ mod tests {
         let h = world.add_item(7000, [-0.05, 70.0, 8.0], [0.2, 0.0, 0.0], item);
         world.flush().unwrap();
         assert_eq!(entity_document(&folder, from).items.len(), 1);
-        world.tick_entities();
+        world.tick_entities(&[]);
         assert!(world.entities.position[world.entities.slot(h)][0] > 0.0);
         world.flush().unwrap();
         assert!(entity_document(&folder, from).items.is_empty());
@@ -6681,7 +6767,7 @@ mod tests {
         // A subsequent crossing back through negative coordinates clears the other document too.
         let i = world.entities.slot(world.entities.order[0]);
         world.entities.velocity[i][0] = -0.3;
-        world.tick_entities();
+        world.tick_entities(&[]);
         world.flush().unwrap();
         assert_eq!(entity_document(&folder, from).items.len(), 1);
         assert!(entity_document(&folder, into).items.is_empty());
@@ -6715,11 +6801,11 @@ mod tests {
         let handle = world.entities.order[0];
         let i = world.entities.slot(handle);
 
-        world.tick_entities();
+        world.tick_entities(&[]);
         assert!(world.entities.position[i][0] > 16.0);
         assert_eq!(world.entities.position[i][1], -46.0);
         assert_eq!(world.entities.velocity[i][1], -0.0784000015258789);
-        world.tick_entities();
+        world.tick_entities(&[]);
         world.flush().unwrap();
         assert!(entity_document(&folder, from).animals.is_empty());
         let [airborne] = &entity_document(&folder, into).animals[..] else {
@@ -6729,7 +6815,7 @@ mod tests {
         assert!(!airborne.on_ground);
 
         for _ in 0..20 {
-            world.tick_entities();
+            world.tick_entities(&[]);
         }
         assert!(world.entities.on_ground[i]);
         let position = world.entities.position[i];

@@ -286,6 +286,12 @@ runs them in insertion order before the separate player tick. Both species have 
 collisions for dry movement. Animals with `NoAI` stay still. Tracking runs on the logic thread, and the chunk
 workers handle [entity regions](world.md#entity-regions).
 
+The first animal goal runs during the cow's entity tick, before dry movement. A living adult cow with AI
+selects the nearest eligible player holding wheat in either hand. On open, flat ground it turns and steers
+toward the player, stops accelerating when close enough or when the wheat is put away, and coasts under
+normal drag. The goal's cooldown is runtime-only. The turn and movement go to Java viewers; the cow's
+position is saved as usual. Path navigation, other goals and natural spawning are not implemented here.
+
 In Java Survival, an empty main hand or a sword can hit either species. The attack measures reach to the animal's
 hitbox and uses the player's melee damage and recharge. An accepted sword hit wears the sword, including
 on a lethal hit. The animal tracks damage immunity and applies knockback on a fresh hit. Its viewers receive

@@ -646,10 +646,7 @@ impl TickWork for Game {
         }
         // The entities tick, after the block changes are sent, and their viewers are sent their changes.
         let survival_rules = world.survival_rules;
-        let removed = self
-            .world
-            .as_mut()
-            .map_or_else(Vec::new, world::World::tick_entities);
+        let removed = world.tick_entities(&self.players);
         self.track_entities(&removed);
         // Players tick with the entities (`ServerPlayer.tick`), and pick up the items they touch (`aiStep`).
         self.tick_digging();

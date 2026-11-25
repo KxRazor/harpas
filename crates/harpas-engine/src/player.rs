@@ -645,6 +645,15 @@ pub enum Output {
         /// Whether it is on the ground.
         on_ground: bool,
     },
+    /// A walking animal turned to face its new direction.
+    AnimalRotation {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// Yaw and pitch, in degrees.
+        rotation: [f32; 2],
+        /// Whether it is on the ground.
+        on_ground: bool,
+    },
     /// An entity's velocity changed.
     EntityVelocity {
         /// Runtime entity ID.

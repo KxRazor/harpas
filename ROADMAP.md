@@ -497,8 +497,11 @@ as shown by the parity report.
         and a lethal hit rolls the cow loot table (`saved_cow_combat_and_drops_match_vanilla`).
   - [ ] The other entity types and their persistence.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
+  - [x] Saved adult cows follow nearby players holding wheat on open, flat ground. A Java Survival client
+        compares approach and stopping after a hotbar switch with vanilla (`saved_cow_follows_wheat_matches_vanilla`).
+  - [ ] Navigation around obstacles and other animal goals.
   - [ ] Compare natural cow spawning on a fixed grassy platform under matching light, biome and mob-cap
-        conditions. Compare how a cow follows a player holding wheat and stops after the player puts it away.
+        conditions.
 - [ ] Combat, damage, health, hunger, effects.
   - [x] Java Survival fall damage on ordinary terrain, saved health on reconnect, and death and respawn at the
         Overworld spawn. Safe, damaging and lethal falls and Creative immunity are compared with vanilla

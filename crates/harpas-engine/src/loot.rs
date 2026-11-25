@@ -1,4 +1,4 @@
-//! Loot tables from the vanilla data pack, evaluated for broken blocks, chests and bare-hand pig kills.
+//! Loot tables from the vanilla data pack, evaluated for broken blocks, chests and pig kills.
 //!
 //! A table rolls each pool whose conditions pass, as many times as its `rolls`, and each roll picks one of the
 //! entries that expand, by weight; then the entry's, the pool's and the table's functions apply, and stacks over
@@ -684,14 +684,15 @@ impl LootTable {
         })
     }
 
-    /// The loot from killing a mob that is not burning with an empty hand.
-    pub(crate) fn bare_hand_mob_drops(
+    /// The loot from killing a mob without fire or Looting bonuses.
+    pub(crate) fn mob_drops(
         &self,
+        tool: &ItemStack,
         random: &mut dyn RandomSource,
     ) -> io::Result<Vec<ItemStack>> {
         self.roll(&mut Context {
             state: None,
-            tool: &ItemStack::empty(),
+            tool,
             random,
             chest: None,
             treasure_map: None,

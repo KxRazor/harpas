@@ -3653,7 +3653,6 @@ fn punch_and_collect_pig_loot(port: u16, drops: bool) -> Option<i32> {
     let mut attacker = Client::join(port, "PigHunter");
     attacker.stream.set_nodelay(true).unwrap();
     let pig = track_saved_pig(&mut attacker);
-    let porkchop = harpas_core::item::items().id("minecraft:porkchop").unwrap();
     move_player(&mut attacker, [pig.x - 2.0, pig.y, pig.z], true);
     std::thread::sleep(Duration::from_millis(300));
     play_packet(
@@ -3662,7 +3661,15 @@ fn punch_and_collect_pig_loot(port: u16, drops: bool) -> Option<i32> {
             entity_id: pig.entity_id,
         },
     );
+    collect_pig_loot(&mut attacker, pig, drops)
+}
 
+fn collect_pig_loot(
+    attacker: &mut Client,
+    pig: play::clientbound::SpawnEntity,
+    drops: bool,
+) -> Option<i32> {
+    let porkchop = harpas_core::item::items().id("minecraft:porkchop").unwrap();
     let porkchop_drop = |packet: Packet| {
         let Packet::SetEntityMetadata(packet) = packet else {
             return None;
@@ -3678,7 +3685,7 @@ fn punch_and_collect_pig_loot(port: u16, drops: bool) -> Option<i32> {
     let loot = drops.then(|| attacker.matching("a stack of raw porkchops", porkchop_drop));
     if let Some((_, count)) = loot {
         assert!((1..=3).contains(&count));
-        move_player(&mut attacker, [pig.x, pig.y, pig.z], true);
+        move_player(attacker, [pig.x, pig.y, pig.z], true);
     }
     let mut picked_up = false;
     let mut removed = false;
@@ -3702,16 +3709,138 @@ fn punch_and_collect_pig_loot(port: u16, drops: bool) -> Option<i32> {
     loot.map(|(_, count)| count)
 }
 
-fn punch_saved_pig(port: u16, initial_health: f32) -> Option<[f64; 3]> {
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn sword_pig_combat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("sword-pig-combat");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [port, other] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "forceload add 0 0\nsummon minecraft:pig 3.5 -60 1.5 {{NoAI:1b}}\nsave-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Summoned new Pig");
+    reference.wait_for("Saved the game");
+    let entities = "world/dimensions/minecraft/overworld/entities";
+    let initial = harpas_anvil::read_chunk(&vanilla.join(entities), 0, 0)
+        .unwrap()
+        .unwrap();
+    harpas_anvil::write_chunks(&harpas.join(entities), 0, 0, &[((0, 0), &initial)]).unwrap();
+
+    let sword =
+        |slot, name: &str| Compound::from_iter([("Slot", Nbt::Byte(slot)), ("id", name.into())]);
+    let data = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "Inventory",
+            Nbt::List(List::Compound(vec![
+                sword(1, "minecraft:wooden_sword"),
+                sword(2, "minecraft:iron_sword"),
+            ])),
+        ),
+    ]);
+    let hunter = offline_uuid("PigHunter");
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), hunter, &data).unwrap();
+    }
+    let expected = strike_pig_with_swords(port);
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(strike_pig_with_swords(other), expected);
+    stop(&mut server);
+
+    let [expected_inventory, actual_inventory] = [&vanilla, &harpas].map(|dir| {
+        let (saved, _) = harpas_anvil::read_player(&dir.join("world"), hunter)
+            .unwrap()
+            .unwrap();
+        saved.get("Inventory").unwrap().clone()
+    });
+    assert_eq!(actual_inventory, expected_inventory);
+    let Nbt::List(List::Compound(items)) = actual_inventory else {
+        panic!("missing the hunter's inventory");
+    };
+    assert_eq!(items.len(), 3);
+    for (name, damage) in [("minecraft:wooden_sword", 1), ("minecraft:iron_sword", 2)] {
+        let sword = items
+            .iter()
+            .find(|item| item.get("id") == Some(&Nbt::from(name)))
+            .unwrap();
+        assert_eq!(
+            sword.get("components"),
+            Some(&Nbt::from(Compound::from_iter([(
+                "minecraft:damage",
+                damage
+            )])))
+        );
+    }
+    let porkchop = items
+        .iter()
+        .find(|item| item.get("id") == Some(&Nbt::from("minecraft:porkchop")))
+        .unwrap();
+    assert_eq!(porkchop.get("count"), Some(&Nbt::Int(expected)));
+}
+
+fn strike_pig_with_swords(port: u16) -> i32 {
     let mut attacker = Client::join(port, "PigHunter");
     attacker.stream.set_nodelay(true).unwrap();
-    let attacker_id = attacker.matching("Play Login", |packet| match packet {
-        Packet::Login(login) => Some(login.entity_id),
-        _ => None,
-    });
     let pig = track_saved_pig(&mut attacker);
-    let pig_health = |packet: Packet| match packet {
-        Packet::SetEntityMetadata(packet) if packet.entity_id == pig.entity_id => packet
+    let pig_health = |packet| pig_health_update(packet, pig.entity_id);
+    assert_eq!(attacker.matching("initial pig health", pig_health), 10.0);
+    move_player(&mut attacker, [pig.x - 2.0, pig.y, pig.z], true);
+    let select =
+        |client: &mut Client, slot| play_packet(client, play::serverbound::SetHeldItem { slot });
+    let attack: play::serverbound::Packet = play::serverbound::Attack {
+        entity_id: pig.entity_id,
+    }
+    .into();
+    let strike = |client: &mut Client| play_packet(client, attack.clone());
+
+    select(&mut attacker, 1);
+    let equipped = attack_speed(&mut attacker, true);
+    std::thread::sleep(Duration::from_millis(800));
+    let mut frames = Vec::new();
+    for _ in 0..2 {
+        write_frame(&mut frames, |buf| attack.encode(buf));
+    }
+    attacker.stream.write_all(&frames).unwrap();
+    assert_eq!(
+        attacker.matching("pig health after the charged wooden sword hit", pig_health),
+        6.0
+    );
+    assert_no_damage_until_list_reply(&mut attacker, "after the rapid sword attack on the pig");
+
+    select(&mut attacker, 0);
+    attack_speed(&mut attacker, false);
+    std::thread::sleep(Duration::from_millis(800));
+    select(&mut attacker, 2);
+    assert_eq!(attack_speed(&mut attacker, true), equipped);
+    strike(&mut attacker);
+    let after_partial = attacker.matching(
+        "pig health after the partially charged iron sword hit",
+        pig_health,
+    );
+    let recharge_ticks = 20.0 / (equipped.base_value + equipped.modifiers[0].amount) as f32;
+    assert!(
+        (0..6).any(|ticks| {
+            // Network timing can place the hit on any of these early recharge ticks.
+            let charge = (ticks as f32 + 0.5) / recharge_ticks;
+            (after_partial - (6.0 - 6.0 * (0.2 + charge * charge * 0.8))).abs() < 0.0001
+        }),
+        "unexpected pig health after the partially charged hit: {after_partial}"
+    );
+
+    std::thread::sleep(Duration::from_millis(800));
+    attacker.stream.write_all(&frames).unwrap();
+    collect_pig_loot(&mut attacker, pig, true).unwrap()
+}
+
+fn pig_health_update(packet: Packet, entity_id: i32) -> Option<f32> {
+    match packet {
+        Packet::SetEntityMetadata(packet) if packet.entity_id == entity_id => packet
             .metadata
             .entries
             .into_iter()
@@ -3720,7 +3849,18 @@ fn punch_saved_pig(port: u16, initial_health: f32) -> Option<[f64; 3]> {
                 _ => None,
             }),
         _ => None,
-    };
+    }
+}
+
+fn punch_saved_pig(port: u16, initial_health: f32) -> Option<[f64; 3]> {
+    let mut attacker = Client::join(port, "PigHunter");
+    attacker.stream.set_nodelay(true).unwrap();
+    let attacker_id = attacker.matching("Play Login", |packet| match packet {
+        Packet::Login(login) => Some(login.entity_id),
+        _ => None,
+    });
+    let pig = track_saved_pig(&mut attacker);
+    let pig_health = |packet| pig_health_update(packet, pig.entity_id);
     assert_eq!(
         attacker.matching("initial pig health", pig_health),
         initial_health

@@ -285,11 +285,12 @@ runs them in insertion order before the separate player tick. Adult pigs have gr
 collisions for dry movement. Pigs with `NoAI` stay still. Tracking runs on the logic thread, and the chunk
 workers handle [entity regions](world.md#entity-regions).
 
-In Java Survival, an empty main hand can hit an adult pig. The attack measures reach to the pig's hitbox
-and uses the player's melee recharge. The pig tracks damage immunity and applies knockback on a fresh hit.
-Its viewers receive the damage, health and death updates. A dead pig stays tracked for its 20-tick death
-animation and is excluded from entity snapshots as soon as its health reaches zero.
-The lethal punch rolls the installed pig loot table on its named world random sequence when the saved
+In Java Survival, an empty main hand or a sword can hit an adult pig. The attack measures reach to the pig's
+hitbox and uses the player's melee damage and recharge. An accepted sword hit wears the sword, including
+on a lethal hit. The pig tracks damage immunity and applies knockback on a fresh hit. Its viewers receive
+the damage, health and death updates. A dead pig stays tracked for its 20-tick death animation and is
+excluded from entity snapshots as soon as its health reaches zero.
+A lethal hit rolls the installed pig loot table on its named world random sequence when the saved
 `minecraft:mob_drops` rule is enabled. Raw porkchops spawn at the pig's position as an item entity and
 can be collected after the pickup delay. The item is saved in the same entity snapshot that omits the
 dead pig.

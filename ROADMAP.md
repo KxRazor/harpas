@@ -581,7 +581,11 @@ as shown by the parity report.
         table. The count, pickup, saved inventory, saved entities and `minecraft:mob_drops` are compared with
         vanilla (`bare_hand_pig_loot_matches_vanilla`). An engine test checks that only the lethal hit drops
         loot and that one stack reloads after a save during the death animation.
-  - [ ] Loot from other mobs, experience, armed combat with mobs and combat with other mob types.
+  - [x] Unenchanted swords can strike saved adult pigs in Java Survival. The parity test compares full and
+        partial damage, rapid repeats, saved wear and the raw porkchops from a lethal hit using wooden and
+        iron swords (`sword_pig_combat_matches_vanilla`).
+  - [ ] Loot from other mobs, experience, other weapons and enchantments against mobs, sword sweeps with
+        mobs, and combat with other mob types.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

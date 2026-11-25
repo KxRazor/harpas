@@ -960,15 +960,15 @@ impl World {
         }
     }
 
-    /// Drops the pig table's stacks at the pig's position on a lethal bare-hand hit.
-    pub(crate) fn drop_pig_loot(&mut self, position: [f64; 3]) {
+    /// Drops the pig table's stacks at the pig's position on a lethal melee hit.
+    pub(crate) fn drop_pig_loot(&mut self, position: [f64; 3], tool: &ItemStack) {
         let Some(loot) = self.loot.clone() else {
             return;
         };
         let Some(table) = &loot.pig else {
             return;
         };
-        match table.bare_hand_mob_drops(self.drop_random(table.random_sequence.as_deref())) {
+        match table.mob_drops(tool, self.drop_random(table.random_sequence.as_deref())) {
             Ok(stacks) => {
                 for stack in stacks {
                     if let Some(id) = crate::next_entity_id() {

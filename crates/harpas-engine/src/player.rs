@@ -593,7 +593,7 @@ pub enum Output {
         /// Whether the saved mob has its AI disabled.
         no_ai: bool,
     },
-    /// An entity's full position, velocity and ground state.
+    /// An entity's full position, velocity, rotation and ground state.
     EntitySync {
         /// Runtime entity ID.
         entity_id: i32,
@@ -601,6 +601,8 @@ pub enum Output {
         position: [f64; 3],
         /// Its velocity, in blocks per tick.
         velocity: [f64; 3],
+        /// Yaw and pitch, in degrees.
+        rotation: [f32; 2],
         /// Whether it is on the ground.
         on_ground: bool,
     },

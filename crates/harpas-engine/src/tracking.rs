@@ -11,7 +11,6 @@
 use std::collections::HashSet;
 
 use harpas_core::math::{cos_f32, sin_f32};
-use harpas_core::nbt::Nbt;
 use harpas_core::random::RandomSource;
 
 use crate::entity::{ItemEntity, Kind, RemovedEntity};
@@ -24,7 +23,9 @@ const ITEM_RANGE: f64 = 96.0;
 /// How far players see pigs (`EntityType.PIG`'s `clientTrackingRange`).
 const PIG_RANGE: f64 = 160.0;
 /// How often an item entity's viewers are sent its position (`updateInterval`).
-const UPDATE_INTERVAL: i32 = 20;
+const ITEM_UPDATE_INTERVAL: i32 = 20;
+/// How often a pig's viewers are sent its position (`updateInterval`).
+const PIG_UPDATE_INTERVAL: i32 = 3;
 
 /// What the players who see an entity were last sent of it (`ServerEntity`).
 #[derive(Debug, Clone, Default)]
@@ -239,15 +240,17 @@ impl Game {
                             rotation: pig.rotation,
                             health: pig.health,
                             variant: pig.variant,
-                            no_ai: pig.nbt.get("NoAI") == Some(&Nbt::Byte(1)),
+                            no_ai: pig.no_ai(),
                         },
                     });
                 } else if !visible && server.seen_by.remove(&viewer) {
                     player.send(player::Output::RemoveEntity(id));
                 }
             }
-            let Kind::Item(item) = kind else {
-                continue;
+            let (update_interval, rotation) = match kind {
+                Kind::Item(_) => (ITEM_UPDATE_INTERVAL, [0.0; 2]),
+                Kind::Pig(pig) if !pig.no_ai() => (PIG_UPDATE_INTERVAL, pig.rotation),
+                Kind::Pig(_) => continue,
             };
             // `sendChanges`.
             let on_ground = entities.on_ground[i];
@@ -255,7 +258,7 @@ impl Game {
             let impulse = std::mem::take(&mut entities.impulse[i]);
             let server = &mut entities.server[i];
             let mut outputs = Vec::new();
-            if server.tick_count % UPDATE_INTERVAL == 0 || impulse || server.dirty {
+            if server.tick_count % update_interval == 0 || impulse || server.dirty {
                 server.teleport_delay += 1;
                 let delta: [i64; 3] =
                     std::array::from_fn(|a| encode(position[a]) - encode(server.base[a]));
@@ -273,6 +276,7 @@ impl Game {
                             entity_id: id,
                             position,
                             velocity,
+                            rotation,
                             on_ground,
                         });
                     } else if force {
@@ -301,7 +305,9 @@ impl Game {
                         );
                     }
                 }
-                if std::mem::take(&mut server.dirty) {
+                if std::mem::take(&mut server.dirty)
+                    && let Kind::Item(item) = kind
+                {
                     outputs.push(player::Output::ItemChanged {
                         entity_id: id,
                         stack: item.stack.clone(),

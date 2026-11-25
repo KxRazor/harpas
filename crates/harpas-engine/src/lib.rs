@@ -2538,6 +2538,7 @@ mod tests {
         let pig = Pig {
             rotation: [90.0, -22.5],
             health: 7.5,
+            fall_distance: 0.0,
             variant: PigVariant::Cold,
             nbt: Arc::new(Compound::from_iter([("NoAI", 1_i8)])),
         };

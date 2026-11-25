@@ -281,8 +281,9 @@ Harpas uses its own storage:
   translation.
 
 Item entities and saved adult pigs live in this storage (`harpas-engine`'s `entity` module). The entity tick
-runs items in insertion order before the separate player tick. Adult pigs are loaded, tracked and saved.
-Tracking runs on the logic thread, and the chunk workers handle [entity regions](world.md#entity-regions).
+runs them in insertion order before the separate player tick. Adult pigs have gravity, drag and block
+collisions for dry movement. Pigs with `NoAI` stay still. Tracking runs on the logic thread, and the chunk
+workers handle [entity regions](world.md#entity-regions).
 
 ### 6. Chunks
 

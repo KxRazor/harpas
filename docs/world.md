@@ -197,17 +197,18 @@ stack and supported components, UUID, position, velocity, ground state, health, 
 A loaded item receives a new runtime network ID. New items use UUIDs generated from a fresh seed when the world
 opens. Removing or moving an item also updates its former chunk, so it stays gone when that chunk reloads.
 
-Items in chunks outside the simulation set pause. A drop made before its chunk arrives waits for the saved
-entities to load before it can be saved. The logic thread keeps the chunk in memory while its saves are
+Items and pigs in chunks outside the simulation set pause. A drop made before its chunk arrives waits for
+the saved entities to load before it can be saved. The logic thread keeps the chunk in memory while its saves are
 outstanding. Terrain and entity revisions share the worker queue but are saved only when their respective
 data changes. Entity regions use the same journal recovery as terrain regions. A move across region files
 can span two transactions if the process is interrupted.
 
-An adult pig retains its UUID, position, motion, rotation, health, variant and other saved fields. It is
-sent to Java viewers tracking its chunk. Baby pigs and other mobs stay inactive and keep their original NBT,
-as do items with unported components. `item_entity_parity` reads the updated Harpas region back through
-vanilla's codecs. `saved_adult_pig_matches_vanilla` compares the adult pig's spawn and metadata before and
-after Harpas saves the region and vanilla reopens it.
+An adult pig retains its UUID, position, motion, ground state, fall distance, rotation, health, variant and
+other saved fields. Its movement updates both affected chunks when it crosses a boundary. Baby pigs and
+other mobs stay inactive and keep their original NBT, as do items with unported components.
+`item_entity_parity` reads the updated Harpas region back through vanilla's codecs.
+`saved_adult_pig_matches_vanilla` compares the spawn and metadata of a pig suspended with `NoAI` before
+and after vanilla reopens the region Harpas saved.
 
 ---
 

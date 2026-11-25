@@ -71,6 +71,11 @@ fn position(root: &Compound, chunk: ChunkPos) -> io::Result<[f64; 3]> {
     Ok([x, y, z])
 }
 
+fn velocity(root: &Compound) -> io::Result<[f64; 3]> {
+    // Vanilla discards individual velocity components above ten blocks per tick on load.
+    Ok(vector(root, "Motion")?.map(|v| if v.abs() > 10.0 { 0.0 } else { v }))
+}
+
 impl SavedItem {
     fn read(root: &Compound, chunk: ChunkPos, codec: &ItemCodec) -> io::Result<Self> {
         let uuid = read_uuid(root)?;
@@ -103,8 +108,7 @@ impl SavedItem {
         Ok(Self {
             uuid,
             position: position(root, chunk)?,
-            // Vanilla discards individual velocity components above ten blocks per tick on load.
-            velocity: vector(root, "Motion")?.map(|v| if v.abs() > 10.0 { 0.0 } else { v }),
+            velocity: velocity(root)?,
             on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
             stack,
             age: short("Age", 0)?,
@@ -168,6 +172,11 @@ impl SavedPig {
             Some(Nbt::Float(value)) if value.is_finite() && *value > 0.0 => *value,
             _ => return Err(invalid("expected a living pig")),
         };
+        let fall_distance = match root.get("fall_distance") {
+            Some(Nbt::Double(value)) if value.is_finite() => *value,
+            None => 0.0,
+            _ => return Err(invalid("pig fall_distance must be a finite double")),
+        };
         let variant = match root.get("variant") {
             Some(Nbt::String(name)) => match name.as_str() {
                 "minecraft:cold" | "cold" => PigVariant::Cold,
@@ -181,11 +190,12 @@ impl SavedPig {
         Ok(Self {
             uuid: read_uuid(root)?,
             position: position(root, chunk)?,
-            velocity: vector(root, "Motion")?,
+            velocity: velocity(root)?,
             on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
             pig: Pig {
                 rotation,
                 health,
+                fall_distance,
                 variant,
                 nbt: Arc::new(root.clone()),
             },
@@ -204,6 +214,9 @@ impl SavedPig {
         root.insert("Health", Nbt::Float(self.pig.health));
         if self.on_ground || root.get("OnGround").is_some() {
             root.insert("OnGround", Nbt::Byte(i8::from(self.on_ground)));
+        }
+        if self.pig.fall_distance != 0.0 || root.get("fall_distance").is_some() {
+            root.insert("fall_distance", Nbt::Double(self.pig.fall_distance));
         }
         root
     }

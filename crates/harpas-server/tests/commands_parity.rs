@@ -3329,7 +3329,7 @@ fn saved_adult_pig_matches_vanilla() {
     reference.wait_for("Saved the game");
     writeln!(
         reference.child.stdin.as_mut().unwrap(),
-        "summon minecraft:pig 5.5 -60 4.5 {{UUID:[I;1,2,3,4],Health:7.5f,\
+        "summon minecraft:pig 5.5 -58 4.5 {{UUID:[I;1,2,3,4],Health:7.5f,\
          Rotation:[90.0f,-22.5f],variant:\"minecraft:cold\",NoAI:1b}}\n\
          summon minecraft:item 8.5 -60 4.5 {{Item:{{id:\"minecraft:stone\",count:1}},PickupDelay:32767s}}\n\
          save-all flush"
@@ -3390,31 +3390,37 @@ fn saved_entity<'a>(root: &'a Compound, id: &str) -> &'a Compound {
 
 fn observe_saved_pig(port: u16) -> (play::clientbound::SpawnEntity, play::EntityMetadata) {
     let mut client = Client::join(port, "PigViewer");
-    let mut read = 0;
+    let mut spawn = track_saved_pig(&mut client);
+    let metadata = client.matching("pig metadata", |packet| match packet {
+        Packet::SetEntityMetadata(packet) if packet.entity_id == spawn.entity_id => {
+            Some(packet.metadata)
+        }
+        _ => None,
+    });
+    spawn.entity_id = 0;
+    (spawn, metadata)
+}
+
+fn track_saved_pig(client: &mut Client) -> play::clientbound::SpawnEntity {
     let mut has_chunk = false;
-    let mut spawn = loop {
+    for _ in 0..1000 {
         let frame = client.next("saved adult pig spawn");
-        assert!(read < 1000, "no pig after {read} play packets");
-        read += 1;
         match Packet::decode(&frame) {
             Ok(Packet::SynchronizePlayerPosition(position)) => {
                 play_packet(
-                    &mut client,
+                    client,
                     play::serverbound::ConfirmTeleportation {
                         teleport_id: position.teleport_id,
                     },
                 );
-                play_packet(&mut client, play::serverbound::PlayerLoaded);
-                move_player(&mut client, [position.x, position.y, position.z], true);
+                play_packet(client, play::serverbound::PlayerLoaded);
+                move_player(client, [position.x, position.y, position.z], true);
             }
             Ok(Packet::KeepAlive(keep_alive)) => {
-                play_packet(
-                    &mut client,
-                    play::serverbound::KeepAlive { id: keep_alive.id },
-                );
+                play_packet(client, play::serverbound::KeepAlive { id: keep_alive.id })
             }
             Ok(Packet::ChunkBatchFinished(_)) => play_packet(
-                &mut client,
+                client,
                 play::serverbound::ChunkBatchReceived {
                     chunks_per_tick: 25.0,
                 },
@@ -3424,19 +3430,99 @@ fn observe_saved_pig(port: u16) -> (play::clientbound::SpawnEntity, play::Entity
             }
             Ok(Packet::SpawnEntity(spawn)) if spawn.entity_type == 100 => {
                 assert!(has_chunk, "received the pig before its chunk");
-                break spawn;
+                return spawn;
             }
             _ => {}
         }
-    };
-    let metadata = client.matching("pig metadata", |packet| match packet {
-        Packet::SetEntityMetadata(packet) if packet.entity_id == spawn.entity_id => {
-            Some(packet.metadata)
+    }
+    panic!("no pig after 1000 play packets");
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn falling_adult_pig_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("falling-pig");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "forceload add 0 0\n\
+         tick freeze\n\
+         summon minecraft:pig 3.5 -57 1.5 \
+         {{attributes:[{{id:\"minecraft:movement_speed\",base:0d}}]}}\n\
+         save-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Saved the game");
+    let entities = "world/dimensions/minecraft/overworld/entities";
+    let initial = harpas_anvil::read_chunk(&vanilla.join(entities), 0, 0)
+        .unwrap()
+        .unwrap();
+    harpas_anvil::write_chunks(&harpas.join(entities), 0, 0, &[((0, 0), &initial)]).unwrap();
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+
+    let mut viewer = Client::join(vanilla_port, "PigViewer");
+    let pig = track_saved_pig(&mut viewer);
+    assert_eq!(pig.y, -57.0);
+    writeln!(reference.child.stdin.as_mut().unwrap(), "tick unfreeze").unwrap();
+    let expected = observe_pig_landing(&mut viewer, &pig);
+    assert_eq!([expected.x, expected.y, expected.z], [3.5, -60.0, 1.5]);
+    let mut viewer = Client::join(harpas_port, "PigViewer");
+    let pig = track_saved_pig(&mut viewer);
+    assert!(pig.y > -60.0);
+    let actual = observe_pig_landing(&mut viewer, &pig);
+    assert_eq!(
+        [actual.x, actual.y, actual.z],
+        [expected.x, expected.y, expected.z]
+    );
+    assert_eq!(actual.velocity_y, expected.velocity_y);
+    stop(&mut server);
+    stop(&mut reference);
+    for dir in [&vanilla, &harpas] {
+        let saved = harpas_anvil::read_chunk(&dir.join(entities), 0, 0)
+            .unwrap()
+            .unwrap();
+        let pig = saved_entity(&saved, "minecraft:pig");
+        assert_eq!(
+            pig.get("Pos"),
+            Some(&List::Double(vec![3.5, -60.0, 1.5]).into())
+        );
+        assert_eq!(pig.get("OnGround"), Some(&Nbt::Byte(1)));
+    }
+}
+
+fn observe_pig_landing(
+    client: &mut Client,
+    pig: &play::clientbound::SpawnEntity,
+) -> play::clientbound::EntityPositionSync {
+    let mut fell = false;
+    let landing = client.matching("pig landing", |packet| match packet {
+        Packet::EntityPositionSync(sync) if sync.entity_id == pig.entity_id && sync.y < pig.y => {
+            fell |= !sync.on_ground;
+            sync.on_ground.then_some(sync)
+        }
+        Packet::UpdateEntityPosition(movement)
+            if movement.entity_id == pig.entity_id && !movement.on_ground =>
+        {
+            fell |= movement.delta_y < 0;
+            None
+        }
+        Packet::UpdateEntityPositionAndRotation(movement)
+            if movement.entity_id == pig.entity_id && !movement.on_ground =>
+        {
+            fell |= movement.delta_y < 0;
+            None
         }
         _ => None,
     });
-    spawn.entity_id = 0;
-    (spawn, metadata)
+    assert!(
+        fell,
+        "the viewer should see the pig falling before it lands"
+    );
+    landing
 }
 
 fn use_food(client: &mut Client, hand: play::Hand, sequence: i32) {

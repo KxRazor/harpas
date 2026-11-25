@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
-use harpas_core::nbt::Compound;
+use harpas_core::nbt::{Compound, Nbt};
 use harpas_core::random::RandomSource;
 
 use crate::block::{self, BlockPos};
@@ -33,6 +33,8 @@ pub struct EntityHandle {
 
 /// The width and height of an item entity (`EntityType.ITEM`).
 const ITEM_SIZE: f64 = 0.25;
+/// The width and height of an adult pig.
+const PIG_SIZE: f64 = 0.9_f32 as f64;
 /// How many ticks an item lasts on the ground (`ItemEntity.LIFETIME`).
 const LIFETIME: i32 = 6000;
 /// A pickup delay that never ends (`INFINITE_PICKUP_DELAY`).
@@ -57,8 +59,15 @@ pub(crate) struct Pig {
     /// Yaw and pitch, in degrees.
     pub(crate) rotation: [f32; 2],
     pub(crate) health: f32,
+    pub(crate) fall_distance: f64,
     pub(crate) variant: PigVariant,
     pub(crate) nbt: Arc<Compound>,
+}
+
+impl Pig {
+    pub(crate) fn no_ai(&self) -> bool {
+        self.nbt.get("NoAI") == Some(&Nbt::Byte(1))
+    }
 }
 
 /// The type-specific part of an entity.
@@ -216,11 +225,15 @@ impl Entities {
         }
     }
 
-    /// An item entity's box (`getBoundingBox`).
     fn item_box(&self, i: usize) -> Aabb {
+        self.bounds(i, ITEM_SIZE)
+    }
+
+    /// The box of an entity whose width and height are equal (`getBoundingBox`).
+    fn bounds(&self, i: usize, size: f64) -> Aabb {
         let [x, y, z] = self.position[i];
-        let half = ITEM_SIZE / 2.0;
-        [[x - half, y, z - half], [x + half, y + ITEM_SIZE, z + half]]
+        let half = size / 2.0;
+        [[x - half, y, z - half], [x + half, y + size, z + half]]
     }
 }
 
@@ -420,9 +433,9 @@ impl World {
         }
     }
 
-    /// `Entity.move` for an item entity.
-    fn move_entity(&mut self, i: usize, movement: [f64; 3]) {
-        let entity = self.entities.item_box(i);
+    /// The block collision and support changes of `Entity.move`.
+    fn move_entity(&mut self, i: usize, movement: [f64; 3], size: f64) {
+        let entity = self.entities.bounds(i, size);
         let collided = self.collide(entity, movement);
         let length: f64 = collided.iter().map(|d| d * d).sum();
         let wanted: f64 = movement.iter().map(|d| d * d).sum();
@@ -440,7 +453,7 @@ impl World {
             self.entities.on_ground[i] = on_ground;
             // `checkSupportingBlock`.
             if on_ground {
-                let entity = self.entities.item_box(i);
+                let entity = self.entities.bounds(i, size);
                 let below = [
                     [entity[0][0], entity[0][1] - 1.0e-6, entity[0][2]],
                     [entity[1][0], entity[0][1], entity[1][2]],
@@ -492,7 +505,12 @@ impl World {
             let slime = block_states().name(self.state(on)) == Some("minecraft:slime_block");
             let v = &mut self.entities.velocity[i];
             if slime && v[1] < 0.0 {
-                v[1] = -v[1] * 0.8;
+                let bounce = if matches!(self.entities.kind[i], Some(Kind::Item(_))) {
+                    0.8
+                } else {
+                    1.0
+                };
+                v[1] *= -bounce;
             } else {
                 v[1] = 0.0;
             }
@@ -671,7 +689,7 @@ impl World {
                     self.entities.position[i][axis] += d;
                 }
             } else {
-                self.move_entity(i, v);
+                self.move_entity(i, v, ITEM_SIZE);
             }
             let mut f = 0.98_f32;
             if self.entities.on_ground[i] {
@@ -706,6 +724,62 @@ impl World {
             self.entities.impulse[i] = true;
         }
         age < LIFETIME
+    }
+
+    /// The dry movement of a living adult pig without movement input (`travelInAir`).
+    fn tick_pig(&mut self, i: usize) -> bool {
+        let Some(Kind::Pig(pig)) = &self.entities.kind[i] else {
+            return false;
+        };
+        if pig.no_ai() {
+            return false;
+        }
+        let gravity = if pig.nbt.get("NoGravity") == Some(&Nbt::Byte(1)) {
+            0.0
+        } else {
+            0.08
+        };
+        let before = self.entities.position[i];
+        let velocity = self.entities.velocity[i];
+        let on_ground = self.entities.on_ground[i];
+        let drag = if on_ground {
+            0.91_f32 * friction(self.state(self.block_below(i)))
+        } else {
+            0.91_f32
+        };
+        let [mut x, mut y, mut z] = velocity;
+        if x * x + z * z < 9.0e-6 {
+            x = 0.0;
+            z = 0.0;
+        }
+        if y.abs() < 0.003 {
+            y = 0.0;
+        }
+        self.entities.old_position[i] = before;
+        self.entities.tick_count[i] += 1;
+        self.entities.velocity[i] = [x, y, z];
+        self.move_entity(i, [x, y, z], PIG_SIZE);
+        let v = &mut self.entities.velocity[i];
+        *v = [
+            v[0] * f64::from(drag),
+            (v[1] - gravity) * f64::from(0.98_f32),
+            v[2] * f64::from(drag),
+        ];
+        let after = self.entities.position[i];
+        let grounded = self.entities.on_ground[i];
+        let Some(Kind::Pig(pig)) = &mut self.entities.kind[i] else {
+            unreachable!()
+        };
+        let fall_distance = pig.fall_distance;
+        if grounded {
+            pig.fall_distance = 0.0;
+        } else if after[1] < before[1] {
+            pig.fall_distance += f64::from((before[1] - after[1]) as f32);
+        }
+        before != after
+            || velocity != *v
+            || on_ground != grounded
+            || fall_distance != pig.fall_distance
     }
 
     /// `ItemEntity.mergeWithNeighbours`: the stacks of the same item within half a block merge into the larger
@@ -789,22 +863,29 @@ impl World {
     /// (`entityTickList.forEach(tickNonPassenger)`). Returns the entities removed.
     pub(crate) fn tick_entities(&mut self) -> Vec<RemovedEntity> {
         for handle in self.entities.order.clone() {
-            if !self.entities.contains(handle) || self.entities.item(handle).is_none() {
+            if !self.entities.contains(handle) {
                 continue;
             }
-            let [x, _, z] = self.entities.position[self.entities.slot(handle)];
-            let chunk = ChunkPos {
-                x: floor(x) >> 4,
-                z: floor(z) >> 4,
-            };
+            let i = self.entities.slot(handle);
+            let [x, _, z] = self.entities.position[i];
+            let chunk = ChunkPos::at(x, z);
             let ticking = self.wanted_set.contains(&chunk)
                 && matches!(self.chunk(chunk), Some(ChunkState::Loaded(_)));
-            if ticking {
+            if !ticking {
+                continue;
+            }
+            let changed = match self.entities.kind[i].as_ref().expect("live entity") {
+                Kind::Item(_) => {
+                    if !self.tick_item(handle) {
+                        self.entities.remove(handle);
+                    }
+                    true
+                }
+                Kind::Pig(_) => self.tick_pig(i),
+            };
+            if changed {
                 self.entities.changed_chunks.insert(chunk);
-                let i = self.entities.slot(handle);
-                if !self.tick_item(handle) {
-                    self.entities.remove(handle);
-                } else if self.entities.contains(handle) {
+                if self.entities.contains(handle) {
                     let [x, _, z] = self.entities.position[i];
                     self.entities.changed_chunks.insert(ChunkPos::at(x, z));
                 }

@@ -1015,6 +1015,7 @@ pub(crate) fn send(
                 entity_id,
                 position,
                 velocity: motion,
+                rotation: [yaw, pitch],
                 on_ground,
             } => clientbound::EntityPositionSync {
                 entity_id,
@@ -1024,8 +1025,8 @@ pub(crate) fn send(
                 velocity_x: motion[0],
                 velocity_y: motion[1],
                 velocity_z: motion[2],
-                yaw: 0.0,
-                pitch: 0.0,
+                yaw,
+                pitch,
                 on_ground,
             }
             .into(),

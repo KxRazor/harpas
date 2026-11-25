@@ -487,6 +487,9 @@ as shown by the parity report.
   - [x] Saved adult pigs load from Overworld entity regions and appear to Java players tracking their chunk.
         UUID, position, rotation, health and appearance are compared with vanilla through a save and reopen
         (`saved_adult_pig_matches_vanilla`). Engine tests cover tracking changes and chunk unload and reload.
+  - [x] Saved adult pigs fall and land on solid ground, with motion sent to Java viewers
+        (`falling_adult_pig_matches_vanilla`). A pig that crosses a chunk boundary saves in its new chunk
+        and reloads once. Pigs with `NoAI` remain suspended in air as in vanilla.
   - [ ] The other entity types and their persistence.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
 - [ ] Combat, damage, health, hunger, effects.

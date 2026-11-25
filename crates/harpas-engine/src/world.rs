@@ -6470,6 +6470,72 @@ mod tests {
     }
 
     #[test]
+    fn falling_pig_crosses_chunks_and_reloads_from_its_destination() {
+        use harpas_core::nbt::List;
+
+        let folder = Folder::new();
+        let from = ChunkPos { x: 0, z: 0 };
+        let into = ChunkPos { x: 1, z: 0 };
+        save(&folder, &[(from, DATA_VERSION), (into, DATA_VERSION)]);
+        let dir = dimension_dir(&folder.0, "minecraft:overworld").join("entities");
+        let pig = Compound::from_iter([
+            ("id", Nbt::from("minecraft:pig")),
+            ("UUID", Nbt::IntArray(vec![1, 2, 3, 4])),
+            ("Pos", List::Double(vec![15.7, -46.0, 4.5]).into()),
+            ("Motion", List::Double(vec![0.4, 0.0, 0.0]).into()),
+            ("Rotation", List::Float(vec![90.0, -22.5]).into()),
+            ("Health", Nbt::Float(10.0)),
+        ]);
+        let initial = Compound::from_iter([
+            ("DataVersion", Nbt::Int(DATA_VERSION)),
+            ("Position", Nbt::IntArray(vec![0, 0])),
+            ("Entities", List::Compound(vec![pig]).into()),
+        ]);
+        write_chunks(&dir, 0, 0, &[((0, 0), &initial)]).unwrap();
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[from, into]);
+        let handle = world.entities.order[0];
+        let i = world.entities.slot(handle);
+
+        world.tick_entities();
+        assert!(world.entities.position[i][0] > 16.0);
+        assert_eq!(world.entities.position[i][1], -46.0);
+        assert_eq!(world.entities.velocity[i][1], -0.0784000015258789);
+        world.tick_entities();
+        world.flush().unwrap();
+        assert!(entity_document(&folder, from).pigs.is_empty());
+        let [airborne] = &entity_document(&folder, into).pigs[..] else {
+            panic!("expected one airborne pig in the destination");
+        };
+        assert_eq!(airborne.pig.fall_distance, 0.07840000092983246);
+        assert!(!airborne.on_ground);
+
+        for _ in 0..20 {
+            world.tick_entities();
+        }
+        assert!(world.entities.on_ground[i]);
+        let position = world.entities.position[i];
+        assert_eq!(position[1], -48.0);
+        assert!((position[0] - 18.462759423634665).abs() < 1.0e-10);
+        world.flush().unwrap();
+        drop(world);
+
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[into, from]);
+        let [handle] = world.entities.order[..] else {
+            panic!("expected exactly one pig after reopening both chunks");
+        };
+        let i = world.entities.slot(handle);
+        assert_eq!(world.entities.uuid[i], airborne.uuid);
+        assert_eq!(world.entities.position[i], position);
+        assert!(world.entities.on_ground[i]);
+        assert_eq!(
+            entity_document(&folder, into).pigs[0].pig.fall_distance,
+            0.0
+        );
+    }
+
+    #[test]
     fn entity_snapshots_remain_immutable_and_unload_waits_for_newer_changes() {
         use crate::entity::ItemEntity;
         let gate = Arc::new((Mutex::new(false), Condvar::new()));

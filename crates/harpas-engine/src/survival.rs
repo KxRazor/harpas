@@ -293,6 +293,7 @@ pub(crate) struct SurvivalRules {
     keep_inventory: bool,
     show_death_messages: bool,
     natural_regeneration: bool,
+    mob_drops: bool,
     pvp: bool,
     difficulty: Difficulty,
 }
@@ -324,6 +325,7 @@ impl SurvivalRules {
             keep_inventory: boolean("minecraft:keep_inventory", false),
             show_death_messages: boolean("minecraft:show_death_messages", true),
             natural_regeneration: boolean("minecraft:natural_health_regeneration", true),
+            mob_drops: boolean("minecraft:mob_drops", true),
             pvp: boolean("minecraft:pvp", true),
             difficulty,
         }
@@ -1011,7 +1013,7 @@ impl Game {
         pig.health = (pig.health - taken).max(0.0);
         let health = pig.health;
 
-        let [x, _, z] = entities.position[slot];
+        let pig_position @ [x, _, z] = entities.position[slot];
         let velocity = &mut entities.velocity[slot];
         let on_ground = entities.on_ground[slot];
         if fresh_hit {
@@ -1057,6 +1059,9 @@ impl Game {
             if critical {
                 player.send(Output::CriticalHit(entity_id));
             }
+        }
+        if health == 0.0 && world.survival_rules.mob_drops {
+            world.drop_pig_loot(pig_position);
         }
     }
 

@@ -1,4 +1,4 @@
-//! Loot tables from the vanilla data pack, evaluated for broken blocks and chests.
+//! Loot tables from the vanilla data pack, evaluated for broken blocks, chests and bare-hand pig kills.
 //!
 //! A table rolls each pool whose conditions pass, as many times as its `rolls`, and each roll picks one of the
 //! entries that expand, by weight; then the entry's, the pool's and the table's functions apply, and stacks over
@@ -207,7 +207,10 @@ impl Condition {
         match self {
             Self::SurvivesExplosion => true,
             Self::BlockState { block, properties } => {
-                let Some((name, values)) = block_states().properties(context.state) else {
+                let Some((name, values)) = context
+                    .state
+                    .and_then(|state| block_states().properties(state))
+                else {
                     return false;
                 };
                 name == block
@@ -617,7 +620,7 @@ pub(crate) struct LootTable {
 
 /// What a table is evaluated with.
 struct Context<'a> {
-    state: u32,
+    state: Option<u32>,
     tool: &'a ItemStack,
     random: &'a mut dyn RandomSource,
     chest: Option<(&'a chest::LootEnchantments, &'a ItemCodec)>,
@@ -672,8 +675,23 @@ impl LootTable {
         random: &mut dyn RandomSource,
     ) -> io::Result<Vec<ItemStack>> {
         self.roll(&mut Context {
-            state,
+            state: Some(state),
             tool,
+            random,
+            chest: None,
+            treasure_map: None,
+            treasure_requested: false,
+        })
+    }
+
+    /// The loot from killing a mob that is not burning with an empty hand.
+    pub(crate) fn bare_hand_mob_drops(
+        &self,
+        random: &mut dyn RandomSource,
+    ) -> io::Result<Vec<ItemStack>> {
+        self.roll(&mut Context {
+            state: None,
+            tool: &ItemStack::empty(),
             random,
             chest: None,
             treasure_map: None,
@@ -775,11 +793,12 @@ impl LootTable {
     }
 }
 
-/// The loot tables for blocks and supported chests.
+/// The loot tables for blocks, supported chests and pigs.
 #[derive(Debug, Default)]
 pub struct LootTables {
     blocks: HashMap<String, LootTable>,
     pub(crate) chests: Option<chest::ChestLootTables>,
+    pub(crate) pig: Option<LootTable>,
 }
 
 impl LootTables {
@@ -809,6 +828,14 @@ impl LootTables {
         match chest::ChestLootTables::load(&mut archive) {
             Ok(chests) => tables.chests = chests,
             Err(error) => warn!("Chests cannot generate their loot: {error}"),
+        }
+        match archive.by_name("data/minecraft/loot_table/entities/pig.json") {
+            Ok(entry) => match serde_json::from_reader(entry) {
+                Ok(json) => tables.pig = Some(LootTable::parse(&json)),
+                Err(error) => warn!("Pigs cannot generate their loot: {error}"),
+            },
+            Err(zip::result::ZipError::FileNotFound) => {}
+            Err(error) => warn!("Pigs cannot generate their loot: {error}"),
         }
         Ok(tables)
     }

@@ -126,7 +126,7 @@ impl ChestLootTables {
         treasure_map: Option<TreasureMap>,
     ) -> io::Result<([ItemStack; CHEST_SLOTS], bool)> {
         let mut context = Context {
-            state: block_states().default_state("minecraft:air").unwrap(),
+            state: Some(block_states().default_state("minecraft:air").unwrap()),
             tool: &ItemStack::empty(),
             random: &mut *random,
             chest: Some((&self.enchantments, codec)),

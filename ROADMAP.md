@@ -577,7 +577,11 @@ as shown by the parity report.
         sweep. Health of both targets, Sharpness on the same sword, Sweeping Edge in the offhand and a hit
         during an equipment change are compared with vanilla (`sweeping_attacks_match_vanilla`). An engine
         test checks which level applies before and after the equipment tick.
-  - [ ] Mob loot, experience, armed combat with mobs and combat with other mob types.
+  - [x] Adult pigs killed by a bare-hand attack drop raw porkchops from the locally installed vanilla loot
+        table. The count, pickup, saved inventory, saved entities and `minecraft:mob_drops` are compared with
+        vanilla (`bare_hand_pig_loot_matches_vanilla`). An engine test checks that only the lethal hit drops
+        loot and that one stack reloads after a save during the death animation.
+  - [ ] Loot from other mobs, experience, armed combat with mobs and combat with other mob types.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

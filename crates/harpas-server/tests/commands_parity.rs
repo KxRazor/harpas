@@ -3587,6 +3587,121 @@ fn bare_hand_pig_combat_matches_vanilla() {
     }
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn bare_hand_pig_loot_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let entities = "world/dimensions/minecraft/overworld/entities";
+    let read_entities = |dir: &Path| harpas_anvil::read_chunk(&dir.join(entities), 0, 0).unwrap();
+    for drops in [true, false] {
+        let folder = Folder::new("pig-loot");
+        let vanilla = folder.0.join("vanilla");
+        let harpas = folder.0.join("harpas");
+        let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+        let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+        writeln!(
+            reference.child.stdin.as_mut().unwrap(),
+            "gamerule minecraft:mob_drops {drops}\nforceload add 0 0\nsave-all flush"
+        )
+        .unwrap();
+        reference.wait_for("Saved the game");
+        writeln!(
+            reference.child.stdin.as_mut().unwrap(),
+            "summon minecraft:pig 3.5 -60 1.5 {{Health:0.5f,NoAI:1b}}\nsave-all flush"
+        )
+        .unwrap();
+        reference.wait_for("Summoned new Pig");
+        reference.wait_for("Saved the game");
+        let initial = read_entities(&vanilla).unwrap();
+        harpas_anvil::write_chunks(&harpas.join(entities), 0, 0, &[((0, 0), &initial)]).unwrap();
+
+        let expected = punch_and_collect_pig_loot(vanilla_port, drops);
+        stop(&mut reference);
+        let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+        assert_eq!(punch_and_collect_pig_loot(harpas_port, drops), expected);
+        stop(&mut server);
+        for dir in [&vanilla, &harpas] {
+            let (data, _) =
+                harpas_anvil::read_player(&dir.join("world"), offline_uuid("PigHunter"))
+                    .unwrap()
+                    .unwrap();
+            let porkchops = match data.get("Inventory") {
+                Some(Nbt::List(List::Compound(items))) => items
+                    .iter()
+                    .filter(|item| item.get("id") == Some(&Nbt::from("minecraft:porkchop")))
+                    .map(|item| match item.get("count") {
+                        Some(Nbt::Int(count)) => *count,
+                        other => panic!("invalid porkchop count: {other:?}"),
+                    })
+                    .sum::<i32>(),
+                _ => 0,
+            };
+            assert_eq!(porkchops, expected.unwrap_or(0));
+            if let Some(saved) = read_entities(dir)
+                && let Some(Nbt::List(List::Compound(entities))) = saved.get("Entities")
+            {
+                assert!(!entities.iter().any(|entity| {
+                    matches!(entity.get("Item"), Some(Nbt::Compound(stack))
+                        if stack.get("id") == Some(&Nbt::from("minecraft:porkchop")))
+                }));
+            }
+        }
+    }
+}
+
+fn punch_and_collect_pig_loot(port: u16, drops: bool) -> Option<i32> {
+    let mut attacker = Client::join(port, "PigHunter");
+    attacker.stream.set_nodelay(true).unwrap();
+    let pig = track_saved_pig(&mut attacker);
+    let porkchop = harpas_core::item::items().id("minecraft:porkchop").unwrap();
+    move_player(&mut attacker, [pig.x - 2.0, pig.y, pig.z], true);
+    std::thread::sleep(Duration::from_millis(300));
+    play_packet(
+        &mut attacker,
+        play::serverbound::Attack {
+            entity_id: pig.entity_id,
+        },
+    );
+
+    let porkchop_drop = |packet: Packet| {
+        let Packet::SetEntityMetadata(packet) = packet else {
+            return None;
+        };
+        packet.metadata.entries.into_iter().find_map(|entry| {
+            let (8, play::MetadataValue::ItemStack(stack)) = entry else {
+                return None;
+            };
+            (stack.item == porkchop as i32 && stack.count > 0)
+                .then_some((packet.entity_id, stack.count))
+        })
+    };
+    let loot = drops.then(|| attacker.matching("a stack of raw porkchops", porkchop_drop));
+    if let Some((_, count)) = loot {
+        assert!((1..=3).contains(&count));
+        move_player(&mut attacker, [pig.x, pig.y, pig.z], true);
+    }
+    let mut picked_up = false;
+    let mut removed = false;
+    attacker.matching("pig removal and expected loot", |packet| {
+        match packet {
+            Packet::PickupItem(packet) if loot.is_some_and(|(id, _)| packet.collected == id) => {
+                assert_eq!(Some(packet.count), loot.map(|(_, count)| count));
+                picked_up = true;
+            }
+            Packet::RemoveEntities(packet) if packet.entity_ids.contains(&pig.entity_id) => {
+                removed = true;
+            }
+            packet => {
+                if let Some(observed) = porkchop_drop(packet) {
+                    assert_eq!(Some(observed), loot, "unexpected stack of raw porkchops");
+                }
+            }
+        }
+        (removed && (picked_up || !drops)).then_some(())
+    });
+    loot.map(|(_, count)| count)
+}
+
 fn punch_saved_pig(port: u16, initial_health: f32) -> Option<[f64; 3]> {
     let mut attacker = Client::join(port, "PigHunter");
     attacker.stream.set_nodelay(true).unwrap();

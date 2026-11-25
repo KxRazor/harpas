@@ -501,7 +501,7 @@ pub struct World {
     pub(crate) entities: crate::entity::Entities,
     entity_data: HashMap<ChunkPos, EntityChunk>,
     item_codec: Arc<RwLock<Arc<ItemCodec>>>,
-    /// Loot tables for broken blocks and supported chests.
+    /// Loot tables for broken blocks, supported chests and pigs.
     pub(crate) loot: Option<Arc<crate::loot::LootTables>>,
     pub(crate) maps: crate::maps::Maps,
     /// The world seed, read from the world's generation settings, which seeds the random sequences.
@@ -6337,6 +6337,102 @@ mod tests {
                 .any(|removal| removal.network_id == reloaded_id)
         );
         assert!(!world.entities.contains(handle));
+    }
+
+    #[test]
+    fn lethal_pig_loot_survives_a_save_during_the_death_animation() {
+        use std::io::{Cursor, Write};
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file(
+            "data/minecraft/loot_table/entities/pig.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(
+            br#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:porkchop"}]}]}"#,
+        )
+        .unwrap();
+        world.set_loot_tables(Arc::new(
+            crate::loot::LootTables::from_zip_reader(zip.finish().unwrap()).unwrap(),
+        ));
+        let pig = crate::entity::Pig::new(
+            [0.0; 2],
+            1.5,
+            0.0,
+            crate::player::PigVariant::Temperate,
+            Arc::new(Compound::from_iter([("NoAI", Nbt::Byte(1))])),
+        );
+        let position = [3.5, 65.0, 1.5];
+        let player_id = crate::next_entity_id().unwrap();
+        let pig_id = crate::next_entity_id().unwrap();
+        let pig_handle = world
+            .entities
+            .add(pig_id, 42, position, [0.0; 3], Kind::Pig(pig));
+        let (output, _received) = crate::player::output_channel();
+        let mut player = crate::player::PlayerState::new(
+            player_id,
+            Profile {
+                game_mode: GameMode::Survival,
+                ..profile()
+            },
+            2,
+            false,
+            output,
+        );
+        player.player.position = crate::player::Position {
+            x: 1.5,
+            y: 65.0,
+            z: 1.5,
+            on_ground: true,
+            ..Default::default()
+        };
+        player.awaiting_teleport = None;
+        player.attack_charge_ticks = 5;
+        let mut game = Game {
+            pending: Vec::new(),
+            players: vec![player],
+            online_players: Arc::default(),
+            world: Some(world),
+            viewers: Vec::new(),
+            stopped: false,
+        };
+        game.attack_entity(0, pig_id);
+        let world = game.world.as_mut().unwrap();
+        assert_eq!(world.entities.order, [pig_handle]);
+        assert_eq!(world.entities.pig_target(pig_id), Some(pig_handle));
+        for _ in 0..10 {
+            world.tick_entities();
+        }
+
+        game.players[0].attack_charge_ticks = 5;
+        game.attack_entity(0, pig_id);
+        game.players[0].attack_charge_ticks = 5;
+        game.attack_entity(0, pig_id);
+        let mut world = game.world.take().unwrap();
+        assert!(world.entities.contains(pig_handle));
+        assert!(world.entities.pig_target(pig_id).is_none());
+        world.flush().unwrap();
+        drop(world);
+
+        let mut reopened = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut reopened, &[pos]);
+        let [item] = reopened.entities.order[..] else {
+            panic!("expected one dropped item after reopening");
+        };
+        let drop = reopened.entities.item(item).unwrap();
+        assert_eq!(drop.stack.name(), Some("minecraft:porkchop"));
+        assert_eq!(drop.stack.count, 1);
+        assert_eq!(drop.pickup_delay, 10);
+        assert_eq!(
+            reopened.entities.position[reopened.entities.slot(item)],
+            position
+        );
     }
 
     #[test]

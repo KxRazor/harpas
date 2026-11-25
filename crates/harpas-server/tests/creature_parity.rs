@@ -283,18 +283,69 @@ fn saved_cow_combat_and_drops_match_vanilla() {
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_cow_follows_wheat_matches_vanilla() {
+    let [
+        ((vanilla_switch, vanilla_speed), vanilla_pos),
+        ((harpas_switch, harpas_speed), harpas_pos),
+    ] = observe_saved_cow_following(false, lead_cow);
+    // The position and velocity packets can sample different ticks of the approach.
+    assert!(vanilla_speed > 0.06);
+    assert!(
+        (harpas_speed - vanilla_speed).abs() < 0.01,
+        "cow's westward velocity: Harpas {harpas_speed}, vanilla {vanilla_speed}"
+    );
+    for (server, switched_at, pos) in [
+        ("vanilla", vanilla_switch, vanilla_pos),
+        ("Harpas", harpas_switch, harpas_pos),
+    ] {
+        // Allow a few ticks' movement in flight and some coasting, not continued pursuit.
+        assert!(
+            (-0.25..=1.0).contains(&(switched_at - pos[0])),
+            "cow did not stop in {server}: switched at {switched_at}, saved at {pos:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_walks_around_a_wall_matches_vanilla() {
+    let [vanilla, harpas] = observe_saved_cow_following(true, lead_cow_around_wall);
+    for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
+        assert_eq!(saved[1], HERDER_POSITION[1]);
+        assert!(
+            saved[0] < 5.5,
+            "cow returned behind the wall in {server}: {saved:?}"
+        );
+        assert!(
+            (saved[0] - at[0]).hypot(saved[2] - at[2]) < 0.9,
+            "cow did not stop in {server}: switched at {at:?}, saved at {saved:?}"
+        );
+    }
+}
+
+const HERDER_POSITION: [f64; 3] = [2.5, -60.0, 1.5];
+
+fn observe_saved_cow_following<T>(
+    wall: bool,
+    lead: impl Fn(u16, Option<&mut Server>) -> T,
+) -> [(T, [f64; 3]); 2] {
     let Reference { jar, eula } = Reference::required();
-    let folder = Folder::new("cow-temptation");
+    let folder = Folder::new(if wall {
+        "cow-navigation"
+    } else {
+        "cow-temptation"
+    });
     let vanilla = folder.0.join("vanilla");
     let harpas = folder.0.join("harpas");
     let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
     let mut reference = start_flat_vanilla(&jar, &vanilla, false);
-    writeln!(
-        reference.child.stdin.as_mut().unwrap(),
-        "forceload add 0 0\ntick freeze\n\
-         summon minecraft:cow 10.5 -60 1.5\nsave-all flush"
-    )
-    .unwrap();
+    let console = reference.child.stdin.as_mut().unwrap();
+    let north_edge = if wall { -4 } else { 0 };
+    writeln!(console, "forceload add 0 {north_edge} 0 0\ntick freeze").unwrap();
+    if wall {
+        // It is much shorter to go around the south end than the north end.
+        writeln!(console, "fill 6 -60 -4 6 -59 2 minecraft:stone").unwrap();
+    }
+    writeln!(console, "summon minecraft:cow 10.5 -60 1.5\nsave-all flush").unwrap();
     reference.wait_for("Saved the game");
     let entities = "world/dimensions/minecraft/overworld/entities";
     let read_entities = |dir: &Path| {
@@ -319,44 +370,40 @@ fn saved_cow_follows_wheat_matches_vanilla() {
     for dir in [&vanilla, &harpas] {
         harpas_anvil::write_player(&dir.join("world"), offline_uuid("CowHerder"), &player).unwrap();
     }
-    let (vanilla_switch, vanilla_speed) = lead_cow(vanilla_port, || {
-        writeln!(reference.child.stdin.as_mut().unwrap(), "tick unfreeze").unwrap();
-    });
+    let expected = lead(vanilla_port, Some(&mut reference));
     stop(&mut reference);
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
-    let (harpas_switch, harpas_speed) = lead_cow(harpas_port, || {});
+    let actual = lead(harpas_port, None);
     stop(&mut server);
-    // The position and velocity packets can sample different ticks of the approach.
-    assert!(vanilla_speed > 0.06);
-    assert!(
-        (harpas_speed - vanilla_speed).abs() < 0.01,
-        "cow's westward velocity: Harpas {harpas_speed}, vanilla {vanilla_speed}"
-    );
-    for (dir, switched_at) in [(&vanilla, vanilla_switch), (&harpas, harpas_switch)] {
+    [(&vanilla, expected), (&harpas, actual)].map(|(dir, observed)| {
         let saved = read_entities(dir);
         let cow = saved_entity(&saved, "minecraft:cow");
         let Some(Nbt::List(List::Double(pos))) = cow.get("Pos") else {
             panic!("cow has no saved position in {dir:?}");
         };
-        // The wheat is hidden mid-approach, well outside the cow's normal stopping distance.
-        // Allow a few ticks' movement in flight and some coasting, not continued pursuit.
-        assert!(
-            (-0.25..=1.0).contains(&(switched_at - pos[0])),
-            "cow did not stop following in {dir:?}: switched at {switched_at}, saved at {pos:?}"
-        );
-    }
+        (observed, pos.as_slice().try_into().unwrap())
+    })
 }
 
-fn lead_cow(port: u16, start_ticks: impl FnOnce()) -> (f64, f64) {
+fn hold_wheat(
+    port: u16,
+    reference: Option<&mut Server>,
+) -> (Client, play::clientbound::SpawnEntity) {
     let mut client = Client::join(port, "CowHerder");
     client.stream.set_nodelay(true).unwrap();
     let cow = track_animals(&mut client, 30, "saved adult cow", 1, |_| true)
         .pop()
         .unwrap();
-    move_player(&mut client, [2.5, -60.0, 1.5], true);
+    move_player(&mut client, HERDER_POSITION, true);
     play_packet(&mut client, play::serverbound::SetHeldItem { slot: 1 });
-    start_ticks();
+    if let Some(reference) = reference {
+        writeln!(reference.child.stdin.as_mut().unwrap(), "tick unfreeze").unwrap();
+    }
+    (client, cow)
+}
 
+fn lead_cow(port: u16, reference: Option<&mut Server>) -> (f64, f64) {
+    let (mut client, cow) = hold_wheat(port, reference);
     let mut x = cow.x;
     let mut head_yaw = cow.head_yaw;
     let mut westward_speed = 0.0_f64;
@@ -385,6 +432,42 @@ fn lead_cow(port: u16, start_ticks: impl FnOnce()) -> (f64, f64) {
     play_packet(&mut client, play::serverbound::SetHeldItem { slot: 0 });
     std::thread::sleep(Duration::from_millis(650));
     (x, westward_speed)
+}
+
+fn lead_cow_around_wall(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+    let (mut client, cow) = hold_wheat(port, reference);
+    let mut at = [cow.x, cow.y, cow.z];
+    let mut rounded_end = false;
+    client.matching("cow rounds the wall to approach the wheat", |packet| {
+        let delta = match packet {
+            Packet::EntityPositionSync(pos) if pos.entity_id == cow.entity_id => {
+                at = [pos.x, pos.y, pos.z];
+                [0; 3]
+            }
+            Packet::UpdateEntityPosition(pos) if pos.entity_id == cow.entity_id => {
+                [pos.delta_x, pos.delta_y, pos.delta_z]
+            }
+            Packet::UpdateEntityPositionAndRotation(pos) if pos.entity_id == cow.entity_id => {
+                [pos.delta_x, pos.delta_y, pos.delta_z]
+            }
+            _ => return None,
+        };
+        for (coord, change) in at.iter_mut().zip(delta) {
+            *coord += f64::from(change) / 4096.0;
+        }
+        let [x, y, z] = at;
+        assert!((y - cow.y).abs() < 0.001, "cow left the ground at {at:?}");
+        if (5.56..7.44).contains(&x) {
+            assert!(z >= 3.44, "cow crossed the wall at {at:?}");
+            rounded_end = true;
+        }
+        (rounded_end && x < 5.4).then_some(())
+    });
+    let [x, _, z] = at;
+    assert!((x - HERDER_POSITION[0]).hypot(z - HERDER_POSITION[2]) > 3.0);
+    play_packet(&mut client, play::serverbound::SetHeldItem { slot: 0 });
+    std::thread::sleep(Duration::from_millis(650));
+    at
 }
 
 fn saved_animal_combat(kind: &str, name: &str, entity_type: i32, meat: &str) {

@@ -6517,6 +6517,88 @@ mod tests {
     }
 
     #[test]
+    fn adult_cow_walks_around_a_wall_towards_wheat() {
+        use crate::entity::Animal;
+        use crate::inventory::{HOTBAR, ItemStack};
+        use crate::player::{AnimalSpecies, AnimalVariant, PlayerState, Position, output_channel};
+
+        let folder = Folder::new();
+        let chunk = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(chunk, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[chunk]);
+        let states = block_states();
+        let stone = states.default_state("minecraft:stone").unwrap();
+        let air = states.default_state("minecraft:air").unwrap();
+        let mut blocks =
+            PalettedContainer::filled(Strategy::block_states(states.global_bits()), air);
+        for z in 0..=2 {
+            for y in 0..=1 {
+                blocks.set((y << 8) | (z << 4) | 6, stone);
+            }
+        }
+        world.chunk_mut(chunk).unwrap().sections.push(ChunkSection {
+            y: -3,
+            section: Some(Section::new(
+                blocks,
+                PalettedContainer::filled(Strategy::biomes(1), 1),
+            )),
+            rest: Compound::new(),
+        });
+        let cow = Animal::new(
+            AnimalSpecies::Cow,
+            [0.0; 2],
+            10.0,
+            0.0,
+            AnimalVariant::Temperate,
+            Arc::default(),
+        );
+        let handle = world
+            .entities
+            .add(101, 101, [10.5, -48.0, 1.5], [0.0; 3], Kind::Animal(cow));
+        let cow = world.entities.slot(handle);
+        let (output, _received) = output_channel();
+        let mut player = PlayerState::new(102, profile(), 2, false, output);
+        player.data_ready = true;
+        player.player.position = Position {
+            x: 2.5,
+            y: -48.0,
+            z: 1.5,
+            ..Default::default()
+        };
+        player.inventory.slots[HOTBAR] = ItemStack {
+            item: harpas_core::item::items().id("minecraft:wheat").unwrap(),
+            count: 1,
+            ..ItemStack::empty()
+        };
+        let mut players = [player];
+        let mut cleared_wall = false;
+        for _ in 0..140 {
+            world.tick_entities(&players);
+            let [x, y, z] = world.entities.position[cow];
+            assert_eq!(y, -48.0);
+            if (5.56..7.44).contains(&x) {
+                assert!(z >= 3.44, "cow crossed the wall at ({x}, {z})");
+                cleared_wall = true;
+            }
+            if x < 5.4 {
+                break;
+            }
+        }
+        let [x, _, z] = world.entities.position[cow];
+        assert!(cleared_wall && x < 5.4, "cow got stuck at ({x}, {z})");
+        players[0].inventory.selected = 1;
+        for _ in 0..30 {
+            world.tick_entities(&players);
+        }
+        let [sx, _, sz] = world.entities.position[cow];
+        assert!(
+            (sx - x).hypot(sz - z) < 0.3,
+            "cow kept following after the wheat was hidden"
+        );
+    }
+
+    #[test]
     fn lethal_pig_loot_survives_a_save_during_the_death_animation() {
         use std::io::{Cursor, Write};
 

@@ -499,7 +499,9 @@ as shown by the parity report.
 - [ ] Mob AI and spawning, starting with common overworld mobs.
   - [x] Saved adult cows follow nearby players holding wheat on open, flat ground. A Java Survival client
         compares approach and stopping after a hotbar switch with vanilla (`saved_cow_follows_wheat_matches_vanilla`).
-  - [ ] Navigation around obstacles and other animal goals.
+  - [x] A saved adult cow follows wheat around a two-block-high wall on flat ground and stops pursuing when
+        the player hides the wheat, compared with vanilla (`saved_cow_walks_around_a_wall_matches_vanilla`).
+  - [ ] Navigation across height changes and liquids, broader obstacle parity and other animal goals.
   - [ ] Compare natural cow spawning on a fixed grassy platform under matching light, biome and mob-cap
         conditions.
 - [ ] Combat, damage, health, hunger, effects.

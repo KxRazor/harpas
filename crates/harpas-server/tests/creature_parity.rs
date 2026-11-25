@@ -280,6 +280,113 @@ fn saved_cow_combat_and_drops_match_vanilla() {
     saved_animal_combat("minecraft:cow", "Cow", 30, "minecraft:beef");
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_follows_wheat_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("cow-temptation");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "forceload add 0 0\ntick freeze\n\
+         summon minecraft:cow 10.5 -60 1.5\nsave-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Saved the game");
+    let entities = "world/dimensions/minecraft/overworld/entities";
+    let read_entities = |dir: &Path| {
+        harpas_anvil::read_chunk(&dir.join(entities), 0, 0)
+            .unwrap()
+            .unwrap()
+    };
+    let initial = read_entities(&vanilla);
+    harpas_anvil::write_chunks(&harpas.join(entities), 0, 0, &[((0, 0), &initial)]).unwrap();
+    let player = Compound::from_iter([
+        ("DataVersion", Nbt::Int(harpas_anvil::DATA_VERSION)),
+        (
+            "Inventory",
+            List::Compound(vec![Compound::from_iter([
+                ("Slot", Nbt::Byte(1)),
+                ("id", Nbt::from("minecraft:wheat")),
+                ("count", Nbt::Int(1)),
+            ])])
+            .into(),
+        ),
+    ]);
+    for dir in [&vanilla, &harpas] {
+        harpas_anvil::write_player(&dir.join("world"), offline_uuid("CowHerder"), &player).unwrap();
+    }
+    let (vanilla_switch, vanilla_speed) = lead_cow(vanilla_port, || {
+        writeln!(reference.child.stdin.as_mut().unwrap(), "tick unfreeze").unwrap();
+    });
+    stop(&mut reference);
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    let (harpas_switch, harpas_speed) = lead_cow(harpas_port, || {});
+    stop(&mut server);
+    // The position and velocity packets can sample different ticks of the approach.
+    assert!(vanilla_speed > 0.06);
+    assert!(
+        (harpas_speed - vanilla_speed).abs() < 0.01,
+        "cow's westward velocity: Harpas {harpas_speed}, vanilla {vanilla_speed}"
+    );
+    for (dir, switched_at) in [(&vanilla, vanilla_switch), (&harpas, harpas_switch)] {
+        let saved = read_entities(dir);
+        let cow = saved_entity(&saved, "minecraft:cow");
+        let Some(Nbt::List(List::Double(pos))) = cow.get("Pos") else {
+            panic!("cow has no saved position in {dir:?}");
+        };
+        // The wheat is hidden mid-approach, well outside the cow's normal stopping distance.
+        // Allow a few ticks' movement in flight and some coasting, not continued pursuit.
+        assert!(
+            (-0.25..=1.0).contains(&(switched_at - pos[0])),
+            "cow did not stop following in {dir:?}: switched at {switched_at}, saved at {pos:?}"
+        );
+    }
+}
+
+fn lead_cow(port: u16, start_ticks: impl FnOnce()) -> (f64, f64) {
+    let mut client = Client::join(port, "CowHerder");
+    client.stream.set_nodelay(true).unwrap();
+    let cow = track_animals(&mut client, 30, "saved adult cow", 1, |_| true)
+        .pop()
+        .unwrap();
+    move_player(&mut client, [2.5, -60.0, 1.5], true);
+    play_packet(&mut client, play::serverbound::SetHeldItem { slot: 1 });
+    start_ticks();
+
+    let mut x = cow.x;
+    let mut head_yaw = cow.head_yaw;
+    let mut westward_speed = 0.0_f64;
+    client.matching("cow approaches the wheat", |packet| {
+        match packet {
+            Packet::EntityPositionSync(sync) if sync.entity_id == cow.entity_id => x = sync.x,
+            Packet::UpdateEntityPosition(movement) if movement.entity_id == cow.entity_id => {
+                x += f64::from(movement.delta_x) / 4096.0;
+            }
+            Packet::UpdateEntityPositionAndRotation(movement)
+                if movement.entity_id == cow.entity_id =>
+            {
+                x += f64::from(movement.delta_x) / 4096.0;
+            }
+            Packet::SetHeadRotation(rotation) if rotation.entity_id == cow.entity_id => {
+                head_yaw = rotation.head_yaw;
+            }
+            Packet::SetEntityVelocity(motion) if motion.entity_id == cow.entity_id => {
+                westward_speed = westward_speed.max(-motion.velocity.x);
+            }
+            _ => return None,
+        }
+        // West is 90 degrees, encoded as 64 in the protocol.
+        (x < cow.x - 1.25 && (48..=80).contains(&head_yaw)).then_some(())
+    });
+    play_packet(&mut client, play::serverbound::SetHeldItem { slot: 0 });
+    std::thread::sleep(Duration::from_millis(650));
+    (x, westward_speed)
+}
+
 fn saved_animal_combat(kind: &str, name: &str, entity_type: i32, meat: &str) {
     let Reference { jar, eula } = Reference::required();
     let folder = Folder::new("saved-animal-combat");

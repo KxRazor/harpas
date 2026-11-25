@@ -1073,6 +1073,27 @@ pub(crate) fn send(
                 on_ground,
             }
             .into(),
+            Output::AnimalRotation {
+                entity_id,
+                rotation: [yaw, pitch],
+                on_ground,
+            } => {
+                let yaw = angle(yaw);
+                connection.send_play_packet(
+                    clientbound::UpdateEntityRotation {
+                        entity_id,
+                        yaw,
+                        pitch: angle(pitch),
+                        on_ground,
+                    }
+                    .into(),
+                );
+                clientbound::SetHeadRotation {
+                    entity_id,
+                    head_yaw: yaw,
+                }
+                .into()
+            }
             Output::EntityVelocity {
                 entity_id,
                 velocity: motion,

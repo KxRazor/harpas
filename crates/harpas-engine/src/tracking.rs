@@ -24,7 +24,7 @@ const ITEM_RANGE: f64 = 96.0;
 const ANIMAL_RANGE: f64 = 160.0;
 /// How often an item entity's viewers are sent its position (`updateInterval`).
 const ITEM_UPDATE_INTERVAL: i32 = 20;
-/// How often a animal's viewers are sent its position (`updateInterval`).
+/// How often an animal's viewers are sent its position (`updateInterval`).
 const ANIMAL_UPDATE_INTERVAL: i32 = 3;
 
 /// What the players who see an entity were last sent of it (`ServerEntity`).
@@ -34,6 +34,7 @@ pub(crate) struct ServerEntity {
     /// The position last sent, which moves are relative to (`positionCodec`'s base).
     base: [f64; 3],
     pub(crate) last_velocity: [f64; 3],
+    last_rotation: [f32; 2],
     was_on_ground: bool,
     teleport_delay: i32,
     /// Whether the stack changed since it was last sent (`EntityData.isDirty`).
@@ -48,11 +49,11 @@ impl ServerEntity {
         self.seen_by.iter().copied()
     }
 
-    pub(crate) fn new(position: [f64; 3], velocity: [f64; 3], on_ground: bool) -> Self {
+    pub(crate) fn new(position: [f64; 3], velocity: [f64; 3], rotation: [f32; 2]) -> Self {
         Self {
             base: position,
             last_velocity: velocity,
-            was_on_ground: on_ground,
+            last_rotation: rotation,
             ..Self::default()
         }
     }
@@ -307,6 +308,14 @@ impl Game {
                             },
                         );
                     }
+                }
+                if server.last_rotation != rotation {
+                    server.last_rotation = rotation;
+                    outputs.push(player::Output::AnimalRotation {
+                        entity_id: id,
+                        rotation,
+                        on_ground,
+                    });
                 }
                 if std::mem::take(&mut server.dirty)
                     && let Kind::Item(item) = kind

@@ -21,7 +21,7 @@ use harpas_core::random::RandomSource;
 use crate::block::{self, BlockPos};
 use crate::fluid::FluidState;
 use crate::inventory::ItemStack;
-use crate::player::{AnimalSpecies, AnimalVariant};
+use crate::player::{AnimalSpecies, AnimalVariant, GameMode, PlayerState};
 use crate::world::{ChunkPos, ChunkState, World};
 
 /// An entity's handle: its slot and the slot's generation, which changes when the slot is reused.
@@ -55,7 +55,65 @@ pub(crate) struct ItemEntity {
     pub(crate) rest: Arc<Compound>,
 }
 
-/// The saved state of a living adult animal.
+/// The cow's transient wheat-following goal. The target is reevaluated each tick and is not saved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum CowTemptation {
+    #[default]
+    Idle,
+    Following,
+    Cooldown(u8),
+}
+
+impl CowTemptation {
+    /// Selects the nearest player holding wheat within the default temptation range. Steering on
+    /// open ground is direct until path navigation is implemented.
+    fn direction(&mut self, position: [f64; 3], players: &[PlayerState]) -> Option<[f64; 2]> {
+        const RANGE_SQUARED: f64 = 10.0 * 10.0;
+        const STOP_DISTANCE_SQUARED: f64 = 2.5 * 2.5;
+        const RESTART_DELAY: u8 = 100;
+
+        if let Self::Cooldown(ticks) = *self {
+            *self = if ticks == 1 {
+                Self::Idle
+            } else {
+                Self::Cooldown(ticks - 1)
+            };
+            return None;
+        }
+        let target = players
+            .iter()
+            .filter(|player| {
+                player.data_ready
+                    && !player.disconnecting
+                    && !player.is_dead()
+                    && player.player.profile.game_mode != GameMode::Spectator
+            })
+            .filter_map(|player| {
+                let p = player.player.position;
+                let [dx, dy, dz] = [p.x - position[0], p.y - position[1], p.z - position[2]];
+                let distance = dx * dx + dy * dy + dz * dz;
+                (distance <= RANGE_SQUARED
+                    && [false, true].into_iter().any(|off_hand| {
+                        let held = &player.inventory.slots[player.inventory.hand_slot(off_hand)];
+                        !held.is_empty() && held.name() == Some("minecraft:wheat")
+                    }))
+                .then_some((distance, dx, dz))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((distance, dx, dz)) = target else {
+            if *self == Self::Following {
+                *self = Self::Cooldown(RESTART_DELAY);
+            }
+            return None;
+        };
+        *self = Self::Following;
+        let horizontal = dx.hypot(dz);
+        (distance >= STOP_DISTANCE_SQUARED && horizontal > 0.0)
+            .then(|| [dx / horizontal, dz / horizontal])
+    }
+}
+
+/// The saved state of a living adult animal and its runtime goal state.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Animal {
     pub(crate) species: AnimalSpecies,
@@ -65,6 +123,7 @@ pub(crate) struct Animal {
     pub(crate) hurt_cooldown: u8,
     pub(crate) last_damage: f32,
     death_time: u8,
+    temptation: CowTemptation,
     pub(crate) fall_distance: f64,
     pub(crate) variant: AnimalVariant,
     pub(crate) nbt: Arc<Compound>,
@@ -86,6 +145,7 @@ impl Animal {
             hurt_cooldown: 0,
             last_damage: 0.0,
             death_time: 0,
+            temptation: CowTemptation::default(),
             fall_distance,
             variant,
             nbt,
@@ -190,8 +250,12 @@ impl Entities {
         self.tick_count[i] = 0;
         self.supporting[i] = None;
         self.on_ground_no_blocks[i] = false;
+        let rotation = match &kind {
+            Kind::Item(_) => [0.0; 2],
+            Kind::Animal(animal) => animal.rotation,
+        };
         self.kind[i] = Some(kind);
-        self.server[i] = crate::tracking::ServerEntity::new(position, velocity, false);
+        self.server[i] = crate::tracking::ServerEntity::new(position, velocity, rotation);
         let handle = EntityHandle {
             index,
             generation: self.generations[i],
@@ -775,9 +839,9 @@ impl World {
         age < LIFETIME
     }
 
-    /// The dry movement of a living adult animal without movement input (`travelInAir`).
-    fn tick_animal(&mut self, i: usize) -> bool {
-        let Some(Kind::Animal(animal)) = &self.entities.kind[i] else {
+    /// The dry movement of an adult animal (`travelInAir`). A living cow can supply input from its goal.
+    fn tick_animal(&mut self, i: usize, players: &[PlayerState]) -> bool {
+        let Some(Kind::Animal(animal)) = &mut self.entities.kind[i] else {
             return false;
         };
         if animal.no_ai() {
@@ -791,11 +855,24 @@ impl World {
         let before = self.entities.position[i];
         let velocity = self.entities.velocity[i];
         let on_ground = self.entities.on_ground[i];
-        let drag = if on_ground {
-            0.91_f32 * friction(self.state(self.block_below(i)))
+        let height = animal.height();
+        let old_rotation = animal.rotation;
+        let direction = if animal.species == AnimalSpecies::Cow && animal.health > 0.0 {
+            animal.temptation.direction(before, players)
         } else {
-            0.91_f32
+            None
         };
+        if let Some([dx, dz]) = direction
+            && on_ground
+        {
+            animal.rotation[0] = (-dx).atan2(dz).to_degrees() as f32;
+        }
+        let grip = if on_ground {
+            friction(self.state(self.block_below(i)))
+        } else {
+            1.0
+        };
+        let drag = 0.91_f32 * grip;
         let [mut x, mut y, mut z] = velocity;
         if x * x + z * z < 9.0e-6 {
             x = 0.0;
@@ -806,8 +883,18 @@ impl World {
         }
         self.entities.old_position[i] = before;
         self.entities.tick_count[i] += 1;
+        if let Some([dx, dz]) = direction
+            && on_ground
+        {
+            // Move control sets both the forward input and the travel speed from the goal's
+            // modifier and the cow's default movement speed. Ground friction scales the latter.
+            let speed = 1.25_f32 * 0.2;
+            let acceleration = speed * speed * (0.216_000_02 / (grip * grip * grip));
+            x += dx * f64::from(acceleration);
+            z += dz * f64::from(acceleration);
+        }
         self.entities.velocity[i] = [x, y, z];
-        self.move_entity(i, [x, y, z], ANIMAL_WIDTH, animal.height());
+        self.move_entity(i, [x, y, z], ANIMAL_WIDTH, height);
         let v = &mut self.entities.velocity[i];
         *v = [
             v[0] * f64::from(drag),
@@ -828,6 +915,7 @@ impl World {
         before != after
             || velocity != *v
             || on_ground != grounded
+            || old_rotation != animal.rotation
             || fall_distance != animal.fall_distance
     }
 
@@ -910,7 +998,7 @@ impl World {
 
     /// Runs the tick of every entity whose chunk a player sees, in order, and removes expired entities
     /// (`entityTickList.forEach(tickNonPassenger)`). Returns the entities removed.
-    pub(crate) fn tick_entities(&mut self) -> Vec<RemovedEntity> {
+    pub(crate) fn tick_entities(&mut self, players: &[PlayerState]) -> Vec<RemovedEntity> {
         for handle in self.entities.order.clone() {
             if !self.entities.contains(handle) {
                 continue;
@@ -939,7 +1027,7 @@ impl World {
                             continue;
                         }
                     }
-                    self.tick_animal(i)
+                    self.tick_animal(i, players)
                 }
             };
             if changed {

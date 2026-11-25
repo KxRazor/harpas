@@ -968,7 +968,14 @@ impl World {
         let Some(table) = &loot.pig else {
             return;
         };
-        match table.mob_drops(tool, self.drop_random(table.random_sequence.as_deref())) {
+        let looting_level = self
+            .block_item_codec()
+            .enchantment_level(tool, "minecraft:looting");
+        match table.mob_drops(
+            tool,
+            looting_level,
+            self.drop_random(table.random_sequence.as_deref()),
+        ) {
             Ok(stacks) => {
                 for stack in stacks {
                     if let Some(id) = crate::next_entity_id() {

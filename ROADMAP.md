@@ -584,6 +584,9 @@ as shown by the parity report.
   - [x] Unenchanted swords can strike saved adult pigs in Java Survival. The parity test compares full and
         partial damage, rapid repeats, saved wear and the raw porkchops from a lethal hit using wooden and
         iron swords (`sword_pig_combat_matches_vanilla`).
+  - [x] Looting I–III on the main-hand sword increase the raw porkchop count from adult pigs. The exact
+        sequence of drops and their pickup are compared with vanilla for each level, an unenchanted sword,
+        Looting in the offhand and `minecraft:mob_drops` disabled (`pig_looting_matches_vanilla`).
   - [ ] Loot from other mobs, experience, other weapons and enchantments against mobs, sword sweeps with
         mobs, and combat with other mob types.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).

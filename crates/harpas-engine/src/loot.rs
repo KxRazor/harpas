@@ -10,7 +10,7 @@
 //! decoded yet), `random_chance`, `table_bonus`, `any_of`, `all_of` and `inverted`; the functions `set_count`,
 //! `limit_count`, `apply_bonus` and `explosion_decay`; constant, uniform and binomial numbers. Chest loot
 //! supports `enchant_randomly` with the vanilla loot enchantment tag, `set_potion` and `set_stew_effect`.
-//! Tool enchantments are read as none.
+//! Block tool enchantments are read as none. Mob loot supports Looting with `enchanted_count_increase`.
 //! Not done yet: `location_check` and
 //! `entity_properties` conditions (read as false) and `dynamic` entries (which add nothing), and the functions
 //! that copy data into the item (`copy_components`, `copy_state`), which drop the item without it.
@@ -21,6 +21,7 @@ use std::path::Path;
 
 use harpas_core::block::block_states;
 use harpas_core::item::items;
+use harpas_core::math::round_f32;
 use harpas_core::nbt::{Compound, List, Nbt};
 use harpas_core::random::RandomSource;
 use log::warn;
@@ -265,6 +266,10 @@ enum Function {
         min: Option<i32>,
         max: Option<i32>,
     },
+    LootingBonus {
+        count: Number,
+        limit: i32,
+    },
     /// `apply_bonus` with no enchantment level: the binomial formula still rolls its extra chances.
     BinomialBonus {
         extra: i32,
@@ -341,6 +346,12 @@ impl Function {
                     max: bound("max"),
                 }
             }
+            "minecraft:enchanted_count_increase" if value["enchantment"] == "minecraft:looting" => {
+                Number::parse(&value["count"]).map_or(Self::None, |count| Self::LootingBonus {
+                    count,
+                    limit: value["limit"].as_i64().unwrap_or(0) as i32,
+                })
+            }
             "minecraft:apply_bonus" => {
                 let parameters = value.get("parameters");
                 match value.get("formula").and_then(Value::as_str) {
@@ -413,6 +424,13 @@ impl Function {
                     stack.count = stack.count.min(*max);
                 }
             }
+            Self::LootingBonus { count, limit } if context.looting_level > 0 => {
+                let bonus = round_f32(context.looting_level as f32 * count.float(random));
+                stack.count = stack.count.wrapping_add(bonus);
+                if *limit > 0 {
+                    stack.count = stack.count.min(*limit);
+                }
+            }
             Self::BinomialBonus { extra, probability } => {
                 for _ in 0..*extra {
                     if random.next_float() < *probability {
@@ -463,7 +481,7 @@ impl Function {
                     )?;
                 }
             }
-            Self::None => {}
+            Self::LootingBonus { .. } | Self::None => {}
         }
         Ok(())
     }
@@ -622,6 +640,7 @@ pub(crate) struct LootTable {
 struct Context<'a> {
     state: Option<u32>,
     tool: &'a ItemStack,
+    looting_level: i32,
     random: &'a mut dyn RandomSource,
     chest: Option<(&'a chest::LootEnchantments, &'a ItemCodec)>,
     treasure_map: Option<crate::maps::TreasureMap>,
@@ -677,6 +696,7 @@ impl LootTable {
         self.roll(&mut Context {
             state: Some(state),
             tool,
+            looting_level: 0,
             random,
             chest: None,
             treasure_map: None,
@@ -684,15 +704,17 @@ impl LootTable {
         })
     }
 
-    /// The loot from killing a mob without fire or Looting bonuses.
+    /// The loot from killing a mob, with Looting from the attacker's main hand.
     pub(crate) fn mob_drops(
         &self,
         tool: &ItemStack,
+        looting_level: i32,
         random: &mut dyn RandomSource,
     ) -> io::Result<Vec<ItemStack>> {
         self.roll(&mut Context {
             state: None,
             tool,
+            looting_level,
             random,
             chest: None,
             treasure_map: None,
@@ -945,6 +967,34 @@ mod tests {
                 )
                 .unwrap();
             assert!((2..=4).contains(&drops[0].count));
+        }
+    }
+
+    #[test]
+    fn looting_scales_and_rounds_one_draw_and_can_limit_the_total() {
+        let table = LootTable::parse(&json!({
+            "pools": [{"rolls": 1, "entries": [{
+                "type": "minecraft:item",
+                "name": "minecraft:feather",
+                "functions": [{
+                    "function": "minecraft:enchanted_count_increase",
+                    "enchantment": "minecraft:looting",
+                    "count": {"type": "minecraft:uniform", "min": 0, "max": 2},
+                    "limit": 4
+                }]
+            }]}]
+        }));
+        for (level, expected_count) in [(0, 1), (1, 2), (2, 4), (3, 4)] {
+            let mut random = LegacyRandom::new(0);
+            let mut expected_random = random.clone();
+            if level > 0 {
+                expected_random.next_float();
+            }
+            let drops = table
+                .mob_drops(&ItemStack::empty(), level, &mut random)
+                .unwrap();
+            assert_eq!(names(&drops), [("minecraft:feather", expected_count)]);
+            assert_eq!(random.next_int(), expected_random.next_int());
         }
     }
 

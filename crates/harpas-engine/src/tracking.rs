@@ -11,15 +11,18 @@
 use std::collections::HashSet;
 
 use harpas_core::math::{cos_f32, sin_f32};
+use harpas_core::nbt::Nbt;
 use harpas_core::random::RandomSource;
 
-use crate::entity::{ItemEntity, RemovedEntity};
+use crate::entity::{ItemEntity, Kind, RemovedEntity};
 use crate::inventory::ItemStack;
 use crate::world::ChunkPos;
 use crate::{Game, player};
 
 /// How far players see item entities: 6 chunks (`EntityType.ITEM`'s `clientTrackingRange`).
 const ITEM_RANGE: f64 = 96.0;
+/// How far players see pigs (`EntityType.PIG`'s `clientTrackingRange`).
+const PIG_RANGE: f64 = 160.0;
 /// How often an item entity's viewers are sent its position (`updateInterval`).
 const UPDATE_INTERVAL: i32 = 20;
 
@@ -184,7 +187,7 @@ impl Game {
         }
     }
 
-    /// Updates which players see each item entity and sends them its changes (`ChunkMap.tick`).
+    /// Updates which players see each entity and sends them its changes (`ChunkMap.tick`).
     pub(crate) fn track_entities(&mut self, removed: &[RemovedEntity]) {
         let Some(world) = &mut self.world else {
             return;
@@ -203,18 +206,16 @@ impl Game {
             let i = entities.slot(handle);
             let id = entities.network_id[i];
             let position = entities.position[i];
-            let chunk = ChunkPos {
-                x: (position[0].floor() as i32) >> 4,
-                z: (position[2].floor() as i32) >> 4,
+            let chunk = ChunkPos::at(position[0], position[2]);
+            let kind = entities.kind[i].as_ref().expect("live entity");
+            let tracking_range = match kind {
+                Kind::Item(_) => ITEM_RANGE,
+                Kind::Pig(_) => PIG_RANGE,
             };
-            let stack = entities
-                .item(handle)
-                .map(|item| item.stack.clone())
-                .unwrap_or_default();
             // `updatePlayers`.
             for player in &self.players {
                 let viewer = player.player.entity_id;
-                let range = ITEM_RANGE.min(f64::from(player.view_distance) * 16.0);
+                let range = tracking_range.min(f64::from(player.view_distance) * 16.0);
                 let p = &player.player.position;
                 let (dx, dz) = (p.x - position[0], p.z - position[2]);
                 let visible = !player.disconnecting
@@ -222,17 +223,32 @@ impl Game {
                     && player.sent_chunks.contains(&chunk);
                 let server = &mut entities.server[i];
                 if visible && server.seen_by.insert(viewer) {
-                    player.send(player::Output::SpawnItem {
-                        entity_id: id,
-                        uuid: entities.uuid[i],
-                        position: server.base,
-                        velocity: server.last_velocity,
-                        stack: stack.clone(),
+                    player.send(match kind {
+                        Kind::Item(item) => player::Output::SpawnItem {
+                            entity_id: id,
+                            uuid: entities.uuid[i],
+                            position: server.base,
+                            velocity: server.last_velocity,
+                            stack: item.stack.clone(),
+                        },
+                        Kind::Pig(pig) => player::Output::SpawnPig {
+                            entity_id: id,
+                            uuid: entities.uuid[i],
+                            position: server.base,
+                            velocity: server.last_velocity,
+                            rotation: pig.rotation,
+                            health: pig.health,
+                            variant: pig.variant,
+                            no_ai: pig.nbt.get("NoAI") == Some(&Nbt::Byte(1)),
+                        },
                     });
                 } else if !visible && server.seen_by.remove(&viewer) {
                     player.send(player::Output::RemoveEntity(id));
                 }
             }
+            let Kind::Item(item) = kind else {
+                continue;
+            };
             // `sendChanges`.
             let on_ground = entities.on_ground[i];
             let velocity = entities.velocity[i];
@@ -288,7 +304,7 @@ impl Game {
                 if std::mem::take(&mut server.dirty) {
                     outputs.push(player::Output::ItemChanged {
                         entity_id: id,
-                        stack,
+                        stack: item.stack.clone(),
                     });
                 }
                 if send_position {

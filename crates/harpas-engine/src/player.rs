@@ -62,6 +62,17 @@ impl GameMode {
     }
 }
 
+/// The appearance of a pig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PigVariant {
+    /// The variant found in cold biomes.
+    Cold,
+    /// The variant found in temperate biomes.
+    Temperate,
+    /// The variant found in warm biomes.
+    Warm,
+}
+
 /// A damage source the engine can apply to a player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DamageKind {
@@ -562,6 +573,25 @@ pub enum Output {
         velocity: [f64; 3],
         /// The stack it holds.
         stack: ItemStack,
+    },
+    /// Start seeing a saved adult pig.
+    SpawnPig {
+        /// Runtime entity ID.
+        entity_id: i32,
+        /// The entity's saved UUID.
+        uuid: u128,
+        /// Feet position in world coordinates.
+        position: [f64; 3],
+        /// Velocity in blocks per tick.
+        velocity: [f64; 3],
+        /// Saved yaw and pitch, in degrees.
+        rotation: [f32; 2],
+        /// Remaining health.
+        health: f32,
+        /// Appearance from the saved variant.
+        variant: PigVariant,
+        /// Whether the saved mob has its AI disabled.
+        no_ai: bool,
     },
     /// An entity's full position, velocity and ground state.
     EntitySync {

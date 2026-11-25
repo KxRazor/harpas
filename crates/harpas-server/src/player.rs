@@ -7,7 +7,9 @@ use harpas_core::nbt::List;
 use harpas_engine::PlayerSession;
 use harpas_engine::block::{BlockPos, DigAction};
 use harpas_engine::inventory::{ArmorSlot, ComponentPatch, HashedStack, ItemStack};
-use harpas_engine::player::{self, DamageKind, Input, Movement, Output, Position, Profile};
+use harpas_engine::player::{
+    self, DamageKind, Input, Movement, Output, PigVariant, Position, Profile,
+};
 use harpas_java::{ChatEvent, Connection, PlayEvent};
 use harpas_protocol_java::codec::{Holder, LpVec3, Nbt};
 use harpas_protocol_java::v26_1::play::{self, clientbound, serverbound};
@@ -19,11 +21,17 @@ use crate::commands::{self, Commands, ConnectedPeer, Source};
 const PLAYER_ENTITY_TYPE: i32 = 155;
 /// `minecraft:item` in minecraft-data's Java 26.1 entity type registry.
 const ITEM_ENTITY_TYPE: i32 = 71;
+/// `minecraft:pig` in the Java 26.1 entity type registry.
+const PIG_ENTITY_TYPE: i32 = 100;
 /// `minecraft:entity.player.attack.sweep` in the Java 26.1 sound event registry.
 const SWEEP_SOUND_ID: i32 = 1302;
 /// The index of an item entity's stack in its tracked data (`ItemEntity.DATA_ITEM`), after the eight of every
 /// entity.
 const ITEM_DATA_INDEX: u8 = 8;
+/// The tracked data indices for living health, mob flags and pig appearance.
+const LIVING_HEALTH_INDEX: u8 = 9;
+const MOB_FLAGS_INDEX: u8 = 15;
+const PIG_VARIANT_INDEX: u8 = 19;
 
 pub(crate) fn profile(player: &harpas_java::Player, mode: play::GameMode) -> Profile {
     Profile {
@@ -341,6 +349,45 @@ fn item_metadata(stack: &ItemStack) -> play::EntityMetadata {
             play::MetadataValue::ItemStack(packet_stack(stack)),
         )],
     }
+}
+
+fn pig_metadata(health: f32, variant: PigVariant, no_ai: bool) -> play::EntityMetadata {
+    let name = match variant {
+        PigVariant::Cold => "minecraft:cold",
+        PigVariant::Temperate => "minecraft:temperate",
+        PigVariant::Warm => "minecraft:warm",
+    };
+    let variant_id = harpas_java::registry_names("minecraft:pig_variant")
+        .and_then(|entries| entries.iter().position(|&entry| entry == name))
+        .expect("vanilla pig variant");
+    let mut entries = vec![(LIVING_HEALTH_INDEX, play::MetadataValue::Float(health))];
+    if no_ai {
+        entries.push((MOB_FLAGS_INDEX, play::MetadataValue::Byte(1)));
+    }
+    entries.push((
+        PIG_VARIANT_INDEX,
+        play::MetadataValue::PigVariant(variant_id as i32),
+    ));
+    play::EntityMetadata { entries }
+}
+
+/// Send an entity's spawn and initial data in one bundle.
+fn spawn_entity(
+    connection: &mut Connection,
+    spawn: clientbound::SpawnEntity,
+    metadata: play::EntityMetadata,
+) -> clientbound::Packet {
+    let entity_id = spawn.entity_id;
+    connection.send_play_packet(clientbound::BundleDelimiter.into());
+    connection.send_play_packet(spawn.into());
+    connection.send_play_packet(
+        clientbound::SetEntityMetadata {
+            entity_id,
+            metadata,
+        }
+        .into(),
+    );
+    clientbound::BundleDelimiter.into()
 }
 
 fn velocity([x, y, z]: [f64; 3]) -> LpVec3 {
@@ -921,34 +968,49 @@ pub(crate) fn send(
                 position,
                 velocity: motion,
                 stack,
-            } => {
-                // An entity's spawn and its data, applied together (`sendPairingData` in a bundle).
-                connection.send_play_packet(clientbound::BundleDelimiter.into());
-                connection.send_play_packet(
-                    clientbound::SpawnEntity {
-                        entity_id,
-                        uuid,
-                        entity_type: ITEM_ENTITY_TYPE,
-                        x: position[0],
-                        y: position[1],
-                        z: position[2],
-                        velocity: velocity(motion),
-                        pitch: 0,
-                        yaw: 0,
-                        head_yaw: 0,
-                        data: 0,
-                    }
-                    .into(),
-                );
-                connection.send_play_packet(
-                    clientbound::SetEntityMetadata {
-                        entity_id,
-                        metadata: item_metadata(&stack),
-                    }
-                    .into(),
-                );
-                clientbound::BundleDelimiter.into()
-            }
+            } => spawn_entity(
+                connection,
+                clientbound::SpawnEntity {
+                    entity_id,
+                    uuid,
+                    entity_type: ITEM_ENTITY_TYPE,
+                    x: position[0],
+                    y: position[1],
+                    z: position[2],
+                    velocity: velocity(motion),
+                    pitch: 0,
+                    yaw: 0,
+                    head_yaw: 0,
+                    data: 0,
+                },
+                item_metadata(&stack),
+            ),
+            Output::SpawnPig {
+                entity_id,
+                uuid,
+                position,
+                velocity: motion,
+                rotation: [yaw, pitch],
+                health,
+                variant,
+                no_ai,
+            } => spawn_entity(
+                connection,
+                clientbound::SpawnEntity {
+                    entity_id,
+                    uuid,
+                    entity_type: PIG_ENTITY_TYPE,
+                    x: position[0],
+                    y: position[1],
+                    z: position[2],
+                    velocity: velocity(motion),
+                    pitch: angle(pitch),
+                    yaw: angle(yaw),
+                    head_yaw: angle(yaw),
+                    data: 0,
+                },
+                pig_metadata(health, variant, no_ai),
+            ),
             Output::EntitySync {
                 entity_id,
                 position,

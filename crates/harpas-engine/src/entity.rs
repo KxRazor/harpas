@@ -21,6 +21,7 @@ use harpas_core::random::RandomSource;
 use crate::block::{self, BlockPos};
 use crate::fluid::FluidState;
 use crate::inventory::ItemStack;
+use crate::player::PigVariant;
 use crate::world::{ChunkPos, ChunkState, World};
 
 /// An entity's handle: its slot and the slot's generation, which changes when the slot is reused.
@@ -50,10 +51,21 @@ pub(crate) struct ItemEntity {
     pub(crate) rest: Arc<Compound>,
 }
 
+/// The saved state of a living adult pig.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Pig {
+    /// Yaw and pitch, in degrees.
+    pub(crate) rotation: [f32; 2],
+    pub(crate) health: f32,
+    pub(crate) variant: PigVariant,
+    pub(crate) nbt: Arc<Compound>,
+}
+
 /// The type-specific part of an entity.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Kind {
     Item(ItemEntity),
+    Pig(Pig),
 }
 
 /// A removal keeps its network identity and viewers even after its storage slot is reused.
@@ -193,12 +205,14 @@ impl Entities {
     pub(crate) fn item(&self, handle: EntityHandle) -> Option<&ItemEntity> {
         match self.kind.get(handle.index as usize)?.as_ref()? {
             Kind::Item(item) => Some(item),
+            Kind::Pig(_) => None,
         }
     }
 
     fn item_mut(&mut self, handle: EntityHandle) -> Option<&mut ItemEntity> {
         match self.kind.get_mut(handle.index as usize)?.as_mut()? {
             Kind::Item(item) => Some(item),
+            Kind::Pig(_) => None,
         }
     }
 
@@ -775,7 +789,7 @@ impl World {
     /// (`entityTickList.forEach(tickNonPassenger)`). Returns the entities removed.
     pub(crate) fn tick_entities(&mut self) -> Vec<RemovedEntity> {
         for handle in self.entities.order.clone() {
-            if !self.entities.contains(handle) {
+            if !self.entities.contains(handle) || self.entities.item(handle).is_none() {
                 continue;
             }
             let [x, _, z] = self.entities.position[self.entities.slot(handle)];

@@ -1,12 +1,14 @@
-//! Item entities in vanilla's per-chunk entity regions. Unimplemented entities and unrelated NBT survive saves.
+//! Supported entities in vanilla's per-chunk entity regions. Other entities and unrelated NBT survive saves.
 
 use std::io;
 use std::sync::Arc;
 
 use harpas_core::nbt::{Compound, List, Nbt};
 
+use crate::entity::Pig;
 use crate::inventory::ItemStack;
 use crate::item_data::{ItemCodec, invalid};
+use crate::player::PigVariant;
 use crate::world::ChunkPos;
 
 /// The persistent state of an item entity, independent of its process-local network ID and tracking state.
@@ -31,25 +33,47 @@ pub struct SavedItem {
     pub(crate) rest: Arc<Compound>,
 }
 
+fn read_uuid(root: &Compound) -> io::Result<u128> {
+    match root.get("UUID") {
+        Some(Nbt::IntArray(v)) if v.len() == 4 => Ok(v
+            .iter()
+            .fold(0_u128, |uuid, &word| (uuid << 32) | u128::from(word as u32))),
+        _ => Err(invalid("entity has no four-int UUID")),
+    }
+}
+
+fn uuid_tag(uuid: u128) -> Nbt {
+    Nbt::IntArray((0..4).rev().map(|i| (uuid >> (i * 32)) as i32).collect())
+}
+
 fn vector(root: &Compound, name: &str) -> io::Result<[f64; 3]> {
     match root.get(name) {
         Some(Nbt::List(List::Double(v))) if v.len() == 3 && v.iter().all(|v| v.is_finite()) => {
             Ok([v[0], v[1], v[2]])
         }
         _ => Err(invalid(format!(
-            "item entity {name} must contain three finite doubles"
+            "entity {name} must contain three finite doubles"
         ))),
     }
 }
 
+fn position(root: &Compound, chunk: ChunkPos) -> io::Result<[f64; 3]> {
+    let [x, y, z] = vector(root, "Pos")?;
+    if x.abs() > 30_000_512.0
+        || y.abs() > 20_000_000.0
+        || z.abs() > 30_000_512.0
+        || ChunkPos::at(x, z) != chunk
+    {
+        return Err(invalid(
+            "entity position is outside its saved chunk or world limits",
+        ));
+    }
+    Ok([x, y, z])
+}
+
 impl SavedItem {
-    fn read(root: &Compound, codec: &ItemCodec) -> io::Result<Self> {
-        let uuid = match root.get("UUID") {
-            Some(Nbt::IntArray(v)) if v.len() == 4 => v
-                .iter()
-                .fold(0_u128, |uuid, &word| (uuid << 32) | u128::from(word as u32)),
-            _ => return Err(invalid("item entity has no four-int UUID")),
-        };
+    fn read(root: &Compound, chunk: ChunkPos, codec: &ItemCodec) -> io::Result<Self> {
+        let uuid = read_uuid(root)?;
         let short = |name, default| match root.get(name) {
             None => Ok(default),
             Some(Nbt::Short(n)) => Ok(i32::from(*n)),
@@ -78,7 +102,7 @@ impl SavedItem {
         }
         Ok(Self {
             uuid,
-            position: vector(root, "Pos")?,
+            position: position(root, chunk)?,
             // Vanilla discards individual velocity components above ten blocks per tick on load.
             velocity: vector(root, "Motion")?.map(|v| if v.abs() > 10.0 { 0.0 } else { v }),
             on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
@@ -93,15 +117,7 @@ impl SavedItem {
     fn to_nbt(&self, codec: &ItemCodec) -> io::Result<Compound> {
         let mut root = (*self.rest).clone();
         root.insert("id", "minecraft:item");
-        root.insert(
-            "UUID",
-            Nbt::IntArray(
-                (0..4)
-                    .rev()
-                    .map(|i| (self.uuid >> (i * 32)) as i32)
-                    .collect(),
-            ),
-        );
+        root.insert("UUID", uuid_tag(self.uuid));
         root.insert("Pos", Nbt::List(List::Double(self.position.to_vec())));
         root.insert("Motion", Nbt::List(List::Double(self.velocity.to_vec())));
         root.insert("OnGround", Nbt::Byte(i8::from(self.on_ground)));
@@ -126,16 +142,84 @@ impl SavedItem {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SavedPig {
+    pub(crate) uuid: u128,
+    pub(crate) position: [f64; 3],
+    pub(crate) velocity: [f64; 3],
+    pub(crate) on_ground: bool,
+    pub(crate) pig: Pig,
+}
+
+impl SavedPig {
+    fn read(root: &Compound, chunk: ChunkPos) -> io::Result<Self> {
+        match root.get("Age") {
+            Some(Nbt::Int(age)) if *age >= 0 => {}
+            None => {}
+            _ => return Err(invalid("expected an adult pig")),
+        }
+        let rotation = match root.get("Rotation") {
+            Some(Nbt::List(List::Float(v))) if v.len() == 2 && v.iter().all(|v| v.is_finite()) => {
+                [v[0], v[1]]
+            }
+            _ => return Err(invalid("pig Rotation must contain two finite floats")),
+        };
+        let health = match root.get("Health") {
+            Some(Nbt::Float(value)) if value.is_finite() && *value > 0.0 => *value,
+            _ => return Err(invalid("expected a living pig")),
+        };
+        let variant = match root.get("variant") {
+            Some(Nbt::String(name)) => match name.as_str() {
+                "minecraft:cold" | "cold" => PigVariant::Cold,
+                "minecraft:temperate" | "temperate" => PigVariant::Temperate,
+                "minecraft:warm" | "warm" => PigVariant::Warm,
+                _ => return Err(invalid("unsupported pig variant")),
+            },
+            None => PigVariant::Temperate,
+            _ => return Err(invalid("pig variant must be a string")),
+        };
+        Ok(Self {
+            uuid: read_uuid(root)?,
+            position: position(root, chunk)?,
+            velocity: vector(root, "Motion")?,
+            on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
+            pig: Pig {
+                rotation,
+                health,
+                variant,
+                nbt: Arc::new(root.clone()),
+            },
+        })
+    }
+
+    fn to_nbt(&self) -> Compound {
+        let mut root = (*self.pig.nbt).clone();
+        root.insert("UUID", uuid_tag(self.uuid));
+        root.insert("Pos", Nbt::List(List::Double(self.position.to_vec())));
+        root.insert("Motion", Nbt::List(List::Double(self.velocity.to_vec())));
+        root.insert(
+            "Rotation",
+            Nbt::List(List::Float(self.pig.rotation.to_vec())),
+        );
+        root.insert("Health", Nbt::Float(self.pig.health));
+        if self.on_ground || root.get("OnGround").is_some() {
+            root.insert("OnGround", Nbt::Byte(i8::from(self.on_ground)));
+        }
+        root
+    }
+}
+
 /// One entity-region document. Entity types not implemented by the engine remain opaque in `rest`.
 #[derive(Debug, Clone, Default)]
 pub struct EntityChunk {
     /// Active item entities, in their saved order.
     pub items: Vec<SavedItem>,
+    pub(crate) pigs: Vec<SavedPig>,
     rest: Arc<Compound>,
 }
 
 impl EntityChunk {
-    /// Checks the document. Items whose data cannot be decoded are kept as opaque NBT.
+    /// Checks the document. Entries the engine cannot activate are kept as opaque NBT.
     pub fn read(mut root: Compound, pos: ChunkPos, codec: &ItemCodec) -> io::Result<Self> {
         harpas_anvil::check_chunk(&root)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -150,44 +234,50 @@ impl EntityChunk {
             _ => return Err(invalid("entity chunk Entities must be a compound list")),
         };
         let mut items = Vec::new();
+        let mut pigs = Vec::new();
         let mut opaque = Vec::new();
         let mut uuids = std::collections::HashSet::new();
         for entry in entries {
-            if matches!(entry.get("id"), Some(Nbt::String(id)) if id == "minecraft:item" || id == "item")
-            {
-                let result = SavedItem::read(&entry, codec).and_then(|item| {
-                    let [x, y, z] = item.position;
-                    if x.abs() > 30_000_512.0
-                        || y.abs() > 20_000_000.0
-                        || z.abs() > 30_000_512.0
-                        || ChunkPos::at(x, z) != pos
-                    {
-                        return Err(invalid(
-                            "item entity position is outside its saved chunk or world limits",
-                        ));
-                    }
-                    Ok(item)
-                });
-                match result {
-                    Ok(item) => {
-                        if !uuids.insert(item.uuid) {
-                            return Err(invalid("duplicate item entity UUID"));
-                        }
+            let result = match entry.get("id") {
+                Some(Nbt::String(id)) if id == "minecraft:item" || id == "item" => {
+                    SavedItem::read(&entry, pos, codec).map(|item| {
+                        let uuid = item.uuid;
                         items.push(item);
-                        continue;
-                    }
-                    Err(error) => log::warn!(
-                        "Keeping an inactive item in entity chunk {}, {}: {error}",
+                        uuid
+                    })
+                }
+                Some(Nbt::String(id))
+                    if (id == "minecraft:pig" || id == "pig")
+                        && !matches!(entry.get("Age"), Some(Nbt::Int(age)) if *age < 0) =>
+                {
+                    SavedPig::read(&entry, pos).map(|pig| {
+                        let uuid = pig.uuid;
+                        pigs.push(pig);
+                        uuid
+                    })
+                }
+                _ => {
+                    opaque.push(entry);
+                    continue;
+                }
+            };
+            match result {
+                Ok(uuid) if !uuids.insert(uuid) => return Err(invalid("duplicate entity UUID")),
+                Ok(_) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Keeping an inactive entity in chunk {}, {}: {error}",
                         pos.x,
                         pos.z
-                    ),
+                    );
+                    opaque.push(entry);
                 }
             }
-            opaque.push(entry);
         }
         root.insert("Entities", Nbt::List(List::Compound(opaque)));
         Ok(Self {
             items,
+            pigs,
             rest: Arc::new(root),
         })
     }
@@ -206,6 +296,7 @@ impl EntityChunk {
         for item in &self.items {
             entries.push(item.to_nbt(codec)?);
         }
+        entries.extend(self.pigs.iter().map(SavedPig::to_nbt));
         root.insert("Entities", Nbt::List(List::Compound(entries)));
         Ok(root)
     }

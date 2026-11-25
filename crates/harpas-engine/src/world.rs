@@ -19,7 +19,8 @@ use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
 use crate::block::{self, BlockPos};
-use crate::entity_data::{EntityChunk, SavedItem};
+use crate::entity::{ItemEntity, Kind};
+use crate::entity_data::{EntityChunk, SavedItem, SavedPig};
 use crate::fluid::FluidType;
 use crate::furnace::Furnace;
 use crate::item_data::ItemCodec;
@@ -756,7 +757,7 @@ impl World {
                 Some(ChunkState::Failed(error)) => {
                     failed = Some(io::Error::new(
                         error.kind(),
-                        format!("Cannot save items at {}, {}: {error}", pos.x, pos.z),
+                        format!("Cannot save entities at {}, {}: {error}", pos.x, pos.z),
                     ));
                     true
                 }
@@ -781,51 +782,83 @@ impl World {
             let Some(chunk) = saved.get_mut(&ChunkPos::at(position[0], position[2])) else {
                 continue;
             };
-            let item = self.entities.item(handle).expect("an item");
-            chunk.items.push(SavedItem {
-                uuid: self.entities.uuid[i],
-                position,
-                velocity: self.entities.velocity[i],
-                on_ground: self.entities.on_ground[i],
-                stack: item.stack.clone(),
-                age: item.age,
-                pickup_delay: item.pickup_delay,
-                health: item.health,
-                rest: Arc::clone(&item.rest),
-            });
+            let uuid = self.entities.uuid[i];
+            let velocity = self.entities.velocity[i];
+            let on_ground = self.entities.on_ground[i];
+            match self.entities.kind[i].as_ref().expect("live entity") {
+                Kind::Item(item) => chunk.items.push(SavedItem {
+                    uuid,
+                    position,
+                    velocity,
+                    on_ground,
+                    stack: item.stack.clone(),
+                    age: item.age,
+                    pickup_delay: item.pickup_delay,
+                    health: item.health,
+                    rest: Arc::clone(&item.rest),
+                }),
+                Kind::Pig(pig) => chunk.pigs.push(SavedPig {
+                    uuid,
+                    position,
+                    velocity,
+                    on_ground,
+                    pig: pig.clone(),
+                }),
+            }
         }
         saved
     }
 
     fn load_entities(&mut self, pos: ChunkPos, mut saved: EntityChunk) -> io::Result<()> {
-        if saved.items.iter().any(|item| {
+        let mut uuids = saved
+            .items
+            .iter()
+            .map(|item| item.uuid)
+            .chain(saved.pigs.iter().map(|pig| pig.uuid));
+        if uuids.any(|uuid| {
             self.entities
                 .order
                 .iter()
-                .any(|&h| self.entities.uuid[self.entities.slot(h)] == item.uuid)
+                .any(|&h| self.entities.uuid[self.entities.slot(h)] == uuid)
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "duplicate loaded entity UUID",
             ));
         }
-        for item in std::mem::take(&mut saved.items) {
-            let id =
-                crate::next_entity_id().ok_or_else(|| io::Error::other("entity IDs exhausted"))?;
-            let on_ground = item.on_ground;
-            let handle = self.entities.add(
-                id,
+        let items = std::mem::take(&mut saved.items).into_iter().map(|item| {
+            (
                 item.uuid,
                 item.position,
                 item.velocity,
-                crate::entity::Kind::Item(crate::entity::ItemEntity {
+                item.on_ground,
+                Kind::Item(ItemEntity {
                     stack: item.stack,
                     age: item.age,
                     pickup_delay: item.pickup_delay,
                     health: item.health,
                     rest: item.rest,
                 }),
-            );
+            )
+        });
+        let pigs = std::mem::take(&mut saved.pigs).into_iter().map(|pig| {
+            (
+                pig.uuid,
+                pig.position,
+                pig.velocity,
+                pig.on_ground,
+                Kind::Pig(pig.pig),
+            )
+        });
+        let ids = (0..items.len() + pigs.len())
+            .map(|_| {
+                crate::next_entity_id().ok_or_else(|| io::Error::other("entity IDs exhausted"))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        for (id, (uuid, position, velocity, on_ground, kind)) in
+            ids.into_iter().zip(items.chain(pigs))
+        {
+            let handle = self.entities.add(id, uuid, position, velocity, kind);
             let i = self.entities.slot(handle);
             self.entities.on_ground[i] = on_ground;
         }
@@ -6189,6 +6222,91 @@ mod tests {
             &ItemCodec::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn saved_adult_pigs_survive_chunk_unload_and_reload() {
+        use crate::player::PigVariant;
+        use harpas_core::nbt::List;
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: -1, z: -1 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let entities = dimension_dir(&folder.0, "minecraft:overworld").join("entities");
+        let pig = Compound::from_iter([
+            ("id", Nbt::from("minecraft:pig")),
+            ("UUID", Nbt::IntArray(vec![1, 2, 3, 4])),
+            ("Pos", Nbt::List(List::Double(vec![-0.5, 70.25, -15.5]))),
+            ("Motion", Nbt::List(List::Double(vec![0.0; 3]))),
+            ("OnGround", Nbt::Byte(1)),
+            ("Rotation", Nbt::List(List::Float(vec![-90.0, 22.5]))),
+            ("Health", Nbt::Float(7.5)),
+            ("Age", Nbt::Int(0)),
+            ("variant", Nbt::from("minecraft:warm")),
+            ("future_field", Nbt::from("retained")),
+        ]);
+        let mut baby = pig.clone();
+        baby.insert("UUID", Nbt::IntArray(vec![1, 2, 3, 5]));
+        baby.insert("Age", Nbt::Int(-1200));
+        let mut unknown = baby.clone();
+        unknown.insert("id", "minecraft:cow");
+        let document = Compound::from_iter([
+            ("DataVersion", Nbt::Int(DATA_VERSION)),
+            ("Position", Nbt::IntArray(vec![pos.x, pos.z])),
+            (
+                "Entities",
+                List::Compound(vec![pig.clone(), baby.clone(), unknown.clone()]).into(),
+            ),
+        ]);
+        write_chunks(&entities, -1, -1, &[((pos.x, pos.z), &document)]).unwrap();
+
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        world.unload_save_delay = Duration::ZERO;
+        load_chunks(&mut world, &[pos]);
+        let [handle] = world.entities.order[..] else {
+            panic!("expected one active adult pig");
+        };
+        let first_id = world.entities.network_id[world.entities.slot(handle)];
+        // Dropping an item dirties the same entity chunk and makes unloading save the pig too.
+        world.add_item(
+            6000,
+            [-1.5, 70.25, -15.5],
+            [0.0; 3],
+            ItemEntity::new(item_stack(1)),
+        );
+        world.want([]);
+        wait_until(|| {
+            world.advance().unwrap();
+            world.chunk(pos).is_none()
+        });
+        assert!(world.entities.order.is_empty());
+        let saved = read_entity_chunk(&entities, pos.x, pos.z).unwrap().unwrap();
+        let Some(Nbt::List(List::Compound(entries))) = saved.get("Entities") else {
+            panic!("expected saved entities");
+        };
+        assert_eq!(entries.len(), 4);
+        assert!(entries.contains(&pig) && entries.contains(&baby) && entries.contains(&unknown));
+
+        load_chunks(&mut world, &[pos]);
+        let i = world
+            .entities
+            .kind
+            .iter()
+            .position(|kind| matches!(kind, Some(Kind::Pig(_))))
+            .unwrap();
+        let Some(Kind::Pig(loaded)) = &world.entities.kind[i] else {
+            unreachable!()
+        };
+        assert_ne!(world.entities.network_id[i], first_id);
+        assert_eq!(
+            world.entities.uuid[i],
+            0x0000_0001_0000_0002_0000_0003_0000_0004
+        );
+        assert_eq!(world.entities.position[i], [-0.5, 70.25, -15.5]);
+        assert_eq!(
+            (loaded.rotation, loaded.health, loaded.variant),
+            ([-90.0, 22.5], 7.5, PigVariant::Warm)
+        );
     }
 
     #[test]

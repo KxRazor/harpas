@@ -280,10 +280,9 @@ Harpas uses its own storage:
 - **Parallel passes over the hot arrays** for unobservable work: entity tracking, packet encoding, Bedrock
   translation.
 
-**Implemented:** item entities live in this storage (`harpas-engine`'s `entity` module): generational slots, the
-hot data in arrays by slot, and the tick order in which entities were added. Players are not in it yet, so the
-entity tick runs the items first and then the players' part; tracking is computed on the logic thread until the
-parallel passes exist. Entities are not saved yet.
+Item entities and saved adult pigs live in this storage (`harpas-engine`'s `entity` module). The entity tick
+runs items in insertion order before the separate player tick. Adult pigs are loaded, tracked and saved.
+Tracking runs on the logic thread, and the chunk workers handle [entity regions](world.md#entity-regions).
 
 ### 6. Chunks
 

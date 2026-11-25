@@ -1261,8 +1261,6 @@ fn fall_damage_and_respawn_match_vanilla() {
 }
 
 fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
-    let mut attacker = Client::join(port, "Attacker");
-    let mut defender = Client::join(port, "Defender");
     let join = |client: &mut Client| {
         client.stream.set_nodelay(true).unwrap();
         let id = client.matching("Play Login", |packet| match packet {
@@ -1271,16 +1269,30 @@ fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
         });
         (id, confirm_position(client))
     };
-    let (attacker_id, _) = join(&mut attacker);
-    let (defender_id, [x, y, z]) = join(&mut defender);
+    // Place the attacker before the defender joins so the players do not overlap at spawn.
+    let mut attacker = Client::join(port, "Attacker");
+    let (attacker_id, [x, y, z]) = join(&mut attacker);
+    let out_of_range = [x + 7.0, y, z];
+    move_player(&mut attacker, out_of_range, true);
+    attacker.command("list", 1);
+
+    let mut defender = Client::join(port, "Defender");
+    let (defender_id, defender_position) = join(&mut defender);
+    assert_eq!(defender_position, [x, y, z]);
     assert_eq!(health(&mut defender).health, 2.0);
     move_player(&mut defender, [x, y, z], true);
-    move_player(&mut attacker, [x + 3.2, y, z], true);
-    std::thread::sleep(Duration::from_millis(400));
+    defender.command("list", 1);
 
     let punch = play::serverbound::Attack {
         entity_id: defender_id,
     };
+    // Check reach before a successful hit starts the damage cooldown.
+    play_packet(&mut attacker, punch.clone());
+    attacker.command("list", 1);
+    assert_no_damage_until_list_reply(&mut defender, "after the out-of-range punch");
+
+    move_player(&mut attacker, [x + 3.2, y, z], true);
+    std::thread::sleep(Duration::from_millis(400));
     play_packet(&mut attacker, punch.clone());
     play_packet(&mut attacker, punch.clone());
     let mut knockback = None;
@@ -1314,11 +1326,6 @@ fn exercise_punches(port: u16) -> ([f64; 3], codec::Nbt) {
     assert_no_damage_until_list_reply(&mut defender, "after the rapid punch");
 
     std::thread::sleep(Duration::from_millis(650));
-    move_player(&mut attacker, [x + 3.35, y, z], true);
-    play_packet(&mut attacker, punch.clone());
-    attacker.command("list", 1);
-    assert_no_damage_until_list_reply(&mut defender, "after the out-of-range punch");
-
     move_player(&mut attacker, [x + 2.0, y, z], true);
     play_packet(&mut attacker, punch);
     let message = defender.matching("CombatDeath", |packet| match packet {
@@ -3303,6 +3310,133 @@ fn start_flat_harpas(jar: &Path, vanilla: &Path, harpas: &Path) -> Server {
     let mut server = Server::start(OsStr::new(binary), &[], harpas);
     server.wait_for("Done (");
     server
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_adult_pig_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("saved-pig");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "forceload add 0 0\nsave-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Saved the game");
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "summon minecraft:pig 5.5 -60 4.5 {{UUID:[I;1,2,3,4],Health:7.5f,\
+         Rotation:[90.0f,-22.5f],variant:\"minecraft:cold\",NoAI:1b}}\n\
+         summon minecraft:item 8.5 -60 4.5 {{Item:{{id:\"minecraft:stone\",count:1}},PickupDelay:32767s}}\n\
+         save-all flush"
+    )
+    .unwrap();
+    reference.wait_for("Saved the game");
+    let entities = "world/dimensions/minecraft/overworld/entities";
+    let original = harpas_anvil::read_chunk(&vanilla.join(entities), 0, 0)
+        .unwrap()
+        .unwrap();
+    let expected = observe_saved_pig(vanilla_port);
+    assert_eq!(expected.0.uuid, 0x0000_0001_0000_0002_0000_0003_0000_0004);
+    assert_eq!(
+        expected.1.entries,
+        [
+            (9, play::MetadataValue::Float(7.5)),
+            (15, play::MetadataValue::Byte(1)),
+            (19, play::MetadataValue::PigVariant(0)),
+        ],
+    );
+    stop(&mut reference);
+    let (rx, rz) = harpas_anvil::region_of(0, 0);
+    harpas_anvil::write_chunks(&harpas.join(entities), rx, rz, &[((0, 0), &original)]).unwrap();
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    assert_eq!(observe_saved_pig(harpas_port), expected);
+    stop(&mut server);
+
+    let saved = harpas_anvil::read_chunk(&harpas.join(entities), 0, 0)
+        .unwrap()
+        .unwrap();
+    let Some(Nbt::Short(original_age)) = saved_entity(&original, "minecraft:item").get("Age")
+    else {
+        panic!("expected the vanilla item's age");
+    };
+    assert!(
+        matches!(saved_entity(&saved, "minecraft:item").get("Age"), Some(Nbt::Short(age)) if age > original_age),
+        "the item should have ticked and been saved"
+    );
+    assert_eq!(
+        saved_entity(&saved, "minecraft:pig"),
+        saved_entity(&original, "minecraft:pig")
+    );
+    harpas_anvil::write_chunks(&vanilla.join(entities), rx, rz, &[((0, 0), &saved)]).unwrap();
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    assert_eq!(observe_saved_pig(vanilla_port), expected);
+    stop(&mut reference);
+}
+
+fn saved_entity<'a>(root: &'a Compound, id: &str) -> &'a Compound {
+    let Some(Nbt::List(List::Compound(entities))) = root.get("Entities") else {
+        panic!("expected saved entities");
+    };
+    entities
+        .iter()
+        .find(|entity| matches!(entity.get("id"), Some(Nbt::String(saved)) if saved == id))
+        .unwrap_or_else(|| panic!("expected saved {id}"))
+}
+
+fn observe_saved_pig(port: u16) -> (play::clientbound::SpawnEntity, play::EntityMetadata) {
+    let mut client = Client::join(port, "PigViewer");
+    let mut read = 0;
+    let mut has_chunk = false;
+    let mut spawn = loop {
+        let frame = client.next("saved adult pig spawn");
+        assert!(read < 1000, "no pig after {read} play packets");
+        read += 1;
+        match Packet::decode(&frame) {
+            Ok(Packet::SynchronizePlayerPosition(position)) => {
+                play_packet(
+                    &mut client,
+                    play::serverbound::ConfirmTeleportation {
+                        teleport_id: position.teleport_id,
+                    },
+                );
+                play_packet(&mut client, play::serverbound::PlayerLoaded);
+                move_player(&mut client, [position.x, position.y, position.z], true);
+            }
+            Ok(Packet::KeepAlive(keep_alive)) => {
+                play_packet(
+                    &mut client,
+                    play::serverbound::KeepAlive { id: keep_alive.id },
+                );
+            }
+            Ok(Packet::ChunkBatchFinished(_)) => play_packet(
+                &mut client,
+                play::serverbound::ChunkBatchReceived {
+                    chunks_per_tick: 25.0,
+                },
+            ),
+            Ok(Packet::ChunkDataAndUpdateLight(chunk)) if (chunk.x, chunk.z) == (0, 0) => {
+                has_chunk = true;
+            }
+            Ok(Packet::SpawnEntity(spawn)) if spawn.entity_type == 100 => {
+                assert!(has_chunk, "received the pig before its chunk");
+                break spawn;
+            }
+            _ => {}
+        }
+    };
+    let metadata = client.matching("pig metadata", |packet| match packet {
+        Packet::SetEntityMetadata(packet) if packet.entity_id == spawn.entity_id => {
+            Some(packet.metadata)
+        }
+        _ => None,
+    });
+    spawn.entity_id = 0;
+    (spawn, metadata)
 }
 
 fn use_food(client: &mut Client, hand: play::Hand, sequence: i32) {

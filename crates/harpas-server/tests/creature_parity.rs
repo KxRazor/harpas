@@ -41,7 +41,7 @@ fn saved_adult_pig_matches_vanilla() {
     let original = harpas_anvil::read_chunk(&vanilla.join(entities), 0, 0)
         .unwrap()
         .unwrap();
-    let expected = observe_saved_pig(vanilla_port);
+    let expected = observe_saved_pig(vanilla_port, "Vanilla's original world");
     assert_eq!(expected.0.uuid, 0x0000_0001_0000_0002_0000_0003_0000_0004);
     assert_eq!(
         expected.1.entries,
@@ -55,7 +55,7 @@ fn saved_adult_pig_matches_vanilla() {
     let (rx, rz) = harpas_anvil::region_of(0, 0);
     harpas_anvil::write_chunks(&harpas.join(entities), rx, rz, &[((0, 0), &original)]).unwrap();
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
-    assert_eq!(observe_saved_pig(harpas_port), expected);
+    assert_eq!(observe_saved_pig(harpas_port, "Harpas"), expected);
     stop(&mut server);
 
     let saved = harpas_anvil::read_chunk(&harpas.join(entities), 0, 0)
@@ -75,7 +75,10 @@ fn saved_adult_pig_matches_vanilla() {
     );
     harpas_anvil::write_chunks(&vanilla.join(entities), rx, rz, &[((0, 0), &saved)]).unwrap();
     let mut reference = start_flat_vanilla(&jar, &vanilla, false);
-    assert_eq!(observe_saved_pig(vanilla_port), expected);
+    assert_eq!(
+        observe_saved_pig(vanilla_port, "Vanilla after loading Harpas's save"),
+        expected
+    );
     stop(&mut reference);
 }
 
@@ -89,9 +92,20 @@ fn saved_entity<'a>(root: &'a Compound, id: &str) -> &'a Compound {
         .unwrap_or_else(|| panic!("expected saved {id}"))
 }
 
-fn observe_saved_pig(port: u16) -> (play::clientbound::SpawnEntity, play::EntityMetadata) {
+fn observe_saved_pig(
+    port: u16,
+    source: &str,
+) -> (play::clientbound::SpawnEntity, play::EntityMetadata) {
     let mut client = Client::join(port, "PigViewer");
-    let mut spawn = track_saved_pig(&mut client);
+    let mut spawn = track_animals(
+        &mut client,
+        100,
+        &format!("saved adult pig in {source}"),
+        1,
+        |_| true,
+    )
+    .pop()
+    .unwrap();
     let metadata = client.matching("pig metadata", |packet| match packet {
         Packet::SetEntityMetadata(packet) if packet.entity_id == spawn.entity_id => {
             Some(packet.metadata)
@@ -117,6 +131,7 @@ fn track_animals(
 ) -> Vec<play::clientbound::SpawnEntity> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut has_chunk = false;
+    let mut pending_position = None;
     let mut animals = Vec::with_capacity(count);
     while Instant::now() < deadline {
         let frame = client.next(expected);
@@ -129,7 +144,7 @@ fn track_animals(
                     },
                 );
                 play_packet(client, play::serverbound::PlayerLoaded);
-                move_player(client, [position.x, position.y, position.z], true);
+                pending_position = Some([position.x, position.y, position.z]);
             }
             Ok(Packet::KeepAlive(keep_alive)) => {
                 play_packet(client, play::serverbound::KeepAlive { id: keep_alive.id })
@@ -154,9 +169,14 @@ fn track_animals(
             }
             _ => {}
         }
+        // Vanilla refreshes entity tracking on player movement, but skips a viewer whose chunk
+        // is still queued to send. Wait for the chunk before sending our only idle movement.
+        if has_chunk && let Some(position) = pending_position.take() {
+            move_player(client, position, true);
+        }
     }
     panic!(
-        "received {} of {count} spawns while waiting for {expected}",
+        "received {} of {count} spawns while waiting for {expected} (chunk (0, 0) received: {has_chunk})",
         animals.len()
     );
 }

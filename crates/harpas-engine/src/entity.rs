@@ -949,21 +949,45 @@ impl World {
         let Some(table) = block_states().name(state).and_then(|name| loot.block(name)) else {
             return;
         };
-        let stacks = match &table.random_sequence {
-            Some(name) => {
-                let seed = self.seed;
-                let sequence = self
-                    .random_sequences
-                    .entry(name.clone())
-                    .or_insert_with(|| harpas_core::random::RandomSequence::new(seed, Some(name)));
-                table.drops(state, tool, sequence.random())
-            }
-            None => table.drops(state, tool, &mut self.random),
-        };
+        let stacks = table.drops(
+            state,
+            tool,
+            self.drop_random(table.random_sequence.as_deref()),
+        );
         let Ok(stacks) = stacks else { return };
         for stack in stacks {
             self.pop_resource(pos, stack);
         }
+    }
+
+    /// Drops the pig table's stacks at the pig's position on a lethal bare-hand hit.
+    pub(crate) fn drop_pig_loot(&mut self, position: [f64; 3]) {
+        let Some(loot) = self.loot.clone() else {
+            return;
+        };
+        let Some(table) = &loot.pig else {
+            return;
+        };
+        match table.bare_hand_mob_drops(self.drop_random(table.random_sequence.as_deref())) {
+            Ok(stacks) => {
+                for stack in stacks {
+                    if let Some(id) = crate::next_entity_id() {
+                        self.add_resource(id, position, stack);
+                    }
+                }
+            }
+            Err(error) => log::warn!("Cannot roll pig loot: {error}"),
+        }
+    }
+
+    fn drop_random(&mut self, name: Option<&str>) -> &mut dyn RandomSource {
+        let Some(name) = name else {
+            return &mut self.random;
+        };
+        self.random_sequences
+            .entry(name.to_owned())
+            .or_insert_with(|| harpas_core::random::RandomSequence::new(self.seed, Some(name)))
+            .random()
     }
 
     /// `Block.popResource`: an item entity at a random point around the block's center, thrown a little up, picked
@@ -983,6 +1007,10 @@ impl World {
             f64::from(pos.y) + 0.5 + offset() - half,
             f64::from(pos.z) + 0.5 + offset(),
         ];
+        self.add_resource(id, position, stack);
+    }
+
+    fn add_resource(&mut self, id: i32, position: [f64; 3], stack: ItemStack) {
         let velocity = [
             self.random.next_double() * 0.2 - 0.1,
             0.2,

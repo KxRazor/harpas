@@ -538,6 +538,8 @@ as shown by the parity report.
   - [x] Java Survival players can punch each other with an empty main hand. Reach, damage, knockback, a
         rapid repeat attack and a player-attributed death are compared with vanilla
         (`bare_hand_combat_matches_vanilla`).
+  - [x] Java Survival players can punch saved adult pigs. Range, damage, knockback, rapid repeat hits,
+        death and health across restarts are compared with vanilla (`bare_hand_pig_combat_matches_vanilla`).
   - [x] Java Survival players can fight with swords. The locally generated item defaults supply attack damage,
         attack speed and durability. Wooden and iron swords are compared with vanilla for damage, recharge,
         switching the held item and saved wear (`sword_combat_matches_vanilla`).
@@ -575,6 +577,7 @@ as shown by the parity report.
         sweep. Health of both targets, Sharpness on the same sword, Sweeping Edge in the offhand and a hit
         during an equipment change are compared with vanilla (`sweeping_attacks_match_vanilla`). An engine
         test checks which level applies before and after the equipment tick.
+  - [ ] Mob loot, experience, armed combat with mobs and combat with other mob types.
 - [ ] Vanilla commands on the single Brigadier tree, with operator levels ([docs/commands.md](docs/commands.md)).
   - [x] `list`, `list uuids` and `seed` use one tree for the console and Java clients. The command nodes,
         suggestions, replies and operator level required for `seed` are compared with vanilla (`commands_parity`).

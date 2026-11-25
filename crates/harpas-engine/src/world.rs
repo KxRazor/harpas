@@ -797,13 +797,14 @@ impl World {
                     health: item.health,
                     rest: Arc::clone(&item.rest),
                 }),
-                Kind::Pig(pig) => chunk.pigs.push(SavedPig {
+                Kind::Pig(pig) if pig.health > 0.0 => chunk.pigs.push(SavedPig {
                     uuid,
                     position,
                     velocity,
                     on_ground,
                     pig: pig.clone(),
                 }),
+                Kind::Pig(_) => {}
             }
         }
         saved
@@ -6297,7 +6298,8 @@ mod tests {
         let Some(Kind::Pig(loaded)) = &world.entities.kind[i] else {
             unreachable!()
         };
-        assert_ne!(world.entities.network_id[i], first_id);
+        let reloaded_id = world.entities.network_id[i];
+        assert_ne!(reloaded_id, first_id);
         assert_eq!(
             world.entities.uuid[i],
             0x0000_0001_0000_0002_0000_0003_0000_0004
@@ -6307,6 +6309,34 @@ mod tests {
             (loaded.rotation, loaded.health, loaded.variant),
             ([-90.0, 22.5], 7.5, PigVariant::Warm)
         );
+
+        // A save during the death animation must already omit the adult pig.
+        let handle = world.entities.pig_target(reloaded_id).unwrap();
+        let Some(Kind::Pig(loaded)) = &mut world.entities.kind[i] else {
+            unreachable!();
+        };
+        loaded.health = 0.0;
+        world.entities.mark_changed(handle);
+        world.flush().unwrap();
+        assert!(world.entities.contains(handle));
+        let saved = read_entity_chunk(&entities, pos.x, pos.z).unwrap().unwrap();
+        let Some(Nbt::List(List::Compound(entries))) = saved.get("Entities") else {
+            panic!("expected saved entities");
+        };
+        assert_eq!(entries.len(), 3);
+        assert!(entries.contains(&baby) && entries.contains(&unknown));
+        assert!(!entries.contains(&pig));
+        for _ in 0..19 {
+            world.tick_entities();
+            assert!(world.entities.contains(handle));
+        }
+        assert!(
+            world
+                .tick_entities()
+                .iter()
+                .any(|removal| removal.network_id == reloaded_id)
+        );
+        assert!(!world.entities.contains(handle));
     }
 
     #[test]

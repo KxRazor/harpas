@@ -2,6 +2,7 @@
 
 use crate::Game;
 use crate::block::BlockPos;
+use crate::entity::Kind;
 use crate::inventory::{ArmorSlot, ItemStack};
 use crate::item_data::{Consumable, ConsumeEffect, FoodProperties, ItemCodec};
 use crate::player::{DamageKind, Effect, EffectKind, GameMode, Output, PlayerState, Position};
@@ -16,6 +17,8 @@ const SAFE_FALL_DISTANCE: f64 = 3.0;
 const LAVA_FIRE_TICKS: i16 = 15 * 20;
 const FIRE_ASPECT_TICKS_PER_LEVEL: i16 = 4 * 20;
 const SURVIVAL_ENTITY_REACH: f64 = 3.0;
+/// Java allows three extra blocks when validating a received attack on a mob.
+const PIG_ATTACK_REACH: f64 = SURVIVAL_ENTITY_REACH + 3.0;
 const BASE_ATTACK_SPEED: f64 = 4.0;
 const BASE_ATTACK_DAMAGE: f64 = 1.0;
 const SHIELD_RAISE_TICKS: u32 = 5;
@@ -27,13 +30,33 @@ const HIT_KNOCKBACK: f64 = 0.4;
 // A standing player already carries one tick's downward gravity before a hit.
 const GROUNDED_HIT_LIFT: f64 = HIT_KNOCKBACK - 0.08 * 0.98 / 2.0;
 
-fn hit_push(target: &mut PlayerState, mut dx: f64, mut dz: f64) -> [f64; 2] {
+fn hit_push(random: &mut impl RandomSource, mut dx: f64, mut dz: f64) -> [f64; 2] {
     while dx * dx + dz * dz < 1.0e-5 {
-        dx = (target.random.next_double() - 0.5) * 0.02;
-        dz = (target.random.next_double() - 0.5) * 0.02;
+        dx = (random.next_double() - 0.5) * 0.02;
+        dz = (random.next_double() - 0.5) * 0.02;
     }
     let scale = HIT_KNOCKBACK / dx.hypot(dz);
     [dx * scale, dz * scale]
+}
+
+fn apply_knockback(velocity: &mut [f64; 3], on_ground: bool, [x, z]: [f64; 2], strength: f64) {
+    velocity[0] = velocity[0] / 2.0 + x;
+    velocity[2] = velocity[2] / 2.0 + z;
+    if on_ground {
+        velocity[1] = (velocity[1] / 2.0 + strength).min(HIT_KNOCKBACK);
+    }
+}
+
+fn attack_charge(source: &PlayerState) -> f32 {
+    let speed = BASE_ATTACK_SPEED + source.attack_speed_modifier.unwrap_or_default();
+    ((f32::from(source.attack_charge_ticks) + 0.5) / (20.0 / speed as f32)).min(1.0)
+}
+
+fn within_reach(eye: [f64; 3], [min, max]: [[f64; 3]; 2], reach: f64) -> bool {
+    (0..3)
+        .map(|axis| (eye[axis] - eye[axis].clamp(min[axis], max[axis])).powi(2))
+        .sum::<f64>()
+        < reach.powi(2)
 }
 
 pub(crate) type ActiveEffects = [Option<ActiveEffect>; EffectKind::ALL.len()];
@@ -775,8 +798,22 @@ impl Game {
         }
     }
 
-    pub(crate) fn attack_player(&mut self, attacker: usize, target_id: i32) {
+    fn can_crit(&self, source: &PlayerState) -> bool {
+        let position = source.player.position;
+        source.fall_distance > 0.0
+            && !position.on_ground
+            && !source.sprinting
+            && source.effects[EffectKind::Blindness as usize].is_none()
+            && !self.world.as_ref().is_some_and(|world| {
+                let Position { x, y, z, .. } = position;
+                let bounds = [[x - 0.3, y, z - 0.3], [x + 0.3, y + 1.8, z + 0.3]];
+                world.on_climbable(position) || world.entity_fluid_height(bounds, true) > 0.0
+            })
+    }
+
+    pub(crate) fn attack_entity(&mut self, attacker: usize, target_id: i32) {
         let Some(defender) = self.active(target_id) else {
+            self.punch_pig(attacker, target_id);
             return;
         };
         let rules = self
@@ -803,12 +840,9 @@ impl Game {
             return;
         }
         let Position { x, y, z, .. } = target.player.position;
-        let [eye_x, eye_y, eye_z] = source.eye_position();
         // Measure reach to the nearest point on the standing player's hitbox.
-        let dx = eye_x - eye_x.clamp(x - 0.3, x + 0.3);
-        let dy = eye_y - eye_y.clamp(y, y + 1.8);
-        let dz = eye_z - eye_z.clamp(z - 0.3, z + 0.3);
-        if dx * dx + dy * dy + dz * dz >= SURVIVAL_ENTITY_REACH.powi(2) {
+        let bounds = [[x - 0.3, y, z - 0.3], [x + 0.3, y + 1.8, z + 0.3]];
+        if !within_reach(source.eye_position(), bounds, SURVIVAL_ENTITY_REACH) {
             return;
         }
 
@@ -816,24 +850,13 @@ impl Game {
         let dx = x - source.player.position.x;
         let dz = z - source.player.position.z;
         // Equipment attributes change on the player tick. Wear applies to the item held at the hit.
-        let speed = BASE_ATTACK_SPEED + source.attack_speed_modifier.unwrap_or_default();
         let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
-        let recharge_ticks = 20.0 / speed as f32;
-        let charge = ((f32::from(source.attack_charge_ticks) + 0.5) / recharge_ticks).min(1.0);
+        let charge = attack_charge(source);
         let charged = charge > 0.9;
         let sprint_hit = charged && source.sprinting;
         let charged_damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
         let position = source.player.position;
-        let critical = charged
-            && source.fall_distance > 0.0
-            && !position.on_ground
-            && !source.sprinting
-            && source.effects[EffectKind::Blindness as usize].is_none()
-            && !self.world.as_ref().is_some_and(|world| {
-                let Position { x, y, z, .. } = position;
-                let bounds = [[x - 0.3, y, z - 0.3], [x + 0.3, y + 1.8, z + 0.3]];
-                world.on_climbable(position) || world.entity_fluid_height(bounds, true) > 0.0
-            });
+        let critical = charged && self.can_crit(source);
         let sweeping = charged
             && !sprint_hit
             && position.on_ground
@@ -879,7 +902,7 @@ impl Game {
         let target = &mut self.players[defender];
         let on_ground = target.player.position.on_ground;
         if fresh_hit {
-            let [dx, dz] = hit_push(target, dx, dz);
+            let [dx, dz] = hit_push(&mut target.random, dx, dz);
             let vertical = if on_ground { GROUNDED_HIT_LIFT } else { 0.0 };
             let mut velocity = [dx, vertical, dz];
             if extra_knockback > 0.0 {
@@ -935,6 +958,108 @@ impl Game {
         }
     }
 
+    fn punch_pig(&mut self, attacker: usize, entity_id: i32) {
+        let source = &self.players[attacker];
+        let main_hand = &source.inventory.slots[source.inventory.hand_slot(false)];
+        if source.player.profile.game_mode != GameMode::Survival
+            || source.awaiting_teleport.is_some()
+            || !main_hand.is_empty()
+        {
+            return;
+        }
+        let charge = attack_charge(source);
+        let charged = charge > 0.9;
+        let critical = charged && self.can_crit(source);
+        let sprint_hit = charged && source.sprinting;
+        let position = source.player.position;
+        let source_id = source.player.entity_id;
+        let base_damage = BASE_ATTACK_DAMAGE + source.attack_damage_modifier;
+        let Some(world) = &mut self.world else { return };
+        let entities = &mut world.entities;
+        let Some(handle) = entities.pig_target(entity_id) else {
+            return;
+        };
+        let slot = entities.slot(handle);
+        if !within_reach(
+            source.eye_position(),
+            entities.pig_box(slot),
+            PIG_ATTACK_REACH,
+        ) {
+            return;
+        }
+        let Kind::Pig(pig) = entities.kind[slot].as_mut().expect("live pig") else {
+            unreachable!()
+        };
+        self.players[attacker].attack_charge_ticks = 0;
+        let mut damage = base_damage as f32 * (0.2 + charge * charge * 0.8);
+        if critical {
+            damage *= 1.5;
+        }
+        let fresh_hit = pig.hurt_cooldown <= 10;
+        let taken = if fresh_hit {
+            damage
+        } else {
+            damage - pig.last_damage
+        };
+        if taken <= 0.0 || pig.nbt.get("Invulnerable") == Some(&Nbt::Byte(1)) {
+            return;
+        }
+        pig.last_damage = damage;
+        if fresh_hit {
+            pig.hurt_cooldown = 20;
+        }
+        pig.health = (pig.health - taken).max(0.0);
+        let health = pig.health;
+
+        let [x, _, z] = entities.position[slot];
+        let velocity = &mut entities.velocity[slot];
+        let on_ground = entities.on_ground[slot];
+        if fresh_hit {
+            let [dx, dz] = hit_push(&mut world.random, x - position.x, z - position.z);
+            apply_knockback(velocity, on_ground, [dx, dz], HIT_KNOCKBACK);
+        }
+        if sprint_hit {
+            let yaw = wrap_degrees_f32(position.yaw).to_radians();
+            let [x, z] = [-sin_f32(yaw), cos_f32(yaw)].map(f64::from);
+            let scale = 0.5 / x.hypot(z);
+            apply_knockback(velocity, on_ground, [x * scale, z * scale], 0.5);
+            self.players[attacker].sprinting = false;
+        }
+        let pushed = fresh_hit || sprint_hit;
+        let velocity = *velocity;
+        if pushed {
+            entities.server[slot].last_velocity = velocity;
+            entities.impulse[slot] = true;
+        }
+        entities.mark_changed(handle);
+        self.players[attacker].vitals.exhaust(0.1);
+        for viewer in entities.seen_by(handle) {
+            let Some(player) = self.players.iter().find(|p| p.player.entity_id == viewer) else {
+                continue;
+            };
+            if fresh_hit {
+                player.send(Output::Damage {
+                    entity_id,
+                    kind: DamageKind::PlayerAttack(source_id),
+                });
+            }
+            if health == 0.0 {
+                player.send(Output::PigDied(entity_id));
+            } else {
+                player.send(Output::PigHealth { entity_id, health });
+            }
+            if pushed {
+                player.send(Output::EntityVelocity {
+                    entity_id,
+                    velocity,
+                });
+            }
+            if critical {
+                player.send(Output::CriticalHit(entity_id));
+            }
+        }
+    }
+
     fn sweep_attack(
         &mut self,
         attacker: usize,
@@ -982,7 +1107,7 @@ impl Game {
             }
             let target = &mut self.players[index];
             let [dx, dz] = if fresh_hit {
-                hit_push(target, dx, dz)
+                hit_push(&mut target.random, dx, dz)
             } else {
                 [0.0; 2]
             };

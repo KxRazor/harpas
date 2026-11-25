@@ -285,6 +285,11 @@ runs them in insertion order before the separate player tick. Adult pigs have gr
 collisions for dry movement. Pigs with `NoAI` stay still. Tracking runs on the logic thread, and the chunk
 workers handle [entity regions](world.md#entity-regions).
 
+In Java Survival, an empty main hand can hit an adult pig. The attack measures reach to the pig's hitbox
+and uses the player's melee recharge. The pig tracks damage immunity and applies knockback on a fresh hit.
+Its viewers receive the damage, health and death updates. A dead pig stays tracked for its 20-tick death
+animation and is excluded from entity snapshots as soon as its health reaches zero.
+
 ### 6. Chunks
 
 - Sections of 16×16×16 blocks stored as **paletted containers**, the same structure vanilla uses

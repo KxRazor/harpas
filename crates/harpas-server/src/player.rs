@@ -895,11 +895,13 @@ pub(crate) fn send(
                     continue;
                 }
             }
-            Output::PlayerDied(entity_id) => clientbound::EntityEvent {
-                entity_id,
-                event: 3,
+            Output::PlayerDied(entity_id) | Output::PigDied(entity_id) => {
+                clientbound::EntityEvent {
+                    entity_id,
+                    event: 3,
+                }
+                .into()
             }
-            .into(),
             Output::Respawn {
                 teleport_id,
                 position,
@@ -1028,6 +1030,13 @@ pub(crate) fn send(
                 yaw,
                 pitch,
                 on_ground,
+            }
+            .into(),
+            Output::PigHealth { entity_id, health } => clientbound::SetEntityMetadata {
+                entity_id,
+                metadata: play::EntityMetadata {
+                    entries: vec![(LIVING_HEALTH_INDEX, play::MetadataValue::Float(health))],
+                },
             }
             .into(),
             Output::EntityMove {

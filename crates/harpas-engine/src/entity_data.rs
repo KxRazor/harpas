@@ -192,13 +192,13 @@ impl SavedPig {
             position: position(root, chunk)?,
             velocity: velocity(root)?,
             on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
-            pig: Pig {
+            pig: Pig::new(
                 rotation,
                 health,
                 fall_distance,
                 variant,
-                nbt: Arc::new(root.clone()),
-            },
+                Arc::new(root.clone()),
+            ),
         })
     }
 

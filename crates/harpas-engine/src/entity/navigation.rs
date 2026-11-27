@@ -1,12 +1,13 @@
-//! Dry ground navigation for a cow following wheat, including jumps and drops.
+//! Ground navigation for a cow following wheat, including jumps, drops and shallow water.
 
 use std::collections::{HashMap, VecDeque};
 
+use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
 
 use super::{ANIMAL_WIDTH, Aabb, floor};
 use crate::block::BlockPos;
-use crate::fluid::FluidState;
+use crate::fluid::{FluidState, FluidType};
 use crate::world::World;
 
 type Point = [f64; 2];
@@ -39,7 +40,9 @@ impl CowNavigation {
         [tx, ty, tz]: [f64; 3],
         height: f64,
         on_ground: bool,
+        over_shallow_water: bool,
     ) -> Option<CowSteering> {
+        // In shallow water the path uses the floor even while the cow floats above it.
         let level = floor(y + 1.0e-7);
         let ground = Ground { world, height };
         let from = [x, z];
@@ -47,10 +50,10 @@ impl CowNavigation {
             // The cow can straddle the edge before falling or when first landing after a jump.
             // Finish crossing before asking the ground search for full support again.
             let to = center(landing);
-            if !on_ground
+            if !(on_ground || over_shallow_water && level == landing.y)
                 || (!ground.can_walk(from, from, level)
                     && match level - landing.y {
-                        0 => ground.is_clear(sweep(from, to, y, y + height)),
+                        0 => ground.is_clear(sweep(from, to, y, y + height), Some(level)),
                         1..=MAX_DROP => ground.can_descend(from, to, level, landing.y),
                         _ => false,
                     })
@@ -59,7 +62,7 @@ impl CowNavigation {
             }
             self.landing = None;
         }
-        if !on_ground || (y - f64::from(level)).abs() > 1.0e-7 {
+        if !over_shallow_water && (!on_ground || (y - f64::from(level)).abs() > 1.0e-7) {
             *self = Self::default();
             return None;
         }
@@ -126,36 +129,32 @@ struct Ground<'w> {
 }
 
 impl Ground<'_> {
-    /// A conservative sweep of the cow's box: every column under the rectangle must be supported,
-    /// dry and loaded, and the box must have room for the cow's whole height. For a cardinal edge
-    /// this rectangle is the actual sweep; diagonal shortcuts can reject more than necessary.
+    /// A conservative sweep of the cow's box: every column must be loaded, supported, and clear
+    /// except for shallow water at foot level. For a cardinal edge this rectangle is the actual
+    /// sweep; diagonal shortcuts can reject more than necessary.
     fn can_walk(&self, from: Point, to: Point, level: i32) -> bool {
         let y = f64::from(level);
         let area @ [min, max] = sweep(from, to, y, y + self.height);
-        let behavior = block_behavior();
         for x in floor(min[0])..max[0].ceil() as i32 {
             for z in floor(min[2])..max[2].ceil() as i32 {
-                let below = BlockPos { x, y: level - 1, z };
-                if !self
-                    .world
-                    .block_state(below)
-                    .is_some_and(|state| behavior.is_collision_face_full(state, Face::Up))
-                {
+                if !has_floor(self.world, BlockPos { x, y: level, z }) {
                     return false;
                 }
             }
         }
-        self.is_clear(area)
+        self.is_clear(area, Some(level))
     }
 
-    fn is_clear(&self, area @ [min, max]: Aabb) -> bool {
+    fn is_clear(&self, area @ [min, max]: Aabb, water_level: Option<i32>) -> bool {
         for x in floor(min[0])..max[0].ceil() as i32 {
             for z in floor(min[2])..max[2].ceil() as i32 {
                 for y in floor(min[1])..max[1].ceil() as i32 {
-                    if self
-                        .world
-                        .block_state(BlockPos { x, y, z })
-                        .is_none_or(|state| FluidState::of(state).kind().is_some())
+                    let pos = BlockPos { x, y, z };
+                    let Some(state) = self.world.block_state(pos) else {
+                        return false;
+                    };
+                    if FluidState::of(state).kind().is_some()
+                        && (water_level != Some(y) || !is_shallow_water(self.world, pos, state))
                     {
                         return false;
                     }
@@ -169,16 +168,16 @@ impl Ground<'_> {
         let y = f64::from(level);
         let top = y + JUMP_CLEARANCE + self.height;
         self.can_walk(to, to, level + 1)
-            && self.is_clear(sweep(from, from, y, top))
-            && self.is_clear(sweep(from, to, y + 1.0, top))
+            && self.is_clear(sweep(from, from, y, top), Some(level))
+            && self.is_clear(sweep(from, to, y + 1.0, top), None)
     }
 
     fn can_descend(&self, from: Point, to: Point, level: i32, landing_y: i32) -> bool {
         let y = f64::from(level);
-        // The opening at the edge and the whole fall to the supported landing must be clear and dry.
+        // Water is allowed at the supported landing, never along the drop above it.
         self.can_walk(to, to, landing_y)
-            && self.is_clear(sweep(from, to, y, y + self.height))
-            && self.is_clear(sweep(to, to, f64::from(landing_y), y))
+            && self.is_clear(sweep(from, to, y, y + self.height), None)
+            && self.is_clear(sweep(to, to, f64::from(landing_y), y), Some(landing_y))
     }
 
     fn can_reach(&self, from: Point, level: i32, next: BlockPos) -> bool {
@@ -190,7 +189,7 @@ impl Ground<'_> {
         }
     }
 
-    /// Find a shortest cardinal route on dry ground, bounded around the starting cell.
+    /// Find a shortest cardinal route, bounded around the starting cell.
     fn detour(&self, from: Point, level: i32, goal: BlockPos) -> Option<Vec<BlockPos>> {
         let [x, z] = from.map(floor);
         let start = BlockPos { x, y: level, z };
@@ -232,6 +231,38 @@ impl Ground<'_> {
         }
         None
     }
+}
+
+pub(super) fn over_shallow_water(world: &World, [x, y, z]: [f64; 3]) -> bool {
+    let pos = BlockPos {
+        x: floor(x),
+        y: floor(y),
+        z: floor(z),
+    };
+    world
+        .block_state(pos)
+        .is_some_and(|state| is_shallow_water(world, pos, state))
+}
+
+fn is_shallow_water(world: &World, pos: BlockPos, state: u32) -> bool {
+    block_states().name(state) == Some("minecraft:water")
+        && FluidState::of(state).kind() == Some(FluidType::Water)
+        && has_floor(world, pos)
+        && world
+            .block_state(BlockPos {
+                y: pos.y + 1,
+                ..pos
+            })
+            .is_some_and(|state| FluidState::of(state).kind().is_none())
+}
+
+fn has_floor(world: &World, pos: BlockPos) -> bool {
+    world
+        .block_state(BlockPos {
+            y: pos.y - 1,
+            ..pos
+        })
+        .is_some_and(|state| block_behavior().is_collision_face_full(state, Face::Up))
 }
 
 fn sweep([x, z]: Point, [tx, tz]: Point, bottom: f64, top: f64) -> Aabb {

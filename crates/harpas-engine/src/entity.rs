@@ -26,7 +26,7 @@ use crate::world::{ChunkPos, ChunkState, World};
 
 mod navigation;
 
-use navigation::{CowNavigation, CowSteering};
+use navigation::{CowNavigation, CowSteering, over_shallow_water};
 
 /// An entity's handle: its slot and the slot's generation, which changes when the slot is reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -842,7 +842,7 @@ impl World {
         age < LIFETIME
     }
 
-    /// The dry movement of an adult animal (`travelInAir`). A living cow can supply input from its goal.
+    /// Adult animal movement on land and in shallow water. A living cow can steer from its goal.
     fn tick_animal(&mut self, i: usize, players: &[PlayerState]) -> bool {
         let Some(Kind::Animal(animal)) = &mut self.entities.kind[i] else {
             return false;
@@ -860,17 +860,24 @@ impl World {
         let on_ground = self.entities.on_ground[i];
         let height = animal.height();
         let old_rotation = animal.rotation;
-        let (mut navigation, target) =
-            if animal.species == AnimalSpecies::Cow && animal.health > 0.0 {
-                (
-                    std::mem::take(&mut animal.navigation),
-                    animal.temptation.target(before, players),
-                )
-            } else {
-                (CowNavigation::default(), None)
-            };
+        let cow = animal.species == AnimalSpecies::Cow;
+        let (mut navigation, target) = if cow && animal.health > 0.0 {
+            (
+                std::mem::take(&mut animal.navigation),
+                animal.temptation.target(before, players),
+            )
+        } else {
+            (CowNavigation::default(), None)
+        };
+        let shallow_water = cow && over_shallow_water(self, before);
+        let water_height = if shallow_water {
+            self.entity_fluid_height(self.entities.animal_box(i), true)
+        } else {
+            0.0
+        };
+        let swimming = water_height > 0.0;
         let steering = if let Some(target) = target {
-            navigation.steer(self, before, target, height, on_ground)
+            navigation.steer(self, before, target, height, on_ground, shallow_water)
         } else {
             navigation = CowNavigation::default();
             None
@@ -880,7 +887,11 @@ impl World {
         } else {
             1.0
         };
-        let drag = 0.91_f32 * grip;
+        let (drag, vertical_drag, gravity) = if swimming {
+            (0.8_f32, 0.8_f32, gravity / 16.0)
+        } else {
+            (0.91_f32 * grip, 0.98_f32, gravity)
+        };
         let [mut x, mut y, mut z] = velocity;
         if x * x + z * z < 9.0e-6 {
             x = 0.0;
@@ -888,6 +899,10 @@ impl World {
         }
         if y.abs() < 0.003 {
             y = 0.0;
+        }
+        if water_height > 0.4 {
+            // Approximate the float goal with an upward impulse while the cow's feet are deep enough.
+            y += f64::from(0.04_f32);
         }
         self.entities.old_position[i] = before;
         self.entities.tick_count[i] += 1;
@@ -897,9 +912,11 @@ impl World {
         }) = steering
         {
             if jump {
-                y = f64::from(0.42_f32);
+                y = f64::from(if swimming { 0.3_f32 } else { 0.42_f32 });
             }
-            let acceleration = if on_ground {
+            let acceleration = if swimming {
+                0.2_f32 * 0.02
+            } else if on_ground {
                 // Forward input and travel speed both come from the goal; friction scales the latter.
                 let speed = 1.25_f32 * 0.2;
                 speed * speed * (0.216_000_02 / (grip * grip * grip))
@@ -914,7 +931,7 @@ impl World {
         let v = &mut self.entities.velocity[i];
         *v = [
             v[0] * f64::from(drag),
-            (v[1] - gravity) * f64::from(0.98_f32),
+            (v[1] - gravity) * f64::from(vertical_drag),
             v[2] * f64::from(drag),
         ];
         let after = self.entities.position[i];
@@ -931,7 +948,7 @@ impl World {
             animal.rotation[0] = (-dx).atan2(dz).to_degrees() as f32;
         }
         let fall_distance = animal.fall_distance;
-        if grounded {
+        if grounded || swimming {
             animal.fall_distance = 0.0;
         } else if after[1] < before[1] {
             animal.fall_distance += f64::from((before[1] - after[1]) as f32);

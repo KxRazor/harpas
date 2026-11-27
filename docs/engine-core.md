@@ -289,15 +289,17 @@ workers handle [entity regions](world.md#entity-regions).
 The first animal goal runs during the cow's entity tick, before dry movement. A living adult cow with AI
 selects the nearest eligible player holding wheat in either hand. On open, flat ground it turns and steers
 toward the player, stops accelerating when close enough or when the wheat is put away, and coasts under
-normal drag. When the straight approach is blocked, a bounded search can find a detour over loaded, dry
-ground. The cow can jump up one block with enough headroom or walk off a ledge and fall up to three blocks
-through dry, clear space onto solid ground. The search can visit up to three levels below and one level above
-the range spanned by the endpoints, so it can route through a depression even when both ends are level.
-The cow keeps steering toward the landing while the wheat goal is active.
+normal drag. When the straight approach is blocked, a bounded search can find a route over loaded ground.
+The cow can jump up one block with enough headroom or walk off a ledge and fall up to three blocks through
+clear space. The search can visit up to three levels below and one level above the range spanned by the
+endpoints, so it can route through a depression even when both ends are level. The cow keeps steering toward
+the landing while the wheat goal is active. A route can cross a one-block layer of still water over a solid
+floor. The cow can steer while floating, moves more slowly in the water, and can climb onto a dry bank one
+block higher.
 The goal's cooldown, route and landing target are runtime-only. The turn and movement go to Java viewers;
 the cow's position is saved as usual.
-Other height changes, liquids, vanilla's full path evaluator and waypoint timing, other goals and natural
-spawning remain open.
+Other height changes, deeper water, currents, other liquids, vanilla's full path evaluator and exact swimming
+and waypoint timing, other goals and natural spawning remain open.
 
 In Java Survival, an empty main hand or a sword can hit either species. The attack measures reach to the animal's
 hitbox and uses the player's melee damage and recharge. An accepted sword hit wears the sword, including

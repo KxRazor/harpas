@@ -511,8 +511,11 @@ as shown by the parity report.
   - [x] A saved adult cow walks down dry ledges two or three blocks high to follow wheat. The fall, landing,
         stopping when the wheat is hidden and position after restart are compared with vanilla
         (`saved_cow_walks_down_larger_steps_matches_vanilla`).
-  - [ ] Navigation across other height changes and through liquids, broader obstacle parity and
-        other animal goals.
+  - [x] A saved adult cow swims across a one-block-deep trench of still water and climbs onto the far bank
+        to follow wheat, even with a longer dry route. Both courses, stopping when the wheat is hidden and
+        position after restart are compared with vanilla (`saved_cow_swims_across_a_shallow_trench_matches_vanilla`).
+  - [ ] Navigation across other height changes, deep or flowing water and other liquids, broader obstacle
+        parity and other animal goals.
   - [ ] Compare natural cow spawning on a fixed grassy platform under matching light, biome and mob-cap
         conditions.
 - [ ] Combat, damage, health, hunger, effects.

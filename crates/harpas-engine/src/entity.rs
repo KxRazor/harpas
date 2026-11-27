@@ -24,6 +24,10 @@ use crate::inventory::ItemStack;
 use crate::player::{AnimalSpecies, AnimalVariant, GameMode, PlayerState};
 use crate::world::{ChunkPos, ChunkState, World};
 
+mod navigation;
+
+use navigation::CowNavigation;
+
 /// An entity's handle: its slot and the slot's generation, which changes when the slot is reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EntityHandle {
@@ -65,9 +69,8 @@ enum CowTemptation {
 }
 
 impl CowTemptation {
-    /// Selects the nearest player holding wheat within the default temptation range. Steering on
-    /// open ground is direct until path navigation is implemented.
-    fn direction(&mut self, position: [f64; 3], players: &[PlayerState]) -> Option<[f64; 2]> {
+    /// Selects the nearest player holding wheat within the default temptation range.
+    fn target(&mut self, position: [f64; 3], players: &[PlayerState]) -> Option<[f64; 2]> {
         const RANGE_SQUARED: f64 = 10.0 * 10.0;
         const STOP_DISTANCE_SQUARED: f64 = 2.5 * 2.5;
         const RESTART_DELAY: u8 = 100;
@@ -97,19 +100,17 @@ impl CowTemptation {
                         let held = &player.inventory.slots[player.inventory.hand_slot(off_hand)];
                         !held.is_empty() && held.name() == Some("minecraft:wheat")
                     }))
-                .then_some((distance, dx, dz))
+                .then_some((distance, [p.x, p.z]))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let Some((distance, dx, dz)) = target else {
+        let Some((distance, target)) = target else {
             if *self == Self::Following {
                 *self = Self::Cooldown(RESTART_DELAY);
             }
             return None;
         };
         *self = Self::Following;
-        let horizontal = dx.hypot(dz);
-        (distance >= STOP_DISTANCE_SQUARED && horizontal > 0.0)
-            .then(|| [dx / horizontal, dz / horizontal])
+        (distance >= STOP_DISTANCE_SQUARED).then_some(target)
     }
 }
 
@@ -124,6 +125,7 @@ pub(crate) struct Animal {
     pub(crate) last_damage: f32,
     death_time: u8,
     temptation: CowTemptation,
+    navigation: CowNavigation,
     pub(crate) fall_distance: f64,
     pub(crate) variant: AnimalVariant,
     pub(crate) nbt: Arc<Compound>,
@@ -146,6 +148,7 @@ impl Animal {
             last_damage: 0.0,
             death_time: 0,
             temptation: CowTemptation::default(),
+            navigation: CowNavigation::default(),
             fall_distance,
             variant,
             nbt,
@@ -857,16 +860,21 @@ impl World {
         let on_ground = self.entities.on_ground[i];
         let height = animal.height();
         let old_rotation = animal.rotation;
-        let direction = if animal.species == AnimalSpecies::Cow && animal.health > 0.0 {
-            animal.temptation.direction(before, players)
+        let (mut navigation, target) =
+            if animal.species == AnimalSpecies::Cow && animal.health > 0.0 {
+                (
+                    std::mem::take(&mut animal.navigation),
+                    animal.temptation.target(before, players),
+                )
+            } else {
+                (CowNavigation::default(), None)
+            };
+        let direction = if let Some(target) = target.filter(|_| on_ground) {
+            navigation.direction(self, before, target, height)
         } else {
+            navigation = CowNavigation::default();
             None
         };
-        if let Some([dx, dz]) = direction
-            && on_ground
-        {
-            animal.rotation[0] = (-dx).atan2(dz).to_degrees() as f32;
-        }
         let grip = if on_ground {
             friction(self.state(self.block_below(i)))
         } else {
@@ -883,9 +891,7 @@ impl World {
         }
         self.entities.old_position[i] = before;
         self.entities.tick_count[i] += 1;
-        if let Some([dx, dz]) = direction
-            && on_ground
-        {
+        if let Some([dx, dz]) = direction {
             // Move control sets both the forward input and the travel speed from the goal's
             // modifier and the cow's default movement speed. Ground friction scales the latter.
             let speed = 1.25_f32 * 0.2;
@@ -906,6 +912,10 @@ impl World {
         let Some(Kind::Animal(animal)) = &mut self.entities.kind[i] else {
             unreachable!()
         };
+        animal.navigation = navigation;
+        if let Some([dx, dz]) = direction {
+            animal.rotation[0] = (-dx).atan2(dz).to_degrees() as f32;
+        }
         let fall_distance = animal.fall_distance;
         if grounded {
             animal.fall_distance = 0.0;

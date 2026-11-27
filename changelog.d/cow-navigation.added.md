@@ -1,0 +1,1 @@
+- Saved adult cows can walk around walls on flat ground to follow a player holding wheat.

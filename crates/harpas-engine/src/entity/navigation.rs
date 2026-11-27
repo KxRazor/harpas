@@ -196,7 +196,8 @@ impl Ground<'_> {
         }
         let mut previous = HashMap::from([(start, start)]);
         let mut frontier = VecDeque::from([start]);
-        let heights = level.min(goal.y)..=level.max(goal.y);
+        // A route can dip into a trench or climb over a rise even when both ends are level.
+        let heights = (level.min(goal.y) - 1)..=(level.max(goal.y) + 1);
         while let Some(cell @ BlockPos { x, y, z }) = frontier.pop_front() {
             if cell == goal {
                 let mut route = vec![cell];

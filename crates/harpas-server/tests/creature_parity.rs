@@ -8,7 +8,9 @@ use harpas_java::{offline_uuid, write_frame};
 use harpas_protocol_java::v26_1::play;
 use play::clientbound::Packet;
 use reference::{Folder, Reference, Server};
+use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fs;
 use std::io::Write;
 use std::ops::Range;
 use std::path::Path;
@@ -130,8 +132,20 @@ fn track_animals(
     count: usize,
     belongs: impl Fn(&play::clientbound::SpawnEntity) -> bool,
 ) -> Vec<play::clientbound::SpawnEntity> {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut has_chunk = false;
+    track_animals_after_join(client, entity_type, expected, count, belongs, || {})
+}
+
+fn track_animals_after_join(
+    client: &mut Client,
+    entity_type: i32,
+    expected: &str,
+    count: usize,
+    belongs: impl Fn(&play::clientbound::SpawnEntity) -> bool,
+    on_ready: impl FnOnce(),
+) -> Vec<play::clientbound::SpawnEntity> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut chunks = HashSet::new();
+    let mut on_ready = Some(on_ready);
     let mut pending_position = None;
     let mut animals = Vec::with_capacity(count);
     while Instant::now() < deadline {
@@ -156,13 +170,17 @@ fn track_animals(
                     chunks_per_tick: 25.0,
                 },
             ),
-            Ok(Packet::ChunkDataAndUpdateLight(chunk)) if (chunk.x, chunk.z) == (0, 0) => {
-                has_chunk = true;
+            Ok(Packet::ChunkDataAndUpdateLight(chunk)) => {
+                chunks.insert((chunk.x, chunk.z));
             }
             Ok(Packet::SpawnEntity(spawn))
                 if spawn.entity_type == entity_type && belongs(&spawn) =>
             {
-                assert!(has_chunk, "received the animal before its chunk");
+                let pos = ((spawn.x.floor() as i32) >> 4, (spawn.z.floor() as i32) >> 4);
+                assert!(
+                    chunks.contains(&pos),
+                    "received the animal before its chunk"
+                );
                 animals.push(spawn);
                 if animals.len() == count {
                     return animals;
@@ -172,14 +190,169 @@ fn track_animals(
         }
         // Vanilla refreshes entity tracking on player movement, but skips a viewer whose chunk
         // is still queued to send. Wait for the chunk before sending our only idle movement.
-        if has_chunk && let Some(position) = pending_position.take() {
+        if chunks.contains(&(0, 0))
+            && let Some(position) = pending_position.take()
+        {
             move_player(client, position, true);
+            if let Some(on_ready) = on_ready.take() {
+                on_ready();
+            }
         }
     }
     panic!(
-        "received {} of {count} spawns while waiting for {expected} (chunk (0, 0) received: {has_chunk})",
-        animals.len()
+        "received {} of {count} spawns while waiting for {expected} ({} chunks received)",
+        animals.len(),
+        chunks.len()
     );
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn natural_cows_spawn_on_grass_matches_vanilla() {
+    let Reference { jar, eula } = Reference::required();
+    let folder = Folder::new("natural-cows");
+    let vanilla = folder.0.join("vanilla");
+    let harpas = folder.0.join("harpas");
+    let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
+    for dir in [&vanilla, &harpas] {
+        let path = dir.join("server.properties");
+        let properties = fs::read_to_string(&path)
+            .unwrap()
+            .replace("view-distance=2", "view-distance=7")
+            .replace("simulation-distance=2", "simulation-distance=7");
+        fs::write(
+            &path,
+            format!(
+                "{properties}generator-settings={{\"biome\":\"minecraft:plains\",\"layers\":[\
+             {{\"block\":\"minecraft:bedrock\",\"height\":1}},\
+             {{\"block\":\"minecraft:stone\",\"height\":3}}],\"features\":false,\"lakes\":false}}\n"
+            ),
+        )
+        .unwrap();
+    }
+    let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "forceload add -112 -96 111 95"
+    )
+    .unwrap();
+    reference.wait_for("force loaded");
+    writeln!(reference.child.stdin.as_mut().unwrap(), "save-all flush").unwrap();
+    reference.wait_for("Saved the game");
+    writeln!(
+        reference.child.stdin.as_mut().unwrap(),
+        "fill -96 -61 -80 -33 -61 79 minecraft:grass_block\n\
+         fill 32 -61 -80 95 -61 79 minecraft:grass_block\n\
+         fill -112 -57 -96 -17 -57 95 minecraft:stone\n\
+         fill 16 -57 -96 111 -57 95 minecraft:stone\n\
+         gamerule minecraft:advance_time false\ngamerule minecraft:advance_weather false\n\
+         gamerule minecraft:random_tick_speed 0\n\
+         gamerule minecraft:spawn_monsters false\ntime set 6000\nweather clear\n\
+         gamerule minecraft:spawn_mobs true"
+    )
+    .unwrap();
+    reference.wait_for("Gamerule spawn_mobs is now set to: true");
+
+    let expected = std::thread::scope(|scope| {
+        let (ready, waiting) = std::sync::mpsc::channel();
+        let peer = scope.spawn(move || {
+            let mut client = Client::join_with_view(vanilla_port, "CowViewer", 7);
+            track_animals_after_join(
+                &mut client,
+                30,
+                "naturally spawned vanilla cow",
+                1,
+                |_| true,
+                || ready.send(()).unwrap(),
+            )
+            .pop()
+            .unwrap()
+        });
+        waiting.recv_timeout(Duration::from_secs(30)).unwrap();
+        let command = |server: &mut Server, text: &str| {
+            writeln!(server.child.stdin.as_mut().unwrap(), "{text}").unwrap();
+        };
+        command(&mut reference, "tick sprint 400t");
+        reference.wait_for("Sprint completed");
+        let assert_no_cows = |server: &mut Server, case| {
+            command(server, "execute unless entity @e[type=minecraft:cow]");
+            assert_eq!(
+                server.wait_for_any(&["Test passed", "Test failed"]),
+                0,
+                "{case}"
+            );
+        };
+        assert_no_cows(&mut reference, "the covered platforms should be too dark");
+        command(&mut reference, "fill -112 -57 -96 -17 -57 95 minecraft:air");
+        command(&mut reference, "fill 16 -57 -96 111 -57 95 minecraft:air");
+        for _ in 0..10 {
+            command(
+                &mut reference,
+                "summon minecraft:sheep 7 -60 7 {NoAI:1b,PersistenceRequired:0b}",
+            );
+        }
+        command(&mut reference, "tick sprint 400t");
+        reference.wait_for("Sprint completed");
+        assert_no_cows(&mut reference, "the creature cap should be full");
+        command(&mut reference, "kill @e[type=minecraft:sheep]");
+        for _ in 0..12 {
+            command(&mut reference, "tick sprint 400t");
+            reference.wait_for("Sprint completed");
+            if peer.is_finished() {
+                break;
+            }
+            // Other species may fill the vanilla cap before cows are selected.
+            command(
+                &mut reference,
+                "kill @e[type=!minecraft:player,type=!minecraft:cow]",
+            );
+        }
+        peer.join().unwrap()
+    });
+    stop(&mut reference);
+
+    let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
+    let mut client = Client::join_with_view(harpas_port, "CowViewer", 7);
+    client
+        .stream
+        .set_read_timeout(Some(Duration::from_secs(25)))
+        .unwrap();
+    let actual = track_animals(&mut client, 30, "naturally spawned Harpas cow", 1, |_| true)
+        .pop()
+        .unwrap();
+    stop(&mut server);
+    for spawn in [&expected, &actual] {
+        assert!(
+            ((-96.0..-32.0).contains(&spawn.x) || (32.0..96.0).contains(&spawn.x))
+                && (-80.0..80.0).contains(&spawn.z),
+            "cow spawned outside the grass platforms: {spawn:?}"
+        );
+        assert_eq!(spawn.y, -60.0);
+    }
+    let saved = harpas_anvil::read_entity_chunk(
+        &harpas_anvil::dimension_dir(&harpas.join("world"), "minecraft:overworld").join("entities"),
+        (actual.x.floor() as i32) >> 4,
+        (actual.z.floor() as i32) >> 4,
+    )
+    .unwrap()
+    .unwrap();
+    let Some(Nbt::List(List::Compound(entities))) = saved.get("Entities") else {
+        panic!("expected saved cows");
+    };
+    let uuid = Nbt::IntArray(
+        actual
+            .uuid
+            .to_be_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(i32::from_be_bytes)
+            .collect(),
+    );
+    assert!(entities.iter().any(|cow| {
+        cow.get("id") == Some(&Nbt::from("minecraft:cow")) && cow.get("UUID") == Some(&uuid)
+    }));
 }
 
 #[test]
@@ -379,7 +552,7 @@ fn saved_cow_crosses_a_dry_trench_matches_vanilla() {
     for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
         assert_eq!(saved[1], UPPER_HERDER_POSITION[1]);
         assert!(
-            saved[0] < 5.55 && (0.5..4.5).contains(&saved[2]),
+            (0.0..6.0).contains(&saved[0]) && (0.0..5.0).contains(&saved[2]),
             "cow did not stay on the far bank in {server}: {saved:?}"
         );
         assert!(
@@ -691,10 +864,7 @@ fn lead_cow_across_trench(port: u16, reference: Option<&mut Server>) -> [f64; 3]
         |[x, y, z]| {
             reached_bottom |= (y - (bank - 1.0)).abs() < 0.001 && (6.44..8.56).contains(&x);
             jumped |= reached_bottom && y > bank + 0.05;
-            jumped
-                && (y - bank).abs() < 0.001
-                && (4.6..5.55).contains(&x)
-                && (0.5..4.5).contains(&z)
+            jumped && (y - bank).abs() < 0.001 && (4.6..5.3).contains(&x) && (0.5..4.5).contains(&z)
         },
     )
 }

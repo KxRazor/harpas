@@ -306,6 +306,7 @@ fn run() -> io::Result<()> {
             }
         }
     };
+    let mut server_info = server_info(&properties);
     let game_data = harpas_engine::GameData {
         shapes,
         loot,
@@ -324,9 +325,18 @@ fn run() -> io::Result<()> {
                 Vec::new()
             }
         },
+        spawning: match harpas_engine::spawning::SpawningRules::new(
+            &worldgen_data,
+            server_info.simulation_distance,
+        ) {
+            Ok(rules) => rules.map(Arc::new),
+            Err(error) => {
+                warn!("Natural creature spawning will be unavailable: {error}");
+                None
+            }
+        },
         items: Some(Arc::new(items)),
     };
-    let mut server_info = server_info(&properties);
     server_info.tags = Arc::new(tags::load(Path::new(""), &data_pack)?);
     if let Some((level, _)) = harpas_anvil::read_level(&world_dir)?
         && let Some(spawn) = harpas_anvil::overworld_spawn(&level)

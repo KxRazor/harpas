@@ -46,6 +46,10 @@ impl Client {
     }
 
     pub(super) fn join(port: u16, name: &str) -> Self {
+        Self::join_with_view(port, name, 2)
+    }
+
+    pub(super) fn join_with_view(port: u16, name: &str, view: u8) -> Self {
         let (mut client, reply) = Self::login(port, name);
         assert!(
             matches!(reply, login::clientbound::Packet::LoginSuccess(_)),
@@ -56,7 +60,7 @@ impl Client {
         client.send(|buf| {
             codec::write_varint(buf, 0); // Client Information
             codec::write_string(buf, "en_us");
-            buf.extend_from_slice(&[2, 0, 1, 127, 1, 0, 1, 0]);
+            buf.extend_from_slice(&[view, 0, 1, 127, 1, 0, 1, 0]);
         });
         loop {
             let bytes = client.next("configuration packet");

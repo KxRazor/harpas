@@ -185,6 +185,21 @@ pub(crate) fn get(chunk: &Chunk, pos: BlockPos) -> u32 {
         })
 }
 
+/// The first air above the world's surface in this column, from the live heightmap.
+pub(crate) fn surface_height(chunk: &Chunk, x: i32, z: i32) -> i32 {
+    let kind = HeightmapType::WorldSurface;
+    if let Some(Nbt::Compound(maps)) = chunk.rest.get("Heightmaps")
+        && let Some(Nbt::LongArray(packed)) = maps.get(kind.nbt_key())
+        && packed.len() == HEIGHT_LONGS
+    {
+        return packed_height(packed, ((z & 15) << 4 | (x & 15)) as usize);
+    }
+    (MIN_Y..=MAX_Y)
+        .rev()
+        .find(|&y| kind.matches(get(chunk, BlockPos { x, y, z })))
+        .map_or(MIN_Y, |y| y + 1)
+}
+
 /// Sets the block state at `pos` in `chunk`, which must hold it, as `LevelChunk.setBlockState`: updates the
 /// final heightmaps and removes the block entity of a replaced block. Returns the old state, or none when the
 /// state did not change or the chunk has no section there.
@@ -260,12 +275,14 @@ fn unpack(packed: &[i64]) -> Option<[i32; 256]> {
     if packed.len() != HEIGHT_LONGS {
         return None;
     }
+    Some(std::array::from_fn(|i| packed_height(packed, i)))
+}
+
+fn packed_height(packed: &[i64], index: usize) -> i32 {
     let mask = (1_u64 << HEIGHT_BITS) - 1;
-    Some(std::array::from_fn(|i| {
-        let long = packed[i / HEIGHTS_PER_LONG] as u64;
-        let value = (long >> ((i % HEIGHTS_PER_LONG) * HEIGHT_BITS)) & mask;
-        MIN_Y + value as i32
-    }))
+    let long = packed[index / HEIGHTS_PER_LONG] as u64;
+    let value = (long >> ((index % HEIGHTS_PER_LONG) * HEIGHT_BITS)) & mask;
+    MIN_Y + value as i32
 }
 
 fn pack(heights: &[i32; 256]) -> Vec<i64> {

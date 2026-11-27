@@ -17,6 +17,7 @@ use harpas_core::chunk::Section;
 use harpas_core::nbt::{Compound, Nbt};
 use harpas_worldgen::{LightWorld, light_chunk};
 
+use crate::block::BlockPos;
 use crate::player::NEIGHBORS;
 use crate::world::ChunkPos;
 
@@ -41,6 +42,21 @@ impl Layer {
             _ => Self::Values(values.into()),
         }
     }
+
+    fn at(&self, index: usize) -> u8 {
+        match self {
+            Self::Uniform(level) => *level,
+            Self::Values(bytes) => nibble(bytes[index / 2], index),
+        }
+    }
+}
+
+fn nibble(byte: u8, index: usize) -> u8 {
+    (byte >> ((index & 1) * 4)) & 15
+}
+
+fn light_index(pos: BlockPos) -> usize {
+    (((pos.y & 15) << 8) | ((pos.z & 15) << 4) | (pos.x & 15)) as usize
 }
 
 /// One section's light.
@@ -59,6 +75,56 @@ pub struct SectionLight {
 pub struct Light {
     /// The sections, lowest first.
     pub sections: Vec<SectionLight>,
+}
+
+impl Light {
+    pub(crate) fn brightness(&self, pos: BlockPos) -> Option<u8> {
+        let section = self
+            .sections
+            .iter()
+            .find(|section| section.y == pos.y >> 4)?;
+        let index = light_index(pos);
+        Some(section.block.at(index).max(section.sky.at(index)))
+    }
+}
+
+/// Raw brightness in a lit Anvil chunk. A missing sky layer inherits light from the bottom of the
+/// next stored sky layer above it, or from the open sky if there is none.
+pub(crate) fn saved_brightness(chunk: &Chunk, pos: BlockPos) -> Option<u8> {
+    if chunk.rest.get("isLightOn") != Some(&Nbt::Byte(1)) {
+        return None;
+    }
+    let section_y = pos.y >> 4;
+    let index = light_index(pos);
+    let block = chunk
+        .sections
+        .iter()
+        .find(|section| i32::from(section.y) == section_y)
+        .and_then(|section| saved_layer(&section.rest, "BlockLight"))
+        .map_or(0, |bytes| nibble(bytes[index / 2] as u8, index));
+    let sky = chunk
+        .sections
+        .iter()
+        .filter(|section| i32::from(section.y) >= section_y)
+        .filter_map(|section| {
+            Some((
+                i32::from(section.y),
+                saved_layer(&section.rest, "SkyLight")?,
+            ))
+        })
+        .min_by_key(|(y, _)| *y)
+        .map_or(15, |(y, bytes)| {
+            let index = if y == section_y { index } else { index & 255 };
+            nibble(bytes[index / 2] as u8, index)
+        });
+    Some(block.max(sky))
+}
+
+fn saved_layer<'a>(rest: &'a Compound, name: &str) -> Option<&'a [i8]> {
+    match rest.get(name) {
+        Some(Nbt::ByteArray(bytes)) if bytes.len() == LAYER_BYTES => Some(bytes),
+        _ => None,
+    }
 }
 
 /// The chunk being lit and the chunks around it, with their sections by height.
@@ -178,13 +244,12 @@ pub fn write_light(chunk: &mut Chunk, light: &Light) {
 /// The light saved in the sections of `chunk`, for the sections of `like`: a missing sky layer is all fifteen,
 /// as [`write_light`] leaves it out, and a missing block layer is all zero.
 pub fn saved_light(chunk: &Chunk, like: &Light) -> Light {
-    let layer =
-        |rest: Option<&Compound>, name: &str, missing: u8| match rest.and_then(|r| r.get(name)) {
-            Some(Nbt::ByteArray(bytes)) if bytes.len() == LAYER_BYTES => {
-                Layer::new(bytes.iter().map(|&byte| byte as u8).collect())
-            }
-            _ => Layer::Uniform(missing),
-        };
+    let layer = |rest: Option<&Compound>, name: &str, missing: u8| match rest
+        .and_then(|r| saved_layer(r, name))
+    {
+        Some(bytes) => Layer::new(bytes.iter().map(|&byte| byte as u8).collect()),
+        _ => Layer::Uniform(missing),
+    };
     Light {
         sections: like
             .sections

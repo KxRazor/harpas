@@ -156,10 +156,7 @@ impl Animal {
     }
 
     fn height(&self) -> f64 {
-        match self.species {
-            AnimalSpecies::Pig => ANIMAL_WIDTH,
-            AnimalSpecies::Cow => 1.4_f32 as f64,
-        }
+        animal_height(self.species)
     }
 
     pub(crate) fn no_ai(&self) -> bool {
@@ -212,6 +209,23 @@ pub(crate) struct Entities {
 
 /// A box in world coordinates: its lower and upper corners.
 type Aabb = [[f64; 3]; 2];
+
+fn animal_height(species: AnimalSpecies) -> f64 {
+    match species {
+        AnimalSpecies::Pig => ANIMAL_WIDTH,
+        AnimalSpecies::Cow => 1.4_f32 as f64,
+    }
+}
+
+pub(crate) fn animal_bounds(species: AnimalSpecies, position: [f64; 3]) -> Aabb {
+    bounds(position, ANIMAL_WIDTH, animal_height(species))
+}
+
+/// The box of an entity at its feet position (`getBoundingBox`).
+fn bounds([x, y, z]: [f64; 3], width: f64, height: f64) -> Aabb {
+    let half = width / 2.0;
+    [[x - half, y, z - half], [x + half, y + height, z + half]]
+}
 
 impl Entities {
     /// Adds an entity at the end of the tick order.
@@ -327,7 +341,7 @@ impl Entities {
     }
 
     fn item_box(&self, i: usize) -> Aabb {
-        self.bounds(i, ITEM_SIZE, ITEM_SIZE)
+        bounds(self.position[i], ITEM_SIZE, ITEM_SIZE)
     }
 
     pub(crate) fn animal_target(&self, entity_id: i32) -> Option<EntityHandle> {
@@ -342,14 +356,7 @@ impl Entities {
         let Some(Kind::Animal(animal)) = &self.kind[i] else {
             unreachable!()
         };
-        self.bounds(i, ANIMAL_WIDTH, animal.height())
-    }
-
-    /// The box of an entity at its feet position (`getBoundingBox`).
-    fn bounds(&self, i: usize, width: f64, height: f64) -> Aabb {
-        let [x, y, z] = self.position[i];
-        let half = width / 2.0;
-        [[x - half, y, z - half], [x + half, y + height, z + half]]
+        animal_bounds(animal.species, self.position[i])
     }
 }
 
@@ -551,7 +558,7 @@ impl World {
 
     /// The block collision and support changes of `Entity.move`.
     fn move_entity(&mut self, i: usize, movement: [f64; 3], width: f64, height: f64) {
-        let entity = self.entities.bounds(i, width, height);
+        let entity = bounds(self.entities.position[i], width, height);
         let collided = self.collide(entity, movement);
         let length: f64 = collided.iter().map(|d| d * d).sum();
         let wanted: f64 = movement.iter().map(|d| d * d).sum();
@@ -569,7 +576,7 @@ impl World {
             self.entities.on_ground[i] = on_ground;
             // `checkSupportingBlock`.
             if on_ground {
-                let entity = self.entities.bounds(i, width, height);
+                let entity = bounds(self.entities.position[i], width, height);
                 let below = [
                     [entity[0][0], entity[0][1] - 1.0e-6, entity[0][2]],
                     [entity[1][0], entity[0][1], entity[1][2]],
@@ -1183,12 +1190,23 @@ impl World {
         velocity: [f64; 3],
         item: ItemEntity,
     ) -> EntityHandle {
-        let high = (self.item_uuids.next_long() & -61441) | 16384;
-        let low = (self.item_uuids.next_long() & 0x3FFF_FFFF_FFFF_FFFF) | i64::MIN;
+        self.add_entity(network_id, position, velocity, Kind::Item(item))
+    }
+
+    /// Adds a new entity and marks its chunk for saving.
+    pub(crate) fn add_entity(
+        &mut self,
+        network_id: i32,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        kind: Kind,
+    ) -> EntityHandle {
+        let high = (self.entity_uuids.next_long() & -61441) | 16384;
+        let low = (self.entity_uuids.next_long() & 0x3FFF_FFFF_FFFF_FFFF) | i64::MIN;
         let uuid = (u128::from(high as u64) << 64) | u128::from(low as u64);
         let handle = self
             .entities
-            .add(network_id, uuid, position, velocity, Kind::Item(item));
+            .add(network_id, uuid, position, velocity, kind);
         self.entities.mark_changed(handle);
         handle
     }

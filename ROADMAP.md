@@ -516,8 +516,10 @@ as shown by the parity report.
         position after restart are compared with vanilla (`saved_cow_swims_across_a_shallow_trench_matches_vanilla`).
   - [ ] Navigation across other height changes, deep or flowing water and other liquids, broader obstacle
         parity and other animal goals.
-  - [ ] Compare natural cow spawning on a fixed grassy platform under matching light, biome and mob-cap
-        conditions.
+  - [x] Temperate adult cows spawn naturally on grassy plains in the Overworld. The comparison uses fixed
+        platforms in clear daylight, with darkness and the creature cap checked separately
+        (`natural_cows_spawn_on_grass_matches_vanilla`).
+  - [ ] Natural spawning in other biomes, other species, local creature caps and exact pack distribution.
 - [ ] Combat, damage, health, hunger, effects.
   - [x] Java Survival fall damage on ordinary terrain, saved health on reconnect, and death and respawn at the
         Overworld spawn. Safe, damaging and lethal falls and Creative immunity are compared with vanilla

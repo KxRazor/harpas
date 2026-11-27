@@ -26,6 +26,7 @@ use crate::furnace::Furnace;
 use crate::item_data::ItemCodec;
 use crate::light::{self, Light, Lighter};
 use crate::neighbor;
+use crate::spawning::NaturalSpawning;
 use crate::ticks::{self, LevelTicks};
 use harpas_core::random::{LegacyRandom, Seed128, XoroshiroRandom};
 use harpas_worldgen::shape_update::ShapeUpdates;
@@ -499,7 +500,8 @@ pub struct World {
     pub(crate) active_furnaces: BTreeSet<BlockPos>,
     /// The level's random source, which lava's spread delay draws from.
     pub(crate) random: LegacyRandom,
-    pub(crate) item_uuids: XoroshiroRandom,
+    pub(crate) entity_uuids: XoroshiroRandom,
+    pub(crate) spawning: NaturalSpawning,
     /// The entities other than players.
     pub(crate) entities: crate::entity::Entities,
     entity_data: HashMap<ChunkPos, EntityChunk>,
@@ -576,12 +578,15 @@ impl World {
             Some(Nbt::Long(time)) => *time,
             _ => 0,
         };
-        if !biomes.contains(&"minecraft:plains") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the biome registry must include minecraft:plains",
-            ));
-        }
+        let plains = biomes
+            .iter()
+            .position(|name| *name == "minecraft:plains")
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the biome registry must include minecraft:plains",
+                )
+            })? as u32;
         let region_dir = dimension_dir(world_dir, "minecraft:overworld").join("region");
         // Saves interrupted by a crash are completed or discarded before any worker reads the regions.
         let recovery = recover(&region_dir)?;
@@ -597,10 +602,16 @@ impl World {
         ));
         let mut uuid_seed = [0; 16];
         getrandom::fill(&mut uuid_seed).map_err(io::Error::other)?;
-        let item_uuids = XoroshiroRandom::from_seed_128(Seed128::new(
+        let entity_uuids = XoroshiroRandom::from_seed_128(Seed128::new(
             u64::from_le_bytes(uuid_seed[..8].try_into().unwrap()),
             u64::from_le_bytes(uuid_seed[8..].try_into().unwrap()),
         ));
+        let spawning = NaturalSpawning::new(
+            game_rules.as_ref(),
+            plains,
+            seed,
+            i64::from_le_bytes(uuid_seed[..8].try_into().unwrap()),
+        );
         let entity_dir = dimension_dir(world_dir, "minecraft:overworld").join("entities");
         recover(&entity_dir)?;
         let load_entity_dir = entity_dir.clone();
@@ -705,7 +716,8 @@ impl World {
             block_ticks: LevelTicks::default(),
             active_furnaces: BTreeSet::new(),
             random: LegacyRandom::new(0),
-            item_uuids,
+            entity_uuids,
+            spawning,
             entities: crate::entity::Entities::default(),
             entity_data: HashMap::new(),
             item_codec,
@@ -897,6 +909,28 @@ impl World {
             ChunkState::Loaded(chunk) => Some(block::get(chunk, pos)),
             _ => None,
         }
+    }
+
+    /// Animal spawning uses the stored sky light without the visual night darkening.
+    pub(crate) fn spawn_brightness(&self, pos: BlockPos) -> Option<u8> {
+        let chunk_pos = pos.chunk();
+        if self.light_pending(chunk_pos) {
+            return None;
+        }
+        if self.needs_light(chunk_pos) {
+            return self.light(chunk_pos)??.brightness(pos);
+        }
+        let ChunkState::Loaded(chunk) = self.chunk(chunk_pos)? else {
+            return None;
+        };
+        light::saved_brightness(chunk, pos)
+    }
+
+    pub(crate) fn opaque_creature_count(&self, types: &HashSet<String>) -> usize {
+        self.entity_data
+            .values()
+            .map(|chunk| chunk.opaque_creature_count(types))
+            .sum()
     }
 
     /// Whether eyes at `eye` are under water, as vanilla's `Entity.updateFluidOnEyes`: the water of the block a
@@ -2080,7 +2114,8 @@ mod tests {
             block_ticks: LevelTicks::default(),
             active_furnaces: BTreeSet::new(),
             random: LegacyRandom::new(0),
-            item_uuids: XoroshiroRandom::new(0),
+            entity_uuids: XoroshiroRandom::new(0),
+            spawning: NaturalSpawning::new(None, 0, 0, 0),
             entities: crate::entity::Entities::default(),
             entity_data: HashMap::new(),
             item_codec: Arc::new(RwLock::new(Arc::default())),
@@ -2116,6 +2151,123 @@ mod tests {
             name: "Steve".into(),
             properties: Vec::new(),
             game_mode: GameMode::Creative,
+        }
+    }
+
+    #[test]
+    fn natural_cow_spawning_checks_light_biome_and_creature_cap() {
+        use harpas_worldgen::WorldgenData;
+
+        let data = WorldgenData::from_json_entries([
+            (
+                "data/minecraft/worldgen/biome/plains.json",
+                r#"{
+                "has_precipitation": true, "temperature": 0.5, "downfall": 0.5,
+                "spawners": {"creature": [
+                    {"type": "minecraft:cow", "weight": 1, "minCount": 4, "maxCount": 4},
+                    {"type": "minecraft:sheep", "weight": 0, "minCount": 1, "maxCount": 1}
+                ]}
+            }"#,
+            ),
+            (
+                "data/minecraft/tags/block/animals_spawnable_on.json",
+                r#"{"values":["minecraft:grass_block"]}"#,
+            ),
+        ])
+        .unwrap();
+        let rules = Arc::new(
+            crate::spawning::SpawningRules::new(&data, 7)
+                .unwrap()
+                .unwrap(),
+        );
+        let grass = block_states()
+            .default_state("minecraft:grass_block")
+            .unwrap();
+        let air = block_states().default_state("minecraft:air").unwrap();
+        let chunks: Vec<_> = (2..=4)
+            .flat_map(|x| (-2..=2).map(move |z| ChunkPos { x, z }))
+            .collect();
+        let mut player = crate::player::PlayerState::new(
+            1,
+            profile(),
+            7,
+            true,
+            crate::player::output_channel().0,
+        );
+        player.player.position.y = -60.0;
+
+        for (label, time, plains, light, sheep, persistent, enabled, spawns) in [
+            ("daylight", 400, 1, 15, 0, false, true, true),
+            ("outside the cycle", 399, 1, 15, 0, false, true, false),
+            ("darkness", 400, 1, 0, 0, false, true, false),
+            ("eight block light", 400, 1, 8, 0, false, true, false),
+            ("nine block light", 400, 1, 9, 0, false, true, true),
+            ("other biome", 400, 0, 15, 0, false, true, false),
+            ("full cap", 400, 1, 15, 10, false, true, false),
+            ("persistent sheep", 400, 1, 15, 10, true, true, true),
+            ("disabled game rule", 400, 1, 15, 0, false, false, false),
+        ] {
+            let mut world = fake_world(
+                1,
+                Arc::new(move |pos| {
+                    let mut terrain = chunk(pos, DATA_VERSION);
+                    let section = terrain.sections[0].section.as_mut().unwrap();
+                    for x in 0..16 {
+                        for z in 0..16 {
+                            section.set_block_state(x, 3, z, grass);
+                            for y in 4..16 {
+                                section.set_block_state(x, y, z, air);
+                            }
+                        }
+                    }
+                    if light < 15 {
+                        terrain.sections[0]
+                            .rest
+                            .insert("SkyLight", Nbt::ByteArray(vec![0; 2048]));
+                        terrain.sections[0].rest.insert(
+                            "BlockLight",
+                            Nbt::ByteArray(vec![(light << 4 | light) as i8; 2048]),
+                        );
+                    }
+                    Ok((Some((terrain, Vec::new(), false)), None))
+                }),
+            );
+            world.spawning = NaturalSpawning::new(
+                Some(&Compound::from_iter([(
+                    "minecraft:spawn_mobs",
+                    Nbt::Byte(i8::from(enabled)),
+                )])),
+                plains,
+                0,
+                17,
+            );
+            world.spawning.rules = Some(Arc::clone(&rules));
+            load_chunks(&mut world, &chunks);
+            let pos = chunks[0];
+            let sheep = vec![
+                Compound::from_iter([
+                    ("id", Nbt::from("minecraft:sheep")),
+                    ("PersistenceRequired", Nbt::Byte(i8::from(persistent))),
+                ]);
+                sheep
+            ];
+            let saved = EntityChunk::read(
+                Compound::from_iter([
+                    ("DataVersion", Nbt::Int(DATA_VERSION)),
+                    ("Position", Nbt::IntArray(vec![pos.x, pos.z])),
+                    (
+                        "Entities",
+                        Nbt::List(harpas_core::nbt::List::Compound(sheep)),
+                    ),
+                ]),
+                pos,
+                &world.item_codec(),
+            )
+            .unwrap();
+            world.load_entities(pos, saved).unwrap();
+            world.game_time = time;
+            world.tick_natural_spawning(std::slice::from_ref(&player));
+            assert_eq!(!world.entities.order.is_empty(), spawns, "{label}");
         }
     }
 

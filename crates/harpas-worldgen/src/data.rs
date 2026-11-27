@@ -191,6 +191,19 @@ pub struct BiomeDef {
     pub features: Vec<Vec<String>>,
 }
 
+/// A weighted entry in a biome's creature spawn list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatureSpawn {
+    /// The entity type's resource location.
+    pub entity: String,
+    /// Relative weight within the biome's creature category.
+    pub weight: i32,
+    /// Smallest attempted group.
+    pub min_count: i32,
+    /// Largest attempted group.
+    pub max_count: i32,
+}
+
 /// An entry in an explicit `multi_noise_biome_source_parameter_list` `"biomes"` array.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BiomeParameterEntryDef {
@@ -973,6 +986,8 @@ pub struct WorldgenData {
     pub noise_settings: IndexMap<String, NoiseSettingsDef>,
     /// `minecraft:worldgen/biome` definitions in deterministic lexicographical order matching Java 26.1 registry IDs.
     pub biomes: IndexMap<String, BiomeDef>,
+    /// Biome creature spawn lists, in data-pack order.
+    pub creature_spawns: IndexMap<String, Vec<CreatureSpawn>>,
     /// `minecraft:worldgen/multi_noise_biome_source_parameter_list` definitions keyed by resource location.
     pub parameter_lists: IndexMap<String, MultiNoiseParameterListDef>,
     /// `minecraft:worldgen/world_preset` definitions keyed by resource location (e.g. `"minecraft:normal"`).
@@ -1078,6 +1093,10 @@ impl WorldgenData {
                 }
                 "biome" => {
                     let biome = parse_biome(&resource_id, &json)?;
+                    let creatures = parse_creature_spawns(&resource_id, &json)?;
+                    if !creatures.is_empty() {
+                        data.creature_spawns.insert(resource_id.clone(), creatures);
+                    }
                     data.biomes.insert(resource_id, biome);
                 }
                 "multi_noise_biome_source_parameter_list" => {
@@ -2533,6 +2552,41 @@ fn parse_biome(ctx: &str, json: &Value) -> Result<BiomeDef, WorldgenDataError> {
         carvers,
         features,
     })
+}
+
+fn parse_creature_spawns(ctx: &str, json: &Value) -> Result<Vec<CreatureSpawn>, WorldgenDataError> {
+    let Some(creatures) = json
+        .get("spawners")
+        .and_then(|spawners| spawners.get("creature"))
+    else {
+        return Ok(Vec::new());
+    };
+    let entries = creatures
+        .as_array()
+        .ok_or_else(|| invalid_def(ctx, "creature spawners must be an array"))?;
+    entries
+        .iter()
+        .map(|entry| {
+            let entry = entry
+                .as_object()
+                .ok_or_else(|| invalid_def(ctx, "creature spawner must be an object"))?;
+            let weight = req_i32(entry, "weight", ctx)?;
+            let min_count = req_i32(entry, "minCount", ctx)?;
+            let max_count = req_i32(entry, "maxCount", ctx)?;
+            if weight < 0 || min_count <= 0 || max_count < min_count {
+                return Err(invalid_def(
+                    ctx,
+                    "invalid creature spawn weight or group size",
+                ));
+            }
+            Ok(CreatureSpawn {
+                entity: resource_name(req_str(entry, "type", ctx)?),
+                weight,
+                min_count,
+                max_count,
+            })
+        })
+        .collect()
 }
 
 fn parse_configured_feature(

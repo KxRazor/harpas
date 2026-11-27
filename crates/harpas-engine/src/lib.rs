@@ -23,6 +23,7 @@ pub mod player;
 pub mod player_data;
 pub mod recipe;
 mod redstone;
+pub mod spawning;
 mod survival;
 pub(crate) mod ticks;
 mod tracking;
@@ -343,6 +344,8 @@ pub struct GameData {
     pub mining: Option<Arc<mining::MiningRules>>,
     /// Membership in the climbable block tag, indexed by block state ID.
     pub climbable_blocks: Vec<bool>,
+    /// Natural creature spawning rules from the installed data pack.
+    pub spawning: Option<Arc<spawning::SpawningRules>>,
     /// Saved item component codecs, using the owner's generated component registry.
     pub items: Option<Arc<item_data::ItemCodec>>,
 }
@@ -384,6 +387,7 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
     world.recipes = data.recipes;
     world.mining = data.mining;
     world.climbable_blocks = data.climbable_blocks;
+    world.spawning.rules = data.spawning;
     if let Some(items) = data.items {
         world.set_item_codec(items);
     }
@@ -571,8 +575,9 @@ impl TickWork for Game {
             self.fail_world(error);
             return;
         }
-        // The game time advances and the scheduled fluid ticks run, before the tick's changes are sent.
+        // Scheduled block and fluid ticks run before the chunk spawning phase.
         world.tick_scheduled();
+        world.tick_natural_spawning(&self.players);
         let events = world.take_level_events();
         send_level_events(&self.players, &events);
         // Sending light changes, only to the players at whose view's edge each chunk is: the others light the

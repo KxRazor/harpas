@@ -299,7 +299,17 @@ block higher.
 The goal's cooldown, route and landing target are runtime-only. The turn and movement go to Java viewers;
 the cow's position is saved as usual.
 Other height changes, deeper water, currents, other liquids, vanilla's full path evaluator and exact swimming
-and waypoint timing, other goals and natural spawning remain open.
+and waypoint timing, and other goals remain open.
+
+During the chunk phase, the Overworld attempts natural creature spawning every 400 game ticks [12], subject
+to the saved `minecraft:spawn_mobs` rule. The first supported entry is the temperate adult cow in plains.
+The installed data supplies the plains creature weights, pack sizes and permitted ground blocks. A position
+needs at least nine block or sky light, room for the cow's hitbox, and no fluid.
+The pass uses loaded chunks within the configured simulation distance of non-spectators, and excludes
+positions within 24 blocks of the nearest player or world spawn. The global creature cap scales with the
+union of the players' 17×17 chunk squares and counts non-persistent saved creatures in the loaded chunks.
+New cows enter the same tick, tracking and Anvil save path as loaded cows. Per-player caps, exact pack
+distribution and spawning other entries are still open.
 
 In Java Survival, an empty main hand or a sword can hit either species. The attack measures reach to the animal's
 hitbox and uses the player's melee damage and recharge. An accepted sword hit wears the sword, including
@@ -424,3 +434,5 @@ and can be collected after the pickup delay. The entity snapshot saves the drops
 11. Stefan Gustavson, "Simplex noise demystified", Linköping University (2005), for 2D and 3D simplex
     skew/unskew constants, corner falloff and 12-edge gradient table.
     https://weber.itn.liu.se/~stegu/simplexnoise/simplexnoise.pdf
+12. minecraft.wiki, "Mob spawning" (Java spawn cycle, creature caps, pack spawning and spawn conditions).
+    https://minecraft.wiki/w/Mob_spawning

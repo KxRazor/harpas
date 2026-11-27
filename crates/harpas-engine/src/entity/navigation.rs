@@ -1,4 +1,4 @@
-//! Dry ground navigation for a cow following wheat, including one-block steps up and down.
+//! Dry ground navigation for a cow following wheat, including jumps and drops.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -13,6 +13,7 @@ type Point = [f64; 2];
 
 const SEARCH_RADIUS: i32 = 12;
 const REPATH_INTERVAL: u8 = 10;
+const MAX_DROP: i32 = 3;
 /// Clearance for the peak of the cow's normal jump from level ground.
 const JUMP_CLEARANCE: f64 = 1.26;
 
@@ -50,7 +51,7 @@ impl CowNavigation {
                 || (!ground.can_walk(from, from, level)
                     && match level - landing.y {
                         0 => ground.is_clear(sweep(from, to, y, y + height)),
-                        1 => ground.can_descend(from, to, level),
+                        1..=MAX_DROP => ground.can_descend(from, to, level, landing.y),
                         _ => false,
                     })
             {
@@ -105,8 +106,8 @@ impl CowNavigation {
             return steer(from, target, false);
         };
         let to = center(next);
-        let descending = next.y == level - 1;
-        if descending && !ground.can_descend(from, to, level) {
+        let descending = next.y < level;
+        if descending && !ground.can_reach(from, level, next) {
             self.retry_in = 0;
             return None;
         }
@@ -172,17 +173,19 @@ impl Ground<'_> {
             && self.is_clear(sweep(from, to, y + 1.0, top))
     }
 
-    fn can_descend(&self, from: Point, to: Point, level: i32) -> bool {
+    fn can_descend(&self, from: Point, to: Point, level: i32, landing_y: i32) -> bool {
         let y = f64::from(level);
-        // Walk above the edge, then fall into a clear space with dry support below it.
-        self.can_walk(to, to, level - 1) && self.is_clear(sweep(from, to, y, y + self.height))
+        // The opening at the edge and the whole fall to the supported landing must be clear and dry.
+        self.can_walk(to, to, landing_y)
+            && self.is_clear(sweep(from, to, y, y + self.height))
+            && self.is_clear(sweep(to, to, f64::from(landing_y), y))
     }
 
     fn can_reach(&self, from: Point, level: i32, next: BlockPos) -> bool {
-        match next.y - level {
+        match level - next.y {
             0 => self.can_walk(from, center(next), level),
-            1 => self.can_jump(from, center(next), level),
-            -1 => self.can_descend(from, center(next), level),
+            -1 => self.can_jump(from, center(next), level),
+            1..=MAX_DROP => self.can_descend(from, center(next), level, next.y),
             _ => false,
         }
     }
@@ -197,7 +200,7 @@ impl Ground<'_> {
         let mut previous = HashMap::from([(start, start)]);
         let mut frontier = VecDeque::from([start]);
         // A route can dip into a trench or climb over a rise even when both ends are level.
-        let heights = (level.min(goal.y) - 1)..=(level.max(goal.y) + 1);
+        let heights = (level.min(goal.y) - MAX_DROP)..=(level.max(goal.y) + 1);
         while let Some(cell @ BlockPos { x, y, z }) = frontier.pop_front() {
             if cell == goal {
                 let mut route = vec![cell];
@@ -212,8 +215,9 @@ impl Ground<'_> {
                 if (nx - start.x).abs().max((nz - start.z).abs()) > SEARCH_RADIUS {
                     continue;
                 }
-                let Some(next) = [y, y + 1, y - 1]
+                let Some(next) = [y, y + 1]
                     .into_iter()
+                    .chain((y - MAX_DROP..y).rev())
                     .filter(|y| heights.contains(y))
                     .map(|y| BlockPos { x: nx, y, z: nz })
                     .find(|&next| {

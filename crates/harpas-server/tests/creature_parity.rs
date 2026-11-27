@@ -10,6 +10,7 @@ use play::clientbound::Packet;
 use reference::{Folder, Reference, Server};
 use std::ffi::OsStr;
 use std::io::Write;
+use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -342,12 +343,27 @@ fn saved_cow_jumps_up_a_step_matches_vanilla() {
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_cow_walks_down_a_step_matches_vanilla() {
-    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::StepDown, lead_cow_down_step);
+    compare_cow_descent(1, 5.4..6.55);
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_walks_down_larger_steps_matches_vanilla() {
+    for height in [2, 3] {
+        compare_cow_descent(height, 4.9..6.55);
+    }
+}
+
+fn compare_cow_descent(height: i32, landing_x: Range<f64>) {
+    let [vanilla, harpas] =
+        observe_saved_cow_following(CowCourse::StepDown(height), |port, reference| {
+            lead_cow_down_step(port, reference, height, &landing_x)
+        });
     for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
         assert_eq!(saved[1], HERDER_POSITION[1]);
         assert!(
-            (5.4..6.55).contains(&saved[0]),
-            "cow was not stopped below the ledge in {server}: {saved:?}"
+            landing_x.contains(&saved[0]),
+            "cow was not stopped below the {height}-block ledge in {server}: {saved:?}"
         );
         assert!(
             (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
@@ -380,7 +396,7 @@ enum CowCourse {
     Flat,
     Wall,
     StepUp,
-    StepDown,
+    StepDown(i32),
     Trench,
 }
 
@@ -389,27 +405,32 @@ fn observe_saved_cow_following<T>(
     lead: impl Fn(u16, Option<&mut Server>) -> T,
 ) -> [(T, [f64; 3]); 2] {
     let Reference { jar, eula } = Reference::required();
-    let check_reload = matches!(course, CowCourse::StepDown | CowCourse::Trench);
+    let check_reload = matches!(course, CowCourse::StepDown(_) | CowCourse::Trench);
     let (name, north_edge, terrain, cow_y) = match course {
-        CowCourse::Flat => ("cow-temptation", 0, "", -60),
+        CowCourse::Flat => ("cow-temptation", 0, String::new(), -60),
         // It is much shorter to go around the south end than the north end.
         CowCourse::Wall => (
             "cow-navigation",
             -4,
-            "fill 6 -60 -4 6 -59 2 minecraft:stone\n",
+            "fill 6 -60 -4 6 -59 2 minecraft:stone\n".into(),
             -60,
         ),
-        CowCourse::StepUp => ("cow-step", 0, "fill 0 -60 0 6 -60 4 minecraft:stone\n", -60),
-        CowCourse::StepDown => (
+        CowCourse::StepUp => (
+            "cow-step",
+            0,
+            "fill 0 -60 0 6 -60 4 minecraft:stone\n".into(),
+            -60,
+        ),
+        CowCourse::StepDown(height) => (
             "cow-step-descent",
             0,
-            "fill 7 -60 0 15 -60 4 minecraft:stone\n",
-            -59,
+            format!("fill 7 -60 0 15 {} 4 minecraft:stone\n", -61 + height),
+            -60 + height,
         ),
         CowCourse::Trench => (
             "cow-uneven-terrain",
             0,
-            "fill 0 -60 0 5 -60 4 minecraft:stone\nfill 9 -60 0 15 -60 4 minecraft:stone\n",
+            "fill 0 -60 0 5 -60 4 minecraft:stone\nfill 9 -60 0 15 -60 4 minecraft:stone\n".into(),
             -59,
         ),
     };
@@ -587,19 +608,29 @@ fn lead_cow_up_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
     )
 }
 
-fn lead_cow_down_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+fn lead_cow_down_step(
+    port: u16,
+    reference: Option<&mut Server>,
+    height: i32,
+    landing_x: &Range<f64>,
+) -> [f64; 3] {
+    let server = if reference.is_some() {
+        "vanilla"
+    } else {
+        "Harpas"
+    };
     let (mut client, cow) = hold_wheat(port, reference, HERDER_POSITION);
-    assert_eq!(cow.y, -59.0);
     let floor = HERDER_POSITION[1];
+    assert_eq!(cow.y, floor + f64::from(height));
     let mut fell = false;
     follow_cow_until(
         &mut client,
         &cow,
-        "cow walks off the platform",
+        &format!("cow walks down the {height}-block ledge in {server}"),
         |[x, y, z]| {
             assert!(y <= cow.y + 0.001, "cow jumped at {x}, {y}, {z}");
             fell |= (floor + 0.01..cow.y - 0.01).contains(&y);
-            fell && (y - floor).abs() < 0.001 && (5.4..6.55).contains(&x)
+            fell && (y - floor).abs() < 0.001 && landing_x.contains(&x)
         },
     )
 }

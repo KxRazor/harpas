@@ -6669,42 +6669,47 @@ mod tests {
     }
 
     #[test]
-    fn adult_cow_walks_down_a_dry_step_towards_wheat() {
-        let folder = Folder::new();
-        let (mut world, cow, player) =
-            cow_navigation_world(&folder, -47.0, [2.5, -48.0, 1.5], |blocks, stone| {
-                for z in 0..=4 {
-                    for x in 7..16 {
-                        blocks.set((z << 4) | x, stone);
+    fn adult_cow_walks_down_dry_steps_towards_wheat() {
+        for height in 1..=3 {
+            let folder = Folder::new();
+            let ledge = -48.0 + f64::from(height);
+            let (mut world, cow, player) =
+                cow_navigation_world(&folder, ledge, [2.5, -48.0, 1.5], |blocks, stone| {
+                    for y in 0..height as usize {
+                        for z in 0..=4 {
+                            for x in 7..16 {
+                                blocks.set((y << 8) | (z << 4) | x, stone);
+                            }
+                        }
                     }
+                });
+            let mut players = [player];
+            let mut fell = false;
+            for _ in 0..100 {
+                world.tick_entities(&players);
+                let [x, y, _] = world.entities.position[cow];
+                assert!(y <= ledge, "cow jumped before descending");
+                fell |= (-48.0 < y && y < ledge) && !world.entities.on_ground[cow];
+                if x < 6.4 && y == -48.0 && world.entities.on_ground[cow] {
+                    break;
                 }
-            });
-        let mut players = [player];
-        let mut fell = false;
-        for _ in 0..100 {
-            world.tick_entities(&players);
-            let [x, y, _] = world.entities.position[cow];
-            assert!(y <= -47.0, "cow jumped before descending");
-            fell |= -48.0 < y && y < -47.0 && !world.entities.on_ground[cow];
-            if x < 6.4 && y == -48.0 && world.entities.on_ground[cow] {
-                break;
             }
+            let [x, y, z] = world.entities.position[cow];
+            assert!(
+                fell && x < 6.4 && y == -48.0 && world.entities.on_ground[cow],
+                "cow did not land below the {height}-block step at {x}, {y}, {z}"
+            );
+            players[0].inventory.selected = 1;
+            for _ in 0..30 {
+                world.tick_entities(&players);
+            }
+            let [sx, sy, sz] = world.entities.position[cow];
+            assert_eq!(sy, -48.0);
+            assert!(
+                (sx - x).hypot(sz - z) < 0.3,
+                "cow kept following without wheat"
+            );
         }
-        let [x, y, z] = world.entities.position[cow];
-        assert!(
-            fell && x < 6.4 && y == -48.0 && world.entities.on_ground[cow],
-            "cow did not land below the step at {x}, {y}, {z}"
-        );
-        players[0].inventory.selected = 1;
-        for _ in 0..30 {
-            world.tick_entities(&players);
-        }
-        let [sx, sy, sz] = world.entities.position[cow];
-        assert_eq!(sy, -48.0);
-        assert!(
-            (sx - x).hypot(sz - z) < 0.3,
-            "cow kept following without wheat"
-        );
     }
 
     #[test]
@@ -6749,20 +6754,42 @@ mod tests {
     }
 
     #[test]
-    fn adult_cow_does_not_take_a_two_block_drop_towards_wheat() {
+    fn adult_cow_does_not_take_a_four_block_drop_towards_wheat() {
         let folder = Folder::new();
         let (mut world, cow, player) =
-            cow_navigation_world(&folder, -46.0, [2.5, -48.0, 1.5], |blocks, stone| {
-                for z in 0..16 {
-                    for x in 7..16 {
-                        blocks.set((z << 4) | x, stone);
-                        blocks.set((1 << 8) | (z << 4) | x, stone);
+            cow_navigation_world(&folder, -44.0, [2.5, -48.0, 1.5], |blocks, stone| {
+                for y in 0..4 {
+                    for z in 0..16 {
+                        for x in 7..16 {
+                            blocks.set((y << 8) | (z << 4) | x, stone);
+                        }
                     }
                 }
             });
         for _ in 0..100 {
             world.tick_entities(std::slice::from_ref(&player));
-            assert_eq!(world.entities.position[cow][1], -46.0);
+            assert_eq!(world.entities.position[cow][1], -44.0);
+        }
+    }
+
+    #[test]
+    fn adult_cow_does_not_descend_through_water_to_a_dry_landing() {
+        let folder = Folder::new();
+        let water = block_states().default_state("minecraft:water").unwrap();
+        let (mut world, cow, player) =
+            cow_navigation_world(&folder, -45.0, [2.5, -48.0, 1.5], |blocks, stone| {
+                for z in 0..16 {
+                    for x in 7..16 {
+                        for y in 0..3 {
+                            blocks.set((y << 8) | (z << 4) | x, stone);
+                        }
+                    }
+                    blocks.set((2 << 8) | (z << 4) | 6, water);
+                }
+            });
+        for _ in 0..100 {
+            world.tick_entities(std::slice::from_ref(&player));
+            assert_eq!(world.entities.position[cow][1], -45.0);
         }
     }
 

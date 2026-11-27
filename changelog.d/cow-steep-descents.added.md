@@ -1,0 +1,1 @@
+- Saved adult cows following wheat can walk down dry ledges two or three blocks high.

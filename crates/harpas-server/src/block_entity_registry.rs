@@ -729,6 +729,19 @@ mod tests {
     }
 
     #[test]
+    fn food_use_duration_is_loaded_in_ticks() {
+        let food = json!({"nutrition": 2, "saturation": 0.5});
+        let consumables = consumable_defaults(&json!({
+            "minecraft:apple": {"food": food, "consumable": {}},
+            "minecraft:dried_kelp": {"food": food, "consumable": {"consume_seconds": 0.8}},
+        }))
+        .unwrap();
+        for (item, ticks) in [("minecraft:apple", 32), ("minecraft:dried_kelp", 16)] {
+            assert_eq!(consumables[&items().id(item).unwrap()].use_ticks, ticks);
+        }
+    }
+
+    #[test]
     fn extracts_milk_and_potions_as_consumables_without_food_properties() {
         let scratch = Scratch::new(&std::env::temp_dir()).unwrap();
         for (name, components) in [

@@ -3184,7 +3184,6 @@ struct FoodCase {
     name: &'static str,
     item: &'static str,
     hand: play::Hand,
-    ticks: u32,
     remainder: Option<&'static str>,
 }
 
@@ -3193,42 +3192,36 @@ const FOOD_CASES: [FoodCase; 6] = [
         name: "BreadEater",
         item: "minecraft:bread",
         hand: play::Hand::MainHand,
-        ticks: 32,
         remainder: None,
     },
     FoodCase {
         name: "SteakEater",
         item: "minecraft:cooked_beef",
         hand: play::Hand::OffHand,
-        ticks: 32,
         remainder: None,
     },
     FoodCase {
         name: "KelpEater",
         item: "minecraft:dried_kelp",
         hand: play::Hand::MainHand,
-        ticks: 16,
         remainder: None,
     },
     FoodCase {
         name: "StewEater",
         item: "minecraft:mushroom_stew",
         hand: play::Hand::MainHand,
-        ticks: 32,
         remainder: Some("minecraft:bowl"),
     },
     FoodCase {
         name: "SoupEater",
         item: "minecraft:beetroot_soup",
         hand: play::Hand::OffHand,
-        ticks: 32,
         remainder: Some("minecraft:bowl"),
     },
     FoodCase {
         name: "RabbitEater",
         item: "minecraft:rabbit_stew",
         hand: play::Hand::MainHand,
-        ticks: 32,
         remainder: Some("minecraft:bowl"),
     },
 ];
@@ -3241,7 +3234,6 @@ fn exercise_food_defaults(server: &mut Server, port: u16) -> Vec<play::clientbou
                 name,
                 item,
                 hand,
-                ticks,
                 remainder,
             } = case;
             let mut client = Client::join(port, name);
@@ -3263,11 +3255,17 @@ fn exercise_food_defaults(server: &mut Server, port: u16) -> Vec<play::clientbou
             let expected_item = harpas_core::item::items()
                 .id(remainder.unwrap_or(item))
                 .unwrap();
-            let (mut updated_health, mut delivered_remainder) = (None, remainder.is_none());
-            let started = Instant::now();
+            let (mut finished, mut updated_health, mut delivered_remainder) =
+                (false, None, remainder.is_none());
+            // Check completion on the wire. The engine tests count ticks without a wall clock.
             use_food(&mut client, hand, sequence);
-            let after = client.matching("food update and any returned container", |packet| {
+            let after = client.matching(&format!("completed use of {item}"), |packet| {
                 match packet {
+                    Packet::EntityEvent(event)
+                        if event.entity_id == entity_id && event.event == 9 =>
+                    {
+                        finished = true;
+                    }
                     Packet::SetHealth(health) => updated_health = Some(health),
                     Packet::SetContainerSlot(change)
                         if change.window_id == 0
@@ -3279,19 +3277,12 @@ fn exercise_food_defaults(server: &mut Server, port: u16) -> Vec<play::clientbou
                     }
                     _ => {}
                 }
-                if delivered_remainder {
+                if finished && delivered_remainder {
                     updated_health.take()
                 } else {
                     None
                 }
             });
-            let elapsed = started.elapsed();
-            let expected = Duration::from_millis(u64::from(ticks) * 50);
-            // The exact ticks are checked in the engine. Allow for network and scheduling delays here.
-            assert!(
-                elapsed.abs_diff(expected) < Duration::from_millis(400),
-                "{item} took {elapsed:?}, expected about {expected:?}"
-            );
             drop(client);
             server.wait_for(&format!("{name} left the game"));
 
@@ -3352,7 +3343,6 @@ fn food_and_natural_regeneration_match_vanilla() {
             item,
             hand,
             remainder,
-            ..
         } in FOOD_CASES
         {
             let mut data = Compound::from_iter([

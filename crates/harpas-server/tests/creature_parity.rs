@@ -325,12 +325,29 @@ fn saved_cow_walks_around_a_wall_matches_vanilla() {
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_cow_jumps_up_a_step_matches_vanilla() {
-    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::Step, lead_cow_up_step);
+    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::StepUp, lead_cow_up_step);
     for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
         assert_eq!(saved[1], STEP_HERDER_POSITION[1]);
         assert!(
             saved[0] < 5.8,
             "cow left the platform in {server}: {saved:?}"
+        );
+        assert!(
+            (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
+            "cow did not stop in {server}: switched at {at:?}, saved at {saved:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_walks_down_a_step_matches_vanilla() {
+    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::StepDown, lead_cow_down_step);
+    for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
+        assert_eq!(saved[1], HERDER_POSITION[1]);
+        assert!(
+            (5.4..6.55).contains(&saved[0]),
+            "cow was not stopped below the ledge in {server}: {saved:?}"
         );
         assert!(
             (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
@@ -345,7 +362,8 @@ const STEP_HERDER_POSITION: [f64; 3] = [1.5, -59.0, 1.5];
 enum CowCourse {
     Flat,
     Wall,
-    Step,
+    StepUp,
+    StepDown,
 }
 
 fn observe_saved_cow_following<T>(
@@ -353,15 +371,22 @@ fn observe_saved_cow_following<T>(
     lead: impl Fn(u16, Option<&mut Server>) -> T,
 ) -> [(T, [f64; 3]); 2] {
     let Reference { jar, eula } = Reference::required();
-    let (name, north_edge, terrain) = match course {
-        CowCourse::Flat => ("cow-temptation", 0, ""),
+    let (name, north_edge, terrain, cow_y) = match course {
+        CowCourse::Flat => ("cow-temptation", 0, "", -60),
         // It is much shorter to go around the south end than the north end.
         CowCourse::Wall => (
             "cow-navigation",
             -4,
             "fill 6 -60 -4 6 -59 2 minecraft:stone\n",
+            -60,
         ),
-        CowCourse::Step => ("cow-step", 0, "fill 0 -60 0 6 -60 4 minecraft:stone\n"),
+        CowCourse::StepUp => ("cow-step", 0, "fill 0 -60 0 6 -60 4 minecraft:stone\n", -60),
+        CowCourse::StepDown => (
+            "cow-step-descent",
+            0,
+            "fill 7 -60 0 15 -60 4 minecraft:stone\n",
+            -59,
+        ),
     };
     let folder = Folder::new(name);
     let vanilla = folder.0.join("vanilla");
@@ -372,7 +397,7 @@ fn observe_saved_cow_following<T>(
     writeln!(
         console,
         "forceload add 0 {north_edge} 0 0\ntick freeze\n{terrain}\
-         summon minecraft:cow 10.5 -60 1.5\nsave-all flush"
+         summon minecraft:cow 10.5 {cow_y} 1.5\nsave-all flush"
     )
     .unwrap();
     reference.wait_for("Saved the game");
@@ -404,13 +429,38 @@ fn observe_saved_cow_following<T>(
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
     let actual = lead(harpas_port, None);
     stop(&mut server);
-    [(&vanilla, expected), (&harpas, actual)].map(|(dir, observed)| {
+    [
+        (&vanilla, vanilla_port, expected),
+        (&harpas, harpas_port, actual),
+    ]
+    .map(|(dir, port, observed)| {
         let saved = read_entities(dir);
         let cow = saved_entity(&saved, "minecraft:cow");
         let Some(Nbt::List(List::Double(pos))) = cow.get("Pos") else {
             panic!("cow has no saved position in {dir:?}");
         };
-        (observed, pos.as_slice().try_into().unwrap())
+        let pos: [f64; 3] = pos.as_slice().try_into().unwrap();
+        if matches!(course, CowCourse::StepDown) {
+            assert_eq!(cow.get("OnGround"), Some(&Nbt::Byte(1)));
+            let mut server = if dir == &vanilla {
+                start_flat_vanilla(&jar, &vanilla, false)
+            } else {
+                let mut server =
+                    Server::start(OsStr::new(env!("CARGO_BIN_EXE_harpas")), &[], &harpas);
+                server.wait_for("Done (");
+                server
+            };
+            let mut client = Client::join(port, "CowHerder");
+            let cows = track_animals(&mut client, 30, "reloaded adult cow", 1, |_| true);
+            let reloaded = &cows[0];
+            assert_eq!(reloaded.y, pos[1]);
+            assert!(
+                (reloaded.x - pos[0]).hypot(reloaded.z - pos[2]) < 0.25,
+                "cow reloaded away from {pos:?} in {dir:?}: {reloaded:?}"
+            );
+            stop(&mut server);
+        }
+        (observed, pos)
     })
 }
 
@@ -493,6 +543,23 @@ fn lead_cow_up_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
                 && (y - STEP_HERDER_POSITION[1]).abs() < 0.001
                 && (4.6..5.8).contains(&x)
                 && (0.5..4.5).contains(&z)
+        },
+    )
+}
+
+fn lead_cow_down_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+    let (mut client, cow) = hold_wheat(port, reference, HERDER_POSITION);
+    assert_eq!(cow.y, -59.0);
+    let floor = HERDER_POSITION[1];
+    let mut fell = false;
+    follow_cow_until(
+        &mut client,
+        &cow,
+        "cow walks off the platform",
+        |[x, y, z]| {
+            assert!(y <= cow.y + 0.001, "cow jumped at {x}, {y}, {z}");
+            fell |= (floor + 0.01..cow.y - 0.01).contains(&y);
+            fell && (y - floor).abs() < 0.001 && (5.4..6.55).contains(&x)
         },
     )
 }

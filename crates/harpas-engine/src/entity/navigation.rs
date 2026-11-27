@@ -1,4 +1,4 @@
-//! Dry ground navigation for a cow following wheat, including jumps up single blocks.
+//! Dry ground navigation for a cow following wheat, including one-block steps up and down.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -43,14 +43,18 @@ impl CowNavigation {
         let ground = Ground { world, height };
         let from = [x, z];
         if let Some(landing) = self.landing {
-            // A cow can land with just the front of its collision box over the ledge.
-            // Finish crossing it before asking the ground search for full support again.
+            // The cow can straddle the edge before falling or when first landing after a jump.
+            // Finish crossing before asking the ground search for full support again.
+            let to = center(landing);
             if !on_ground
-                || (level == landing.y
-                    && !ground.can_walk(from, from, level)
-                    && ground.is_clear(sweep(from, center(landing), y, y + height)))
+                || (!ground.can_walk(from, from, level)
+                    && match level - landing.y {
+                        0 => ground.is_clear(sweep(from, to, y, y + height)),
+                        1 => ground.can_descend(from, to, level),
+                        _ => false,
+                    })
             {
-                return steer(from, center(landing), false);
+                return steer(from, to, false);
             }
             self.landing = None;
         }
@@ -61,7 +65,7 @@ impl CowNavigation {
         let target = [tx, tz];
         let mut goal = BlockPos {
             x: floor(tx),
-            y: floor(ty).max(level),
+            y: floor(ty),
             z: floor(tz),
         };
         // A jumping player still attracts the cow along the ground below.
@@ -101,9 +105,14 @@ impl CowNavigation {
             return steer(from, target, false);
         };
         let to = center(next);
+        let descending = next.y == level - 1;
+        if descending && !ground.can_descend(from, to, level) {
+            self.retry_in = 0;
+            return None;
+        }
         let jump =
             next.y == level + 1 && distance(from, to) < 1.0 && ground.can_jump(from, to, level);
-        if jump {
+        if jump || descending {
             self.landing = Some(next);
         }
         steer(from, to, jump)
@@ -163,10 +172,17 @@ impl Ground<'_> {
             && self.is_clear(sweep(from, to, y + 1.0, top))
     }
 
+    fn can_descend(&self, from: Point, to: Point, level: i32) -> bool {
+        let y = f64::from(level);
+        // Walk above the edge, then fall into a clear space with dry support below it.
+        self.can_walk(to, to, level - 1) && self.is_clear(sweep(from, to, y, y + self.height))
+    }
+
     fn can_reach(&self, from: Point, level: i32, next: BlockPos) -> bool {
         match next.y - level {
             0 => self.can_walk(from, center(next), level),
             1 => self.can_jump(from, center(next), level),
+            -1 => self.can_descend(from, center(next), level),
             _ => false,
         }
     }
@@ -180,6 +196,7 @@ impl Ground<'_> {
         }
         let mut previous = HashMap::from([(start, start)]);
         let mut frontier = VecDeque::from([start]);
+        let heights = level.min(goal.y)..=level.max(goal.y);
         while let Some(cell @ BlockPos { x, y, z }) = frontier.pop_front() {
             if cell == goal {
                 let mut route = vec![cell];
@@ -194,19 +211,16 @@ impl Ground<'_> {
                 if (nx - start.x).abs().max((nz - start.z).abs()) > SEARCH_RADIUS {
                     continue;
                 }
-                let mut next = BlockPos { x: nx, y, z: nz };
-                if previous.contains_key(&next) {
+                let Some(next) = [y, y + 1, y - 1]
+                    .into_iter()
+                    .filter(|y| heights.contains(y))
+                    .map(|y| BlockPos { x: nx, y, z: nz })
+                    .find(|&next| {
+                        !previous.contains_key(&next) && self.can_reach(center(cell), y, next)
+                    })
+                else {
                     continue;
-                }
-                if !self.can_walk(center(cell), center(next), y) {
-                    next.y += 1;
-                    if next.y > goal.y
-                        || previous.contains_key(&next)
-                        || !self.can_jump(center(cell), center(next), y)
-                    {
-                        continue;
-                    }
-                }
+                };
                 previous.insert(next, cell);
                 frontier.push_back(next);
             }

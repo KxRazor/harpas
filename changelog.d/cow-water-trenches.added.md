@@ -1,0 +1,1 @@
+- Saved adult cows following wheat can swim across shallow trenches of still water and climb onto the far bank.

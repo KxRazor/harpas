@@ -6754,6 +6754,41 @@ mod tests {
     }
 
     #[test]
+    fn adult_cow_swims_across_a_shallow_trench_towards_wheat() {
+        let folder = Folder::new();
+        let water = block_states().default_state("minecraft:water").unwrap();
+        for dry_detour in [false, true] {
+            let (mut world, cow, player) =
+                cow_navigation_world(&folder, -47.0, [1.5, -47.0, 1.5], |blocks, stone| {
+                    for z in 0..=4 {
+                        for x in 0..16 {
+                            let top = if (6..=8).contains(&x) && !(dry_detour && z == 4) {
+                                water
+                            } else {
+                                stone
+                            };
+                            blocks.set((z << 4) | x, top);
+                        }
+                    }
+                });
+            let mut swam = false;
+            for _ in 0..320 {
+                world.tick_entities(std::slice::from_ref(&player));
+                let [x, y, z] = world.entities.position[cow];
+                swam |= (7.0..8.0).contains(&x) && (-47.9..-47.15).contains(&y) && z < 3.5;
+                if x < 5.5 && y == -47.0 && world.entities.on_ground[cow] {
+                    break;
+                }
+            }
+            let [x, y, z] = world.entities.position[cow];
+            assert!(
+                swam && x < 5.5 && y == -47.0 && world.entities.on_ground[cow],
+                "cow did not swim across with dry detour {dry_detour}: swam {swam}, at {x}, {y}, {z}"
+            );
+        }
+    }
+
+    #[test]
     fn adult_cow_does_not_take_a_four_block_drop_towards_wheat() {
         let folder = Folder::new();
         let (mut world, cow, player) =

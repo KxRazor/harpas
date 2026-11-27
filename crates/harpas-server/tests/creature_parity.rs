@@ -389,6 +389,28 @@ fn saved_cow_crosses_a_dry_trench_matches_vanilla() {
     }
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_swims_across_a_shallow_trench_matches_vanilla() {
+    for dry_detour in [true, false] {
+        let [vanilla, harpas] = observe_saved_cow_following(
+            CowCourse::WaterTrench { dry_detour },
+            lead_cow_through_water,
+        );
+        for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
+            assert_eq!(saved[1], UPPER_HERDER_POSITION[1]);
+            assert!(
+                (0.0..6.0).contains(&saved[0]) && (0.0..5.0).contains(&saved[2]),
+                "cow did not stay on the far bank in {server} (dry detour {dry_detour}): {saved:?}"
+            );
+            assert!(
+                (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
+                "cow did not stop in {server}: switched at {at:?}, saved at {saved:?}"
+            );
+        }
+    }
+}
+
 const HERDER_POSITION: [f64; 3] = [2.5, -60.0, 1.5];
 const UPPER_HERDER_POSITION: [f64; 3] = [1.5, -59.0, 1.5];
 
@@ -398,6 +420,7 @@ enum CowCourse {
     StepUp,
     StepDown(i32),
     Trench,
+    WaterTrench { dry_detour: bool },
 }
 
 fn observe_saved_cow_following<T>(
@@ -405,7 +428,10 @@ fn observe_saved_cow_following<T>(
     lead: impl Fn(u16, Option<&mut Server>) -> T,
 ) -> [(T, [f64; 3]); 2] {
     let Reference { jar, eula } = Reference::required();
-    let check_reload = matches!(course, CowCourse::StepDown(_) | CowCourse::Trench);
+    let check_reload = matches!(
+        course,
+        CowCourse::StepDown(_) | CowCourse::Trench | CowCourse::WaterTrench { .. }
+    );
     let (name, north_edge, terrain, cow_y) = match course {
         CowCourse::Flat => ("cow-temptation", 0, String::new(), -60),
         // It is much shorter to go around the south end than the north end.
@@ -431,6 +457,23 @@ fn observe_saved_cow_following<T>(
             "cow-uneven-terrain",
             0,
             "fill 0 -60 0 5 -60 4 minecraft:stone\nfill 9 -60 0 15 -60 4 minecraft:stone\n".into(),
+            -59,
+        ),
+        CowCourse::WaterTrench { dry_detour } => (
+            "cow-water-trench",
+            -1,
+            format!(
+                "fill 0 -60 0 5 -60 4 minecraft:stone\n\
+                 fill 9 -60 0 15 -60 4 minecraft:stone\n\
+                 fill 0 -60 -1 15 -57 -1 minecraft:stone\n\
+                 fill 0 -60 5 15 -57 5 minecraft:stone\n\
+                 fill 6 -60 0 8 -60 4 minecraft:water\n{}",
+                if dry_detour {
+                    "fill 6 -60 4 8 -60 4 minecraft:stone\n"
+                } else {
+                    ""
+                }
+            ),
             -59,
         ),
     };
@@ -654,6 +697,33 @@ fn lead_cow_across_trench(port: u16, reference: Option<&mut Server>) -> [f64; 3]
                 && (0.5..4.5).contains(&z)
         },
     )
+}
+
+fn lead_cow_through_water(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+    let server = if reference.is_some() {
+        "vanilla"
+    } else {
+        "Harpas"
+    };
+    let (mut client, cow) = hold_wheat(port, reference, UPPER_HERDER_POSITION);
+    let bank = UPPER_HERDER_POSITION[1];
+    assert_eq!(cow.y, bank);
+    let mut swam = false;
+    let at = follow_cow_until(
+        &mut client,
+        &cow,
+        &format!("cow swims across the trench and reaches the far bank in {server}"),
+        |[x, y, z]| {
+            // Feet above the bottom and below the water's surface, away from either bank.
+            swam |= (7.0..8.0).contains(&x)
+                && (bank - 0.9..bank - 0.15).contains(&y)
+                && (0.5..3.5).contains(&z);
+            // Let the whole cow reach the bank before it can resume its idle movement.
+            (y - bank).abs() < 0.001 && (4.6..5.1).contains(&x)
+        },
+    );
+    assert!(swam, "cow did not swim across in {server}: {at:?}");
+    at
 }
 
 fn follow_cow_until(

@@ -1,88 +1,117 @@
-//! Same-level, dry ground navigation for a cow following wheat. Jumps, drops and path costs for
-//! terrain such as water are not modeled yet.
+//! Dry ground navigation for a cow following wheat, including jumps up single blocks.
 
-use std::collections::{HashMap, VecDeque, hash_map::Entry};
+use std::collections::{HashMap, VecDeque};
 
 use harpas_core::block_behavior::{Face, block_behavior};
 
-use super::{ANIMAL_WIDTH, floor};
+use super::{ANIMAL_WIDTH, Aabb, floor};
 use crate::block::BlockPos;
 use crate::fluid::FluidState;
 use crate::world::World;
 
-type Cell = [i32; 2];
 type Point = [f64; 2];
 
 const SEARCH_RADIUS: i32 = 12;
 const REPATH_INTERVAL: u8 = 10;
+/// Clearance for the peak of the cow's normal jump from level ground.
+const JUMP_CLEARANCE: f64 = 1.26;
+
+pub(super) struct CowSteering {
+    pub(super) direction: Point,
+    pub(super) jump: bool,
+}
 
 /// Transient waypoints, in reverse order. `None` means no route, and an empty route means direct steering.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct CowNavigation {
-    route: Option<Vec<Point>>,
+    route: Option<Vec<BlockPos>>,
     goal: Option<BlockPos>,
+    landing: Option<BlockPos>,
     retry_in: u8,
 }
 
 impl CowNavigation {
-    pub(super) fn direction(
+    pub(super) fn steer(
         &mut self,
         world: &World,
         [x, y, z]: [f64; 3],
-        target @ [tx, tz]: Point,
+        [tx, ty, tz]: [f64; 3],
         height: f64,
-    ) -> Option<Point> {
+        on_ground: bool,
+    ) -> Option<CowSteering> {
         let level = floor(y + 1.0e-7);
-        if (y - f64::from(level)).abs() > 1.0e-7 {
+        let ground = Ground { world, height };
+        let from = [x, z];
+        if let Some(landing) = self.landing {
+            // A cow can land with just the front of its collision box over the ledge.
+            // Finish crossing it before asking the ground search for full support again.
+            if !on_ground
+                || (level == landing.y
+                    && !ground.can_walk(from, from, level)
+                    && ground.is_clear(sweep(from, center(landing), y, y + height)))
+            {
+                return steer(from, center(landing), false);
+            }
+            self.landing = None;
+        }
+        if !on_ground || (y - f64::from(level)).abs() > 1.0e-7 {
             *self = Self::default();
             return None;
         }
-        let ground = Ground {
-            world,
-            level,
-            height,
-        };
-        let from = [x, z];
-        let goal = BlockPos {
+        let target = [tx, tz];
+        let mut goal = BlockPos {
             x: floor(tx),
-            y: level,
+            y: floor(ty).max(level),
             z: floor(tz),
         };
+        // A jumping player still attracts the cow along the ground below.
+        if goal.y > level && !ground.can_walk(center(goal), center(goal), goal.y) {
+            goal.y = level;
+        }
         self.retry_in = self.retry_in.saturating_sub(1);
         if self.goal != Some(goal) || self.retry_in == 0 {
             // Prefer the player over the block centers whenever the straight approach is clear.
-            if ground.can_walk(from, target) {
+            if goal.y == level && ground.can_walk(from, target, level) {
                 self.route = Some(Vec::new());
             } else if self.goal != Some(goal)
                 || self
                     .route
                     .as_ref()
                     .and_then(|route| route.last())
-                    .is_none_or(|&next| !ground.can_walk(from, next))
+                    .is_none_or(|&next| !ground.can_reach(from, level, next))
             {
-                self.route = ground.detour(from, [goal.x, goal.z]);
+                self.route = ground.detour(from, level, goal);
             }
             self.goal = Some(goal);
             self.retry_in = REPATH_INTERVAL;
         }
 
         let route = self.route.as_mut()?;
-        while let [.., after, next] = route.as_slice() {
+        while let &[.., after, next] = route.as_slice() {
             // Do not cut a corner until the cow's whole width fits in the next corridor.
-            if distance(from, *next) > 0.25 || !ground.can_walk(from, *after) {
+            if next.y != level
+                || distance(from, center(next)) > 0.25
+                || !ground.can_reach(from, level, after)
+            {
                 break;
             }
             route.pop();
         }
-        let [nx, nz] = route.last().copied().unwrap_or(target);
-        let length = distance(from, [nx, nz]);
-        (length > 0.0).then(|| [(nx - x) / length, (nz - z) / length])
+        let Some(&next) = route.last() else {
+            return steer(from, target, false);
+        };
+        let to = center(next);
+        let jump =
+            next.y == level + 1 && distance(from, to) < 1.0 && ground.can_jump(from, to, level);
+        if jump {
+            self.landing = Some(next);
+        }
+        steer(from, to, jump)
     }
 }
 
 struct Ground<'w> {
     world: &'w World,
-    level: i32,
     height: f64,
 }
 
@@ -90,19 +119,13 @@ impl Ground<'_> {
     /// A conservative sweep of the cow's box: every column under the rectangle must be supported,
     /// dry and loaded, and the box must have room for the cow's whole height. For a cardinal edge
     /// this rectangle is the actual sweep; diagonal shortcuts can reject more than necessary.
-    fn can_walk(&self, [x, z]: Point, [tx, tz]: Point) -> bool {
-        let half = ANIMAL_WIDTH / 2.0 - 1.0e-7;
-        let y = f64::from(self.level);
-        let min = [x.min(tx) - half, y, z.min(tz) - half];
-        let max = [x.max(tx) + half, y + self.height, z.max(tz) + half];
+    fn can_walk(&self, from: Point, to: Point, level: i32) -> bool {
+        let y = f64::from(level);
+        let area @ [min, max] = sweep(from, to, y, y + self.height);
         let behavior = block_behavior();
         for x in floor(min[0])..max[0].ceil() as i32 {
             for z in floor(min[2])..max[2].ceil() as i32 {
-                let below = BlockPos {
-                    x,
-                    y: self.level - 1,
-                    z,
-                };
+                let below = BlockPos { x, y: level - 1, z };
                 if !self
                     .world
                     .block_state(below)
@@ -110,7 +133,15 @@ impl Ground<'_> {
                 {
                     return false;
                 }
-                for y in self.level..max[1].ceil() as i32 {
+            }
+        }
+        self.is_clear(area)
+    }
+
+    fn is_clear(&self, area @ [min, max]: Aabb) -> bool {
+        for x in floor(min[0])..max[0].ceil() as i32 {
+            for z in floor(min[2])..max[2].ceil() as i32 {
+                for y in floor(min[1])..max[1].ceil() as i32 {
                     if self
                         .world
                         .block_state(BlockPos { x, y, z })
@@ -121,43 +152,87 @@ impl Ground<'_> {
                 }
             }
         }
-        !self.world.collides([min, max])
+        !self.world.collides(area)
     }
 
-    /// Find a shortest cardinal detour on the current level, bounded around the cow's starting cell.
-    fn detour(&self, from: Point, goal: Cell) -> Option<Vec<Point>> {
-        let start = from.map(floor);
-        if !self.can_walk(from, center(start)) {
+    fn can_jump(&self, from: Point, to: Point, level: i32) -> bool {
+        let y = f64::from(level);
+        let top = y + JUMP_CLEARANCE + self.height;
+        self.can_walk(to, to, level + 1)
+            && self.is_clear(sweep(from, from, y, top))
+            && self.is_clear(sweep(from, to, y + 1.0, top))
+    }
+
+    fn can_reach(&self, from: Point, level: i32, next: BlockPos) -> bool {
+        match next.y - level {
+            0 => self.can_walk(from, center(next), level),
+            1 => self.can_jump(from, center(next), level),
+            _ => false,
+        }
+    }
+
+    /// Find a shortest cardinal route on dry ground, bounded around the starting cell.
+    fn detour(&self, from: Point, level: i32, goal: BlockPos) -> Option<Vec<BlockPos>> {
+        let [x, z] = from.map(floor);
+        let start = BlockPos { x, y: level, z };
+        if !self.can_walk(from, center(start), level) {
             return None;
         }
         let mut previous = HashMap::from([(start, start)]);
         let mut frontier = VecDeque::from([start]);
-        while let Some(cell @ [x, z]) = frontier.pop_front() {
+        while let Some(cell @ BlockPos { x, y, z }) = frontier.pop_front() {
             if cell == goal {
-                let mut route = vec![center(cell)];
+                let mut route = vec![cell];
                 let mut cell = cell;
                 while cell != start {
                     cell = previous[&cell];
-                    route.push(center(cell));
+                    route.push(cell);
                 }
                 return Some(route);
             }
-            for next in [[x - 1, z], [x + 1, z], [x, z - 1], [x, z + 1]] {
-                if (next[0] - start[0]).abs().max((next[1] - start[1]).abs()) <= SEARCH_RADIUS
-                    && let Entry::Vacant(parent) = previous.entry(next)
-                    && self.can_walk(center(cell), center(next))
-                {
-                    parent.insert(cell);
-                    frontier.push_back(next);
+            for [nx, nz] in [[x - 1, z], [x + 1, z], [x, z - 1], [x, z + 1]] {
+                if (nx - start.x).abs().max((nz - start.z).abs()) > SEARCH_RADIUS {
+                    continue;
                 }
+                let mut next = BlockPos { x: nx, y, z: nz };
+                if previous.contains_key(&next) {
+                    continue;
+                }
+                if !self.can_walk(center(cell), center(next), y) {
+                    next.y += 1;
+                    if next.y > goal.y
+                        || previous.contains_key(&next)
+                        || !self.can_jump(center(cell), center(next), y)
+                    {
+                        continue;
+                    }
+                }
+                previous.insert(next, cell);
+                frontier.push_back(next);
             }
         }
         None
     }
 }
 
-fn center(cell: Cell) -> Point {
-    cell.map(|n| f64::from(n) + 0.5)
+fn sweep([x, z]: Point, [tx, tz]: Point, bottom: f64, top: f64) -> Aabb {
+    let half = ANIMAL_WIDTH / 2.0 - 1.0e-7;
+    [
+        [x.min(tx) - half, bottom, z.min(tz) - half],
+        [x.max(tx) + half, top, z.max(tz) + half],
+    ]
+}
+
+fn center(pos: BlockPos) -> Point {
+    [f64::from(pos.x) + 0.5, f64::from(pos.z) + 0.5]
+}
+
+fn steer(from @ [x, z]: Point, to @ [tx, tz]: Point, jump: bool) -> Option<CowSteering> {
+    let length = distance(from, to);
+    (length > 0.0).then(|| CowSteering {
+        direction: [(tx - x) / length, (tz - z) / length],
+        jump,
+    })
 }
 
 fn distance([x, z]: Point, [tx, tz]: Point) -> f64 {

@@ -26,7 +26,7 @@ use crate::world::{ChunkPos, ChunkState, World};
 
 mod navigation;
 
-use navigation::CowNavigation;
+use navigation::{CowNavigation, CowSteering};
 
 /// An entity's handle: its slot and the slot's generation, which changes when the slot is reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,7 +70,7 @@ enum CowTemptation {
 
 impl CowTemptation {
     /// Selects the nearest player holding wheat within the default temptation range.
-    fn target(&mut self, position: [f64; 3], players: &[PlayerState]) -> Option<[f64; 2]> {
+    fn target(&mut self, position: [f64; 3], players: &[PlayerState]) -> Option<[f64; 3]> {
         const RANGE_SQUARED: f64 = 10.0 * 10.0;
         const STOP_DISTANCE_SQUARED: f64 = 2.5 * 2.5;
         const RESTART_DELAY: u8 = 100;
@@ -100,7 +100,7 @@ impl CowTemptation {
                         let held = &player.inventory.slots[player.inventory.hand_slot(off_hand)];
                         !held.is_empty() && held.name() == Some("minecraft:wheat")
                     }))
-                .then_some((distance, [p.x, p.z]))
+                .then_some((distance, [p.x, p.y, p.z]))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
         let Some((distance, target)) = target else {
@@ -869,8 +869,8 @@ impl World {
             } else {
                 (CowNavigation::default(), None)
             };
-        let direction = if let Some(target) = target.filter(|_| on_ground) {
-            navigation.direction(self, before, target, height)
+        let steering = if let Some(target) = target {
+            navigation.steer(self, before, target, height, on_ground)
         } else {
             navigation = CowNavigation::default();
             None
@@ -891,11 +891,21 @@ impl World {
         }
         self.entities.old_position[i] = before;
         self.entities.tick_count[i] += 1;
-        if let Some([dx, dz]) = direction {
-            // Move control sets both the forward input and the travel speed from the goal's
-            // modifier and the cow's default movement speed. Ground friction scales the latter.
-            let speed = 1.25_f32 * 0.2;
-            let acceleration = speed * speed * (0.216_000_02 / (grip * grip * grip));
+        if let Some(CowSteering {
+            direction: [dx, dz],
+            jump,
+        }) = steering
+        {
+            if jump {
+                y = f64::from(0.42_f32);
+            }
+            let acceleration = if on_ground {
+                // Forward input and travel speed both come from the goal; friction scales the latter.
+                let speed = 1.25_f32 * 0.2;
+                speed * speed * (0.216_000_02 / (grip * grip * grip))
+            } else {
+                1.25_f32 * 0.2 * 0.02
+            };
             x += dx * f64::from(acceleration);
             z += dz * f64::from(acceleration);
         }
@@ -913,7 +923,11 @@ impl World {
             unreachable!()
         };
         animal.navigation = navigation;
-        if let Some([dx, dz]) = direction {
+        if let Some(CowSteering {
+            direction: [dx, dz],
+            ..
+        }) = steering
+        {
             animal.rotation[0] = (-dx).atan2(dz).to_degrees() as f32;
         }
         let fall_distance = animal.fall_distance;

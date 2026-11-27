@@ -286,7 +286,7 @@ fn saved_cow_follows_wheat_matches_vanilla() {
     let [
         ((vanilla_switch, vanilla_speed), vanilla_pos),
         ((harpas_switch, harpas_speed), harpas_pos),
-    ] = observe_saved_cow_following(false, lead_cow);
+    ] = observe_saved_cow_following(CowCourse::Flat, lead_cow);
     // The position and velocity packets can sample different ticks of the approach.
     assert!(vanilla_speed > 0.06);
     assert!(
@@ -308,7 +308,7 @@ fn saved_cow_follows_wheat_matches_vanilla() {
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_cow_walks_around_a_wall_matches_vanilla() {
-    let [vanilla, harpas] = observe_saved_cow_following(true, lead_cow_around_wall);
+    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::Wall, lead_cow_around_wall);
     for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
         assert_eq!(saved[1], HERDER_POSITION[1]);
         assert!(
@@ -322,30 +322,59 @@ fn saved_cow_walks_around_a_wall_matches_vanilla() {
     }
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_jumps_up_a_step_matches_vanilla() {
+    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::Step, lead_cow_up_step);
+    for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
+        assert_eq!(saved[1], STEP_HERDER_POSITION[1]);
+        assert!(
+            saved[0] < 5.8,
+            "cow left the platform in {server}: {saved:?}"
+        );
+        assert!(
+            (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
+            "cow did not stop in {server}: switched at {at:?}, saved at {saved:?}"
+        );
+    }
+}
+
 const HERDER_POSITION: [f64; 3] = [2.5, -60.0, 1.5];
+const STEP_HERDER_POSITION: [f64; 3] = [1.5, -59.0, 1.5];
+
+enum CowCourse {
+    Flat,
+    Wall,
+    Step,
+}
 
 fn observe_saved_cow_following<T>(
-    wall: bool,
+    course: CowCourse,
     lead: impl Fn(u16, Option<&mut Server>) -> T,
 ) -> [(T, [f64; 3]); 2] {
     let Reference { jar, eula } = Reference::required();
-    let folder = Folder::new(if wall {
-        "cow-navigation"
-    } else {
-        "cow-temptation"
-    });
+    let (name, north_edge, terrain) = match course {
+        CowCourse::Flat => ("cow-temptation", 0, ""),
+        // It is much shorter to go around the south end than the north end.
+        CowCourse::Wall => (
+            "cow-navigation",
+            -4,
+            "fill 6 -60 -4 6 -59 2 minecraft:stone\n",
+        ),
+        CowCourse::Step => ("cow-step", 0, "fill 0 -60 0 6 -60 4 minecraft:stone\n"),
+    };
+    let folder = Folder::new(name);
     let vanilla = folder.0.join("vanilla");
     let harpas = folder.0.join("harpas");
     let [vanilla_port, harpas_port] = flat_survival_servers(&vanilla, &harpas, &eula, "normal");
     let mut reference = start_flat_vanilla(&jar, &vanilla, false);
     let console = reference.child.stdin.as_mut().unwrap();
-    let north_edge = if wall { -4 } else { 0 };
-    writeln!(console, "forceload add 0 {north_edge} 0 0\ntick freeze").unwrap();
-    if wall {
-        // It is much shorter to go around the south end than the north end.
-        writeln!(console, "fill 6 -60 -4 6 -59 2 minecraft:stone").unwrap();
-    }
-    writeln!(console, "summon minecraft:cow 10.5 -60 1.5\nsave-all flush").unwrap();
+    writeln!(
+        console,
+        "forceload add 0 {north_edge} 0 0\ntick freeze\n{terrain}\
+         summon minecraft:cow 10.5 -60 1.5\nsave-all flush"
+    )
+    .unwrap();
     reference.wait_for("Saved the game");
     let entities = "world/dimensions/minecraft/overworld/entities";
     let read_entities = |dir: &Path| {
@@ -388,13 +417,14 @@ fn observe_saved_cow_following<T>(
 fn hold_wheat(
     port: u16,
     reference: Option<&mut Server>,
+    herder: [f64; 3],
 ) -> (Client, play::clientbound::SpawnEntity) {
     let mut client = Client::join(port, "CowHerder");
     client.stream.set_nodelay(true).unwrap();
     let cow = track_animals(&mut client, 30, "saved adult cow", 1, |_| true)
         .pop()
         .unwrap();
-    move_player(&mut client, HERDER_POSITION, true);
+    move_player(&mut client, herder, true);
     play_packet(&mut client, play::serverbound::SetHeldItem { slot: 1 });
     if let Some(reference) = reference {
         writeln!(reference.child.stdin.as_mut().unwrap(), "tick unfreeze").unwrap();
@@ -403,7 +433,7 @@ fn hold_wheat(
 }
 
 fn lead_cow(port: u16, reference: Option<&mut Server>) -> (f64, f64) {
-    let (mut client, cow) = hold_wheat(port, reference);
+    let (mut client, cow) = hold_wheat(port, reference, HERDER_POSITION);
     let mut x = cow.x;
     let mut head_yaw = cow.head_yaw;
     let mut westward_speed = 0.0_f64;
@@ -435,10 +465,46 @@ fn lead_cow(port: u16, reference: Option<&mut Server>) -> (f64, f64) {
 }
 
 fn lead_cow_around_wall(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
-    let (mut client, cow) = hold_wheat(port, reference);
-    let mut at = [cow.x, cow.y, cow.z];
+    let (mut client, cow) = hold_wheat(port, reference, HERDER_POSITION);
     let mut rounded_end = false;
-    client.matching("cow rounds the wall to approach the wheat", |packet| {
+    follow_cow_until(&mut client, &cow, "cow rounds the wall", |[x, y, z]| {
+        assert!(
+            (y - cow.y).abs() < 0.001,
+            "cow left the ground at {x}, {y}, {z}"
+        );
+        if (5.56..7.44).contains(&x) {
+            assert!(z >= 3.44, "cow crossed the wall at {x}, {y}, {z}");
+            rounded_end = true;
+        }
+        rounded_end && x < 5.4 && (x - HERDER_POSITION[0]).hypot(z - HERDER_POSITION[2]) > 3.0
+    })
+}
+
+fn lead_cow_up_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+    let (mut client, cow) = hold_wheat(port, reference, STEP_HERDER_POSITION);
+    let mut jumped = false;
+    follow_cow_until(
+        &mut client,
+        &cow,
+        "cow jumps onto the platform",
+        |[x, y, z]| {
+            jumped |= y > STEP_HERDER_POSITION[1] + 0.05;
+            jumped
+                && (y - STEP_HERDER_POSITION[1]).abs() < 0.001
+                && (4.6..5.8).contains(&x)
+                && (0.5..4.5).contains(&z)
+        },
+    )
+}
+
+fn follow_cow_until(
+    client: &mut Client,
+    cow: &play::clientbound::SpawnEntity,
+    expectation: &str,
+    mut reached: impl FnMut([f64; 3]) -> bool,
+) -> [f64; 3] {
+    let mut at = [cow.x, cow.y, cow.z];
+    client.matching(expectation, |packet| {
         let delta = match packet {
             Packet::EntityPositionSync(pos) if pos.entity_id == cow.entity_id => {
                 at = [pos.x, pos.y, pos.z];
@@ -455,17 +521,9 @@ fn lead_cow_around_wall(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
         for (coord, change) in at.iter_mut().zip(delta) {
             *coord += f64::from(change) / 4096.0;
         }
-        let [x, y, z] = at;
-        assert!((y - cow.y).abs() < 0.001, "cow left the ground at {at:?}");
-        if (5.56..7.44).contains(&x) {
-            assert!(z >= 3.44, "cow crossed the wall at {at:?}");
-            rounded_end = true;
-        }
-        (rounded_end && x < 5.4).then_some(())
+        reached(at).then_some(())
     });
-    let [x, _, z] = at;
-    assert!((x - HERDER_POSITION[0]).hypot(z - HERDER_POSITION[2]) > 3.0);
-    play_packet(&mut client, play::serverbound::SetHeldItem { slot: 0 });
+    play_packet(client, play::serverbound::SetHeldItem { slot: 0 });
     std::thread::sleep(Duration::from_millis(650));
     at
 }

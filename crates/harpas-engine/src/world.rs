@@ -6516,15 +6516,17 @@ mod tests {
         assert_eq!(world.entities.position[no_ai], frozen);
     }
 
-    #[test]
-    fn adult_cow_walks_around_a_wall_towards_wheat() {
+    fn cow_navigation_world(
+        folder: &Folder,
+        [x, y, z]: [f64; 3],
+        terrain: impl FnOnce(&mut PalettedContainer, u32),
+    ) -> (World, usize, crate::player::PlayerState) {
         use crate::entity::Animal;
         use crate::inventory::{HOTBAR, ItemStack};
         use crate::player::{AnimalSpecies, AnimalVariant, PlayerState, Position, output_channel};
 
-        let folder = Folder::new();
         let chunk = ChunkPos { x: 0, z: 0 };
-        save(&folder, &[(chunk, DATA_VERSION)]);
+        save(folder, &[(chunk, DATA_VERSION)]);
         let mut world = World::open(&folder.0, BIOMES).unwrap();
         load_chunks(&mut world, &[chunk]);
         let states = block_states();
@@ -6532,11 +6534,7 @@ mod tests {
         let air = states.default_state("minecraft:air").unwrap();
         let mut blocks =
             PalettedContainer::filled(Strategy::block_states(states.global_bits()), air);
-        for z in 0..=2 {
-            for y in 0..=1 {
-                blocks.set((y << 8) | (z << 4) | 6, stone);
-            }
-        }
+        terrain(&mut blocks, stone);
         world.chunk_mut(chunk).unwrap().sections.push(ChunkSection {
             y: -3,
             section: Some(Section::new(
@@ -6561,9 +6559,9 @@ mod tests {
         let mut player = PlayerState::new(102, profile(), 2, false, output);
         player.data_ready = true;
         player.player.position = Position {
-            x: 2.5,
-            y: -48.0,
-            z: 1.5,
+            x,
+            y,
+            z,
             ..Default::default()
         };
         player.inventory.slots[HOTBAR] = ItemStack {
@@ -6571,6 +6569,20 @@ mod tests {
             count: 1,
             ..ItemStack::empty()
         };
+        (world, cow, player)
+    }
+
+    #[test]
+    fn adult_cow_walks_around_a_wall_towards_wheat() {
+        let folder = Folder::new();
+        let (mut world, cow, player) =
+            cow_navigation_world(&folder, [2.5, -48.0, 1.5], |blocks, stone| {
+                for z in 0..=2 {
+                    for y in 0..=1 {
+                        blocks.set((y << 8) | (z << 4) | 6, stone);
+                    }
+                }
+            });
         let mut players = [player];
         let mut cleared_wall = false;
         for _ in 0..140 {
@@ -6596,6 +6608,63 @@ mod tests {
             (sx - x).hypot(sz - z) < 0.3,
             "cow kept following after the wheat was hidden"
         );
+    }
+
+    #[test]
+    fn adult_cow_jumps_up_a_dry_step_towards_wheat() {
+        let folder = Folder::new();
+        let (mut world, cow, player) =
+            cow_navigation_world(&folder, [1.5, -47.0, 1.5], |blocks, stone| {
+                for z in 0..=4 {
+                    for x in 0..=6 {
+                        blocks.set((z << 4) | x, stone);
+                    }
+                }
+            });
+        let mut players = [player];
+        let mut jumped = false;
+        for _ in 0..100 {
+            world.tick_entities(&players);
+            let [x, y, _] = world.entities.position[cow];
+            jumped |= y > -47.0;
+            if x < 5.8 && world.entities.on_ground[cow] {
+                break;
+            }
+        }
+        let [x, y, z] = world.entities.position[cow];
+        assert!(
+            jumped && x < 5.8 && y == -47.0,
+            "cow did not reach the platform at {x}, {y}, {z}"
+        );
+        assert!((x - 1.5).hypot(z - 1.5) > 3.0);
+        players[0].inventory.selected = 1;
+        for _ in 0..30 {
+            world.tick_entities(&players);
+        }
+        let [sx, sy, sz] = world.entities.position[cow];
+        assert_eq!(sy, -47.0);
+        assert!(
+            (sx - x).hypot(sz - z) < 0.3,
+            "cow kept following without wheat"
+        );
+    }
+
+    #[test]
+    fn adult_cow_needs_headroom_to_jump_up_a_step() {
+        let folder = Folder::new();
+        let (mut world, cow, player) =
+            cow_navigation_world(&folder, [1.5, -47.0, 1.5], |blocks, stone| {
+                for z in 0..16 {
+                    for x in 0..=6 {
+                        blocks.set((z << 4) | x, stone);
+                    }
+                    blocks.set((2 << 8) | (z << 4) | 7, stone);
+                }
+            });
+        for _ in 0..100 {
+            world.tick_entities(std::slice::from_ref(&player));
+            assert_eq!(world.entities.position[cow][1], -48.0);
+        }
     }
 
     #[test]

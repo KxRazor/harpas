@@ -6708,6 +6708,47 @@ mod tests {
     }
 
     #[test]
+    fn adult_cow_crosses_a_dry_trench_towards_wheat() {
+        let folder = Folder::new();
+        let (mut world, cow, player) =
+            cow_navigation_world(&folder, -47.0, [1.5, -47.0, 1.5], |blocks, stone| {
+                for z in 0..=4 {
+                    for x in (0..=5).chain(9..16) {
+                        blocks.set((z << 4) | x, stone);
+                    }
+                }
+            });
+        let mut players = [player];
+        let mut reached_bottom = false;
+        let mut jumped = false;
+        for _ in 0..140 {
+            world.tick_entities(&players);
+            let [x, y, _] = world.entities.position[cow];
+            reached_bottom |= y == -48.0 && world.entities.on_ground[cow];
+            jumped |= reached_bottom && y > -47.0;
+            if x < 5.4 && y == -47.0 && world.entities.on_ground[cow] {
+                break;
+            }
+        }
+        let [x, y, z] = world.entities.position[cow];
+        assert!(
+            jumped && x < 5.4 && y == -47.0 && world.entities.on_ground[cow],
+            "cow did not cross the trench: reached bottom {reached_bottom}, stopped at {x}, {y}, {z}"
+        );
+        assert!((x - 1.5).hypot(z - 1.5) > 3.0);
+        players[0].inventory.selected = 1;
+        for _ in 0..30 {
+            world.tick_entities(&players);
+        }
+        let [sx, sy, sz] = world.entities.position[cow];
+        assert_eq!(sy, -47.0);
+        assert!(
+            (sx - x).hypot(sz - z) < 0.3,
+            "cow kept following without wheat"
+        );
+    }
+
+    #[test]
     fn adult_cow_does_not_take_a_two_block_drop_towards_wheat() {
         let folder = Folder::new();
         let (mut world, cow, player) =

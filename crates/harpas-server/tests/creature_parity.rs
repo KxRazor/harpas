@@ -327,7 +327,7 @@ fn saved_cow_walks_around_a_wall_matches_vanilla() {
 fn saved_cow_jumps_up_a_step_matches_vanilla() {
     let [vanilla, harpas] = observe_saved_cow_following(CowCourse::StepUp, lead_cow_up_step);
     for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
-        assert_eq!(saved[1], STEP_HERDER_POSITION[1]);
+        assert_eq!(saved[1], UPPER_HERDER_POSITION[1]);
         assert!(
             saved[0] < 5.8,
             "cow left the platform in {server}: {saved:?}"
@@ -356,14 +356,32 @@ fn saved_cow_walks_down_a_step_matches_vanilla() {
     }
 }
 
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn saved_cow_crosses_a_dry_trench_matches_vanilla() {
+    let [vanilla, harpas] = observe_saved_cow_following(CowCourse::Trench, lead_cow_across_trench);
+    for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
+        assert_eq!(saved[1], UPPER_HERDER_POSITION[1]);
+        assert!(
+            saved[0] < 5.55 && (0.5..4.5).contains(&saved[2]),
+            "cow did not stay on the far bank in {server}: {saved:?}"
+        );
+        assert!(
+            (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
+            "cow did not stop in {server}: switched at {at:?}, saved at {saved:?}"
+        );
+    }
+}
+
 const HERDER_POSITION: [f64; 3] = [2.5, -60.0, 1.5];
-const STEP_HERDER_POSITION: [f64; 3] = [1.5, -59.0, 1.5];
+const UPPER_HERDER_POSITION: [f64; 3] = [1.5, -59.0, 1.5];
 
 enum CowCourse {
     Flat,
     Wall,
     StepUp,
     StepDown,
+    Trench,
 }
 
 fn observe_saved_cow_following<T>(
@@ -371,6 +389,7 @@ fn observe_saved_cow_following<T>(
     lead: impl Fn(u16, Option<&mut Server>) -> T,
 ) -> [(T, [f64; 3]); 2] {
     let Reference { jar, eula } = Reference::required();
+    let check_reload = matches!(course, CowCourse::StepDown | CowCourse::Trench);
     let (name, north_edge, terrain, cow_y) = match course {
         CowCourse::Flat => ("cow-temptation", 0, "", -60),
         // It is much shorter to go around the south end than the north end.
@@ -385,6 +404,12 @@ fn observe_saved_cow_following<T>(
             "cow-step-descent",
             0,
             "fill 7 -60 0 15 -60 4 minecraft:stone\n",
+            -59,
+        ),
+        CowCourse::Trench => (
+            "cow-uneven-terrain",
+            0,
+            "fill 0 -60 0 5 -60 4 minecraft:stone\nfill 9 -60 0 15 -60 4 minecraft:stone\n",
             -59,
         ),
     };
@@ -425,6 +450,14 @@ fn observe_saved_cow_following<T>(
         harpas_anvil::write_player(&dir.join("world"), offline_uuid("CowHerder"), &player).unwrap();
     }
     let expected = lead(vanilla_port, Some(&mut reference));
+    if check_reload {
+        // Leave the cow's chunk unloaded at startup so it cannot wander before we freeze ticks.
+        writeln!(
+            reference.child.stdin.as_mut().unwrap(),
+            "tick freeze\nforceload remove all"
+        )
+        .unwrap();
+    }
     stop(&mut reference);
     let mut server = start_flat_harpas(&jar, &vanilla, &harpas);
     let actual = lead(harpas_port, None);
@@ -440,10 +473,17 @@ fn observe_saved_cow_following<T>(
             panic!("cow has no saved position in {dir:?}");
         };
         let pos: [f64; 3] = pos.as_slice().try_into().unwrap();
-        if matches!(course, CowCourse::StepDown) {
+        if check_reload {
             assert_eq!(cow.get("OnGround"), Some(&Nbt::Byte(1)));
             let mut server = if dir == &vanilla {
-                start_flat_vanilla(&jar, &vanilla, false)
+                let mut reference = start_flat_vanilla(&jar, &vanilla, false);
+                writeln!(
+                    reference.child.stdin.as_mut().unwrap(),
+                    "tick freeze\nforceload add 0 0\nsave-all flush"
+                )
+                .unwrap();
+                reference.wait_for("Saved the game");
+                reference
             } else {
                 let mut server =
                     Server::start(OsStr::new(env!("CARGO_BIN_EXE_harpas")), &[], &harpas);
@@ -531,16 +571,16 @@ fn lead_cow_around_wall(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
 }
 
 fn lead_cow_up_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
-    let (mut client, cow) = hold_wheat(port, reference, STEP_HERDER_POSITION);
+    let (mut client, cow) = hold_wheat(port, reference, UPPER_HERDER_POSITION);
     let mut jumped = false;
     follow_cow_until(
         &mut client,
         &cow,
         "cow jumps onto the platform",
         |[x, y, z]| {
-            jumped |= y > STEP_HERDER_POSITION[1] + 0.05;
+            jumped |= y > UPPER_HERDER_POSITION[1] + 0.05;
             jumped
-                && (y - STEP_HERDER_POSITION[1]).abs() < 0.001
+                && (y - UPPER_HERDER_POSITION[1]).abs() < 0.001
                 && (4.6..5.8).contains(&x)
                 && (0.5..4.5).contains(&z)
         },
@@ -560,6 +600,27 @@ fn lead_cow_down_step(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
             assert!(y <= cow.y + 0.001, "cow jumped at {x}, {y}, {z}");
             fell |= (floor + 0.01..cow.y - 0.01).contains(&y);
             fell && (y - floor).abs() < 0.001 && (5.4..6.55).contains(&x)
+        },
+    )
+}
+
+fn lead_cow_across_trench(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+    let (mut client, cow) = hold_wheat(port, reference, UPPER_HERDER_POSITION);
+    let bank = UPPER_HERDER_POSITION[1];
+    assert_eq!(cow.y, bank);
+    let mut reached_bottom = false;
+    let mut jumped = false;
+    follow_cow_until(
+        &mut client,
+        &cow,
+        "cow descends into the trench and jumps onto the far bank",
+        |[x, y, z]| {
+            reached_bottom |= (y - (bank - 1.0)).abs() < 0.001 && (6.44..8.56).contains(&x);
+            jumped |= reached_bottom && y > bank + 0.05;
+            jumped
+                && (y - bank).abs() < 0.001
+                && (4.6..5.55).contains(&x)
+                && (0.5..4.5).contains(&z)
         },
     )
 }

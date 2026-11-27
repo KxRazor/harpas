@@ -1,0 +1,1 @@
+- Saved adult cows following wheat can cross dry one-block-deep trenches between banks at the same height.

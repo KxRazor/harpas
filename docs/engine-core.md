@@ -289,11 +289,11 @@ workers handle [entity regions](world.md#entity-regions).
 The first animal goal runs during the cow's entity tick, before dry movement. A living adult cow with AI
 selects the nearest eligible player holding wheat in either hand. On open, flat ground it turns and steers
 toward the player, stops accelerating when close enough or when the wheat is put away, and coasts under
-normal drag. When the straight approach is blocked, a bounded search can find a detour over loaded, dry,
-level ground with clearance for the cow's collision box. It does not model vanilla's full path evaluator or
-waypoint timing. The goal's cooldown and the route are runtime-only. The turn and movement go to Java
-viewers; the cow's position is saved as usual. Navigation across height changes and liquids, other goals and
-natural spawning are not implemented here.
+normal drag. When the straight approach is blocked, a bounded search can find a detour over loaded, dry
+ground. It can route up full-block steps if there is room for the cow to jump and land, and keeps steering
+toward the landing while the wheat goal is active. The goal's cooldown, route and landing target are
+runtime-only. The turn and movement go to Java viewers; the cow's position is saved as usual. Descending
+ledges, liquids, vanilla's full path evaluator and waypoint timing, other goals and natural spawning remain open.
 
 In Java Survival, an empty main hand or a sword can hit either species. The attack measures reach to the animal's
 hitbox and uses the player's melee damage and recharge. An accepted sword hit wears the sword, including

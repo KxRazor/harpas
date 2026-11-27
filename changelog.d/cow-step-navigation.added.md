@@ -1,0 +1,1 @@
+- Saved adult cows following wheat can jump up dry one-block steps with enough headroom.

@@ -501,7 +501,10 @@ as shown by the parity report.
         compares approach and stopping after a hotbar switch with vanilla (`saved_cow_follows_wheat_matches_vanilla`).
   - [x] A saved adult cow follows wheat around a two-block-high wall on flat ground and stops pursuing when
         the player hides the wheat, compared with vanilla (`saved_cow_walks_around_a_wall_matches_vanilla`).
-  - [ ] Navigation across height changes and liquids, broader obstacle parity and other animal goals.
+  - [x] A saved adult cow jumps up a dry one-block step to follow wheat and stops pursuing when it is hidden.
+        The jump, landing and saved position are compared with vanilla (`saved_cow_jumps_up_a_step_matches_vanilla`).
+  - [ ] Navigation down ledges, across other height changes and through liquids, broader obstacle parity and
+        other animal goals.
   - [ ] Compare natural cow spawning on a fixed grassy platform under matching light, biome and mob-cap
         conditions.
 - [ ] Combat, damage, health, hunger, effects.

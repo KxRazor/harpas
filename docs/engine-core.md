@@ -290,9 +290,10 @@ The first animal goal runs during the cow's entity tick, before dry movement. A 
 selects the nearest eligible player holding wheat in either hand. On open, flat ground it turns and steers
 toward the player, stops accelerating when close enough or when the wheat is put away, and coasts under
 normal drag. When the straight approach is blocked, a bounded search can find a detour over loaded, dry
-ground. The cow can jump up a one-block step with enough headroom or walk off one onto solid ground below.
-The search can visit one level below or above the range spanned by the endpoints, so both banks of a shallow
-trench can be at the same height. The cow keeps steering toward the landing while the wheat goal is active.
+ground. The cow can jump up one block with enough headroom or walk off a ledge and fall up to three blocks
+through dry, clear space onto solid ground. The search can visit up to three levels below and one level above
+the range spanned by the endpoints, so it can route through a depression even when both ends are level.
+The cow keeps steering toward the landing while the wheat goal is active.
 The goal's cooldown, route and landing target are runtime-only. The turn and movement go to Java viewers;
 the cow's position is saved as usual.
 Other height changes, liquids, vanilla's full path evaluator and waypoint timing, other goals and natural

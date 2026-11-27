@@ -1,0 +1,1 @@
+- Saved adult cows following wheat can walk down dry one-block steps onto solid ground.

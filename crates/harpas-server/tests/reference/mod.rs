@@ -97,23 +97,27 @@ impl Server {
     }
 
     pub fn wait_for(&mut self, text: &str) {
+        self.wait_for_any(&[text]);
+    }
+
+    pub fn wait_for_any(&mut self, texts: &[&str]) -> usize {
         let deadline = Instant::now() + Duration::from_secs(180);
         loop {
             if let Ok(line) = self.lines.recv_timeout(Duration::from_millis(200)) {
                 self.log.push_str(&line);
                 self.log.push('\n');
-                if line.contains(text) {
-                    return;
+                if let Some(index) = texts.iter().position(|text| line.contains(text)) {
+                    return index;
                 }
             }
             assert!(
                 self.child.try_wait().unwrap().is_none(),
-                "server exited before {text}: {}",
+                "server exited before {texts:?}: {}",
                 self.log
             );
             assert!(
                 Instant::now() < deadline,
-                "server did not reach {text}: {}",
+                "server did not reach {texts:?}: {}",
                 self.log
             );
         }

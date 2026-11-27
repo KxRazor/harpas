@@ -233,6 +233,19 @@ pub struct EntityChunk {
 }
 
 impl EntityChunk {
+    pub(crate) fn opaque_creature_count(&self, types: &std::collections::HashSet<String>) -> usize {
+        let Some(Nbt::List(List::Compound(entries))) = self.rest.get("Entities") else {
+            return 0;
+        };
+        entries
+            .iter()
+            .filter(|entity| {
+                matches!(entity.get("id"), Some(Nbt::String(id)) if types.contains(id))
+                    && !persistent(entity)
+            })
+            .count()
+    }
+
     /// Checks the document. Entries the engine cannot activate are kept as opaque NBT.
     pub fn read(mut root: Compound, pos: ChunkPos, codec: &ItemCodec) -> io::Result<Self> {
         harpas_anvil::check_chunk(&root)
@@ -314,4 +327,8 @@ impl EntityChunk {
         root.insert("Entities", Nbt::List(List::Compound(entries)));
         Ok(root)
     }
+}
+
+pub(crate) fn persistent(entity: &Compound) -> bool {
+    matches!(entity.get("PersistenceRequired"), Some(Nbt::Byte(value)) if *value != 0)
 }

@@ -1,0 +1,1 @@
+- Temperate cows now spawn naturally on grassy plains in the Overworld.

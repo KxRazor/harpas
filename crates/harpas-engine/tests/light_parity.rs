@@ -179,6 +179,58 @@ fn saved_layer(section: &harpas_anvil::ChunkSection, name: &str) -> Option<Vec<u
     }
 }
 
+fn saved_world(region: &Path) -> Option<World> {
+    let mut chunks = HashMap::new();
+    for x in -3..=3 {
+        for z in -3..=3 {
+            let nbt = read_chunk(region, x, z).unwrap()?;
+            let (chunk, _warnings) = Chunk::read(nbt, &["minecraft:plains"]).unwrap();
+            chunks.insert((x, z), chunk);
+        }
+    }
+    Some(World { chunks })
+}
+
+fn saved_block_light(world: &World, [x, y, z]: [i32; 3]) -> Option<u8> {
+    let chunk = &world.chunks[&(x.div_euclid(16), z.div_euclid(16))];
+    let section = chunk
+        .sections
+        .iter()
+        .find(|section| i32::from(section.y) == y.div_euclid(16))?;
+    let layer = saved_layer(section, "BlockLight")?;
+    assert_eq!(layer.len(), LIGHT_BYTES);
+    let index = ((y & 15) << 8) | ((z & 15) << 4) | (x & 15);
+    Some(nibble(&layer, index as usize))
+}
+
+fn wait_for_saved_light(server: &mut Server, log: &Path, region: &Path) -> World {
+    // Each source emits 15. Its light should cross both chunk edges to these points in open air.
+    let probes = [[-1, 148, -1], [16, 148, 16], [-1, 138, -1]];
+    let expected = [Some(5), Some(5), Some(7)];
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let marker = format!("light-parity: save {attempt} complete");
+        command(server, &format!("save-all flush\nsay {marker}"));
+        wait_for_log(server, log, &marker);
+        let observed = if let Some(world) = saved_world(region) {
+            let observed = probes.map(|pos| saved_block_light(&world, pos));
+            if observed == expected {
+                return world;
+            }
+            Some(observed)
+        } else {
+            None
+        };
+        assert!(
+            Instant::now() < deadline,
+            "vanilla did not save propagated block light at {probes:?}: expected {expected:?}, got {observed:?}"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn compare(target_x: i32, target_z: i32, world: &World) -> Vec<String> {
     let computed = light_chunk(world, target_x, target_z);
     let saved = &world.chunks[&(target_x, target_z)];
@@ -260,26 +312,15 @@ fn light_matches_vanillas_saved_chunks() {
             "Successfully filled",
         );
     }
-    // The light engine finishes before the save on its own thread; give it time to.
-    thread::sleep(Duration::from_secs(2));
-    command(&mut server, "save-all flush");
-    wait_for_log(&mut server, &log, "Saved the game");
+    // Compare the save that includes the propagated light; shutdown can rewrite neighboring layers.
+    let region = folder.0.join("world/dimensions/minecraft/overworld/region");
+    let world = wait_for_saved_light(&mut server, &log, &region);
     let contents = fs::read_to_string(&log).unwrap();
     assert!(!contents.contains("Failed to load chunk"), "{contents}");
     command(&mut server, "stop");
     let status = server.0.wait().unwrap();
     assert!(status.success(), "the vanilla server exited with {status}");
 
-    let region = folder.0.join("world/dimensions/minecraft/overworld/region");
-    let mut chunks = HashMap::new();
-    for x in -3..=3 {
-        for z in -3..=3 {
-            let nbt = read_chunk(&region, x, z).unwrap().unwrap();
-            let (chunk, _warnings) = Chunk::read(nbt, &["minecraft:plains"]).unwrap();
-            chunks.insert((x, z), chunk);
-        }
-    }
-    let world = World { chunks };
     let mut problems = Vec::new();
     for (x, z) in [(-1, -1), (0, 0), (1, 1)] {
         problems.extend(compare(x, z, &world));

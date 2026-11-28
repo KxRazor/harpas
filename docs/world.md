@@ -114,16 +114,16 @@ block changes are part of gameplay work.
   chunk that leaves every view waits up to five seconds for the others of its region, and a region has one
   save queued or in progress at a time: the changes made meanwhile share the next one. Autosave and shutdown
   do not wait.
-- The chunks of a region and the `.mcc` files of its large chunks are saved as one transaction, so a crash
-  never leaves some chunks of a save without the others, or a chunk newer than the region that points to it.
+- The chunks of a region and the `.mcc` files of its large chunks are saved as one transaction, so recovery
+  after a process crash completes the whole save. On Unix the region directory is also synced between
+  steps for durability across power loss; that guarantee does not apply on Windows.
   The chunks are written into free sectors and synced, which changes nothing a reader sees; the region's new
   header and every new `.mcc` file are written whole and synced under staged names (`r.x.z.mca.header.tmp`,
   `<name>.tmp`); then a journal, `r.x.z.mca.journal`, listing the header to write, the files to install and
   the `.mcc` files to remove, is synced and renamed into place, which commits the save; then the header is
   written over the region's and synced, the staged files are renamed over the current ones, stale `.mcc`
-  files removed and the journal removed. The folder is synced between these steps, on Unix, so they reach the
-  disk in this order. Tools that save a whole region (`harpas_anvil::Region`) stage the region file instead
-  of its header, through the same journal.
+  files removed and the journal removed. The first save of a region and tools that save a whole region
+  (`harpas_anvil::Region`) stage the region file instead of its header, through the same journal.
 - On start, before any chunk is read, the server completes the committed saves it finds and removes the files
   of saves interrupted before their commit, with a warning for each. Opening a region completes its own
   committed save, and reading one chunk of a region with a committed save still pending is an error instead

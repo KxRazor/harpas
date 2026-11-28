@@ -878,14 +878,28 @@ fn play(
                     .kick
                     .or(player::send(&mut connection, session, &environment.chunks));
             if !connection.is_closed() {
-                departure.kick = player::receive(
+                match player::receive(
                     &mut connection,
                     session,
                     logic,
                     &environment.commands,
                     peer,
                     &environment.chunks,
-                )?;
+                ) {
+                    Ok(kick) => departure.kick = kick,
+                    Err(error)
+                        if error
+                            .get_ref()
+                            .is_some_and(|e| e.is::<harpas_engine::LogicStopped>()) =>
+                    {
+                        // Shutdown may have happened while input was waiting for queue space.
+                        departure.kick = Some(
+                            player::send(&mut connection, session, &environment.chunks)
+                                .ok_or(error)?,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             stream.write_all(&connection.take_output())?;
         }

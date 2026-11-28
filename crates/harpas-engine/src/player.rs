@@ -874,7 +874,7 @@ fn channel(connection: Option<Thread>) -> (OutputSender, OutputReceiver) {
 impl OutputSender {
     /// Queues `output`. A message over the limit is dropped and the queue overflows for good: the receiver
     /// then gives only a disconnection.
-    fn send(&self, output: Output) {
+    pub(crate) fn send(&self, output: Output) {
         if self.overflowed() {
             return;
         }

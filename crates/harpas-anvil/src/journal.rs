@@ -7,23 +7,26 @@
 //! 2. The journal, listing the files to install and the `.mcc` files to remove, is written and synced as
 //!    `r.x.z.mca.journal.tmp`, then renamed into place. Once it exists, the save is committed.
 //! 3. The staged files are renamed over the current ones, the stale `.mcc` files removed and the journal
-//!    removed, the folder being synced between steps so they reach the disk in this order.
+//!    removed, the folder being synced on Unix between steps so they reach the disk in this order.
 //!
-//! A save that writes only some chunks of a region ([`write_chunks`](crate::write_chunks)) does not stage the
-//! region file. It writes the chunks into free sectors of the region, which changes nothing a reader sees, and
-//! stages the region's new header as `r.x.z.mca.header.tmp`. Applying the journal writes that header over the
-//! region's, syncs the region and removes the staged header, before the other files are installed.
+//! When updating an existing region, [`write_chunks`](crate::write_chunks) writes the chunks into free
+//! sectors and stages only the new header as `r.x.z.mca.header.tmp`. Applying the journal writes that header
+//! over the region's, syncs the region and removes the staged header before the other files are installed.
+//! The first save stages the entire new region so that a partial write cannot appear as the live header.
 //!
 //! An interruption before the commit leaves the previous files untouched, with staged files that are ignored
 //! and overwritten by the next save or removed by [`recover`]. An interruption after it is completed the next
 //! time the region is opened or [`recover`] runs: installing a file whose staged copy is gone is skipped, so
 //! completing a journal twice is harmless. Design: `docs/world.md#saving`.
 
-use std::fs;
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::file::write_synced;
+use crate::file::{
+    check_dir, check_regular_file, create_staged, open_regular, remove_if_present, sync_dir,
+    write_synced,
+};
 use crate::region::region_of;
 
 const HEADER: &str = "harpas region journal 1";
@@ -48,6 +51,7 @@ pub struct Recovery {
 /// reading a folder whose last save may have been interrupted, with no save running on it; a missing folder has
 /// nothing to recover.
 pub fn recover(dir: &Path) -> io::Result<Recovery> {
+    check_dir(dir)?;
     let mut recovery = Recovery::default();
     let mut names = match fs::read_dir(dir) {
         Ok(entries) => entries
@@ -103,11 +107,18 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    /// Starts a staged replacement of `name`. The caller must sync it before committing.
+    pub(crate) fn create_staged(&mut self, dir: &Path, name: String) -> io::Result<File> {
+        let file = create_staged(&dir.join(staged(&name)))?;
+        self.install.push(name);
+        Ok(file)
+    }
+
     /// Writes `bytes` synced as the staged copy of `name`, to be installed when the journal is applied.
     pub(crate) fn stage(&mut self, dir: &Path, name: String, bytes: &[u8]) -> io::Result<()> {
-        write_synced(&dir.join(staged(&name)), bytes)?;
-        self.install.push(name);
-        Ok(())
+        let mut file = self.create_staged(dir, name)?;
+        file.write_all(bytes)?;
+        file.sync_all()
     }
 
     /// Writes `header` synced as the staged header of the region file `name`, to replace the region's when
@@ -164,7 +175,7 @@ impl Journal {
             match action {
                 "header" if parse_region(name).is_some() => journal.header.push(name.to_owned()),
                 "install" => journal.install.push(name.to_owned()),
-                "remove" => journal.remove.push(name.to_owned()),
+                "remove" if parse_external(name).is_some() => journal.remove.push(name.to_owned()),
                 _ => return Err(format!("unreadable journal line {line:?}")),
             }
         }
@@ -207,18 +218,24 @@ impl Journal {
             step()?;
             let staged = staged_header(dir, name);
             // A header that is gone was written and synced before it was removed.
-            let header = match fs::read(&staged) {
-                Ok(header) => header,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            let path = dir.join(name);
+            let file = match open_regular(&staged, OpenOptions::new().read(true)) {
+                Ok(file) => file,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    check_regular_file(&path)?;
+                    continue;
+                }
                 Err(e) => return Err(e),
             };
+            let mut header = Vec::with_capacity(HEADER_LEN);
+            file.take(HEADER_LEN as u64 + 1).read_to_end(&mut header)?;
             if header.len() != HEADER_LEN {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("{}: not a region header", staged.display()),
                 ));
             }
-            let mut region = fs::OpenOptions::new().write(true).open(dir.join(name))?;
+            let mut region = open_regular(&path, OpenOptions::new().write(true))?;
             region.write_all(&header)?;
             region.sync_all()?;
             step()?;
@@ -227,18 +244,25 @@ impl Journal {
         for name in &self.install {
             step()?;
             let path = dir.join(name);
-            match fs::rename(staged_path(&path), &path) {
-                Err(e) if e.kind() == io::ErrorKind::NotFound && path.is_file() => {}
+            let source = staged_path(&path);
+            match check_regular_file(&source) {
+                Ok(()) => fs::rename(source, &path)?,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "{}: the journal installs {name}, which is missing",
-                            journal.display()
-                        ),
-                    ));
+                    check_regular_file(&path).map_err(|error| {
+                        if error.kind() == io::ErrorKind::NotFound {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "{}: the journal installs {name}, which is missing",
+                                    journal.display()
+                                ),
+                            )
+                        } else {
+                            error
+                        }
+                    })?;
                 }
-                result => result?,
+                Err(error) => return Err(error),
             }
         }
         for name in &self.remove {
@@ -258,23 +282,33 @@ impl Journal {
 
 /// Whether a save of region `x`, `z` in `dir` was committed and not completed.
 pub(crate) fn pending(dir: &Path, x: i32, z: i32) -> io::Result<bool> {
-    journal_path(dir, x, z).try_exists()
+    match check_regular_file(&journal_path(dir, x, z)) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// Completes the committed save of region `x`, `z` in `dir`, if there is one, and says whether there was.
 pub(crate) fn complete(dir: &Path, x: i32, z: i32) -> io::Result<bool> {
+    check_dir(dir)?;
     let path = journal_path(dir, x, z);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
+    let mut file = match open_regular(&path, OpenOptions::new().read(true)) {
+        Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
     };
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    drop(file);
     let journal = Journal::decode(&text, x, z).map_err(|reason| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{}: {reason}", path.display()),
         )
     })?;
+    // A previous commit can have renamed this journal but stopped before syncing the directory.
+    sync_dir(dir)?;
     journal.apply(dir, &path, &mut || Ok(()))?;
     Ok(true)
 }
@@ -323,24 +357,6 @@ fn parse_coordinates(text: &str) -> Option<(i32, i32)> {
     Some((number(x)?, number(z)?))
 }
 
-fn remove_if_present(path: &Path) -> io::Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
-/// Makes the folder's entries, as created, renamed and removed so far, durable. Windows cannot open a folder
-/// as a file to sync it; NTFS journals its own entries.
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    fs::File::open(dir)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +398,8 @@ mod tests {
         assert!(Journal::decode(&other, 1, -1).is_err());
         let chunk_header = format!("{HEADER}\nheader c.33.-1.mcc\n{END}\n");
         assert!(Journal::decode(&chunk_header, 1, -1).is_err());
+        let region_removal = format!("{HEADER}\nremove r.1.-1.mca\n{END}\n");
+        assert!(Journal::decode(&region_removal, 1, -1).is_err());
         assert!(Journal::decode("", 1, -1).is_err());
     }
 }

@@ -381,6 +381,12 @@ enum Completed {
     },
 }
 
+struct FailedSave {
+    uuid: u128,
+    data: Arc<PlayerInventory>,
+    error: io::Error,
+}
+
 /// A bounded worker queue, with at most one outstanding write per UUID. Pending newer snapshots replace
 /// older ones in memory; a reconnect uses the latest snapshot even when its write has not reached disk.
 /// A single worker orders reads and writes, including the `_old` backup rotation.
@@ -514,25 +520,33 @@ impl PlayerStore {
         let mut loaded = Vec::new();
         loop {
             match self.completed.try_recv() {
-                Ok(completion) => self.finish(completion, &mut loaded)?,
+                Ok(completion) => self
+                    .finish(completion, &mut loaded)
+                    .map_err(|save| save.error)?,
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     return Err(io::Error::other("player data worker stopped"));
                 }
             }
         }
-        self.queue_saves()?;
+        self.queue_saves(&HashSet::new())?;
         Ok(loaded)
     }
 
-    fn finish(&mut self, completion: Completed, loaded: &mut Vec<Loaded>) -> io::Result<()> {
+    fn finish(
+        &mut self,
+        completion: Completed,
+        loaded: &mut Vec<Loaded>,
+    ) -> Result<(), FailedSave> {
         self.jobs -= 1;
         match completion {
             Completed::Loaded(result) => loaded.push(result),
             Completed::Saved { uuid, data, result } => {
                 self.writing.remove(&uuid);
-                result.map_err(|error| {
-                    io::Error::new(error.kind(), format!("saving player data: {error}"))
+                result.map_err(|error| FailedSave {
+                    uuid,
+                    data: Arc::clone(&data),
+                    error: io::Error::new(error.kind(), format!("saving player data: {error}")),
                 })?;
                 if self
                     .pending
@@ -546,9 +560,9 @@ impl PlayerStore {
         Ok(())
     }
 
-    fn queue_saves(&mut self) -> io::Result<()> {
+    fn queue_saves(&mut self, failed: &HashSet<u128>) -> io::Result<()> {
         for (&uuid, data) in &self.pending {
-            if self.writing.contains(&uuid) {
+            if self.writing.contains(&uuid) || failed.contains(&uuid) {
                 continue;
             }
             match self
@@ -574,16 +588,28 @@ impl PlayerStore {
     }
 
     pub(crate) fn flush(&mut self) -> io::Result<()> {
+        let mut failed = HashSet::new();
+        let mut error = None;
         loop {
-            self.poll()?;
-            if self.jobs == 0 && self.pending.is_empty() {
-                return Ok(());
+            self.queue_saves(&failed)?;
+            if self.jobs == 0 {
+                return error.map_or(Ok(()), Err);
             }
             let completion = self
                 .completed
                 .recv()
                 .map_err(|_| io::Error::other("player data worker stopped"))?;
-            self.finish(completion, &mut Vec::new())?;
+            if let Err(save) = self.finish(completion, &mut Vec::new()) {
+                // A failed older write must not prevent the latest snapshot from being attempted.
+                if self
+                    .pending
+                    .get(&save.uuid)
+                    .is_some_and(|latest| Arc::ptr_eq(latest, &save.data))
+                {
+                    failed.insert(save.uuid);
+                }
+                error.get_or_insert(save.error);
+            }
         }
     }
 }
@@ -838,6 +864,42 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_saves_other_players_and_newer_snapshots_after_a_write_fails() {
+        let writes = Arc::new(Mutex::new(HashSet::new()));
+        let saved = Arc::clone(&writes);
+        let mut store = PlayerStore::start_with_io(
+            Arc::new(|_| panic!("no reads expected")),
+            Arc::new(move |uuid, root| {
+                let items = PlayerInventory::read(root.clone(), &ItemCodec::default())?;
+                let count = items.slots[36].count;
+                if (uuid, count) == (1, 1) {
+                    return Err(io::Error::other("old snapshot failed"));
+                }
+                saved.lock().unwrap().insert((uuid, count));
+                Ok(())
+            }),
+        )
+        .unwrap();
+        store.save(1, data(1));
+        store.poll().unwrap();
+        store.save(1, data(2));
+        for uuid in 2..=CAPACITY as u128 + 1 {
+            store.save(uuid, data(1));
+        }
+        assert!(
+            store
+                .flush()
+                .unwrap_err()
+                .to_string()
+                .contains("old snapshot failed")
+        );
+        let writes = writes.lock().unwrap();
+        assert!(writes.contains(&(1, 2)));
+        assert_eq!(writes.len(), CAPACITY + 1);
+        assert!(store.pending.is_empty());
+    }
+
+    #[test]
     fn queue_backpressure_and_save_failures_are_reported() {
         let mut store = PlayerStore::start_with_io(
             Arc::new(|_| Ok(new_player(1))),
@@ -948,7 +1010,7 @@ mod autosave_tests {
             online_players: Arc::new(AtomicU32::new(1)),
             world: Some(world),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.autosave();
         game.players[0].inventory.slots[36].count = 15;

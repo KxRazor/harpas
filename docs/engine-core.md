@@ -72,7 +72,8 @@ when power is removed. The chunk stores the remaining delay and preserves ticks 
 Normal furnace block entities tick after entities.
 
 Connection threads queue entry, departure, movement and verified chat for the connection phase, and translate the resulting
-messages into edition-specific packets. The logic thread owns each player's profile and position and publishes
+messages into edition-specific packets. The queue is bounded and at most 1,024 events are applied per tick, in
+order. The logic thread owns each player's profile and position and publishes
 the online count. Player entities have distinct runtime IDs; a duplicate UUID disconnects the old session.
 All players appear in the player list, while entity tracking is per viewer, capped by both its view distance
 and 128 blocks. Spectator entities are hidden from non-spectators. A departure removes the entity and list entry

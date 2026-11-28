@@ -37,7 +37,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -47,11 +47,12 @@ const TICK_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_LAG: Duration = Duration::from_secs(2);
 const AUTOSAVE_INTERVAL: u64 = 6_000;
 const CHUNKS_PER_BATCH: usize = 8;
+const EVENTS_PER_TICK: usize = 1024;
 
 /// A handle for sending connection events to the logic thread.
 #[derive(Clone, Debug)]
 pub struct Handle {
-    events: Sender<Event>,
+    events: SyncSender<Event>,
     online_players: Arc<AtomicU32>,
     has_world: bool,
 }
@@ -247,7 +248,7 @@ impl Handle {
             .map_err(|_| LogicStopped)
     }
 
-    /// Stops the logic thread at the next connection phase, disconnecting every player with `reason`.
+    /// Stops the logic thread during a connection phase, disconnecting every player with `reason`.
     pub fn shutdown(&self, reason: &'static str) -> Result<(), LogicStopped> {
         self.events
             .send(Event::Shutdown(reason))
@@ -269,12 +270,12 @@ pub struct PlayerListEntry {
 #[derive(Debug)]
 pub struct PlayerSession {
     entity_id: i32,
-    events: Sender<Event>,
+    events: SyncSender<Event>,
     output: player::OutputReceiver,
 }
 
 impl PlayerSession {
-    /// Queues input from this player for the next packet phase.
+    /// Queues input from this player for a packet phase, waiting for space when the queue is full.
     pub fn send(&self, input: player::Input) -> Result<(), LogicStopped> {
         self.events
             .send(Event::Input {
@@ -395,7 +396,7 @@ fn with_data(mut world: world::World, data: GameData) -> Option<world::World> {
 }
 
 fn start_game(world: Option<world::World>) -> io::Result<(Handle, JoinHandle<io::Result<()>>)> {
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(EVENTS_PER_TICK);
     let online_players = Arc::new(AtomicU32::new(0));
     let handle = Handle {
         events: sender,
@@ -518,7 +519,27 @@ struct Game {
     world: Option<world::World>,
     /// The players whose views the world's wanted chunks were last computed from, in order.
     viewers: Vec<i32>,
-    stopped: bool,
+    stop: Option<Stop>,
+}
+
+enum Stop {
+    Shutdown(&'static str),
+    World(io::Error),
+}
+
+impl Stop {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Shutdown(reason) => reason,
+            Self::World(_) => "Cannot access the world",
+        }
+    }
+
+    fn reject_join(&self, event: Event) {
+        if let Event::Joined { output, .. } = event {
+            output.send(player::Output::Disconnect(self.reason()));
+        }
+    }
 }
 
 impl TickWork for Game {
@@ -671,11 +692,11 @@ impl TickWork for Game {
     }
 
     fn connections(&mut self) {
-        if self.stopped {
+        if self.stop.is_some() {
             return;
         }
         let joined = self.poll_player_data();
-        if self.stopped {
+        if self.stop.is_some() {
             return;
         }
         // A player whose connection fell too far behind leaves; its connection closes on its own.
@@ -694,6 +715,10 @@ impl TickWork for Game {
         }
         let mut moved = HashSet::new();
         for event in std::mem::take(&mut self.pending) {
+            if let Some(stop) = &self.stop {
+                stop.reject_join(event);
+                continue;
+            }
             match event {
                 Event::Joined {
                     entity_id,
@@ -770,13 +795,7 @@ impl TickWork for Game {
                 #[cfg(test)]
                 Event::Panic => panic!("a test asked the logic thread to panic"),
                 Event::Shutdown(reason) => {
-                    for state in &mut self.players {
-                        if !state.disconnecting {
-                            state.disconnecting = true;
-                            state.send(player::Output::Disconnect(reason));
-                        }
-                    }
-                    self.stopped = true;
+                    self.stop(Stop::Shutdown(reason));
                 }
                 Event::Input { entity_id, input } => {
                     match input {
@@ -1034,6 +1053,9 @@ impl TickWork for Game {
                 }
             }
         }
+        if self.stop.is_some() {
+            return;
+        }
         for state in &mut self.players {
             // At the start of the connection's tick, after its packets, as vanilla.
             if let Some(sequence) = state.acknowledge_block_changes.take() {
@@ -1054,6 +1076,9 @@ impl TickWork for Game {
     }
 
     fn autosave(&mut self) {
+        if self.stop.is_some() {
+            return;
+        }
         self.save_player_inventories();
         if let Some(Err(error)) = self.world.as_mut().map(world::World::autosave) {
             self.fail_world(error);
@@ -1064,13 +1089,17 @@ impl TickWork for Game {
 impl Game {
     fn fail_world(&mut self, error: io::Error) {
         log::error!("{error}");
+        self.stop(Stop::World(error));
+    }
+
+    fn stop(&mut self, stop: Stop) {
         for state in &mut self.players {
             if !state.disconnecting {
                 state.disconnecting = true;
-                state.send(player::Output::Disconnect("Cannot access the world"));
+                state.send(player::Output::Disconnect(stop.reason()));
             }
         }
-        self.stopped = true;
+        self.stop = Some(stop);
     }
 
     fn join(
@@ -1256,7 +1285,14 @@ impl Game {
     }
 
     fn stop_digging(&mut self, index: usize) {
-        let digging = &mut self.players[index].digging;
+        let state = &mut self.players[index];
+        if matches!(
+            state.pending_map_chest,
+            Some(maps::PendingChestAction::Break(_))
+        ) {
+            state.pending_map_chest = None;
+        }
+        let digging = &mut state.digging;
         let active = std::mem::take(&mut digging.is_destroying).then_some(digging.destroy_pos);
         let delayed =
             std::mem::take(&mut digging.has_delayed_destroy).then_some(digging.delayed_destroy_pos);
@@ -1326,8 +1362,12 @@ impl Game {
     }
 
     fn finish_digging(&mut self, index: usize, pos: block::BlockPos) {
-        let digging = &self.players[index].digging;
-        if pos != digging.destroy_pos {
+        let player = &self.players[index];
+        let digging = &player.digging;
+        if !digging.is_destroying
+            || pos != digging.destroy_pos
+            || player.player.profile.game_mode != player::GameMode::Survival
+        {
             return;
         }
         let ticks = digging
@@ -1479,6 +1519,15 @@ impl Game {
     /// Breaks a block for a player, as vanilla's `ServerPlayerGameMode.destroyBlock`. Returns whether the
     /// player's prediction stands.
     fn destroy_block(&mut self, index: usize, pos: block::BlockPos) -> bool {
+        let player = &self.players[index];
+        if player.is_dead()
+            || !matches!(
+                player.player.profile.game_mode,
+                player::GameMode::Creative | player::GameMode::Survival
+            )
+        {
+            return false;
+        }
         let Some(world) = &mut self.world else {
             return true;
         };
@@ -1639,26 +1688,27 @@ fn advance(
     now: Instant,
 ) -> bool {
     if schedule.take_due(now) {
-        // A tick that overruns makes the next one due at once. Take what arrived meanwhile first, or a server
-        // that falls behind would stop hearing its players and the request to stop.
-        loop {
+        // Leave excess arrivals queued in order so sustained traffic cannot starve the next tick.
+        let mut disconnected = false;
+        while game.pending.len() < EVENTS_PER_TICK {
             match receiver.try_recv() {
                 Ok(event) => game.pending.push(event),
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return false,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
             }
+        }
+        if disconnected && game.pending.is_empty() {
+            return false;
         }
         *number += 1;
         tick(game, *number);
-        !game.stopped
+        !disconnected && game.stop.is_none()
     } else {
-        // Wake for incoming events, but apply them only at the tick's connection phase. Check the
-        // deadline after each event so a busy network cannot prevent ticks from running.
-        match receiver.recv_timeout(schedule.next.saturating_duration_since(now)) {
-            Ok(event) => game.pending.push(event),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return false,
-        }
+        // Events are only applied during ticks; the channel buffers them until then.
+        thread::sleep(schedule.next.saturating_duration_since(now));
         true
     }
 }
@@ -1674,7 +1724,7 @@ fn run(
         online_players,
         world,
         viewers: Vec::new(),
-        stopped: false,
+        stop: None,
     };
     let mut schedule = Schedule::new(Instant::now());
     let mut number = 0;
@@ -1688,6 +1738,17 @@ fn run(
             Instant::now(),
         ) {}
     }));
+    if let Some(stop) = &game.stop {
+        for event in game
+            .pending
+            .drain(..)
+            .chain(receiver.try_iter().take(EVENTS_PER_TICK))
+        {
+            stop.reject_join(event);
+        }
+    }
+    drop(receiver);
+    game.online_players.store(0, Ordering::Relaxed);
     // Final snapshots precede the I/O flush, including when the server stopped after a tick panic.
     while let Some(player) = game.players.last() {
         let id = player.player.entity_id;
@@ -1701,9 +1762,14 @@ fn run(
         }
         game.leave(id);
     }
-    if let Some(world) = &mut game.world {
-        world.flush()?;
+    let saved = game.world.as_mut().map_or(Ok(()), world::World::flush);
+    if let Some(Stop::World(error)) = game.stop {
+        if let Err(save_error) = saved {
+            log::error!("Cannot finish saving the world: {save_error}");
+        }
+        return Err(error);
     }
+    saved?;
     ticks.map_err(|_| io::Error::other("The logic thread panicked; the world was saved"))
 }
 
@@ -1728,7 +1794,7 @@ mod tests {
             online_players: Arc::new(AtomicU32::new(0)),
             world: None,
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         }
     }
 
@@ -2821,6 +2887,12 @@ mod tests {
         tick(&mut game, 2);
         assert!(game.players[0].flying);
 
+        game.players[0].pending_map_chest =
+            Some(maps::PendingChestAction::Break(block::BlockPos {
+                x: 0,
+                y: 65,
+                z: 0,
+            }));
         let (reply, changed) = mpsc::channel();
         game.pending.push(Event::SetGameMode {
             targets: vec![1],
@@ -2833,6 +2905,7 @@ mod tests {
         assert_eq!(changed.try_recv().unwrap(), vec![(1, "Steve".to_owned())]);
         assert_eq!(game.players[0].player.profile.game_mode, GameMode::Survival);
         assert!(!game.players[0].flying);
+        assert!(game.players[0].pending_map_chest.is_none());
         assert_eq!(
             target.try_recv(),
             Ok(Output::GameModeChanged {
@@ -3110,6 +3183,49 @@ mod tests {
         game.pending.push(Event::Left(1));
         tick(&mut game, 3);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn ticks_leave_excess_events_queued_and_shutdown_rejects_late_joins() {
+        let mut game = game();
+        let (sender, receiver) = mpsc::channel();
+        for id in 0..EVENTS_PER_TICK {
+            sender.send(Event::Left(id as i32)).unwrap();
+        }
+        sender.send(Event::Shutdown("Server closed")).unwrap();
+        let (output, received) = player::output_channel();
+        sender
+            .send(Event::Joined {
+                entity_id: 1,
+                profile: profile("Steve", 1),
+                view_distance: 10,
+                initial_view_distance: 10,
+                allow_flight: false,
+                output,
+                force_game_mode_on_login: None,
+            })
+            .unwrap();
+        let start = Instant::now();
+        let mut schedule = Schedule::new(start);
+        let mut number = 0;
+        let due = start + TICK_INTERVAL * 2;
+        assert!(advance(
+            &mut game,
+            &mut schedule,
+            &receiver,
+            &mut number,
+            due
+        ));
+        assert!(!advance(
+            &mut game,
+            &mut schedule,
+            &receiver,
+            &mut number,
+            due
+        ));
+        assert_eq!(number, 2);
+        assert!(game.players.is_empty());
+        assert_eq!(received.try_recv(), Ok(Output::Disconnect("Server closed")));
     }
 
     #[test]

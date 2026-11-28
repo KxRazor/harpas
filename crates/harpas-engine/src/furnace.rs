@@ -6,6 +6,7 @@ use std::io;
 use harpas_core::block::block_states;
 use harpas_core::item::items;
 use harpas_core::nbt::{Compound, List, Nbt};
+use harpas_core::random::RandomSource;
 
 use crate::block::BlockPos;
 use crate::container_storage::{new_tag, read_items, write_items};
@@ -237,13 +238,40 @@ impl Furnace {
         if self.slots[INPUT].is_empty() {
             self.slots[INPUT] = ItemStack::empty();
         }
-        if let Some(id) = &recipe.id {
-            let used = match self.recipes_used.get(id) {
-                Some(Nbt::Int(n)) => n.saturating_add(1),
-                _ => 1,
+        let used = match self.recipes_used.get(&recipe.id) {
+            Some(Nbt::Int(n)) => n.saturating_add(1),
+            _ => 1,
+        };
+        self.recipes_used.insert(recipe.id.as_str(), used);
+    }
+
+    pub(crate) fn claim_experience(
+        &mut self,
+        recipes: &Recipes,
+        random: &mut impl RandomSource,
+    ) -> i32 {
+        let mut pending = Compound::new();
+        let mut points = 0i32;
+        for (id, value) in self.recipes_used.iter() {
+            let (Some(experience), Nbt::Int(count)) = (recipes.smelting_experience(id), value)
+            else {
+                pending.insert(id, value.clone());
+                continue;
             };
-            self.recipes_used.insert(id.as_str(), used);
+            let exact = *count as f32 * experience;
+            let whole = exact as i32;
+            let remainder = exact.fract();
+            let rounded = whole.saturating_add(i32::from(
+                remainder > 0.0 && random.next_float() < remainder,
+            ));
+            points = points.saturating_add(rounded);
         }
+        self.recipes_used = pending;
+        points
+    }
+
+    pub(crate) fn has_pending_experience(&self) -> bool {
+        !self.recipes_used.is_empty()
     }
 }
 
@@ -252,6 +280,16 @@ fn single(item: u32) -> ItemStack {
         item,
         count: 1,
         ..ItemStack::default()
+    }
+}
+
+impl crate::player::PlayerState {
+    pub(crate) fn award_furnace_experience(&mut self, points: i32) {
+        if points > 0 {
+            // shortcut: credit points directly until experience orbs can be spawned and collected.
+            self.experience.add(points);
+            self.send(self.experience.update());
+        }
     }
 }
 
@@ -267,7 +305,13 @@ impl World {
         let [remaining, duration, progress, total] = TIMER_KEYS.map(timer);
         let recipes_used = match tag.get("RecipesUsed") {
             None => Compound::default(),
-            Some(Nbt::Compound(used)) => used.clone(),
+            Some(Nbt::Compound(used))
+                if used
+                    .iter()
+                    .all(|(_, value)| matches!(value, Nbt::Int(count) if *count >= 0)) =>
+            {
+                used.clone()
+            }
             _ => return Err(invalid("invalid furnace recipe usage")),
         };
         Ok(Furnace {
@@ -368,11 +412,16 @@ impl World {
                     y: *y,
                     z: *z,
                 };
-                (pos.chunk() == chunk
-                    && self
-                        .furnace(pos)
-                        .is_ok_and(|furnace| furnace.needs_tick(recipes)))
-                .then_some(pos)
+                if pos.chunk() != chunk {
+                    return None;
+                }
+                match self.furnace(pos) {
+                    Ok(furnace) => furnace.needs_tick(recipes).then_some(pos),
+                    Err(error) => {
+                        log::warn!("Cannot load furnace at {pos:?}: {error}");
+                        None
+                    }
+                }
             })
             .collect();
         self.active_furnaces.extend(active);

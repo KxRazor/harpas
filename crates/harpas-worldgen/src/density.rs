@@ -813,6 +813,12 @@ impl<'a> GraphCompiler<'a> {
                         message: format!("unknown noise parameter `{name}`"),
                     }
                 })?;
+                params
+                    .validate()
+                    .map_err(|message| WorldgenDataError::InvalidDefinition {
+                        context: name.to_owned(),
+                        message: message.to_owned(),
+                    })?;
                 let mut rng = self.positional.fork_from_hash_of(name);
                 NormalNoise::from_parameters(&mut *rng, params)
             }
@@ -1426,6 +1432,12 @@ impl CompiledDensityGraph {
                 message: format!("unknown noise parameter `{name}`"),
             })?;
         let mut rng = self.positional_random().fork_from_hash_of(name);
+        params
+            .validate()
+            .map_err(|message| WorldgenDataError::InvalidDefinition {
+                context: name.to_owned(),
+                message: message.to_owned(),
+            })?;
         Ok(NormalNoise::from_parameters(&mut *rng, params))
     }
 

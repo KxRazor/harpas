@@ -495,6 +495,7 @@ pub struct World {
     /// changed.
     block_changes: Vec<BlockPos>,
     changed_blocks: HashSet<BlockPos>,
+    pub(crate) broken_crafting_tables: HashSet<BlockPos>,
     /// The shape rules of the blocks, without which changes leave their neighbors as they are.
     pub(crate) shape_updates: Option<Arc<ShapeUpdates>>,
     pub(crate) updater: neighbor::Updater,
@@ -724,6 +725,7 @@ impl World {
             light: HashMap::new(),
             block_changes: Vec::new(),
             changed_blocks: HashSet::new(),
+            broken_crafting_tables: HashSet::new(),
             shape_updates: None,
             updater: neighbor::Updater::default(),
             level_events: Vec::new(),
@@ -1370,7 +1372,8 @@ impl World {
     }
 
     /// Keeps the light the workers computed for a chunk, unless the chunk changed or left since the request.
-    fn finish_light(&mut self, lit: light::Lit) {
+    fn finish_light(&mut self, mut lit: light::Lit) {
+        lit.light = lit.light.filter(|light| light.is_valid());
         // A chunk that changed or left since the request has no entry with this request's ID.
         if !matches!(self.light.get(&lit.pos), Some(LightState::Computing(id)) if *id == lit.id) {
             return;
@@ -1761,7 +1764,7 @@ impl World {
             && self.relights(pos)
             && matches!(
                 self.chunks.get(&pos),
-                Some(ChunkState::Loaded(chunk)) if chunk.rest.get("isLightOn") != Some(&Nbt::Byte(1))
+                Some(ChunkState::Loaded(chunk)) if !light::has_valid_saved_light(chunk)
             )
         {
             self.unlit.insert(pos);
@@ -2131,6 +2134,7 @@ mod tests {
             light: HashMap::new(),
             block_changes: Vec::new(),
             changed_blocks: HashSet::new(),
+            broken_crafting_tables: HashSet::new(),
             shape_updates: None,
             updater: neighbor::Updater::default(),
             level_events: Vec::new(),
@@ -4800,6 +4804,64 @@ mod tests {
     }
 
     #[test]
+    fn fluids_use_loaded_routes_and_keep_the_calculated_lava_delay() {
+        let pos = ChunkPos { x: 0, z: 0 };
+        let folder = Folder::new();
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        let state = |name, level| block_states().state(name, [("level", level)]).unwrap().0;
+        let at = |x, z| BlockPos { x, y: -51, z };
+        let air = block_states().default_state("minecraft:air").unwrap();
+        let edge = at(15, 8);
+        let inward = at(14, 8);
+        world.set_block_state(edge, state("minecraft:water", "0"));
+        world.set_block_state(inward, air);
+        world.tick_fluid(edge, FluidType::Water);
+        assert_eq!(
+            world.block_state(inward),
+            Some(state("minecraft:water", "1"))
+        );
+
+        let liquid = at(8, 8);
+        world.set_block_state(liquid, state("minecraft:lava", "4"));
+        world.set_block_state(at(7, 8), state("minecraft:lava", "0"));
+        world.game_time += 30;
+        let due = world.fluid_ticks.collect(world.game_time, |_| true);
+        let tick = due.iter().find(|tick| tick.pos == liquid).unwrap();
+        world.tick_fluid(tick.pos, tick.kind);
+        assert_eq!(
+            world.block_state(liquid),
+            Some(state("minecraft:lava", "2"))
+        );
+        assert!(
+            world
+                .fluid_ticks
+                .collect(world.game_time + 30, |_| true)
+                .iter()
+                .all(|tick| tick.pos != liquid)
+        );
+        assert!(
+            world
+                .fluid_ticks
+                .collect(world.game_time + 120, |_| true)
+                .iter()
+                .any(|tick| tick.pos == liquid)
+        );
+
+        let obsidian = at(10, 10);
+        world.set_block_state(at(10, 9), state("minecraft:water", "0"));
+        world.set_block_state(obsidian, state("minecraft:lava", "0"));
+        assert_eq!(
+            world
+                .block_state(obsidian)
+                .and_then(|state| block_states().name(state)),
+            Some("minecraft:obsidian")
+        );
+        assert!(!world.fluid_ticks.has_scheduled(FluidType::Lava, obsidian));
+    }
+
+    #[test]
     fn pending_fluid_ticks_are_saved_and_run_after_the_world_is_read_again() {
         let folder = Folder::new();
         let pos = ChunkPos { x: 0, z: 0 };
@@ -5720,7 +5782,7 @@ mod tests {
         save(&folder, &[(pos.chunk(), DATA_VERSION)]);
         let recipe = serde_json::json!({
             "type": "minecraft:smelting", "ingredient": "minecraft:raw_iron",
-            "result": {"id": "minecraft:iron_ingot"}, "cookingtime": 200,
+            "result": {"id": "minecraft:iron_ingot"}, "cookingtime": 200, "experience": 2.0,
         });
         let recipes = Arc::new(crate::recipe::Recipes::from_json(
             &HashMap::new(),
@@ -5855,6 +5917,36 @@ mod tests {
             game.players[0].inventory.slots[HOTBAR + 7],
             stack("minecraft:iron_ingot", 1)
         );
+        assert_eq!(game.players[0].experience.total, 2);
+        click(&mut game, 2, 4);
+        assert_eq!(
+            game.players[0].experience.total, 2,
+            "an empty click awards nothing"
+        );
+        for (slot, button, mode) in [(2, 0, 0), (2, 40, 2), (2, 0, 4), (3, 0, 6)] {
+            let world = game.world.as_mut().unwrap();
+            let tag = world.container_tag(pos, FURNACE).unwrap();
+            let output = stack("minecraft:iron_ingot", 1);
+            let mut furnace = world.furnace(pos).unwrap();
+            furnace.slots[2] = output.clone();
+            let mut tag = world.furnace_with_items(pos, tag, &furnace).unwrap();
+            tag.insert(
+                "RecipesUsed",
+                Compound::from_iter([("harpas:smelting/0", 1)]),
+            );
+            world.store_container_tag(pos, tag);
+            game.players[0].inventory.carried = if mode == 6 {
+                output
+            } else {
+                ItemStack::empty()
+            };
+            let total = game.players[0].experience.total;
+            game.click_container(0, 1, -1, slot, button, mode, Vec::new(), None);
+            let furnace = game.world.as_ref().unwrap().furnace(pos).unwrap();
+            assert!(furnace.slots[2].is_empty());
+            assert!(!furnace.has_pending_experience());
+            assert_eq!(game.players[0].experience.total, total + 2);
+        }
         assert!(game.world.as_ref().unwrap().furnace(pos).unwrap().slots[2].is_empty());
         assert!(game.destroy_block(0, pos));
         assert!(game.players[0].block_menu.is_none());
@@ -6675,6 +6767,10 @@ mod tests {
         // Replacing a table also invalidates menus; returned ingredients are not left in the block.
         game.players[1].with_menu(|menu| menu.slots[8] = stack("minecraft:diamond", 2));
         game.world.as_mut().unwrap().set_block_state(table, stone);
+        game.world
+            .as_mut()
+            .unwrap()
+            .set_block_state(table, crafting);
         game.send_inventory_changes();
         assert!(game.players[1].block_menu.is_none());
         assert!(other.try_iter().any(|o| o == Output::CloseContainer(1)));
@@ -7000,6 +7096,26 @@ mod tests {
             ..ItemStack::empty()
         };
         (world, cow, player)
+    }
+
+    #[test]
+    fn a_new_wall_invalidates_the_cows_direct_route_before_its_retry() {
+        let folder = Folder::new();
+        let (mut world, cow, player) =
+            cow_navigation_world(&folder, -48.0, [2.5, -48.0, 1.5], |_, _| {});
+        world.entities.on_ground[cow] = true;
+        world.entities.position[cow][0] = 10.75;
+        let players = [player];
+        world.tick_entities(&players);
+        assert!(world.entities.position[cow][0] < 10.75);
+        assert_eq!(world.entities.position[cow][2], 1.5);
+
+        let stone = block_states().default_state("minecraft:stone").unwrap();
+        for y in [-48, -47] {
+            world.set_block_state(BlockPos { x: 9, y, z: 1 }, stone);
+        }
+        world.tick_entities(&players);
+        assert_ne!(world.entities.position[cow][2], 1.5);
     }
 
     #[test]

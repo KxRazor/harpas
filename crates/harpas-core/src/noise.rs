@@ -236,6 +236,49 @@ pub struct PerlinNoise {
     max_value: f64,
 }
 
+// Keep world-sized coordinates within the range of Perlin's signed 64-bit wrapping quotient.
+const OCTAVE_RANGE: std::ops::RangeInclusive<i32> = -1022..=50;
+const MAX_OCTAVES: usize = 1023;
+
+fn octave_count(first: i32, last: i32) -> Result<usize, &'static str> {
+    if !OCTAVE_RANGE.contains(&first) || !OCTAVE_RANGE.contains(&last) || first > last {
+        return Err("noise octave exponent is out of range");
+    }
+    let count = (last - first + 1) as usize;
+    if count > MAX_OCTAVES {
+        Err("too many noise octaves to normalize")
+    } else {
+        Ok(count)
+    }
+}
+
+fn perlin_value_factor(count: usize) -> f64 {
+    let count = count as i32;
+    2.0_f64.powi(count - 1) / (2.0_f64.powi(count) - 1.0)
+}
+
+fn check_amplitudes(first: i32, amplitudes: &[f64]) -> Result<(), &'static str> {
+    let n = amplitudes.len();
+    if !(1..=MAX_OCTAVES).contains(&n) {
+        return Err("noise needs between one and 1023 amplitudes");
+    }
+    let last = first
+        .checked_add(n as i32 - 1)
+        .ok_or("noise octave index overflow")?;
+    octave_count(first, last)?;
+    let mut value_factor = perlin_value_factor(n);
+    let mut bound = 0.0;
+    for &amplitude in amplitudes {
+        bound += amplitude.abs() * 2.0 * value_factor;
+        value_factor /= 2.0;
+    }
+    if bound <= f64::MAX / 4.0 {
+        Ok(())
+    } else {
+        Err("noise amplitudes have no finite bound after normalization")
+    }
+}
+
 impl PerlinNoise {
     /// Wraps `value` into `[-16_777_216.0, 16_777_216.0)` with period `2^25`, matching `PerlinNoise.wrap`.
     pub const fn wrap(value: f64) -> f64 {
@@ -246,21 +289,18 @@ impl PerlinNoise {
     ///
     /// # Panics
     ///
-    /// Panics if `amplitudes` is empty.
+    /// Panics for invalid octave exponents, amplitude counts or weights.
     pub fn new<R: RandomSource + ?Sized>(
         rng: &mut R,
         first_octave: i32,
         amplitudes: &[f64],
     ) -> Self {
-        assert!(
-            !amplitudes.is_empty(),
-            "PerlinNoise requires at least one amplitude"
-        );
+        check_amplitudes(first_octave, amplitudes).expect("valid PerlinNoise parameters");
         let positional = rng.fork_positional_source();
         let mut noise_levels = Vec::with_capacity(amplitudes.len());
         for (i, &amplitude) in amplitudes.iter().enumerate() {
             if amplitude != 0.0 {
-                let octave = first_octave.wrapping_add(i as i32);
+                let octave = first_octave + i as i32;
                 let mut octave_rng = positional.from_hash_of(&format!("octave_{octave}"));
                 noise_levels.push(Some(ImprovedNoise::new(&mut octave_rng)));
             } else {
@@ -277,24 +317,16 @@ impl PerlinNoise {
     ///
     /// # Panics
     ///
-    /// Panics if `amplitudes` is empty or contains a non-zero amplitude at a positive octave (`> 0`).
+    /// Panics for invalid parameters or a non-zero amplitude at a positive octave (`> 0`).
     pub fn new_legacy<R: RandomSource + ?Sized>(
         rng: &mut R,
         first_octave: i32,
         amplitudes: &[f64],
     ) -> Self {
-        assert!(
-            !amplitudes.is_empty(),
-            "PerlinNoise requires at least one amplitude"
-        );
+        check_amplitudes(first_octave, amplitudes).expect("valid legacy PerlinNoise parameters");
         let n = amplitudes.len();
         let zero_idx = -first_octave;
         let mut noise_levels: Vec<Option<ImprovedNoise>> = vec![None; n];
-
-        let zero_noise = ImprovedNoise::new(rng);
-        if zero_idx >= 0 && (zero_idx as usize) < n && amplitudes[zero_idx as usize] != 0.0 {
-            noise_levels[zero_idx as usize] = Some(zero_noise);
-        }
 
         let positive_start = (zero_idx + 1).max(0) as usize;
         for (idx, &amp) in amplitudes.iter().enumerate().skip(positive_start) {
@@ -303,6 +335,10 @@ impl PerlinNoise {
                 "legacy PerlinNoise does not support positive octave {}",
                 first_octave + (idx as i32)
             );
+        }
+        let zero_noise = ImprovedNoise::new(rng);
+        if zero_idx >= 0 && (zero_idx as usize) < n && amplitudes[zero_idx as usize] != 0.0 {
+            noise_levels[zero_idx as usize] = Some(zero_noise);
         }
 
         if zero_idx > 0 {
@@ -324,9 +360,8 @@ impl PerlinNoise {
         first_octave: i32,
         amplitudes: &[f64],
     ) -> Self {
-        let n = amplitudes.len() as i32;
         let lowest_freq_input_factor = 2.0_f64.powi(first_octave);
-        let lowest_freq_value_factor = 2.0_f64.powi(n - 1) / (2.0_f64.powi(n) - 1.0);
+        let lowest_freq_value_factor = perlin_value_factor(amplitudes.len());
         let mut sampler = Self {
             noise_levels,
             first_octave,
@@ -359,13 +394,13 @@ impl PerlinNoise {
         self.edge_value(y_scale + 2.0)
     }
 
-    /// Accumulates `amplitude * edge * value_factor` across active octaves (`PerlinNoise.edgeValue`).
+    /// Accumulates the absolute contribution each active octave can make to the bound.
     pub fn edge_value(&self, edge: f64) -> f64 {
         let mut total = 0.0;
         let mut value_factor = self.lowest_freq_value_factor;
         for (i, level) in self.noise_levels.iter().enumerate() {
             if level.is_some() {
-                total += self.amplitudes[i] * edge * value_factor;
+                total += self.amplitudes[i].abs() * edge.abs() * value_factor;
             }
             value_factor /= 2.0;
         }
@@ -374,7 +409,7 @@ impl PerlinNoise {
 
     /// Returns the `index`-th octave counting backward from the highest frequency (`getOctaveNoise`).
     pub fn octave_noise(&self, index: usize) -> Option<&ImprovedNoise> {
-        let slot = self.noise_levels.len().checked_sub(1 + index)?;
+        let slot = self.noise_levels.len().checked_sub(index.checked_add(1)?)?;
         self.noise_levels[slot].as_ref()
     }
 
@@ -438,6 +473,11 @@ impl NoiseParameters {
             amplitudes: amplitudes.into(),
         }
     }
+
+    /// Checks that the parameters can be used to build a bounded noise sampler.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        check_amplitudes(self.first_octave, &self.amplitudes)
+    }
 }
 
 /// Sum of two frequency-offset [`PerlinNoise`] samplers scaled to target deviation `1 / 6` (`NormalNoise`).
@@ -455,7 +495,7 @@ impl NormalNoise {
     ///
     /// # Panics
     ///
-    /// Panics if `amplitudes` is empty.
+    /// Panics for invalid octave exponents, amplitude counts or weights.
     pub fn new<R: RandomSource + ?Sized>(
         rng: &mut R,
         first_octave: i32,
@@ -478,7 +518,7 @@ impl NormalNoise {
     ///
     /// # Panics
     ///
-    /// Panics if `amplitudes` is empty or contains a non-zero positive octave.
+    /// Panics for invalid parameters or a non-zero amplitude at a positive octave.
     pub fn new_legacy<R: RandomSource + ?Sized>(
         rng: &mut R,
         first_octave: i32,
@@ -836,7 +876,7 @@ impl PerlinSimplexNoise {
     ///
     /// # Panics
     ///
-    /// Panics if `octaves` is empty.
+    /// Panics if `octaves` is empty or its exponent range cannot be normalized.
     pub fn new<R: RandomSource + ?Sized>(rng: &mut R, octaves: &[i32]) -> Self {
         assert!(
             !octaves.is_empty(),
@@ -846,31 +886,22 @@ impl PerlinSimplexNoise {
         sorted.sort_unstable();
         sorted.dedup();
 
-        let low_freq_octaves = -sorted[0];
         let high_freq_octaves = *sorted.last().expect("non-empty octaves");
-        let total_octaves = low_freq_octaves + high_freq_octaves + 1;
-        assert!(
-            total_octaves >= 1,
-            "total number of octaves must be at least 1"
-        );
+        let total_usize =
+            octave_count(sorted[0], high_freq_octaves).expect("valid simplex octaves");
 
         let first_noise = SimplexNoise::new(rng);
         let zero_idx = high_freq_octaves;
-        let total_usize = total_octaves as usize;
         let mut noise_levels: Vec<Option<SimplexNoise>> = vec![None; total_usize];
 
         if zero_idx >= 0 && (zero_idx as usize) < total_usize && sorted.binary_search(&0).is_ok() {
             noise_levels[zero_idx as usize] = Some(first_noise.clone());
         }
 
-        for (idx, slot) in noise_levels
-            .iter_mut()
-            .enumerate()
-            .skip((zero_idx + 1).max(0) as usize)
-        {
-            let octave = zero_idx - (idx as i32);
-            if sorted.binary_search(&octave).is_ok() {
-                *slot = Some(SimplexNoise::new(rng));
+        for idx in zero_idx + 1..total_usize as i32 {
+            let octave = zero_idx - idx;
+            if idx >= 0 && sorted.binary_search(&octave).is_ok() {
+                noise_levels[idx as usize] = Some(SimplexNoise::new(rng));
             } else {
                 rng.consume_count(SKIPPED_OCTAVE_DRAWS);
             }
@@ -893,7 +924,7 @@ impl PerlinSimplexNoise {
         }
 
         let highest_freq_input_factor = 2.0_f64.powi(high_freq_octaves);
-        let highest_freq_value_factor = 1.0 / (2.0_f64.powi(total_octaves) - 1.0);
+        let highest_freq_value_factor = 1.0 / (2.0_f64.powi(total_usize as i32) - 1.0);
         Self {
             noise_levels: noise_levels.into_boxed_slice(),
             highest_freq_value_factor,
@@ -969,6 +1000,21 @@ mod tests {
         assert_eq!(PerlinNoise::wrap(16_777_216.0), -16_777_216.0);
         assert_eq!(PerlinNoise::wrap(33_554_432.25), 0.25);
         assert_eq!(PerlinNoise::wrap(-33_554_431.75), 0.25);
+    }
+
+    #[test]
+    fn noise_validation_checks_octaves_normalization_and_signed_weights() {
+        assert!(NoiseParameters::new(i32::MIN, [1.0]).validate().is_err());
+        assert!(
+            NoiseParameters::new(-1022, vec![1.0; 1024])
+                .validate()
+                .is_err()
+        );
+        assert!(NoiseParameters::new(0, [f64::MAX]).validate().is_err());
+        let noise = PerlinNoise::new(&mut XoroshiroRandom::new(0), -2, &[-1.0, 1.0]);
+        assert_eq!(noise.max_value(), 2.0);
+        assert!(noise.octave_noise(usize::MAX).is_none());
+        assert!(noise.get_value(30_000_000.0, 64.0, 0.0).abs() <= noise.max_value());
     }
 
     #[test]

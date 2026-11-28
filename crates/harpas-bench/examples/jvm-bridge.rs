@@ -2,8 +2,10 @@
 
 use std::cell::UnsafeCell;
 use std::error::Error;
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::mem::{offset_of, size_of};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -13,6 +15,7 @@ use jni::objects::{JClass, JStaticMethodID};
 use jni::signature::{Primitive, ReturnType};
 use jni::sys::{jdouble, jlong, jvalue};
 use jni::{Env, EnvUnowned, InitArgsBuilder, JavaVM, NativeMethod, jni_sig, jni_str};
+use sha2::{Digest, Sha256};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Upcall = unsafe extern "C" fn(i64) -> i64;
@@ -181,22 +184,21 @@ fn rss() {
         {
             println!("{line}");
         }
+    } else {
+        println!("Process RSS: unavailable");
     }
 }
 
 fn cpu() {
-    // Linux only. Compiler threads are "C1/C2 CompilerThread" or "JVMCI-native CompilerThread" (truncated
-    // to 15 bytes); their CPU time is lost if they exit, so compare with -XX:-UseDynamicNumberOfCompilerThreads.
-    let Ok(stat) = std::fs::read_to_string("/proc/self/stat") else {
-        return;
-    };
-    // utime and stime are fields 14 and 15, in USER_HZ (100 on Linux), and include exited threads.
-    let fields: Vec<&str> = stat[stat.rfind(')').unwrap_or(0) + 2..]
-        .split(' ')
-        .collect();
-    let process =
-        (fields[11].parse::<u64>().unwrap_or(0) + fields[12].parse::<u64>().unwrap_or(0)) * 10;
-    let (mut compiler, mut threads) = (0u64, 0);
+    if let Some(process) = process_cpu_ms() {
+        println!("Process CPU: {process:.0} ms");
+    } else {
+        println!("Process CPU: unavailable");
+    }
+    // Linux truncates the names to 15 bytes. CPU time is lost when compiler threads exit.
+    let mut compiler = 0u64;
+    let mut threads = 0;
+    let mut missing = false;
     for task in std::fs::read_dir("/proc/self/task")
         .into_iter()
         .flatten()
@@ -204,41 +206,95 @@ fn cpu() {
     {
         let path = task.path();
         let name = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
-        if name.contains("Compiler") || name.starts_with("JVMCI") {
+        if [
+            "C1 Compiler",
+            "C2 Compiler",
+            "JVMCI Compiler",
+            "JVMCI-native Co",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        {
             // The first schedstat field is the time spent on CPU, in nanoseconds.
             let schedstat = std::fs::read_to_string(path.join("schedstat")).unwrap_or_default();
-            compiler += schedstat
-                .split(' ')
+            if let Some(ns) = schedstat
+                .split_whitespace()
                 .next()
-                .and_then(|ns| ns.parse().ok())
-                .unwrap_or(0);
+                .and_then(|ns| ns.parse::<u64>().ok())
+            {
+                compiler += ns;
+            } else {
+                missing = true;
+            }
             threads += 1;
         }
     }
-    println!(
-        "CPU: process {process} ms; {threads} live compiler threads {} ms",
-        compiler / 1_000_000
-    );
+    if missing || threads == 0 {
+        println!("Live compiler thread CPU: unavailable");
+    } else {
+        println!(
+            "CPU of {threads} live compiler threads: {} ms",
+            compiler / 1_000_000
+        );
+    }
+}
+
+fn process_cpu_ms() -> Option<f64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // utime and stime are fields 14 and 15, including exited threads.
+    let mut fields = stat.rsplit_once(')')?.1.split_whitespace().skip(11);
+    let user: u64 = fields.next()?.parse().ok()?;
+    let system: u64 = fields.next()?.parse().ok()?;
+    let frequency = Command::new("getconf").arg("CLK_TCK").output().ok()?;
+    if !frequency.status.success() {
+        return None;
+    }
+    let hz: u64 = std::str::from_utf8(&frequency.stdout)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    (hz > 0).then(|| (user as f64 + system as f64) * 1000.0 / hz as f64)
 }
 
 fn fixture() -> Result<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()?;
-    let output = root.join("target/jvm-bridge");
-    let jar = output.join("bridge.jar");
-    let stamp = output.join("compiled-source.java");
     let source = include_str!("jvm-bridge/Bridge.java");
+    let mut digest = String::with_capacity(64);
+    for byte in Sha256::digest(source) {
+        write!(digest, "{byte:02x}")?;
+    }
+    let output = root.join("target/jvm-bridge").join(digest);
+    let jar = output.join("bridge.jar");
     // Keep the identical JAR (including its timestamp) across AOT training and production runs.
-    if jar.is_file() && std::fs::read_to_string(&stamp).is_ok_and(|old| old == source) {
+    if jar.is_file() {
         return Ok(jar);
     }
-    let classes = output.join("classes");
-    if classes.exists() {
-        std::fs::remove_dir_all(&classes)?;
+    std::fs::create_dir_all(&output)?;
+    let mut nonce = [0; 16];
+    getrandom::fill(&mut nonce).map_err(std::io::Error::other)?;
+    let stage = output.join(format!("build-{:032x}", u128::from_ne_bytes(nonce)));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
-    std::fs::create_dir_all(&classes)?;
-    let java_source = output.join("Bridge.java");
+    builder.create(&stage)?;
+    let result = build_fixture(&stage, &jar, source);
+    let cleanup = std::fs::remove_dir_all(&stage);
+    result?;
+    cleanup?;
+    Ok(jar)
+}
+
+fn build_fixture(stage: &std::path::Path, jar: &std::path::Path, source: &str) -> Result<()> {
+    let classes = stage.join("classes");
+    std::fs::create_dir(&classes)?;
+    let java_source = stage.join("Bridge.java");
+    let staged_jar = stage.join("bridge.jar");
     std::fs::write(&java_source, source)?;
     for (tool, args) in [
         (
@@ -258,7 +314,7 @@ fn fixture() -> Result<PathBuf> {
             vec![
                 "--create".into(),
                 "--file".into(),
-                jar.clone().into_os_string(),
+                staged_jar.clone().into_os_string(),
                 "-C".into(),
                 classes.into_os_string(),
                 ".".into(),
@@ -268,12 +324,48 @@ fn fixture() -> Result<PathBuf> {
         let executable = std::env::var_os("JAVA_HOME")
             .map(|home| PathBuf::from(home).join("bin").join(tool))
             .unwrap_or_else(|| PathBuf::from(tool));
-        if !Command::new(executable).args(args).status()?.success() {
+        if !Command::new(executable)
+            .env_remove("JDK_JAVAC_OPTIONS")
+            .args(args)
+            .status()?
+            .success()
+        {
             return Err(format!("{tool} failed; use JAVA_HOME pointing to a JDK 25").into());
         }
     }
-    std::fs::write(stamp, source)?;
-    Ok(jar)
+    // Publish only the complete JAR; concurrent builders use the first copy.
+    match std::fs::hard_link(staged_jar, jar) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && jar.is_file() => Ok(()),
+        result => Ok(result?),
+    }
+}
+
+fn reserved_option(option: &str) -> bool {
+    let key = option
+        .trim_start()
+        .split_once('=')
+        .map_or(option.trim_start(), |(key, _)| key);
+    matches!(
+        key,
+        "-Djava.class.path"
+            | "-Djava.system.class.loader"
+            | "-cp"
+            | "-classpath"
+            | "--class-path"
+            | "--enable-native-access"
+            | "--illegal-native-access"
+            | "-XX:VMOptionsFile"
+            | "-XX:Flags"
+    ) || [
+        "-Dharpas.bench.",
+        "-Xbootclasspath",
+        "-javaagent:",
+        "-agentlib:",
+        "-agentpath:",
+        "-Xrun",
+    ]
+    .iter()
+    .any(|prefix| key.starts_with(prefix))
 }
 
 fn main() -> Result<()> {
@@ -304,6 +396,14 @@ fn main() -> Result<()> {
     }
     if ticks == 0 || warmup_ms == 0 {
         return Err("ticks and warmup-ms must be positive".into());
+    }
+    if let Some(option) = options.iter().find(|option| reserved_option(option)) {
+        return Err(format!("reserved JVM option: {option}").into());
+    }
+    for name in ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS"] {
+        if std::env::var_os(name).is_some_and(|value| !value.is_empty()) {
+            return Err(format!("unset {name} and pass JVM options after --").into());
+        }
     }
     assert_eq!(size_of::<Location>(), 24);
     assert_eq!(offset_of!(Shared, event), 4800);
@@ -353,15 +453,31 @@ fn main() -> Result<()> {
         "JVM creation: {:.1} ms; extra options: {options:?}",
         start.elapsed().as_secs_f64() * 1000.0
     );
-    vm.attach_current_thread(|env| {
-        benchmark(env, shared, self_test, ticks, warmup_ms, cold_ticks)
-    })?;
-    vm.detach_current_thread()?;
+    let run = catch_unwind(AssertUnwindSafe(|| {
+        vm.attach_current_thread(|env| {
+            benchmark(env, shared, self_test, ticks, warmup_ms, cold_ticks)
+        })
+        // JNI errors may own global throwable references. Keep only their diagnostic across shutdown.
+        .map_err(|error| error.to_string())
+    }));
+    let detach = vm.detach_current_thread();
     // SAFETY: the attachment closure and all its JNI references are gone; this fixture never spawns
     // native workers or attaches daemon threads. No native code will call the VM after destruction.
     // Orderly shutdown also flushes unified GC logs and permits AOT training to write its cache.
-    unsafe { vm.destroy()? };
-    Ok(())
+    let destroy = unsafe { vm.destroy() };
+    let shutdown = detach.and(destroy);
+    if !matches!(run, Ok(Ok(())))
+        && let Err(error) = &shutdown
+    {
+        eprintln!("JVM shutdown also failed: {error}");
+    }
+    match run {
+        Ok(result) => {
+            result?;
+            Ok(shutdown?)
+        }
+        Err(panic) => resume_unwind(panic),
+    }
 }
 
 fn benchmark(
@@ -403,6 +519,26 @@ fn benchmark(
             std::mem::transmute::<usize, Upcall>(call(env, &class, control, 2)? as usize),
         )
     };
+    if !self_test && cold_ticks > 0 {
+        // Time to steady state: paced FFM ticks before any other warmup, reported per second.
+        reset(shared);
+        // SAFETY: live stub, same attached thread; dispatch catches all listener exceptions.
+        let (samples, overruns) = paced(cold_ticks, || {
+            tick(shared, || unsafe { ffm_dispatch(0) }, false)
+        });
+        println!("\n| Cold FFM ticks, second | mean µs/tick | max µs/tick |\n|---|---:|---:|");
+        for (second, window) in samples.chunks(20).enumerate() {
+            println!(
+                "| {} | {:.2} | {:.2} |",
+                second + 1,
+                window.iter().sum::<f64>() / window.len() as f64,
+                window.iter().copied().fold(0.0, f64::max)
+            );
+        }
+        println!("Cold deadline overruns: {overruns}");
+    }
+    reset(shared);
+    call(env, &class, control, 7)?;
     // SAFETY: the stub is live and we are on the JVM-attached thread.
     assert_eq!(unsafe { ffm_ping(41) }, 42);
     assert_eq!(call(env, &class, ping, 41)?, 42);
@@ -438,24 +574,6 @@ fn benchmark(
         return Ok(());
     }
     call(env, &class, control, 3)?;
-    if cold_ticks > 0 {
-        // Time to steady state: paced FFM ticks before any other warmup, reported per second.
-        reset(shared);
-        // SAFETY: live stub, same attached thread; dispatch catches all listener exceptions.
-        let (samples, overruns) = paced(cold_ticks, || {
-            tick(shared, || unsafe { ffm_dispatch(0) }, false)
-        });
-        println!("\n| Cold FFM ticks, second | mean µs/tick | max µs/tick |\n|---|---:|---:|");
-        for (second, window) in samples.chunks(20).enumerate() {
-            println!(
-                "| {} | {:.2} | {:.2} |",
-                second + 1,
-                window.iter().sum::<f64>() / window.len() as f64,
-                window.iter().copied().fold(0.0, f64::max)
-            );
-        }
-        println!("Cold deadline overruns: {overruns}");
-    }
     println!(
         "\nWarmup: {warmup_ms} ms per case; {ticks} measured ticks per dispatch path, 200 players at 20 TPS."
     );

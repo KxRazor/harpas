@@ -8,10 +8,9 @@ No JDK is needed to build the Rust workspace. `jni` is a benchmark-only dependen
 cargo run --release -p harpas-bench --example jvm-bridge
 ```
 
-The host compiles the synthetic Java fixture into `target/jvm-bridge/bridge.jar`, embeds the JVM, and attaches
-one thread for the whole run. The JAR is reused while its source is unchanged, including between JVM vendors
-and AOT training/production. Delete `target/jvm-bridge/bridge.jar` to force recompilation. Run instances
-sequentially: they share these build artifacts.
+The host compiles the synthetic Java fixture into `target/jvm-bridge/<source-hash>/bridge.jar`, embeds the
+JVM, and attaches one thread for the whole run. The JAR is reused while its source is unchanged, including
+between JVM vendors and AOT training/production. Delete the cached JAR to force recompilation.
 
 The default run takes about 45 seconds. `--ticks N` changes the measured ticks per dispatch path (default
 200), and `--warmup-ms N` changes the unpaced warmup per case (default 2000). `--cold-ticks N` first runs N
@@ -65,7 +64,9 @@ and increase the duration when evaluating production choices.
 
 ## JVM configurations
 
-Everything after the second `--` is passed unchanged as JVM options. The host defaults to `-Xrs -Xms64m
+Pass JVM options after the second `--`. The bridge reserves its class path, native access, and
+`harpas.bench.*` properties, and rejects VM configuration files and agents that could override them.
+Leave `JAVA_TOOL_OPTIONS` and `_JAVA_OPTIONS` unset. The host defaults to `-Xrs -Xms64m
 -Xmx256m --enable-native-access=ALL-UNNAMED`; appended options can override heap sizing. This fixture uses the
 unnamed module, whereas the production design restricts native access to the shim module.
 

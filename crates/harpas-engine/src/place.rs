@@ -25,6 +25,8 @@ use crate::chest::{self, CHEST, Chest};
 use crate::fluid::{FluidState, FluidType};
 use crate::furnace::{FURNACE, Furnace};
 use crate::inventory::{self, ItemStack};
+use crate::item_data::ItemCodec;
+use crate::world::World;
 use crate::{Game, neighbor, player};
 
 /// What a click with an item did (`InteractionResult`): only a placement consumes it.
@@ -539,23 +541,15 @@ impl Game {
     /// how fast a player drops stacks is not ported yet.
     pub(crate) fn set_creative_slot(&mut self, index: usize, slot: i16, mut stack: ItemStack) {
         let state = &mut self.players[index];
-        if !stack.is_valid() {
-            state.disconnecting = true;
-            state.send(player::Output::Disconnect("Network Protocol Error"));
-            return;
-        }
         if state.player.profile.game_mode != player::GameMode::Creative {
             return;
         }
+        let codec = self.world.as_ref().map(World::item_codec);
         if !stack.is_empty()
-            && let Some(store) = self
-                .world
-                .as_ref()
-                .and_then(|world| world.player_store.as_ref())
-            && let Err(error) = store
-                .codec
-                .write(&stack)
-                .and_then(|_| store.codec.resolve_stack_limit(&mut stack))
+            && let Err(error) = codec
+                .as_deref()
+                .unwrap_or_else(|| ItemCodec::fallback())
+                .normalize(&mut stack)
         {
             log::warn!(
                 "Refusing an unsavable Creative item from {}: {error}",
@@ -587,6 +581,7 @@ impl Game {
 
     /// Sends each player the slots of its inventory that changed (`broadcastChanges`, in the player's tick).
     pub(crate) fn send_inventory_changes(&mut self) {
+        self.close_removed_crafting_tables();
         for index in 0..self.players.len() {
             if self.players[index].disconnecting || !self.players[index].data_ready {
                 continue;
@@ -676,6 +671,7 @@ impl Game {
         changed: Vec<(i16, Option<crate::inventory::HashedStack>)>,
         carried: Option<crate::inventory::HashedStack>,
     ) {
+        self.close_removed_crafting_tables();
         self.validate_block_menu(index);
         if container_id != self.players[index].container_id() {
             return;
@@ -713,9 +709,13 @@ impl Game {
                     .world
                     .as_ref()
                     .expect("an open furnace is in the world");
-                let Ok(furnace) = world.furnace(pos) else {
-                    self.close_block_menu(index);
-                    return;
+                let furnace = match world.furnace(pos) {
+                    Ok(furnace) => furnace,
+                    Err(error) => {
+                        log::warn!("Cannot load furnace at {pos:?}: {error}");
+                        self.close_block_menu(index);
+                        return;
+                    }
                 };
                 self.synchronize_furnace(pos, &furnace);
                 Some(SharedSlots::Furnace(furnace))
@@ -723,8 +723,10 @@ impl Game {
             _ => None,
         };
         let recipes = self.world.as_ref().and_then(|w| w.recipes.clone());
+        let codec = self.world.as_ref().map(World::item_codec);
         let context = crate::menu::Context {
             recipes: recipes.as_deref(),
+            codec: codec.as_deref().unwrap_or_else(|| ItemCodec::fallback()),
             creative: mode_now == player::GameMode::Creative,
         };
         let state = &mut self.players[index];
@@ -759,11 +761,20 @@ impl Game {
                     .as_mut()
                     .expect("an open container is in the world");
                 let position = menu.position;
+                let mut reward = None;
                 let result = match &mut shared {
                     SharedSlots::Chest(chest, items) => {
                         world.save_chest_menu(*chest, items, updated)
                     }
                     SharedSlots::Furnace(furnace) => {
+                        if updated[crate::furnace::RESULT].count
+                            < furnace.slots[crate::furnace::RESULT].count
+                            && let Some(recipes) = &recipes
+                        {
+                            let mut random = state.random.clone();
+                            let points = furnace.claim_experience(recipes, &mut random);
+                            reward = Some((points, random));
+                        }
                         let slots = std::array::from_fn(|i| updated[i].clone());
                         furnace.set_slots(slots, recipes.as_deref());
                         world.save_furnace(position, furnace)
@@ -787,6 +798,11 @@ impl Game {
                         self.synchronize_furnace(position, &furnace);
                     }
                 }
+                if let Some((points, random)) = reward {
+                    let state = &mut self.players[index];
+                    state.random = random;
+                    state.award_furnace_experience(points);
+                }
             }
         }
         for stack in drops {
@@ -808,6 +824,7 @@ impl Game {
         let recipes = self.world.as_ref().and_then(|w| w.recipes.clone());
         let context = crate::menu::Context {
             recipes: recipes.as_deref(),
+            codec: ItemCodec::fallback(),
             creative: self.players[index].player.profile.game_mode == player::GameMode::Creative,
         };
         let drops = self.players[index].with_menu(|menu| menu.close(&context));

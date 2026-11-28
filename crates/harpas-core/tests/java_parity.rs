@@ -660,13 +660,11 @@ public final class Probe {
                 this.levels[zeroIdx] = first;
             }
             for (int idx = zeroIdx + 1; idx < total; idx++) {
-                if (idx >= 0) {
-                    int oct = zeroIdx - idx;
-                    if (set.contains(oct)) {
-                        this.levels[idx] = new Simplex(rng);
-                    } else {
-                        rng.consumeCount(262);
-                    }
+                int oct = zeroIdx - idx;
+                if (idx >= 0 && set.contains(oct)) {
+                    this.levels[idx] = new Simplex(rng);
+                } else {
+                    rng.consumeCount(262);
                 }
             }
             if (high > 0) {
@@ -990,7 +988,8 @@ public final class Probe {
             { 0 },
             { -3, -2, -1, 0 },
             { -4, -2, 0 },
-            { -3, -1, 0, 2 }
+            { -3, -1, 0, 2 },
+            { -3, -2 }
         };
         for (long seed : new long[] { 2345L, 0L, -123456789L }) {
             Simplex sx = new Simplex(XoroRng.fromSeed(seed));
@@ -1009,8 +1008,12 @@ public final class Probe {
                 }
             }
             for (int[] octs : simplexOctaves) {
-                PerlinSimplex psx = new PerlinSimplex(XoroRng.fromSeed(seed), octs);
-                PerlinSimplex psl = new PerlinSimplex(new LegacyRng(seed), octs);
+                Rng xoro = XoroRng.fromSeed(seed);
+                Rng legacy = new LegacyRng(seed);
+                PerlinSimplex psx = new PerlinSimplex(xoro, octs);
+                PerlinSimplex psl = new PerlinSimplex(legacy, octs);
+                h = mix(h, Integer.toUnsignedLong(xoro.nextInt()));
+                h = mix(h, Integer.toUnsignedLong(legacy.nextInt()));
                 for (int i = -10; i <= 10; i++) {
                     double x = i * 19.625;
                     double y = -i * 23.125;
@@ -1495,7 +1498,13 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
     assert_eq!(h, expected["blended_noise"], "blended_noise mismatch");
 
     h = FNV_OFFSET;
-    let simplex_octaves: [&[i32]; 4] = [&[0], &[-3, -2, -1, 0], &[-4, -2, 0], &[-3, -1, 0, 2]];
+    let simplex_octaves: [&[i32]; 5] = [
+        &[0],
+        &[-3, -2, -1, 0],
+        &[-4, -2, 0],
+        &[-3, -1, 0, 2],
+        &[-3, -2],
+    ];
     for seed in [2345_i64, 0, -123_456_789] {
         let mut xoro = XoroshiroRandom::new(seed);
         let sx = SimplexNoise::new(&mut xoro);
@@ -1519,6 +1528,8 @@ fn math_and_random_match_java_runtime_bit_for_bit() {
             let psx = PerlinSimplexNoise::new(&mut xoro, octs);
             let mut leg = LegacyRandom::new(seed);
             let psl = PerlinSimplexNoise::new(&mut leg, octs);
+            mix(&mut h, u64::from(xoro.next_int() as u32));
+            mix(&mut h, u64::from(leg.next_int() as u32));
             for i in -10..=10_i32 {
                 let x = (i as f64) * 19.625;
                 let y = (-i as f64) * 23.125;

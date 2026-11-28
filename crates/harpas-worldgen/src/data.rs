@@ -2018,7 +2018,11 @@ pub(crate) fn parse_noise_parameters(
             .ok_or_else(|| invalid_def(ctx, format!("amplitude[{idx}] must be a number")))?;
         amplitudes.push(amp);
     }
-    Ok(NoiseParameters::new(first_octave, amplitudes))
+    let parameters = NoiseParameters::new(first_octave, amplitudes);
+    parameters
+        .validate()
+        .map_err(|message| invalid_def(ctx, message))?;
+    Ok(parameters)
 }
 
 /// Parses a `DensityFunctionDef` from a `serde_json::Value`.

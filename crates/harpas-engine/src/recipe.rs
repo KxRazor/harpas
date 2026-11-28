@@ -123,7 +123,7 @@ impl Recipe {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SmeltingRecipe {
-    pub(crate) id: Option<String>,
+    pub(crate) id: String,
     pub(crate) result: ItemStack,
     pub(crate) ticks: i32,
 }
@@ -133,6 +133,7 @@ pub(crate) struct SmeltingRecipe {
 pub struct Recipes {
     recipes: Vec<Recipe>,
     smelting: HashMap<u32, SmeltingRecipe>,
+    smelting_experience: HashMap<String, f32>,
     fuels: HashMap<u32, i32>,
 }
 
@@ -253,11 +254,22 @@ impl Recipes {
             fuels: fuel_times(&tags),
             ..Self::default()
         };
-        for (id, json) in recipes {
+        for (index, (id, json)) in recipes.into_iter().enumerate() {
             if json.get("type").and_then(Value::as_str) == Some("minecraft:smelting") {
+                let id = id.map_or_else(|| format!("harpas:smelting/{index}"), str::to_owned);
                 let Some((recipe, ingredients)) = Self::parse_smelting(id, json, &tags) else {
                     continue;
                 };
+                let experience = json.get("experience").map_or(Some(0.0), Value::as_f64);
+                let Some(experience) = experience
+                    .map(|value| value as f32)
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                else {
+                    continue;
+                };
+                parsed
+                    .smelting_experience
+                    .insert(recipe.id.clone(), experience);
                 for item in ingredients {
                     parsed
                         .smelting
@@ -272,7 +284,7 @@ impl Recipes {
     }
 
     fn parse_smelting(
-        id: Option<&str>,
+        id: String,
         json: &Value,
         tags: &HashMap<String, HashSet<u32>>,
     ) -> Option<(SmeltingRecipe, Ingredient)> {
@@ -297,7 +309,7 @@ impl Recipes {
         let ingredients = ingredient(json.get("ingredient")?, tags)?;
         Some((
             SmeltingRecipe {
-                id: id.map(str::to_owned),
+                id,
                 result: stack,
                 ticks: i32::from(ticks),
             },
@@ -307,6 +319,14 @@ impl Recipes {
 
     pub(crate) fn smelting(&self, stack: &ItemStack) -> Option<&SmeltingRecipe> {
         self.smelting.get(&stack.item).filter(|_| !stack.is_empty())
+    }
+
+    pub(crate) fn smelting_experience(&self, id: &str) -> Option<f32> {
+        self.smelting_experience.get(id).copied().or_else(|| {
+            (!id.contains(':'))
+                .then(|| format!("minecraft:{id}"))
+                .and_then(|id| self.smelting_experience.get(&id).copied())
+        })
     }
 
     /// The number of ticks the stack's item fuels a furnace, or zero for an item that cannot burn.

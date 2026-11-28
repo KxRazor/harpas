@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
-use harpas_core::nbt::{Compound, Nbt};
+use harpas_core::nbt::Compound;
 use harpas_core::random::RandomSource;
 
 use crate::block::{self, BlockPos};
@@ -160,7 +160,7 @@ impl Animal {
     }
 
     pub(crate) fn no_ai(&self) -> bool {
-        self.nbt.get("NoAI") == Some(&Nbt::Byte(1))
+        crate::entity_data::nbt_bool(&self.nbt, "NoAI")
     }
 }
 
@@ -572,10 +572,13 @@ impl World {
         let z_collision = !equal(movement[2], collided[2]);
         let vertical = movement[1] != collided[1];
         let on_ground = vertical && movement[1] < 0.0;
-        if movement[1].abs() > 0.0 {
-            self.entities.on_ground[i] = on_ground;
+        let horizontal_from_ground = movement[1] == 0.0
+            && self.entities.on_ground[i]
+            && (collided[0] != 0.0 || collided[2] != 0.0);
+        if movement[1] != 0.0 || horizontal_from_ground {
+            self.entities.on_ground[i] = on_ground || horizontal_from_ground;
             // `checkSupportingBlock`.
-            if on_ground {
+            if self.entities.on_ground[i] {
                 let entity = bounds(self.entities.position[i], width, height);
                 let below = [
                     [entity[0][0], entity[0][1] - 1.0e-6, entity[0][2]],
@@ -583,7 +586,10 @@ impl World {
                 ];
                 let position = self.entities.position[i];
                 let mut found = self.supporting_block(below, position);
-                if found.is_none() && !self.entities.on_ground_no_blocks[i] {
+                if found.is_none()
+                    && !horizontal_from_ground
+                    && !self.entities.on_ground_no_blocks[i]
+                {
                     let back = [
                         [
                             below[0][0] - collided[0],
@@ -600,6 +606,9 @@ impl World {
                 }
                 self.entities.supporting[i] = found;
                 self.entities.on_ground_no_blocks[i] = found.is_none();
+                if horizontal_from_ground && found.is_none() {
+                    self.entities.on_ground[i] = false;
+                }
             } else {
                 self.entities.on_ground_no_blocks[i] = false;
                 self.entities.supporting[i] = None;
@@ -753,7 +762,9 @@ impl World {
             return false;
         }
         // `Entity.baseTick`: lava burns the item, 4 health a tick.
-        let in_lava = self.entity_fluid_height(self.entities.item_box(i), false) > 0.0;
+        let no_gravity = crate::entity_data::nbt_bool(&item.rest, "NoGravity");
+        let in_lava = !crate::entity_data::nbt_bool(&item.rest, "Invulnerable")
+            && self.entity_fluid_height(self.entities.item_box(i), false) > 0.0;
         if in_lava {
             let item = self.entities.item_mut(handle).expect("an item");
             item.health -= 4.0;
@@ -786,7 +797,7 @@ impl World {
                 v[1] + if v[1] < 0.06 { 5.0e-4 } else { 0.0 },
                 v[2] * 0.95,
             ];
-        } else {
+        } else if !no_gravity {
             v[1] -= 0.04;
         }
         // An item stuck in a block moves through blocks while it is pushed out (`noPhysics`).
@@ -857,7 +868,7 @@ impl World {
         if animal.no_ai() {
             return false;
         }
-        let gravity = if animal.nbt.get("NoGravity") == Some(&Nbt::Byte(1)) {
+        let gravity = if crate::entity_data::nbt_bool(&animal.nbt, "NoGravity") {
             0.0
         } else {
             0.08

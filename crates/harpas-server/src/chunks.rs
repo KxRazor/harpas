@@ -345,7 +345,7 @@ fn pack_light(light: &Light, omit_full_sky: bool) -> play::LightData {
         }
         let bit = 1_u64 << offset;
         match &section.sky {
-            Layer::Uniform(15) if omit_full_sky => {}
+            Layer::Uniform(15) if omit_full_sky && light.inherits_full_sky(section.y) => {}
             Layer::Uniform(0) => empty_sky |= bit,
             layer => {
                 sky |= bit;

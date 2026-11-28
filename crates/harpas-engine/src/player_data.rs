@@ -12,7 +12,7 @@ use harpas_core::nbt::{Compound, List, Nbt};
 
 use crate::inventory::{Inventory, ItemStack, SLOTS};
 use crate::item_data::{ItemCodec, invalid};
-use crate::player::{EffectKind, GameMode, PlayerState};
+use crate::player::{EffectKind, Experience, GameMode, PlayerState};
 use crate::survival::{ActiveEffect, ActiveEffects, Vitals};
 
 const CAPACITY: usize = 64;
@@ -34,6 +34,7 @@ pub struct PlayerInventory {
     root: Arc<Compound>,
     mode: Option<SavedGameMode>,
     vitals: Option<Vitals>,
+    experience: Experience,
     effects: ActiveEffects,
 }
 
@@ -84,12 +85,25 @@ impl PlayerInventory {
             Some(Nbt::Int(value @ 0..=8)) => *value as usize,
             _ => return Err(invalid("SelectedItemSlot must be an integer from 0 to 8")),
         };
+        let xp_int = |key| match root.get(key) {
+            Some(Nbt::Int(value)) => (*value).max(0),
+            _ => 0,
+        };
+        let experience = Experience {
+            progress: match root.get("XpP") {
+                Some(Nbt::Float(value)) if (0.0..1.0).contains(value) => *value,
+                _ => 0.0,
+            },
+            level: xp_int("XpLevel"),
+            total: xp_int("XpTotal"),
+        };
         Ok(Self {
             slots,
             selected,
             root: Arc::new(root),
             mode: None,
             vitals: None,
+            experience,
             effects: Default::default(),
         })
     }
@@ -139,6 +153,11 @@ impl PlayerInventory {
             root.insert("equipment", equipment);
         }
         root.insert("SelectedItemSlot", self.selected as i32);
+        if self.experience != Experience::default() {
+            root.insert("XpP", self.experience.progress);
+            root.insert("XpLevel", self.experience.level);
+            root.insert("XpTotal", self.experience.total);
+        }
         if let Some(mode) = self.mode {
             root.insert("playerGameType", mode.current.id());
             if let Some(previous) = mode.previous {
@@ -196,6 +215,7 @@ impl PlayerInventory {
                 flying: player.flying,
             }),
             vitals: Some(player.vitals),
+            experience: player.experience,
             effects: player.effects.clone(),
         }
     }
@@ -646,6 +666,7 @@ impl crate::Game {
     ) {
         data.restore_game_mode(player);
         data.restore_vitals(player);
+        player.experience = data.experience;
         player.inventory.slots = data.slots.clone();
         player.inventory.selected = data.selected;
         player.data_ready = true;

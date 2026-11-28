@@ -26,13 +26,24 @@ public final class Bridge {
     private static native double readX(long address);
     private static native void teleport(long address, double x, double y, double z);
 
-    private static boolean jvmciCompiler() {
+    private static String vmOption(String name) {
+        var diagnostic = ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class);
+        if (diagnostic == null) return "";
         try {
-            return ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class)
-                .getVMOption("UseJVMCICompiler").getValue().equals("true");
+            return diagnostic.getVMOption(name).getValue();
         } catch (IllegalArgumentException missing) {
-            return false; // A HotSpot build without JVMCI.
+            return "";
         }
+    }
+
+    private static String compilerName() {
+        var compiler = ManagementFactory.getCompilationMXBean();
+        if ("false".equals(vmOption("UseCompiler"))) return "disabled";
+        if (compiler == null) return "unavailable";
+        if ("true".equals(vmOption("TieredCompilation"))
+            && !"4".equals(vmOption("TieredStopAtLevel"))) return compiler.getName() + " (C1 only)";
+        if ("true".equals(vmOption("UseJVMCICompiler"))) return compiler.getName() + " (JVMCI)";
+        return compiler.getName();
     }
 
     private static MemorySegment address(String name) {
@@ -143,8 +154,12 @@ public final class Bridge {
         return switch ((int) operation) {
             case 0 -> {
                 if (Runtime.version().feature() != 25) throw new IllegalStateException("use JDK 25");
+                for (int i = 0; i < PLAYERS; i++) VIEWS[i] = new Player(i);
+                yield 0;
+            }
+            case 7 -> {
                 for (int i = 0; i < PLAYERS; i++) {
-                    Player player = VIEWS[i] = new Player(i);
+                    Player player = VIEWS[i];
                     double expected = i;
                     if (player.getLocation().x != expected || readX(player.memory.address()) != expected
                         || (double) READ.invokeExact(player.memory) != expected
@@ -167,7 +182,7 @@ public final class Bridge {
             case 3 -> {
                 System.out.println(System.getProperty("java.vm.vendor") + " " + System.getProperty("java.runtime.version")
                     + "; " + System.getProperty("os.name") + " " + System.getProperty("os.arch")
-                    + "; top-tier JIT: " + (jvmciCompiler() ? "Graal (JVMCI)" : "C2"));
+                    + "; compiler: " + compilerName());
                 System.out.println("VM arguments: " + ManagementFactory.getRuntimeMXBean().getInputArguments()
                     .stream().filter(arg -> !arg.startsWith("-Dharpas.bench.")).toList());
                 System.out.println("Collectors: " + ManagementFactory.getGarbageCollectorMXBeans().stream()
@@ -176,11 +191,17 @@ public final class Bridge {
             }
             case 4 -> {
                 if (failure != null) throw new AssertionError("listener failed", failure);
-                for (GarbageCollectorMXBean gc : ManagementFactory.getGarbageCollectorMXBeans())
-                    System.out.println("GC " + gc.getName() + ": " + gc.getCollectionCount()
-                        + " collections, " + gc.getCollectionTime() + " ms collection time (whole run)");
+                for (GarbageCollectorMXBean gc : ManagementFactory.getGarbageCollectorMXBeans()) {
+                    long count = gc.getCollectionCount();
+                    long time = gc.getCollectionTime();
+                    System.out.println("GC " + gc.getName() + ": " + (count < 0 ? "unavailable" : count)
+                        + " collections, " + (time < 0 ? "unavailable" : time + " ms") + " collection time (whole run)");
+                }
+                var compiler = ManagementFactory.getCompilationMXBean();
+                String compilationTime = compiler != null && compiler.isCompilationTimeMonitoringSupported()
+                    ? compiler.getTotalCompilationTime() + " ms" : "unavailable";
                 System.out.println("Heap used: " + ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed()
-                    + " bytes; compiler: " + ManagementFactory.getCompilationMXBean().getTotalCompilationTime() + " ms");
+                    + " bytes; compilation time: " + compilationTime);
                 yield 0;
             }
             case 5 -> { throwInListener = true; yield 0; }

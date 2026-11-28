@@ -72,6 +72,7 @@ struct ShapeUpdate {
 #[derive(Debug, Clone, Copy)]
 struct NeighborUpdates {
     source: BlockPos,
+    state: u32,
     /// The next direction, in [`UPDATE_ORDER`].
     next: usize,
 }
@@ -146,6 +147,17 @@ impl World {
         flags: u32,
         recursion: u32,
     ) -> io::Result<bool> {
+        self.set_block_with_fluid_delay(pos, state, flags, recursion, None)
+    }
+
+    pub(crate) fn set_block_with_fluid_delay(
+        &mut self,
+        pos: BlockPos,
+        state: u32,
+        flags: u32,
+        recursion: u32,
+        delay: Option<i32>,
+    ) -> io::Result<bool> {
         let Some(old) = self.block_state(pos) else {
             return Ok(false);
         };
@@ -211,6 +223,9 @@ impl World {
             .chunk_mut(pos.chunk())
             .expect("the chunk is still loaded");
         block::set(chunk, pos, state, biome).expect("the block change was validated");
+        if old_name == Some("minecraft:crafting_table") && new_name != "minecraft:crafting_table" {
+            self.broken_crafting_tables.insert(pos);
+        }
         if was_chest && !is_chest {
             self.maps.forget_chest(pos);
         }
@@ -236,7 +251,10 @@ impl World {
             self.relight_around(pos);
         }
         // `onPlace`, as the chunk sets the block.
-        self.liquid_changed(pos, state);
+        self.liquid_changed(pos, state, delay);
+        if self.block_state(pos) != Some(state) {
+            return Ok(true);
+        }
         if flags & UPDATE_CLIENTS != 0 {
             self.block_changed(pos);
         }
@@ -246,6 +264,7 @@ impl World {
                 pos,
                 Entry::Neighbors(NeighborUpdates {
                     source: pos,
+                    state,
                     next: 0,
                 }),
             );
@@ -253,6 +272,9 @@ impl World {
         if flags & UPDATE_KNOWN_SHAPE == 0 && recursion > 0 {
             let flags = flags & !(UPDATE_NEIGHBORS | UPDATE_SUPPRESS_DROPS);
             for direction in UPDATE_SHAPE_ORDER {
+                if self.block_state(pos) != Some(state) {
+                    break;
+                }
                 let target = step(pos, direction);
                 self.add_and_run(
                     target,
@@ -342,6 +364,10 @@ impl World {
                         false
                     }
                     Entry::Neighbors(mut updates) => {
+                        if self.block_state(updates.source) != Some(updates.state) {
+                            self.updater.stack.remove(top);
+                            break;
+                        }
                         let target = step(updates.source, UPDATE_ORDER[updates.next]);
                         updates.next += 1;
                         self.updater.stack[top] = Entry::Neighbors(updates);
@@ -373,12 +399,15 @@ impl World {
             return;
         }
         if let Some(state) = self.block_state(pos) {
-            self.liquid_changed(pos, state);
+            self.liquid_changed(pos, state, None);
         }
     }
 
     /// `NeighborUpdater.executeShapeUpdate` and `Block.updateOrDestroy`.
     fn execute_shape_update(&mut self, update: ShapeUpdate) {
+        if self.block_state(update.neighbor_pos) != Some(update.neighbor_state) {
+            return;
+        }
         let Some(state) = self.block_state(update.pos) else {
             return;
         };

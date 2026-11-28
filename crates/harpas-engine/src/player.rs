@@ -339,6 +339,8 @@ pub enum Input {
         /// Whether the whole stack was dropped.
         all: bool,
     },
+    /// Swap the selected hotbar slot with the off hand.
+    SwapHands,
     /// The player started, stopped or finished breaking a block. The client predicted the result and waits
     /// for `sequence` to be acknowledged.
     Dig {
@@ -470,6 +472,15 @@ pub enum Output {
         food: i32,
         /// Food saturation.
         saturation: f32,
+    },
+    /// Update the local player's experience bar.
+    Experience {
+        /// Fraction of the current level.
+        progress: f32,
+        /// Current level.
+        level: i32,
+        /// Total points collected.
+        total: i32,
     },
     /// Update the local player's temporary hearts.
     Absorption {
@@ -935,6 +946,46 @@ pub(crate) struct View {
     pub(crate) chunks: Vec<ChunkPos>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Experience {
+    pub(crate) progress: f32,
+    pub(crate) level: i32,
+    pub(crate) total: i32,
+}
+
+impl Experience {
+    fn next_level_cost(level: i32) -> f64 {
+        let level = f64::from(level);
+        if level >= 30.0 {
+            9.0 * level - 158.0
+        } else if level >= 15.0 {
+            5.0 * level - 38.0
+        } else {
+            2.0 * level + 7.0
+        }
+    }
+
+    pub(crate) fn add(&mut self, earned: i32) {
+        self.total = self.total.saturating_add(earned);
+        let mut cost = Self::next_level_cost(self.level);
+        let mut points = f64::from(self.progress) * cost + f64::from(earned);
+        while points >= cost && self.level < i32::MAX {
+            points -= cost;
+            self.level += 1;
+            cost = Self::next_level_cost(self.level);
+        }
+        self.progress = (points / cost).min(f64::from(1.0 - f32::EPSILON)) as f32;
+    }
+
+    pub(crate) fn update(self) -> Output {
+        Output::Experience {
+            progress: self.progress,
+            level: self.level,
+            total: self.total,
+        }
+    }
+}
+
 pub(crate) struct PlayerState {
     pub(crate) player: Player,
     pub(crate) chat_session: Option<ChatSession>,
@@ -955,6 +1006,7 @@ pub(crate) struct PlayerState {
     pub(crate) flying: bool,
     pub(crate) previous_game_mode: Option<GameMode>,
     pub(crate) vitals: crate::survival::Vitals,
+    pub(crate) experience: Experience,
     pub(crate) peaceful_food_ticks: u8,
     pub(crate) sprinting: bool,
     pub(crate) item_use: Option<crate::survival::ItemUse>,
@@ -1067,6 +1119,7 @@ impl PlayerState {
             flying,
             previous_game_mode: None,
             vitals: crate::survival::Vitals::default(),
+            experience: Experience::default(),
             peaceful_food_ticks: 0,
             sprinting: false,
             item_use: None,
@@ -1193,6 +1246,8 @@ impl PlayerState {
         let id = self.next_teleport;
         self.next_teleport = id.checked_add(1).unwrap_or(1);
         self.awaiting_teleport = Some(id);
+        self.client_floating = false;
+        self.floating_ticks = 0;
         self.fall_distance = 0.0;
         self.horizontal_movement_squared = 0.0;
         id

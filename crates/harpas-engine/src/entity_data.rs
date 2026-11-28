@@ -58,8 +58,14 @@ fn vector(root: &Compound, name: &str) -> io::Result<[f64; 3]> {
 }
 
 fn position(root: &Compound, chunk: ChunkPos) -> io::Result<[f64; 3]> {
-    let [x, y, z] = vector(root, "Pos")?;
-    if x.abs() > 30_000_512.0
+    let pos = vector(root, "Pos")?;
+    check_position(pos, chunk)?;
+    Ok(pos)
+}
+
+fn check_position([x, y, z]: [f64; 3], chunk: ChunkPos) -> io::Result<()> {
+    if ![x, y, z].into_iter().all(f64::is_finite)
+        || x.abs() > 30_000_512.0
         || y.abs() > 20_000_000.0
         || z.abs() > 30_000_512.0
         || ChunkPos::at(x, z) != chunk
@@ -68,7 +74,14 @@ fn position(root: &Compound, chunk: ChunkPos) -> io::Result<[f64; 3]> {
             "entity position is outside its saved chunk or world limits",
         ));
     }
-    Ok([x, y, z])
+    Ok(())
+}
+
+fn check_motion(motion: [f64; 3]) -> io::Result<()> {
+    if !motion.into_iter().all(|v| (-10.0..=10.0).contains(&v)) {
+        return Err(invalid("entity Motion cannot round trip"));
+    }
+    Ok(())
 }
 
 fn velocity(root: &Compound) -> io::Result<[f64; 3]> {
@@ -91,6 +104,10 @@ impl SavedItem {
         if stack.is_empty() {
             return Err(invalid("item entity holds an empty stack"));
         }
+        let health = short("Health", 5)?;
+        if health <= 0 {
+            return Err(invalid("expected a living item entity"));
+        }
         let mut rest = root.clone();
         for key in [
             "id",
@@ -109,16 +126,27 @@ impl SavedItem {
             uuid,
             position: position(root, chunk)?,
             velocity: velocity(root)?,
-            on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
+            on_ground: nbt_bool(root, "OnGround"),
             stack,
             age: short("Age", 0)?,
             pickup_delay: short("PickupDelay", 0)?,
-            health: short("Health", 5)? as f32,
+            health: health as f32,
             rest: Arc::new(rest),
         })
     }
 
-    fn to_nbt(&self, codec: &ItemCodec) -> io::Result<Compound> {
+    fn to_nbt(&self, chunk: ChunkPos, codec: &ItemCodec) -> io::Result<Compound> {
+        check_position(self.position, chunk)?;
+        check_motion(self.velocity)?;
+        let age = i16::try_from(self.age).map_err(|_| invalid("item Age does not fit a short"))?;
+        let delay = i16::try_from(self.pickup_delay)
+            .map_err(|_| invalid("item PickupDelay does not fit a short"))?;
+        let health = self.health as i16;
+        if self.stack.is_empty() || health <= 0 || f32::from(health) != self.health {
+            return Err(invalid(
+                "item entity must have a live stack and positive short Health",
+            ));
+        }
         let mut root = (*self.rest).clone();
         root.insert("id", "minecraft:item");
         root.insert("UUID", uuid_tag(self.uuid));
@@ -126,9 +154,9 @@ impl SavedItem {
         root.insert("Motion", Nbt::List(List::Double(self.velocity.to_vec())));
         root.insert("OnGround", Nbt::Byte(i8::from(self.on_ground)));
         root.insert("Item", Nbt::Compound(codec.write(&self.stack)?));
-        root.insert("Age", Nbt::Short(self.age as i16));
-        root.insert("PickupDelay", Nbt::Short(self.pickup_delay as i16));
-        root.insert("Health", Nbt::Short(self.health as i16));
+        root.insert("Age", Nbt::Short(age));
+        root.insert("PickupDelay", Nbt::Short(delay));
+        root.insert("Health", Nbt::Short(health));
         // Required by the base entity codec for newly dropped items. Loaded entities retain their values.
         for (name, value) in [
             ("Rotation", Nbt::List(List::Float(vec![0.0, 0.0]))),
@@ -191,7 +219,7 @@ impl SavedAnimal {
             uuid: read_uuid(root)?,
             position: position(root, chunk)?,
             velocity: velocity(root)?,
-            on_ground: root.get("OnGround") == Some(&Nbt::Byte(1)),
+            on_ground: nbt_bool(root, "OnGround"),
             animal: Animal::new(
                 species,
                 rotation,
@@ -203,8 +231,24 @@ impl SavedAnimal {
         })
     }
 
-    fn to_nbt(&self) -> Compound {
+    fn to_nbt(&self, chunk: ChunkPos) -> io::Result<Compound> {
+        check_position(self.position, chunk)?;
+        check_motion(self.velocity)?;
+        if !self.animal.rotation.into_iter().all(f32::is_finite)
+            || !self.animal.health.is_finite()
+            || self.animal.health <= 0.0
+            || !self.animal.fall_distance.is_finite()
+        {
+            return Err(invalid("animal state cannot round trip"));
+        }
         let mut root = (*self.animal.nbt).clone();
+        root.insert(
+            "id",
+            match self.animal.species {
+                AnimalSpecies::Pig => "minecraft:pig",
+                AnimalSpecies::Cow => "minecraft:cow",
+            },
+        );
         root.insert("UUID", uuid_tag(self.uuid));
         root.insert("Pos", Nbt::List(List::Double(self.position.to_vec())));
         root.insert("Motion", Nbt::List(List::Double(self.velocity.to_vec())));
@@ -219,7 +263,7 @@ impl SavedAnimal {
         if self.animal.fall_distance != 0.0 || root.get("fall_distance").is_some() {
             root.insert("fall_distance", Nbt::Double(self.animal.fall_distance));
         }
-        root
+        Ok(root)
     }
 }
 
@@ -240,7 +284,8 @@ impl EntityChunk {
         entries
             .iter()
             .filter(|entity| {
-                matches!(entity.get("id"), Some(Nbt::String(id)) if types.contains(id))
+                matches!(entity.get("id"), Some(Nbt::String(id)) if types.contains(id)
+                    || (!id.contains(':') && types.contains(&format!("minecraft:{id}"))))
                     && !persistent(entity)
             })
             .count()
@@ -320,15 +365,73 @@ impl EntityChunk {
             Some(Nbt::List(List::Compound(entries))) => entries,
             _ => Vec::new(),
         };
+        let mut uuids = std::collections::HashSet::new();
         for item in &self.items {
-            entries.push(item.to_nbt(codec)?);
+            if !uuids.insert(item.uuid) {
+                return Err(invalid("duplicate entity UUID"));
+            }
+            entries.push(item.to_nbt(pos, codec)?);
         }
-        entries.extend(self.animals.iter().map(SavedAnimal::to_nbt));
+        for animal in &self.animals {
+            if !uuids.insert(animal.uuid) {
+                return Err(invalid("duplicate entity UUID"));
+            }
+            entries.push(animal.to_nbt(pos)?);
+        }
         root.insert("Entities", Nbt::List(List::Compound(entries)));
         Ok(root)
     }
 }
 
 pub(crate) fn persistent(entity: &Compound) -> bool {
-    matches!(entity.get("PersistenceRequired"), Some(Nbt::Byte(value)) if *value != 0)
+    nbt_bool(entity, "PersistenceRequired")
+}
+
+pub(crate) fn nbt_bool(entity: &Compound, key: &str) -> bool {
+    matches!(entity.get(key), Some(Nbt::Byte(value)) if *value != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_items_round_trip_and_invalid_snapshots_fail_before_encoding() {
+        let pos = ChunkPos { x: 0, z: 0 };
+        let codec = ItemCodec::default();
+        let mut source = EntityChunk::default();
+        source.items.push(SavedItem {
+            uuid: 1,
+            position: [1.0, 64.0, 1.0],
+            velocity: [0.0; 3],
+            on_ground: false,
+            stack: codec
+                .read(&Compound::from_iter([("id", "minecraft:stone")]))
+                .unwrap(),
+            age: i32::from(i16::MIN),
+            pickup_delay: i32::from(i16::MAX),
+            health: 5.0,
+            rest: Arc::default(),
+        });
+        let mut root = source.to_nbt(pos, &codec).unwrap();
+        let Some(Nbt::List(List::Compound(mut entities))) = root.remove("Entities") else {
+            panic!("missing entities");
+        };
+        entities[0].insert("id", "item");
+        entities[0].insert("OnGround", Nbt::Byte(-1));
+        root.insert("Entities", List::Compound(entities));
+        let loaded = EntityChunk::read(root, pos, &codec).unwrap();
+        assert_eq!(loaded.items.len(), 1);
+        assert!(loaded.items[0].on_ground);
+        assert_eq!(loaded.items[0].pickup_delay, i32::from(i16::MAX));
+        assert!(source.to_nbt(ChunkPos { x: 1, z: 0 }, &codec).is_err());
+        source.items.push(source.items[0].clone());
+        assert!(source.to_nbt(pos, &codec).is_err());
+        source.items.pop();
+        source.items[0].age = 32_768;
+        assert!(source.to_nbt(pos, &codec).is_err());
+        source.items[0].age = 0;
+        source.items[0].velocity[0] = 11.0;
+        assert!(source.to_nbt(pos, &codec).is_err());
+    }
 }

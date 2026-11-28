@@ -13,6 +13,7 @@ use crate::inventory::{ArmorSlot, ComponentPatch, ItemStack};
 use crate::player::EffectKind;
 
 const POTION_CONTENTS: &str = "minecraft:potion_contents";
+const POTION_DURATION_SCALE: &str = "minecraft:potion_duration_scale";
 pub(crate) const STEW_EFFECTS: &str = "minecraft:suspicious_stew_effects";
 const DEFAULT_STEW_DURATION: i32 = 160;
 const DAMAGE: &str = "minecraft:damage";
@@ -236,32 +237,46 @@ impl ItemCodec {
             return None;
         }
         let mut consumable = self.consumables.get(&stack.item)?.clone();
-        if consumable.food.is_some() && self.component_removed(stack, FOOD) {
-            return None;
+        if self.component_removed(stack, FOOD) {
+            consumable.food = None;
         }
         if self.component_removed(stack, USE_REMAINDER) {
             consumable.remainder = None;
         }
         if stack.name() == Some("minecraft:potion") {
-            let Nbt::Compound(contents) = self.saved_component(stack, POTION_CONTENTS)? else {
-                return None;
-            };
-            let Some(Nbt::String(name)) = contents.get("potion") else {
-                return None;
-            };
-            let (duration, amplifier) = match name.as_str() {
-                "minecraft:regeneration" => (900, 0),
-                "minecraft:long_regeneration" => (1800, 0),
-                "minecraft:strong_regeneration" => (450, 1),
-                _ => return None,
-            };
-            consumable.effect = Some(ConsumeEffect::ApplyPotion(FoodEffect {
-                kind: EffectKind::Regeneration,
-                duration,
-                amplifier,
-            }));
+            let effect = self.potion_effect(stack)?;
+            if consumable.effect.is_none() {
+                consumable.effect = Some(ConsumeEffect::ApplyPotion(effect));
+            }
         }
         Some(consumable)
+    }
+
+    pub(crate) fn potion_effect(&self, stack: &ItemStack) -> Option<FoodEffect> {
+        if stack.name() != Some("minecraft:potion") {
+            return None;
+        }
+        let Nbt::Compound(contents) = self.saved_component(stack, POTION_CONTENTS)? else {
+            return None;
+        };
+        let Some(Nbt::String(name)) = contents.get("potion") else {
+            return None;
+        };
+        let (duration, amplifier) = match name.as_str() {
+            "minecraft:regeneration" => (900, 0),
+            "minecraft:long_regeneration" => (1800, 0),
+            "minecraft:strong_regeneration" => (450, 1),
+            _ => return None,
+        };
+        let scale = match self.saved_component(stack, POTION_DURATION_SCALE) {
+            Some(Nbt::Float(scale)) => scale,
+            _ => 1.0,
+        };
+        Some(FoodEffect {
+            kind: EffectKind::Regeneration,
+            duration: ((duration as f32 * scale) as i32).max(1),
+            amplifier,
+        })
     }
 
     pub(crate) fn is_shield(&self, stack: &ItemStack) -> bool {
@@ -465,11 +480,6 @@ impl ItemCodec {
             }
             _ => return Err(invalid("item components must be a compound")),
         }
-        patch.added.sort_by_key(|(id, _)| *id);
-        patch.removed.sort_unstable();
-        if patch.added.iter().any(|(id, _)| patch.removed.contains(id)) {
-            return Err(invalid("component is both added and removed"));
-        }
         let mut extra = tag.clone();
         for key in ["id", "count", "components", "Slot"] {
             extra.remove(key);
@@ -484,10 +494,24 @@ impl ItemCodec {
             count,
             components: Arc::new(patch),
         };
-        // Prove that the loaded network values can be saved before exposing an editable inventory.
-        self.write(&stack)?;
-        self.resolve_stack_limit(&mut stack)?;
+        self.normalize(&mut stack)?;
         Ok(stack)
+    }
+
+    /// Validates a component patch and puts equivalent item values in the same wire order.
+    pub(crate) fn normalize(&self, stack: &mut ItemStack) -> io::Result<()> {
+        let saved = self.write(stack)?;
+        let patch = Arc::make_mut(&mut stack.components);
+        if let Some(Nbt::Compound(components)) = saved.get("components") {
+            for (id, bytes) in &mut patch.added {
+                let name = self.name(*id)?;
+                *bytes =
+                    encode_component(name, components.get(name).expect("written component"), self)?;
+            }
+        }
+        patch.added.sort_unstable_by_key(|(id, _)| *id);
+        patch.removed.sort_unstable();
+        self.resolve_stack_limit(stack)
     }
 
     /// Writes an item in the vanilla item schema; runtime menu slots are assigned by the inventory serializer.
@@ -548,7 +572,12 @@ impl ItemCodec {
         };
         if let Some(id) = self.ids.get("minecraft:max_stack_size") {
             if let Some((_, bytes)) = patch.added.iter().find(|(kind, _)| kind == id) {
-                limit = Some(read_varint(&mut bytes.as_slice())?);
+                let mut bytes = bytes.as_slice();
+                let value = read_varint(&mut bytes)?;
+                if !bytes.is_empty() || !(1..=99).contains(&value) {
+                    return Err(invalid("invalid max_stack_size"));
+                }
+                limit = Some(value);
             } else if patch.removed.contains(id) {
                 limit = Some(1);
             }
@@ -627,6 +656,41 @@ fn integer(value: &Nbt) -> io::Result<i32> {
     }
 }
 
+// NbtOps represents text of different tag types in a list using empty-key wrappers.
+fn unwrapped_text(tag: &Compound) -> Option<&Nbt> {
+    (tag.len() == 1).then(|| tag.get("")).flatten()
+}
+
+fn valid_text(value: &Nbt) -> bool {
+    match value {
+        Nbt::String(_) => true,
+        Nbt::Compound(tag) => !tag.is_empty() && unwrapped_text(tag).is_none(),
+        Nbt::List(list) => valid_text_list(list),
+        _ => false,
+    }
+}
+
+fn valid_text_list(list: &List) -> bool {
+    match list {
+        List::String(lines) => !lines.is_empty(),
+        List::List(lines) => !lines.is_empty() && lines.iter().all(valid_text_list),
+        List::Compound(lines) => {
+            !lines.is_empty()
+                && lines
+                    .iter()
+                    .all(|line| unwrapped_text(line).map_or(!line.is_empty(), valid_text))
+        }
+        _ => false,
+    }
+}
+
+fn write_text(bytes: &mut Vec<u8>, text: &Nbt) -> io::Result<()> {
+    if !valid_text(text) {
+        return Err(invalid("invalid item text"));
+    }
+    text.write_network(bytes).map_err(invalid)
+}
+
 fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Vec<u8>> {
     validate_component(name, value)?;
     let mut bytes = Vec::new();
@@ -678,7 +742,7 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
             _ => return Err(invalid("expected string component")),
         },
         Kind::Lore => match value {
-            Nbt::List(List::Empty) => write_varint(&mut bytes, 0),
+            Nbt::List(list) if list.is_empty() => write_varint(&mut bytes, 0),
             Nbt::List(List::String(lines)) => {
                 write_varint(&mut bytes, lines.len() as i32);
                 for line in lines {
@@ -690,15 +754,15 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
             Nbt::List(List::Compound(lines)) => {
                 write_varint(&mut bytes, lines.len() as i32);
                 for line in lines {
-                    if line.len() == 1
-                        && let Some(value) = line.get("")
-                    {
-                        value.write_network(&mut bytes).map_err(invalid)?;
-                    } else {
-                        Nbt::Compound(line.clone())
-                            .write_network(&mut bytes)
-                            .map_err(invalid)?;
-                    }
+                    let compound = Nbt::Compound(line.clone());
+                    let text = unwrapped_text(line).unwrap_or(&compound);
+                    write_text(&mut bytes, text)?;
+                }
+            }
+            Nbt::List(List::List(lines)) => {
+                write_varint(&mut bytes, lines.len() as i32);
+                for line in lines {
+                    write_text(&mut bytes, &Nbt::List(line.clone()))?;
                 }
             }
             _ => return Err(invalid("expected text component list")),
@@ -717,7 +781,7 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
             let Nbt::Compound(levels) = value else {
                 return Err(invalid("expected enchantment map"));
             };
-            write_varint(&mut bytes, levels.len() as i32);
+            let mut ordered = Vec::with_capacity(levels.len());
             for (name, level) in levels.iter() {
                 let full = if name.contains(':') {
                     name.to_owned()
@@ -733,6 +797,14 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
                 if !(0..=255).contains(&level) {
                     return Err(invalid("enchantment level outside 0..=255"));
                 }
+                ordered.push((id, level));
+            }
+            ordered.sort_unstable_by_key(|&(id, _)| id);
+            if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                return Err(invalid("duplicate enchantment"));
+            }
+            write_varint(&mut bytes, ordered.len() as i32);
+            for (id, level) in ordered {
                 write_varint(&mut bytes, id as i32);
                 write_varint(&mut bytes, level);
             }
@@ -777,6 +849,9 @@ fn decode_component(name: &str, mut bytes: &[u8], codec: &ItemCodec) -> io::Resu
             let lines = (0..size)
                 .map(|_| Nbt::read_network(&mut bytes).map_err(invalid))
                 .collect::<io::Result<Vec<_>>>()?;
+            if !lines.iter().all(valid_text) {
+                return Err(invalid("invalid lore text"));
+            }
             if lines.iter().all(|line| matches!(line, Nbt::String(_))) {
                 let value = Nbt::List(if lines.is_empty() {
                     List::Empty
@@ -802,13 +877,10 @@ fn decode_component(name: &str, mut bytes: &[u8], codec: &ItemCodec) -> io::Resu
                 lines
                     .into_iter()
                     .map(|line| match line {
-                        Nbt::Compound(value) => Ok(value),
-                        Nbt::String(value) => {
-                            Ok(Compound::from_iter([("".to_owned(), Nbt::String(value))]))
-                        }
-                        _ => Err(invalid("invalid lore text")),
+                        Nbt::Compound(value) => value,
+                        value => Compound::from_iter([("", value)]),
                     })
-                    .collect::<io::Result<_>>()?,
+                    .collect(),
             ))
         }
         Kind::Rarity => Nbt::from(
@@ -979,11 +1051,10 @@ fn validate_component(name: &str, value: &Nbt) -> io::Result<()> {
                     && matches!(entry.get("x"), Some(Nbt::Double(x)) if x.is_finite())
                     && matches!(entry.get("z"), Some(Nbt::Double(z)) if z.is_finite())
                     && matches!(entry.get("rotation"), Some(Nbt::Float(r)) if r.is_finite())))),
-        ("custom_name" | "item_name", value) => {
-            matches!(value, Nbt::String(_) | Nbt::Compound(_) | Nbt::List(_))
-        }
+        ("custom_name" | "item_name", value) => valid_text(value),
+        ("lore", Nbt::List(lines)) => lines.len() <= 256,
         ("enchantable", Nbt::Compound(value)) => {
-            matches!(value.get("value"), Some(Nbt::Int(value)) if *value > 0)
+            value.len() == 1 && matches!(value.get("value"), Some(Nbt::Int(value)) if *value > 0)
         }
         ("item_model" | "tooltip_style" | "note_block_sound", Nbt::String(value)) => {
             let (namespace, path) = value.split_once(':').unwrap_or(("minecraft", value));
@@ -1174,6 +1245,57 @@ mod tests {
     }
 
     #[test]
+    fn text_and_enchantments_survive_canonical_component_order() {
+        let codec = ItemCodec::new(&[
+            "minecraft:enchantments".into(),
+            "minecraft:lore".into(),
+            "minecraft:custom_name".into(),
+        ])
+        .with_enchantments(&["minecraft:sharpness", "minecraft:knockback"]);
+        let rich = Nbt::List(List::String(vec!["one".into(), "two".into()]));
+        let lore = Nbt::List(List::Compound(vec![
+            Compound::from_iter([("", rich.clone())]),
+            Compound::from_iter([("text", "three")]),
+        ]));
+        let mut tag = Compound::from_iter([("id", "minecraft:diamond_sword")]);
+        tag.insert(
+            "components",
+            Compound::from_iter([
+                ("minecraft:lore", lore.clone()),
+                ("minecraft:custom_name", rich.clone()),
+                (
+                    "minecraft:enchantments",
+                    Nbt::Compound(Compound::from_iter([("knockback", 1), ("sharpness", 2)])),
+                ),
+            ]),
+        );
+        let canonical = codec.read(&tag).unwrap();
+        let mut reordered = canonical.clone();
+        let patch = Arc::make_mut(&mut reordered.components);
+        patch.added[0].1 = vec![2, 1, 1, 0, 2];
+        patch.added.reverse();
+        codec.normalize(&mut reordered).unwrap();
+        assert_eq!(canonical, reordered);
+        assert_eq!(
+            codec.saved_component(&reordered, "minecraft:lore"),
+            Some(lore)
+        );
+        assert_eq!(
+            codec.saved_component(&reordered, "minecraft:custom_name"),
+            Some(rich)
+        );
+        assert!(
+            codec
+                .set_saved_component(
+                    &mut reordered,
+                    "minecraft:lore",
+                    &Nbt::List(List::Compound(vec![Compound::from_iter([("", 5)])]))
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn potion_contents_preserve_the_stack_limit_and_reject_custom_effects() {
         let codec = ItemCodec::new(&[
             POTION_CONTENTS.to_owned(),
@@ -1212,24 +1334,28 @@ mod tests {
 
     #[test]
     fn only_supported_potion_contents_can_be_drunk() {
-        let codec = ItemCodec::new(&[POTION_CONTENTS.to_owned(), USE_REMAINDER.to_owned()])
-            .with_potions(&[
-                "minecraft:regeneration".to_owned(),
-                "minecraft:water_breathing".to_owned(),
-            ])
-            .with_consumables(HashMap::from([(
-                items().id("minecraft:potion").unwrap(),
-                Consumable {
-                    food: None,
-                    use_ticks: 32,
-                    remainder: Some(ItemStack {
-                        item: items().id("minecraft:glass_bottle").unwrap(),
-                        count: 1,
-                        ..ItemStack::empty()
-                    }),
-                    effect: None,
-                },
-            )]));
+        let mut codec = ItemCodec::new(&[
+            POTION_CONTENTS.into(),
+            USE_REMAINDER.into(),
+            POTION_DURATION_SCALE.into(),
+        ])
+        .with_potions(&[
+            "minecraft:regeneration".to_owned(),
+            "minecraft:water_breathing".to_owned(),
+        ])
+        .with_consumables(HashMap::from([(
+            items().id("minecraft:potion").unwrap(),
+            Consumable {
+                food: None,
+                use_ticks: 32,
+                remainder: Some(ItemStack {
+                    item: items().id("minecraft:glass_bottle").unwrap(),
+                    count: 1,
+                    ..ItemStack::empty()
+                }),
+                effect: None,
+            },
+        )]));
         let mut stack = codec
             .read(&Compound::from_iter([("id", "minecraft:potion")]))
             .unwrap();
@@ -1237,11 +1363,29 @@ mod tests {
         codec.set_potion(&mut stack, "water_breathing").unwrap();
         assert!(codec.consumable(&stack).is_none());
         codec.set_potion(&mut stack, "regeneration").unwrap();
+        codec
+            .set_saved_component(&mut stack, POTION_DURATION_SCALE, &Nbt::Float(0.5))
+            .unwrap();
         assert!(codec.consumable(&stack).unwrap().remainder.is_some());
         Arc::make_mut(&mut stack.components).removed.push(1);
         let drink = codec.consumable(&stack).unwrap();
         assert!(drink.remainder.is_none());
-        assert!(matches!(drink.effect, Some(ConsumeEffect::ApplyPotion(_))));
+        assert!(
+            matches!(drink.effect, Some(ConsumeEffect::ApplyPotion(effect)) if effect.duration == 450)
+        );
+        codec.consumables.get_mut(&stack.item).unwrap().effect = Some(ConsumeEffect::ClearAll);
+        assert!(matches!(
+            codec.consumable(&stack).unwrap().effect,
+            Some(ConsumeEffect::ClearAll)
+        ));
+        assert_eq!(codec.potion_effect(&stack).unwrap().duration, 450);
+
+        let codec = ItemCodec::default();
+        let mut apple = codec
+            .read(&Compound::from_iter([("id", "minecraft:apple")]))
+            .unwrap();
+        Arc::make_mut(&mut apple.components).removed.push(23);
+        assert!(codec.consumable(&apple).unwrap().food.is_none());
     }
 
     #[test]

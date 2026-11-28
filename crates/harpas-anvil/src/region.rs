@@ -11,7 +11,7 @@
 //! journal (`docs/world.md#saving`).
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,7 +21,7 @@ use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::ZlibEncoder;
 use harpas_core::nbt::{Compound, Nbt};
 
-use crate::file::{MAX_INFLATED, inflate, read_nbt};
+use crate::file::{MAX_INFLATED, check_dir, inflate, open_regular, read_nbt};
 use crate::journal::{self, Journal};
 
 const SECTOR: usize = 4096;
@@ -61,6 +61,7 @@ fn read_entry(
     chunk_z: i32,
     allow_empty_file: bool,
 ) -> io::Result<Option<Compound>> {
+    check_dir(dir)?;
     let (region_x, region_z) = region_of(chunk_x, chunk_z);
     if journal::pending(dir, region_x, region_z)? {
         return Err(invalid(format!(
@@ -68,7 +69,7 @@ fn read_entry(
         )));
     }
     let path = dir.join(format!("r.{region_x}.{region_z}.mca"));
-    let mut file = match fs::File::open(path) {
+    let mut file = match open_regular(&path, OpenOptions::new().read(true)) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -163,21 +164,27 @@ fn write_chunks_with(
     }
     let name = format!("r.{x}.{z}.mca");
     let path = dir.join(&name);
-    fs::create_dir_all(dir)?;
+    check_dir(dir)?;
     // A previous save of this region that failed after its commit is completed before staging anew.
     journal::complete(dir, x, z)?;
     step()?;
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)?;
-    let len = file.metadata()?.len();
+    fs::create_dir_all(dir)?;
+    let current = match open_regular(&path, OpenOptions::new().read(true).write(true)) {
+        Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let len = match &current {
+        Some(file) => file.metadata()?.len(),
+        None => 0,
+    };
+    let mut journal = Journal::default();
+    let new_region = len == 0;
     let mut header = vec![0; 2 * SECTOR];
-    if len == 0 {
-        // A new region starts as an empty one.
-        file.write_all(&header)?;
+    let mut file = if new_region {
+        drop(current);
+        // An incomplete first write must never appear at the final path.
+        journal.create_staged(dir, name.clone())?
     } else if len < (2 * SECTOR) as u64 {
         // Refuse to overwrite a truncated file as though it were a new, empty region.
         return Err(invalid(format!(
@@ -185,8 +192,10 @@ fn write_chunks_with(
             path.display()
         )));
     } else {
+        let mut file = current.expect("a nonempty region is open");
         file.read_exact(&mut header)?;
-    }
+        file
+    };
     // The sectors that the header or a chunk uses, the replaced chunks included.
     let sectors = usize::try_from(len.div_ceil(SECTOR as u64))
         .map_err(invalid)?
@@ -208,13 +217,16 @@ fn write_chunks_with(
                 path.display()
             )));
         }
-        let end = (offset + count).min(sectors);
+        let end = offset + count;
         if offset < end {
+            // The old header remains live until commit, even for a damaged location past EOF.
+            if end > used.len() {
+                used.resize(end, false);
+            }
             used[offset..end].fill(true);
         }
     }
 
-    let mut journal = Journal::default();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |time| time.as_secs() as u32);
@@ -257,10 +269,16 @@ fn write_chunks_with(
     }
     // The chunks reach the disk before the header that points to them is committed.
     step()?;
+    if new_region {
+        file.rewind()?;
+        file.write_all(&header)?;
+    }
     file.sync_all()?;
     drop(file);
-    step()?;
-    journal.stage_header(dir, name, &header)?;
+    if !new_region {
+        step()?;
+        journal.stage_header(dir, name, &header)?;
+    }
     journal.commit(dir, x, z, step)
 }
 
@@ -342,11 +360,14 @@ impl Region {
             slots: (0..CHUNKS).map(|_| Slot::Empty).collect(),
             external: vec![false; CHUNKS],
         };
-        let file = match fs::read(region.path()) {
+        let path = region.path();
+        let mut source = match open_regular(&path, OpenOptions::new().read(true)) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(region),
             Err(e) => return Err(e),
         };
+        let mut file = Vec::new();
+        source.read_to_end(&mut file)?;
         // Refuse to overwrite a truncated file as though it were a new, empty region.
         if file.len() < 2 * SECTOR {
             return Err(invalid(format!(
@@ -496,9 +517,9 @@ impl Region {
                 self.path().display()
             )));
         }
-        fs::create_dir_all(&self.dir)?;
         // A previous save of this region that failed after its commit is completed before staging anew.
         journal::complete(&self.dir, self.x, self.z)?;
+        fs::create_dir_all(&self.dir)?;
         let mut journal = Journal::default();
         let mut file = vec![0; 2 * SECTOR];
         let mut external = vec![false; CHUNKS];
@@ -546,7 +567,7 @@ impl Region {
 
 /// Reads the `.mcc` file of a large chunk, which may hold at most [`MAX_INFLATED`] bytes.
 fn read_external(path: &Path) -> io::Result<Vec<u8>> {
-    fs::File::open(path)
+    open_regular(path, OpenOptions::new().read(true))
         .and_then(|file| inflate(file, MAX_INFLATED))
         .map_err(|error| invalid(format!("{}: {error}", path.display())))
 }
@@ -1218,6 +1239,59 @@ mod tests {
         let error = write_chunks(&folder.0, 0, 0, &borrowed(&chunks)).unwrap_err();
         assert!(error.to_string().contains("incomplete region header"));
         assert_eq!(fs::read(&path).unwrap(), [0; 100]);
+    }
+
+    #[test]
+    fn an_interrupted_first_save_does_not_publish_a_partial_region() {
+        let folder = Folder::new();
+        let chunks = [((0, 0), chunk(0, 0))];
+        let chunks = borrowed(&chunks);
+        let live = folder.0.join("r.0.0.mca");
+        let staged = folder.0.join("r.0.0.mca.tmp");
+        let result = write_chunks_with(&folder.0, 0, 0, &chunks, &mut || {
+            if fs::metadata(&staged).is_ok_and(|metadata| metadata.len() > 0) {
+                Err(io::Error::other("interrupted first save"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_err());
+        assert!(!live.exists());
+        assert_eq!(read_chunk(&folder.0, 0, 0).unwrap(), None);
+
+        write_chunks(&folder.0, 0, 0, &chunks).unwrap();
+        assert_eq!(
+            read_chunk(&folder.0, 0, 0).unwrap().as_ref(),
+            Some(chunks[0].1)
+        );
+        assert_eq!(file_names(&folder.0), ["r.0.0.mca"]);
+    }
+
+    #[test]
+    fn repairing_a_location_past_eof_preserves_the_old_state_until_commit() {
+        let folder = Folder::new();
+        let path = folder.0.join("r.0.0.mca");
+        let mut header = vec![0; 2 * SECTOR];
+        header[..4].copy_from_slice(&0x0000_0201_u32.to_be_bytes());
+        fs::write(&path, header).unwrap();
+
+        let chunks = [((0, 0), chunk(0, 0))];
+        let chunks = borrowed(&chunks);
+        let result = write_chunks_with(&folder.0, 0, 0, &chunks, &mut || {
+            if fs::metadata(&path)?.len() > (2 * SECTOR) as u64 {
+                Err(io::Error::other("interrupted repair"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_err());
+        assert!(read_chunk(&folder.0, 0, 0).is_err());
+
+        write_chunks(&folder.0, 0, 0, &chunks).unwrap();
+        assert_eq!(
+            read_chunk(&folder.0, 0, 0).unwrap().as_ref(),
+            Some(chunks[0].1)
+        );
     }
 
     #[test]

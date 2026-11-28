@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use harpas_anvil::{
-    Chunk, VersionError, check_chunk, dimension_dir, overworld_spawn, read_chunk,
+    Chunk, VersionError, check_chunk, checked_dimension_dir, overworld_spawn, read_chunk,
     read_entity_chunk, read_level, recover, region_of, write_chunks,
 };
 use harpas_core::block::block_states;
@@ -587,7 +587,8 @@ impl World {
                     "the biome registry must include minecraft:plains",
                 )
             })? as u32;
-        let region_dir = dimension_dir(world_dir, "minecraft:overworld").join("region");
+        let dimension = checked_dimension_dir(world_dir, "minecraft:overworld")?;
+        let region_dir = dimension.join("region");
         // Saves interrupted by a crash are completed or discarded before any worker reads the regions.
         let recovery = recover(&region_dir)?;
         for path in &recovery.completed {
@@ -612,7 +613,7 @@ impl World {
             seed,
             i64::from_le_bytes(uuid_seed[..8].try_into().unwrap()),
         );
-        let entity_dir = dimension_dir(world_dir, "minecraft:overworld").join("entities");
+        let entity_dir = dimension.join("entities");
         recover(&entity_dir)?;
         let load_entity_dir = entity_dir.clone();
         let item_codec = Arc::new(RwLock::new(Arc::new(ItemCodec::default())));
@@ -1697,7 +1698,10 @@ impl World {
                     .get_ref()
                     .is_some_and(|source| source.is::<VersionError>())
                 {
-                    return Err(io::Error::other(format!("Cannot load {prefix}: {error}")));
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!("Cannot load {prefix}: {error}"),
+                    ));
                 }
                 error!("Cannot load {prefix}: {error}");
                 ChunkState::Failed(error)
@@ -2008,6 +2012,7 @@ mod tests {
     use crate::neighbor;
     use crate::player::{GameMode, Input, Movement, Output, Profile};
     use crate::{Event, Game, tick};
+    use harpas_anvil::dimension_dir;
     use harpas_worldgen::shape_update::ShapeUpdates;
 
     const BIOMES: &[&str] = &["minecraft:plains", "minecraft:forest"];
@@ -2382,7 +2387,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(1)),
             world: Some(world),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let at = |y, on_ground| crate::player::Position {
             x: 8.5,
@@ -2437,7 +2442,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         tick(&mut game, 2);
@@ -2466,7 +2471,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 0;
         // The connection sends Play Login and its initial teleport after player data has loaded.
@@ -2545,7 +2550,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         let position = game.players[0].player.position;
@@ -3284,7 +3289,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         wait_until(|| {
@@ -3386,7 +3391,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1); // Joining happens after the dimension phase.
         assert!(game.world.as_ref().unwrap().chunk(origin).is_none());
@@ -3448,7 +3453,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         let mut first = None;
@@ -3515,7 +3520,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         let mut first_batch = false;
@@ -3588,7 +3593,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         let mut initial = HashSet::new();
@@ -3686,7 +3691,10 @@ mod tests {
         // The chunks around the incompatible one may be read, and sent, a tick before it.
         let mut outputs = std::iter::from_fn(|| session.try_recv());
         assert!(outputs.any(|output| output == Output::Disconnect("Cannot access the world")));
-        logic.join().unwrap().unwrap();
+        assert_eq!(
+            logic.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
@@ -3753,7 +3761,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 1;
         tick(&mut game, number);
@@ -3852,6 +3860,20 @@ mod tests {
                 .try_iter()
                 .all(|output| !matches!(output, Output::BlockUpdate { .. }))
         );
+
+        game.world.as_mut().unwrap().set_block_state(in_time, dirt);
+        step(
+            &mut game,
+            &[
+                (block::DigAction::Start, in_time),
+                (block::DigAction::Abort, in_time),
+                (block::DigAction::Finish, in_time),
+            ],
+        );
+        for _ in 0..15 {
+            step(&mut game, &[]);
+        }
+        assert_eq!(block(&game, in_time), Some(dirt));
     }
 
     #[test]
@@ -3953,7 +3975,7 @@ mod tests {
             online_players: Arc::default(),
             world: Some(world),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.join(
             1,
@@ -4201,7 +4223,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 1;
         tick(&mut game, number);
@@ -4367,7 +4389,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.world
             .as_mut()
@@ -4516,7 +4538,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 1;
         tick(&mut game, number);
@@ -4634,7 +4656,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 1;
         tick(&mut game, number);
@@ -4820,7 +4842,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.world
             .as_mut()
@@ -5095,7 +5117,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 1;
         tick(&mut game, number);
@@ -5202,7 +5224,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut number = 1;
         tick(&mut game, number);
@@ -5291,7 +5313,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         let mut loot = crate::loot::LootTables::default();
         let drops_itself = |name: &str| {
@@ -5427,7 +5449,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.join(1, profile(), (2, 2), false, first_output, None);
         let mut other = profile();
@@ -5622,7 +5644,7 @@ mod tests {
             online_players: Arc::default(),
             world: Some(world),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.join(1, profile(), (2, 2), false, sender, None);
         wait_until(|| {
@@ -5767,7 +5789,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.join(1, profile(), (2, 2), false, first_output, None);
         let mut other = profile();
@@ -6259,7 +6281,7 @@ mod tests {
             online_players: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             world: Some(World::open(&folder.0, BIOMES).unwrap()),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         tick(&mut game, 1);
         wait_until(|| {
@@ -7042,7 +7064,7 @@ mod tests {
             online_players: Arc::default(),
             world: Some(world),
             viewers: Vec::new(),
-            stopped: false,
+            stop: None,
         };
         game.attack_entity(0, pig_id);
         let world = game.world.as_mut().unwrap();

@@ -4,9 +4,9 @@
 //! current one to `<name>_old` and the new one into place. A crash at any point leaves either the current
 //! file or the backup, and reading falls back to the backup when the current file is missing or damaged.
 
-use std::fs::{self, File};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -52,9 +52,94 @@ pub enum Source {
 
 /// Writes `path` whole and syncs it to the disk.
 pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = File::create(path)?;
+    let mut file = create_staged(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+pub(crate) fn create_staged(path: &Path) -> io::Result<File> {
+    // Unlink an interrupted staging file rather than opening it for truncation.
+    remove_if_present(path)?;
+    OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+pub(crate) fn remove_if_present(path: &Path) -> io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_link(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    metadata.is_symlink()
+}
+
+fn regular_file(path: &Path, metadata: &Metadata) -> io::Result<()> {
+    if !metadata.is_file() || is_link(metadata) {
+        return Err(invalid(path, "expected a regular file without links"));
+    }
+    Ok(())
+}
+
+pub(crate) fn check_regular_file(path: &Path) -> io::Result<()> {
+    regular_file(path, &fs::symlink_metadata(path)?)
+}
+
+pub(crate) fn open_regular(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    check_regular_file(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    regular_file(path, &file.metadata()?)?;
+    Ok(file)
+}
+
+pub(crate) fn check_dir(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !is_link(&metadata) => Ok(()),
+        Ok(_) => Err(invalid(path, "expected a directory without links")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Checks components owned by the world, below the root explicitly chosen by the operator.
+pub(crate) fn checked_dir(world: &Path, relative: &Path) -> io::Result<PathBuf> {
+    let mut dir = world.to_owned();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(invalid(relative, "expected a relative world directory"));
+        };
+        dir.push(name);
+        check_dir(&dir)?;
+    }
+    Ok(dir)
+}
+
+/// Persists directory entries on Unix. Other platforms only have process-interruption recovery.
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -65,7 +150,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 
 /// Reads a gzip NBT file; a missing file is `None`.
 fn read_gzip(path: &Path) -> io::Result<Option<Compound>> {
-    let file = match File::open(path) {
+    let file = match open_regular(path, OpenOptions::new().read(true)) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
@@ -78,41 +163,69 @@ fn read_gzip(path: &Path) -> io::Result<Option<Compound>> {
     }
 }
 
-/// Reads the gzip NBT file `path`, or its backup `<path>_old` when it is missing or cannot be read. An error is
-/// returned only when neither can be read and the file exists.
-pub(crate) fn read_with_backup(path: &Path) -> io::Result<Option<(Compound, Source)>> {
-    let current = read_gzip(path);
+fn read_document<T>(
+    path: &Path,
+    decode: &impl Fn(Compound) -> io::Result<T>,
+) -> io::Result<Option<T>> {
+    read_gzip(path)?
+        .map(|root| decode(root).map_err(|error| invalid(path, error)))
+        .transpose()
+}
+
+pub(crate) fn compound_field(mut root: Compound, key: &str) -> io::Result<Compound> {
+    match root.remove(key) {
+        Some(Nbt::Compound(data)) => Ok(data),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("no {key} compound"),
+        )),
+    }
+}
+
+/// Reads and validates the gzip NBT file, falling back to `<path>_old`.
+pub(crate) fn read_with_backup<T>(
+    path: &Path,
+    decode: impl Fn(Compound) -> io::Result<T>,
+) -> io::Result<Option<(T, Source)>> {
+    let current = read_document(path, &decode);
     if let Ok(Some(root)) = current {
         return Ok(Some((root, Source::Current)));
     }
-    match read_gzip(&with_suffix(path, "_old")) {
+    match read_document(&with_suffix(path, "_old"), &decode) {
         Ok(Some(root)) => Ok(Some((root, Source::Backup))),
         Err(error) if matches!(current, Ok(None)) => Err(error),
         _ => current.map(|_| None),
     }
 }
 
-/// Writes `root` as the gzip NBT file `path`: first as `new_path`, then the current file becomes `<path>_old`
-/// and the new one takes its place.
-pub(crate) fn write_with_backup(path: &Path, new_path: &Path, root: &Compound) -> io::Result<()> {
+/// Installs a synced replacement, rotating the primary only if it is readable.
+pub(crate) fn write_with_backup<T>(
+    path: &Path,
+    new_path: &Path,
+    root: &Compound,
+    decode: impl Fn(Compound) -> io::Result<T>,
+) -> io::Result<()> {
     let mut nbt = Vec::new();
     Nbt::Compound(root.clone()).write_named("", &mut nbt);
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&nbt)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
     write_synced(new_path, &encoder.finish()?)?;
-    let backup = with_suffix(path, "_old");
-    match fs::remove_file(&backup) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-        _ => {}
+    match read_document(path, &decode) {
+        Ok(Some(_)) => {
+            fs::rename(path, with_suffix(path, "_old"))?;
+            sync_dir(parent)?;
+        }
+        Ok(None) => {}
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {}
+        Err(error) => return Err(error),
     }
-    match fs::rename(path, &backup) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    fs::rename(new_path, path)
+    fs::rename(new_path, path)?;
+    sync_dir(parent)
 }
 
 fn invalid(path: &Path, error: impl ToString) -> io::Error {

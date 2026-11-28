@@ -19,34 +19,27 @@ pub fn dimension_dir(world: &Path, id: &str) -> PathBuf {
     world.join("dimensions").join(namespace).join(path)
 }
 
+/// Resolves a dimension directory without following links inside the selected world.
+pub fn checked_dimension_dir(world: &Path, id: &str) -> io::Result<PathBuf> {
+    file::checked_dir(world, &dimension_dir(Path::new(""), id))
+}
+
 /// Reads the `Data` compound of `level.dat`, falling back to `level.dat_old`. `None` when the world has neither.
 pub fn read_level(world: &Path) -> io::Result<Option<(Compound, Source)>> {
-    let path = world.join("level.dat");
-    let Some((mut root, source)) = file::read_with_backup(&path)? else {
-        return Ok(None);
-    };
-    match root.remove("Data") {
-        Some(Nbt::Compound(data)) => Ok(Some((data, source))),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{} has no Data compound", path.display()),
-        )),
-    }
+    file::read_with_backup(&world.join("level.dat"), level_data)
 }
 
 /// Reads the saved game rule values from the world data directory.
 pub fn read_game_rules(world: &Path) -> io::Result<Option<Compound>> {
-    let path = world.join("data").join("minecraft").join("game_rules.dat");
-    let Some((mut root, _)) = file::read_with_backup(&path)? else {
-        return Ok(None);
-    };
-    match root.remove("data") {
-        Some(Nbt::Compound(rules)) => Ok(Some(rules)),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "game_rules.dat has no data compound",
-        )),
-    }
+    let path = file::checked_dir(world, Path::new("data/minecraft"))?.join("game_rules.dat");
+    Ok(
+        file::read_with_backup(&path, |root| file::compound_field(root, "data"))?
+            .map(|(rules, _)| rules),
+    )
+}
+
+fn level_data(root: Compound) -> io::Result<Compound> {
+    file::compound_field(root, "Data")
 }
 
 /// Returns the saved Overworld spawn block position, when present in a 26.1 `level.dat` Data compound.
@@ -72,26 +65,23 @@ pub fn write_level(world: &Path, data: &Compound) -> io::Result<()> {
         &world.join("level.dat"),
         &world.join("level.dat_new"),
         &root,
+        level_data,
     )
 }
 
 /// Reads the root compound of `data/minecraft/world_gen_settings.dat`, including its `DataVersion` and
 /// `data` compound. Returns `None` only when neither the file nor its backup exists.
 pub fn read_world_gen_settings(world: &Path) -> io::Result<Option<(Compound, Source)>> {
-    let path = world
-        .join("data")
-        .join("minecraft")
-        .join("world_gen_settings.dat");
-    let Some((root, source)) = file::read_with_backup(&path)? else {
-        return Ok(None);
-    };
-    if !matches!(root.get("data"), Some(Nbt::Compound(_))) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{} has no data compound", path.display()),
-        ));
-    }
-    Ok(Some((root, source)))
+    file::read_with_backup(&settings_path(world)?, generation_settings)
+}
+
+fn settings_path(world: &Path) -> io::Result<PathBuf> {
+    Ok(file::checked_dir(world, Path::new("data/minecraft"))?.join("world_gen_settings.dat"))
+}
+
+fn generation_settings(root: Compound) -> io::Result<Compound> {
+    settings_seed(&root)?;
+    Ok(root)
 }
 
 /// Reads the saved world seed, if the world generation settings exist.
@@ -162,7 +152,7 @@ pub fn open_or_create_world_gen_settings(
     Ok((root, new_seed, None))
 }
 
-/// Saves the complete root compound of `data/minecraft/world_gen_settings.dat` with a crash-safe backup.
+/// Saves the complete root compound of `data/minecraft/world_gen_settings.dat` with a backup.
 pub fn write_world_gen_settings(world: &Path, root: &Compound) -> io::Result<()> {
     if !matches!(root.get("data"), Some(Nbt::Compound(_))) {
         return Err(io::Error::new(
@@ -170,15 +160,17 @@ pub fn write_world_gen_settings(world: &Path, root: &Compound) -> io::Result<()>
             "world generation settings have no data compound",
         ));
     }
-    let path = world
-        .join("data")
-        .join("minecraft")
-        .join("world_gen_settings.dat");
-    file::write_with_backup(&path, &path.with_extension("dat_new"), root)
+    let path = settings_path(world)?;
+    file::write_with_backup(
+        &path,
+        &path.with_extension("dat_new"),
+        root,
+        generation_settings,
+    )
 }
 
 /// `players/data/<uuid>.dat`, with the UUID in its hyphenated form.
-fn player_path(world: &Path, uuid: u128) -> PathBuf {
+fn player_path(world: &Path, uuid: u128) -> io::Result<PathBuf> {
     let hex = format!("{uuid:032x}");
     let name = format!(
         "{}-{}-{}-{}-{}.dat",
@@ -188,18 +180,18 @@ fn player_path(world: &Path, uuid: u128) -> PathBuf {
         &hex[16..20],
         &hex[20..]
     );
-    world.join("players").join("data").join(name)
+    Ok(file::checked_dir(world, Path::new("players/data"))?.join(name))
 }
 
 /// Reads a player's data, falling back to its `_old` backup. `None` for a player who has never played.
 pub fn read_player(world: &Path, uuid: u128) -> io::Result<Option<(Compound, Source)>> {
-    file::read_with_backup(&player_path(world, uuid))
+    file::read_with_backup(&player_path(world, uuid)?, Ok)
 }
 
 /// Saves a player's data, keeping the previous file as `<uuid>.dat_old`, as vanilla does.
 pub fn write_player(world: &Path, uuid: u128, data: &Compound) -> io::Result<()> {
-    let path = player_path(world, uuid);
-    file::write_with_backup(&path, &path.with_extension("dat.tmp"), data)
+    let path = player_path(world, uuid)?;
+    file::write_with_backup(&path, &path.with_extension("dat.tmp"), data, Ok)
 }
 
 #[cfg(test)]
@@ -287,6 +279,30 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn world_files_and_managed_directories_must_not_be_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let folder = Folder::new();
+        let target = folder.0.join("original");
+        fs::create_dir(&target).unwrap();
+        write_level(&target, &level("original")).unwrap();
+
+        symlink(target.join("level.dat"), folder.0.join("level.dat")).unwrap();
+        assert_eq!(
+            read_level(&folder.0).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        symlink(&target, folder.0.join("dimensions")).unwrap();
+        assert_eq!(
+            checked_dimension_dir(&folder.0, "minecraft:overworld")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
     fn reads_only_a_well_formed_overworld_spawn() {
         let mut spawn = Compound::new();
         spawn.insert("dimension", "minecraft:overworld");
@@ -345,6 +361,19 @@ mod tests {
             read_level(&folder.0).unwrap(),
             Some((level("first"), Source::Backup))
         );
+        write_level(&folder.0, &level("recovered")).unwrap();
+        assert_eq!(
+            read_level(&folder.0).unwrap(),
+            Some((level("recovered"), Source::Current))
+        );
+        assert_eq!(files(&folder.0), ["level.dat", "level.dat_old"]);
+        fs::remove_file(folder.0.join("level.dat")).unwrap();
+        fs::create_dir(folder.0.join("level.dat")).unwrap();
+        assert!(write_level(&folder.0, &level("failed install")).is_err());
+        assert_eq!(
+            read_level(&folder.0).unwrap(),
+            Some((level("first"), Source::Backup))
+        );
     }
 
     #[test]
@@ -358,9 +387,24 @@ mod tests {
         Nbt::Compound(level("bare")).write_named("", &mut nbt);
         let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
         gzip.write_all(&nbt).unwrap();
-        fs::write(folder.0.join("level.dat"), gzip.finish().unwrap()).unwrap();
+        let malformed = gzip.finish().unwrap();
+        fs::write(folder.0.join("level.dat"), &malformed).unwrap();
         let error = read_level(&folder.0).unwrap_err();
         assert!(error.to_string().contains("no Data compound"));
+
+        write_level(&folder.0, &level("backup")).unwrap();
+        write_level(&folder.0, &level("current")).unwrap();
+        fs::write(folder.0.join("level.dat"), malformed).unwrap();
+        assert_eq!(
+            read_level(&folder.0).unwrap(),
+            Some((level("backup"), Source::Backup))
+        );
+        write_level(&folder.0, &level("repaired")).unwrap();
+        fs::remove_file(folder.0.join("level.dat")).unwrap();
+        assert_eq!(
+            read_level(&folder.0).unwrap(),
+            Some((level("backup"), Source::Backup))
+        );
     }
 
     #[test]

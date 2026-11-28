@@ -163,6 +163,9 @@ fn load_enchantments(archive: &mut ZipArchive<impl Read + Seek>) -> io::Result<L
             supported,
         });
     }
+    if enchantments.is_empty() {
+        return Err(invalid("chest loot enchantment tag is empty"));
+    }
     Ok(LootEnchantments(enchantments))
 }
 
@@ -392,9 +395,15 @@ mod tests {
                 .supported
                 .contains(&items().id("minecraft:iron_sword").unwrap())
         );
-        let tables = load(r#"{"values":[{"id":"custom:missing"}]}"#);
-        assert!(tables.get("chests/simple_dungeon").is_none());
-        assert!(tables.get("chests/buried_treasure").is_some());
-        assert!(tables.get("chests/desert_pyramid").is_none());
+        for tag in [
+            r#"{"values":[{"id":"custom:missing"}]}"#,
+            r#"{"values":[]}"#,
+            r##"{"values":[{"id":"#custom:missing","required":false},{"id":"custom:missing","required":false}]}"##,
+        ] {
+            let tables = load(tag);
+            assert!(tables.get("chests/simple_dungeon").is_none(), "{tag}");
+            assert!(tables.get("chests/buried_treasure").is_some());
+            assert!(tables.get("chests/desert_pyramid").is_none());
+        }
     }
 }

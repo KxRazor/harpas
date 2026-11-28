@@ -363,10 +363,8 @@ impl PalettedContainer {
                 });
             }
         }
-        if strategy.global_bits <= strategy.max_bits
-            && strategy.exceeds_local_palette(palette.len())
-        {
-            // Resolved Anvil entries can repeat IDs in a registry too small to need direct storage.
+        if strategy.global_bits <= strategy.max_bits {
+            // Repeated Anvil IDs could push a small registry past its local limit on a later write.
             let mut compact = Self::filled(strategy, palette[stored.get(0) as usize]);
             for index in 1..strategy.len {
                 compact.set(index, palette[stored.get(index) as usize]);
@@ -704,6 +702,19 @@ mod tests {
         let container = PalettedContainer::unpack(Strategy::biomes(0), packed).unwrap();
         assert_eq!(container.bits(), 0);
         assert_eq!(container.palette(), Some(&[0][..]));
+    }
+
+    #[test]
+    fn repeated_biome_ids_do_not_use_up_local_palette_slots() {
+        let packed = Packed {
+            palette: vec![0; 8],
+            data: vec![0o765_432_107_654_321_076_543; 4],
+        };
+        let mut container = PalettedContainer::unpack(Strategy::biomes(1), packed).unwrap();
+        assert_eq!(container.set(0, 1), 0);
+        assert_eq!(container.bits(), 1);
+        assert_eq!(container.palette(), Some(&[0, 1][..]));
+        assert_eq!((container.get(0), container.get(1)), (1, 0));
     }
 
     #[test]

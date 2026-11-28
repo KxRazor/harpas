@@ -4,8 +4,12 @@
 //! sections have the palette sizes and the mix of runs and noise that real ones have, since that is what decides
 //! encoded size and compression cost. Block IDs are plausible magnitudes, not a real registry.
 
+use harpas_protocol_java::codec::write_varint;
+use harpas_protocol_java::v26_1::play::clientbound::ChunkDataAndUpdateLight;
+
 /// Sections in an overworld column, from y = -64 to y = 320.
 pub const SECTIONS: usize = 24;
+const MIN_SECTION: i32 = -4;
 const BLOCKS: usize = 4096;
 
 /// A block type the generator places.
@@ -58,21 +62,22 @@ const JAVA_DIRECT_BITS: u32 = 15;
 const JAVA_PLAINS: i32 = 40;
 
 /// One 16×16×16 section as the engine keeps it: a palette and one palette index per block, indexed
-/// `y * 256 + z * 16 + x` as on the Java wire, plus the count of non-air blocks.
+/// `y * 256 + z * 16 + x` as on the Java wire, plus the non-air and fluid counts.
 #[derive(Clone)]
 pub struct Section {
     palette: Vec<Block>,
     indices: Vec<u16>,
     non_air: u16,
+    fluid: u16,
 }
 
 impl Section {
     fn fill(block: Block) -> Section {
-        let non_air = if block == AIR { 0 } else { BLOCKS as u16 };
         Section {
             palette: vec![block],
             indices: vec![0; BLOCKS],
-            non_air,
+            non_air: u16::from(block != AIR) * BLOCKS as u16,
+            fluid: u16::from(block == WATER) * BLOCKS as u16,
         }
     }
 
@@ -88,6 +93,7 @@ impl Section {
         };
         self.indices[i] = index as u16;
         self.non_air = self.non_air + u16::from(old == AIR) - u16::from(block == AIR);
+        self.fluid = self.fluid + u16::from(block == WATER) - u16::from(old == WATER);
     }
 
     /// Blocks the section's indices refer to.
@@ -244,15 +250,6 @@ fn noise(x: i32, y: i32, z: i32, scale: i32, seed: u32) -> f32 {
 
 // ---- Java -------------------------------------------------------------------------------------------------
 
-fn write_varint(buf: &mut Vec<u8>, value: i32) {
-    let mut value = value as u32;
-    while value >= 0x80 {
-        buf.push(value as u8 | 0x80);
-        value >>= 7;
-    }
-    buf.push(value as u8);
-}
-
 fn bits_for(len: usize) -> u32 {
     usize::BITS - (len.max(2) - 1).leading_zeros()
 }
@@ -275,9 +272,10 @@ fn pack_longs(buf: &mut Vec<u8>, values: impl Iterator<Item = u64>, bits: u32) {
     }
 }
 
-/// Appends a section in the Java format: non-air count, block states and biomes as paletted containers.
+/// Appends a Java 26.1 section: non-air and fluid counts, then the block and biome containers.
 pub fn encode_java_section(buf: &mut Vec<u8>, section: &Section) {
     buf.extend_from_slice(&(section.non_air as i16).to_be_bytes());
+    buf.extend_from_slice(&(section.fluid as i16).to_be_bytes());
     let palette = section.palette();
     if palette.len() == 1 {
         buf.push(0);
@@ -323,7 +321,7 @@ fn write_bitset(buf: &mut Vec<u8>, bits: &[bool]) {
 
 /// Appends a Chunk Data and Update Light packet (ID and body, no length prefix) for `column`.
 pub fn encode_java_column(buf: &mut Vec<u8>, column: &Column) {
-    write_varint(buf, 0x27);
+    write_varint(buf, ChunkDataAndUpdateLight::ID);
     buf.extend_from_slice(&column.x.to_be_bytes());
     buf.extend_from_slice(&column.z.to_be_bytes());
     // Heightmaps: three maps of 256 9-bit heights.
@@ -402,7 +400,7 @@ pub fn encode_bedrock_section(buf: &mut Vec<u8>, section: &Section, y_index: i8,
     buf.extend_from_slice(&[9, 1, y_index as u8]);
     let palette = section.palette();
     if palette.len() == 1 {
-        // A single-value storage: no words and no palette size *(verify)*.
+        // A single-value storage has no words or palette size.
         buf.push(1);
         write_zigzag32(buf, id(&palette[0]));
         return;
@@ -438,15 +436,27 @@ pub fn encode_bedrock_section(buf: &mut Vec<u8>, section: &Section, y_index: i8,
     }
 }
 
-/// Appends an uncompressed batch with one sub-chunk packet per section of `column`.
+/// Appends an uncompressed Bedrock 26.60 batch with one cache-disabled sub-chunk packet per section.
 pub fn encode_bedrock_batch(buf: &mut Vec<u8>, column: &Column, ids: BedrockIds) {
     let mut packet = Vec::new();
+    let mut payload = Vec::new();
     for (i, section) in column.sections.iter().enumerate() {
+        let y = i as i32 + MIN_SECTION;
+        payload.clear();
+        encode_bedrock_section(&mut payload, section, y as i8, ids);
+
         packet.clear();
         write_varint(&mut packet, 0xae); // SubChunkPacket.
-        // Header: cache flag, dimension, position, entry offset and result, as a fixed 16 bytes.
-        packet.extend_from_slice(&[0; 16]);
-        encode_bedrock_section(&mut packet, section, i as i8 - 4, ids);
+        packet.extend_from_slice(&[0, 0]); // Cache disabled, Overworld (zigzag VarInt).
+        for coordinate in [column.x, y, column.z] {
+            packet.extend_from_slice(&coordinate.to_le_bytes());
+        }
+        write_varint(&mut packet, 1); // One entry.
+        packet.extend_from_slice(&[0, 0, 0, 1, 1]); // Zero offset, success, payload present.
+        write_varint(&mut packet, payload.len() as i32);
+        packet.extend_from_slice(&payload);
+        packet.extend_from_slice(&[0, 0, 0, 0, 0]); // No heightmaps or cache blob ID.
+
         write_varint(buf, packet.len() as i32);
         buf.extend_from_slice(&packet);
     }
@@ -455,6 +465,8 @@ pub fn encode_bedrock_batch(buf: &mut Vec<u8>, column: &Column, ids: BedrockIds)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harpas_protocol_java::codec::{read_i16, read_i64, read_u8, read_varint};
+    use harpas_protocol_java::v26_1::play::clientbound::Packet;
 
     #[test]
     fn palette_sizes_look_like_real_terrain() {
@@ -470,15 +482,88 @@ mod tests {
     }
 
     #[test]
-    fn java_section_has_the_documented_size() {
-        // 4 bits per block: 16 blocks per long, 256 longs.
-        let mut section = Section::fill(STONE);
-        section.set(0, 0, 0, AIR);
+    fn java_column_decodes_all_sections_with_their_fluid_counts() {
+        let mut column = Column::generate(3, -7);
+        let surface = &mut column.sections[column.surface];
+        surface.set(0, 0, 0, WATER);
+        surface.set(1, 0, 0, WATER);
+        surface.set(1, 0, 0, AIR);
+        column.sections[SECTIONS - 1] = Section::fill(WATER);
         let mut buf = Vec::new();
-        encode_java_section(&mut buf, &section);
-        let palette = 1 + 1 + 1; // Count, then stone and air, one byte each.
-        assert_eq!(buf.len(), 2 + 1 + palette + 256 * 8 + 2);
-        assert_eq!(&buf[..2], &4095_i16.to_be_bytes());
+        encode_java_column(&mut buf, &column);
+        let Packet::ChunkDataAndUpdateLight(chunk) = Packet::decode(&buf).unwrap() else {
+            panic!("expected chunk data and light");
+        };
+        assert_eq!((chunk.x, chunk.z), (3, -7));
+        assert_eq!(chunk.heightmaps.len(), 3);
+        assert!(chunk.block_entities.is_empty());
+        assert!(!chunk.light.sky_light.is_empty());
+
+        let mut data = chunk.data.as_slice();
+        for section in &column.sections {
+            let blocks = section.indices.iter().map(|&i| section.palette[i as usize]);
+            let non_air = blocks.clone().filter(|&block| block != AIR).count();
+            let fluid = blocks.filter(|&block| block == WATER).count();
+            assert_eq!(read_i16(&mut data).unwrap(), non_air as i16);
+            assert_eq!(read_i16(&mut data).unwrap(), fluid as i16);
+
+            let bits = read_u8(&mut data).unwrap();
+            if bits == 0 {
+                assert_eq!(section.palette.len(), 1);
+                assert_eq!(read_varint(&mut data).unwrap(), section.palette[0].java_id);
+            } else {
+                assert!((4..=8).contains(&bits));
+                assert_eq!(
+                    read_varint(&mut data).unwrap() as usize,
+                    section.palette.len()
+                );
+                for block in &section.palette {
+                    assert_eq!(read_varint(&mut data).unwrap(), block.java_id);
+                }
+                for indices in section.indices.chunks(64 / usize::from(bits)) {
+                    let word = read_i64(&mut data).unwrap() as u64;
+                    for (i, &index) in indices.iter().enumerate() {
+                        assert_eq!(
+                            word >> (i * usize::from(bits)) & ((1 << bits) - 1),
+                            u64::from(index)
+                        );
+                    }
+                }
+            }
+            assert_eq!(read_u8(&mut data).unwrap(), 0); // Singleton biome container.
+            assert_eq!(read_varint(&mut data).unwrap(), JAVA_PLAINS);
+        }
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn bedrock_batch_contains_one_subchunk_at_each_absolute_section_position() {
+        let column = Column::generate(3, -7);
+        for ids in [BedrockIds::Runtime, BedrockIds::Hashed] {
+            let mut buf = Vec::new();
+            encode_bedrock_batch(&mut buf, &column, ids);
+            let mut batch = buf.as_slice();
+            for (section, y) in column.sections.iter().zip(-4_i32..20) {
+                let length = read_varint(&mut batch).unwrap() as usize;
+                let (mut packet, rest) = batch.split_at(length);
+                batch = rest;
+                assert_eq!(read_varint(&mut packet).unwrap(), 174);
+                assert_eq!(&packet[..2], &[0, 0]); // Cache disabled, Overworld.
+                let position = |i| i32::from_le_bytes(packet[i..i + 4].try_into().unwrap());
+                assert_eq!([position(2), position(6), position(10)], [3, y, -7]);
+                packet = &packet[14..];
+                assert_eq!(read_varint(&mut packet).unwrap(), 1);
+                assert_eq!(&packet[..5], &[0, 0, 0, 1, 1]); // Zero offset, success, payload present.
+                packet = &packet[5..];
+                let length = read_varint(&mut packet).unwrap() as usize;
+                let (payload, metadata) = packet.split_at(length);
+                let mut expected = Vec::new();
+                encode_bedrock_section(&mut expected, section, y as i8, ids);
+                assert_eq!(payload, expected);
+                assert_eq!(metadata, [0, 0, 0, 0, 0]); // Both heightmaps and the blob ID are absent.
+            }
+            assert!(batch.is_empty());
+        }
     }
 
     #[test]

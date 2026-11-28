@@ -128,8 +128,8 @@ into the expected block palette [5][16]. The hash is computed from the block sta
 exact algorithm; FNV-1a is the expected one)*. Harpas uses hashed IDs from the start, which makes encoded
 sections stable across sessions and versions, as the blob cache requires, and covers custom blocks without a
 version-specific palette. The trade-off is that every block in a sub-chunk palette takes a few more bytes [16]:
-on a synthetic overworld column, 1.3% more before compression and 2.7% more after it (2,928 bytes instead of
-2,852; [protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). Hash collisions are checked when the
+on a synthetic overworld column, 1.3% more before compression and 2.5% more after it (3,050 bytes instead of
+2,976; [protocol-codecs.md](protocol-codecs.md#shared-encoding-results)). Hash collisions are checked when the
 mapping table is built.
 
 ### 5. Encode and compress once per audience

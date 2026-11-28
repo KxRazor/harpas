@@ -10,6 +10,9 @@ publish.workspace = true
 name = "shared-encoding"
 test = true
 
+[dependencies]
+harpas-protocol-java.workspace = true
+
 # Only the benchmarks use these. As dev-dependencies they stay out of THIRD_PARTY_NOTICES.md, which lists what
 # Harpas distributes.
 [dev-dependencies]

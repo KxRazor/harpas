@@ -296,6 +296,10 @@ Ryzen 5 5600H, single thread. The input is a synthetic overworld column: 24 sect
 blocks below the surface and single-value air above, full sky light above the ground. It is encoded from palette
 indices, as the engine stores sections.
 
+The tables below record that original run. With the corrected Java 26.1 and Bedrock 26.60 packet layouts, the
+same input is 54,550 bytes on Java and 18,070 bytes on Bedrock with hashed IDs, or 2,641 and 3,050 bytes after
+zlib-rs level 6 compression, respectively.
+
 | Step | Java | Bedrock |
 |---|---|---|
 | Uncompressed column | 54,502 bytes | 17,821 bytes (hashed IDs) |

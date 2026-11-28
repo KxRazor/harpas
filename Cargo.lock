@@ -771,6 +771,7 @@ dependencies = [
  "getrandom 0.4.3",
  "harpas-engine",
  "harpas-java",
+ "harpas-protocol-java",
  "harpas-worldgen",
  "jni",
  "libdeflater",

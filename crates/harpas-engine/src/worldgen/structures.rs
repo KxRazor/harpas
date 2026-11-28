@@ -358,7 +358,10 @@ impl Structures {
             && saved.get("sections").is_some()
         {
             let names: Vec<_> = data.biomes.keys().map(String::as_str).collect();
-            let (saved, _) = Chunk::read(saved, &names)?;
+            let (saved, warnings) = Chunk::read(saved, &names)?;
+            for warning in warnings {
+                log::warn!("chunk {x}, {z} used for structure generation: {warning}");
+            }
             let mut terrain =
                 GeneratedChunk::new(x, z, generator.min_y(), height, data.biomes.len());
             for section in saved.sections {

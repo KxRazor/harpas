@@ -145,7 +145,7 @@ fn mansion_blocks_match_vanilla() {
     let input_path = reference.temp.0.join("mansion-input.nbt");
     let output_path = reference.temp.0.join("mansion-output.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(inputs).write_named("", &mut bytes);
+    Nbt::Compound(inputs).write_named("", &mut bytes).unwrap();
     std::fs::write(&input_path, bytes).unwrap();
     reference.java(
         "MansionProbe",

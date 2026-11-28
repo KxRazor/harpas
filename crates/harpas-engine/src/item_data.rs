@@ -475,7 +475,9 @@ impl ItemCodec {
             extra.remove(key);
         }
         if !extra.is_empty() {
-            Nbt::Compound(extra).write_named("", &mut patch.preserved);
+            Nbt::Compound(extra)
+                .write_named("", &mut patch.preserved)
+                .map_err(invalid)?;
         }
         let mut stack = ItemStack {
             item,
@@ -644,7 +646,7 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
                 return Err(invalid("expected empty component"));
             }
         }
-        Kind::Nbt => value.write_network(&mut bytes),
+        Kind::Nbt => value.write_network(&mut bytes).map_err(invalid)?,
         Kind::MapDecorations => {
             let Nbt::Compound(entries) = value else {
                 unreachable!("validated map decorations")
@@ -667,7 +669,9 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
                     (id, Nbt::Compound(sorted))
                 })
                 .collect();
-            Nbt::Compound(ordered).write_network(&mut bytes);
+            Nbt::Compound(ordered)
+                .write_network(&mut bytes)
+                .map_err(invalid)?;
         }
         Kind::String => match value {
             Nbt::String(value) => write_string(&mut bytes, value),
@@ -678,7 +682,9 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
             Nbt::List(List::String(lines)) => {
                 write_varint(&mut bytes, lines.len() as i32);
                 for line in lines {
-                    Nbt::from(line.as_str()).write_network(&mut bytes);
+                    Nbt::from(line.as_str())
+                        .write_network(&mut bytes)
+                        .map_err(invalid)?;
                 }
             }
             Nbt::List(List::Compound(lines)) => {
@@ -687,9 +693,11 @@ fn encode_component(name: &str, value: &Nbt, codec: &ItemCodec) -> io::Result<Ve
                     if line.len() == 1
                         && let Some(value) = line.get("")
                     {
-                        value.write_network(&mut bytes);
+                        value.write_network(&mut bytes).map_err(invalid)?;
                     } else {
-                        Nbt::Compound(line.clone()).write_network(&mut bytes);
+                        Nbt::Compound(line.clone())
+                            .write_network(&mut bytes)
+                            .map_err(invalid)?;
                     }
                 }
             }

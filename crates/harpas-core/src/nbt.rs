@@ -22,9 +22,6 @@ pub const MAX_DEPTH: usize = 512;
 /// 2 MiB.
 pub const NETWORK_QUOTA: usize = 2 * 1024 * 1024;
 
-/// What a compound's entry is counted as besides its name and value: the map's own bookkeeping.
-const ENTRY_OVERHEAD: usize = 16;
-
 /// The memory a value being read may still take.
 struct Budget(usize);
 
@@ -169,7 +166,7 @@ from! {
     Compound => Compound;
 }
 
-/// Why NBT could not be read.
+/// Why NBT could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NbtError {
     /// The input ended in the middle of a value.
@@ -186,6 +183,8 @@ pub enum NbtError {
     TooDeep,
     /// A string was not valid modified UTF-8, or held an unpaired surrogate.
     InvalidString,
+    /// The encoded name or string exceeds its unsigned 16-bit length field.
+    StringTooLong,
     /// The value would take more memory than its reader allows: [`NETWORK_QUOTA`] for a network value.
     TooLarge,
 }
@@ -200,6 +199,9 @@ impl fmt::Display for NbtError {
             NbtError::EndList => f.write_str("NBT list of TAG_End has elements"),
             NbtError::TooDeep => write!(f, "NBT nested deeper than {MAX_DEPTH}"),
             NbtError::InvalidString => f.write_str("NBT string is not valid modified UTF-8"),
+            NbtError::StringTooLong => {
+                f.write_str("NBT string exceeds 65,535 bytes in modified UTF-8")
+            }
             NbtError::TooLarge => f.write_str("NBT takes more memory than allowed"),
         }
     }
@@ -270,11 +272,24 @@ impl Nbt {
 
     /// Writes NBT as files store it, with `name` as the root's name; vanilla names the root of its files `""`.
     ///
-    /// Panics in the same cases as [`Nbt::write_network`].
-    pub fn write_named(&self, name: &str, buf: &mut Vec<u8>) {
-        buf.push(self.tag_id());
-        write_string(buf, name);
+    /// Returns an error without appending anything if the value cannot be represented.
+    pub fn write_named(&self, name: &str, buf: &mut Vec<u8>) -> Result<(), NbtError> {
+        self.write_named_within(name, buf, usize::MAX, usize::MAX)
+    }
+
+    /// Writes named NBT within both an encoded byte limit and a decoded memory quota.
+    pub fn write_named_within(
+        &self,
+        name: &str,
+        buf: &mut Vec<u8>,
+        max_bytes: usize,
+        quota: usize,
+    ) -> Result<(), NbtError> {
+        write_root(buf, self.tag_id(), Some(name), max_bytes, quota, |size| {
+            self.measure(size, 0)
+        })?;
         self.write_payload(buf);
+        Ok(())
     }
 
     /// Reads optional network NBT, where `TAG_End` alone means no value. The limit of [`Nbt::read_network`]
@@ -287,20 +302,41 @@ impl Nbt {
     }
 
     /// Writes optional network NBT: the value, or `TAG_End` alone for none.
-    pub fn write_network_optional(value: Option<&Nbt>, buf: &mut Vec<u8>) {
+    pub fn write_network_optional(value: Option<&Nbt>, buf: &mut Vec<u8>) -> Result<(), NbtError> {
         match value {
             Some(value) => value.write_network(buf),
-            None => buf.push(END),
+            None => {
+                buf.try_reserve(1).map_err(|_| NbtError::TooLarge)?;
+                buf.push(END);
+                Ok(())
+            }
         }
     }
 
     /// Writes network NBT.
     ///
-    /// Panics if a string is longer than 65,535 bytes in modified UTF-8, or a list or array has more than
-    /// `i32::MAX` elements; vanilla cannot write those either.
-    pub fn write_network(&self, buf: &mut Vec<u8>) {
-        buf.push(self.tag_id());
+    /// Returns an error without appending anything if the value cannot be represented.
+    pub fn write_network(&self, buf: &mut Vec<u8>) -> Result<(), NbtError> {
+        write_root(buf, self.tag_id(), None, usize::MAX, usize::MAX, |size| {
+            self.measure(size, 0)
+        })?;
         self.write_payload(buf);
+        Ok(())
+    }
+
+    fn measure(&self, size: &mut WriteSize, depth: usize) -> Result<(), NbtError> {
+        match self {
+            Nbt::Byte(_) => size.bytes.charge(1),
+            Nbt::Short(_) => size.bytes.charge(2),
+            Nbt::Int(_) | Nbt::Float(_) => size.bytes.charge(4),
+            Nbt::Long(_) | Nbt::Double(_) => size.bytes.charge(8),
+            Nbt::ByteArray(v) => size.array(v.len(), 1),
+            Nbt::IntArray(v) => size.array(v.len(), 4),
+            Nbt::LongArray(v) => size.array(v.len(), 8),
+            Nbt::String(v) => size.string(v),
+            Nbt::List(v) => v.measure(size, depth + 1),
+            Nbt::Compound(v) => v.measure(size, depth + 1),
+        }
     }
 
     fn write_payload(&self, buf: &mut Vec<u8>) {
@@ -369,6 +405,26 @@ impl List {
         self.len() == 0
     }
 
+    fn measure(&self, size: &mut WriteSize, depth: usize) -> Result<(), NbtError> {
+        check_depth(depth)?;
+        size.bytes.charge(1)?;
+        match self {
+            List::Empty => size.bytes.charge(4),
+            List::Byte(v) => size.array(v.len(), 1),
+            List::Short(v) => size.array(v.len(), 2),
+            List::Int(v) => size.array(v.len(), 4),
+            List::Long(v) => size.array(v.len(), 8),
+            List::Float(v) => size.array(v.len(), 4),
+            List::Double(v) => size.array(v.len(), 8),
+            List::ByteArray(v) => size.elements(v, |size, v| size.array(v.len(), 1)),
+            List::IntArray(v) => size.elements(v, |size, v| size.array(v.len(), 4)),
+            List::LongArray(v) => size.elements(v, |size, v| size.array(v.len(), 8)),
+            List::String(v) => size.elements(v, |size, v| size.string(v)),
+            List::List(v) => size.elements(v, |size, v| v.measure(size, depth + 1)),
+            List::Compound(v) => size.elements(v, |size, v| v.measure(size, depth + 1)),
+        }
+    }
+
     fn write_payload(&self, buf: &mut Vec<u8>) {
         // A list whose vector is empty is still sent with its element type, as vanilla does for a typed
         // empty list.
@@ -399,6 +455,33 @@ impl List {
 }
 
 impl Compound {
+    /// Writes this compound as a named root within the byte and decoded memory limits.
+    pub fn write_named_within(
+        &self,
+        name: &str,
+        buf: &mut Vec<u8>,
+        max_bytes: usize,
+        quota: usize,
+    ) -> Result<(), NbtError> {
+        write_root(buf, COMPOUND, Some(name), max_bytes, quota, |size| {
+            self.measure(size, 1)
+        })?;
+        self.write_payload(buf);
+        Ok(())
+    }
+
+    fn measure(&self, size: &mut WriteSize, depth: usize) -> Result<(), NbtError> {
+        check_depth(depth)?;
+        size.bytes.charge(1)?;
+        size.memory
+            .charge(compound_bytes(compound_capacity(self.len())))?;
+        for (name, value) in self.iter() {
+            size.bytes.charge(1)?;
+            size.string(name)?;
+            value.measure(size, depth)?;
+        }
+        Ok(())
+    }
     fn write_payload(&self, buf: &mut Vec<u8>) {
         for (name, value) in &self.0 {
             buf.push(value.tag_id());
@@ -407,6 +490,108 @@ impl Compound {
         }
         buf.push(END);
     }
+}
+
+struct WriteSize {
+    bytes: Budget,
+    memory: Budget,
+}
+
+fn write_root(
+    buf: &mut Vec<u8>,
+    id: u8,
+    name: Option<&str>,
+    max_bytes: usize,
+    quota: usize,
+    measure: impl FnOnce(&mut WriteSize) -> Result<(), NbtError>,
+) -> Result<(), NbtError> {
+    let mut size = WriteSize::new(max_bytes, quota);
+    size.bytes.charge(1)?;
+    if let Some(name) = name {
+        size.string(name)?;
+    }
+    measure(&mut size)?;
+    buf.try_reserve(max_bytes - size.bytes.0)
+        .map_err(|_| NbtError::TooLarge)?;
+    buf.push(id);
+    if let Some(name) = name {
+        write_string(buf, name);
+    }
+    Ok(())
+}
+
+impl WriteSize {
+    fn new(bytes: usize, memory: usize) -> Self {
+        Self {
+            bytes: Budget(bytes),
+            memory: Budget(memory),
+        }
+    }
+
+    fn string(&mut self, value: &str) -> Result<(), NbtError> {
+        u16::try_from(value.len()).map_err(|_| NbtError::StringTooLong)?;
+        let len = value
+            .encode_utf16()
+            .map(|unit| match unit {
+                1..=0x7f => 1,
+                0 | 0x80..=0x7ff => 2,
+                _ => 3,
+            })
+            .sum::<usize>();
+        u16::try_from(len).map_err(|_| NbtError::StringTooLong)?;
+        self.memory.charge(value.len())?;
+        self.bytes.charge(2 + len)
+    }
+
+    fn array(&mut self, len: usize, width: usize) -> Result<(), NbtError> {
+        let bytes = self.sequence(len, width)?;
+        self.bytes.charge(bytes)
+    }
+
+    fn elements<T>(
+        &mut self,
+        values: &[T],
+        mut measure: impl FnMut(&mut Self, &T) -> Result<(), NbtError>,
+    ) -> Result<(), NbtError> {
+        self.sequence(values.len(), size_of::<T>())?;
+        for value in values {
+            measure(self, value)?;
+        }
+        Ok(())
+    }
+
+    fn sequence(&mut self, len: usize, width: usize) -> Result<usize, NbtError> {
+        i32::try_from(len).map_err(|_| NbtError::TooLarge)?;
+        let bytes = len.checked_mul(width).ok_or(NbtError::TooLarge)?;
+        self.memory.charge(bytes)?;
+        self.bytes.charge(4)?;
+        Ok(bytes)
+    }
+}
+
+fn check_depth(depth: usize) -> Result<(), NbtError> {
+    if depth > MAX_DEPTH {
+        Err(NbtError::TooDeep)
+    } else {
+        Ok(())
+    }
+}
+
+fn compound_capacity(len: usize) -> usize {
+    if len == 0 { 0 } else { len.next_power_of_two() }
+}
+
+fn compound_bytes(capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    // IndexMap holds a dense entry array and a separate hash index with spare buckets.
+    let entries =
+        capacity.saturating_mul(size_of::<String>() + size_of::<Nbt>() + size_of::<usize>());
+    let buckets = capacity.saturating_mul(2).max(4);
+    entries
+        .saturating_add(buckets.saturating_mul(size_of::<usize>() + 1))
+        .saturating_add(32)
 }
 
 fn read_payload(
@@ -433,43 +618,39 @@ fn read_payload(
 }
 
 fn read_list(input: &mut &[u8], budget: &mut Budget, depth: usize) -> Result<List, NbtError> {
-    if depth > MAX_DEPTH {
-        return Err(NbtError::TooDeep);
-    }
+    check_depth(depth)?;
     let id = read_u8(input)?;
+    let len = read_len(input)?;
     let read_i32 = |input: &mut &[u8], _: &mut Budget| take_array(input).map(i32::from_be_bytes);
     Ok(match id {
-        END => match i32::from_be_bytes(take_array(input)?) {
-            len if len < 0 => return Err(NbtError::NegativeLength(len)),
-            0 => List::Empty,
-            _ => return Err(NbtError::EndList),
-        },
-        BYTE => List::Byte(read_array(input, budget, 1, |input, _| {
+        END if len != 0 => return Err(NbtError::EndList),
+        BYTE => List::Byte(read_elements(input, budget, len, 1, |input, _| {
             Ok(read_u8(input)? as i8)
         })?),
-        SHORT => List::Short(read_array(input, budget, 2, |input, _| {
+        SHORT => List::Short(read_elements(input, budget, len, 2, |input, _| {
             take_array(input).map(i16::from_be_bytes)
         })?),
-        INT => List::Int(read_array(input, budget, 4, read_i32)?),
-        LONG => List::Long(read_array(input, budget, 8, |input, _| {
+        INT => List::Int(read_elements(input, budget, len, 4, read_i32)?),
+        LONG => List::Long(read_elements(input, budget, len, 8, |input, _| {
             take_array(input).map(i64::from_be_bytes)
         })?),
-        FLOAT => List::Float(read_array(input, budget, 4, |input, _| {
+        FLOAT => List::Float(read_elements(input, budget, len, 4, |input, _| {
             take_array(input).map(f32::from_be_bytes)
         })?),
-        DOUBLE => List::Double(read_array(input, budget, 8, |input, _| {
+        DOUBLE => List::Double(read_elements(input, budget, len, 8, |input, _| {
             take_array(input).map(f64::from_be_bytes)
         })?),
-        BYTE_ARRAY => List::ByteArray(read_array(input, budget, 4, read_byte_array)?),
-        STRING => List::String(read_array(input, budget, 2, read_string)?),
-        LIST => List::List(read_array(input, budget, 5, |input, budget| {
+        BYTE_ARRAY => List::ByteArray(read_elements(input, budget, len, 4, read_byte_array)?),
+        STRING => List::String(read_elements(input, budget, len, 2, read_string)?),
+        LIST => List::List(read_elements(input, budget, len, 5, |input, budget| {
             read_list(input, budget, depth + 1)
         })?),
-        COMPOUND => List::Compound(read_array(input, budget, 1, |input, budget| {
+        COMPOUND => List::Compound(read_elements(input, budget, len, 1, |input, budget| {
             read_compound(input, budget, depth + 1)
         })?),
-        INT_ARRAY => List::IntArray(read_array(input, budget, 4, read_int_array)?),
-        LONG_ARRAY => List::LongArray(read_array(input, budget, 4, read_long_array)?),
+        INT_ARRAY => List::IntArray(read_elements(input, budget, len, 4, read_int_array)?),
+        LONG_ARRAY => List::LongArray(read_elements(input, budget, len, 4, read_long_array)?),
+        _ if len == 0 => List::Empty,
         other => return Err(NbtError::UnknownTag(other)),
     })
 }
@@ -479,20 +660,26 @@ fn read_compound(
     budget: &mut Budget,
     depth: usize,
 ) -> Result<Compound, NbtError> {
-    if depth > MAX_DEPTH {
-        return Err(NbtError::TooDeep);
-    }
+    check_depth(depth)?;
     let mut compound = Compound::new();
     loop {
         let id = read_u8(input)?;
         if id == END {
             return Ok(compound);
         }
-        budget.charge(size_of::<String>() + size_of::<Nbt>() + ENTRY_OVERHEAD)?;
         let name = read_string(input, budget)?;
         let value = read_payload(input, budget, id, depth)?;
+        let entries = &mut compound.0;
+        let capacity = entries.capacity();
+        if entries.len() == capacity && !entries.contains_key(&name) {
+            let next = compound_capacity(entries.len() + 1);
+            budget.charge(compound_bytes(next) - compound_bytes(capacity))?;
+            entries
+                .try_reserve_exact(next - entries.len())
+                .map_err(|_| NbtError::TooLarge)?;
+        }
         // A repeated name replaces the earlier value, as in vanilla's map.
-        compound.0.insert(name, value);
+        entries.insert(name, value);
     }
 }
 
@@ -518,18 +705,46 @@ fn read_array<T>(
     input: &mut &[u8],
     budget: &mut Budget,
     min_size: usize,
+    read: impl FnMut(&mut &[u8], &mut Budget) -> Result<T, NbtError>,
+) -> Result<Vec<T>, NbtError> {
+    let len = read_len(input)?;
+    read_elements(input, budget, len, min_size, read)
+}
+
+fn read_len(input: &mut &[u8]) -> Result<usize, NbtError> {
+    let len = i32::from_be_bytes(take_array(input)?);
+    usize::try_from(len).map_err(|_| NbtError::NegativeLength(len))
+}
+
+fn read_elements<T>(
+    input: &mut &[u8],
+    budget: &mut Budget,
+    len: usize,
+    min_size: usize,
     mut read: impl FnMut(&mut &[u8], &mut Budget) -> Result<T, NbtError>,
 ) -> Result<Vec<T>, NbtError> {
-    let len = i32::from_be_bytes(take_array(input)?);
-    let len = usize::try_from(len).map_err(|_| NbtError::NegativeLength(len))?;
     if len.saturating_mul(min_size) > input.len() {
         return Err(NbtError::UnexpectedEnd);
     }
     budget.charge(len.saturating_mul(size_of::<T>()))?;
-    let mut items = Vec::with_capacity(len);
-    for _ in 0..len {
-        items.push(read(input, budget)?);
+    let mut items = Vec::new();
+    if min_size == size_of::<T>() {
+        items
+            .try_reserve_exact(len)
+            .map_err(|_| NbtError::TooLarge)?;
     }
+    for _ in 0..len {
+        let item = read(input, budget)?;
+        if items.len() == items.capacity() {
+            // Variable-width entries may end early even if their minimum widths fit.
+            let additional = items.len().max(16).min(len - items.len());
+            items
+                .try_reserve_exact(additional)
+                .map_err(|_| NbtError::TooLarge)?;
+        }
+        items.push(item);
+    }
+    budget.charge((items.capacity() - len).saturating_mul(size_of::<T>()))?;
     Ok(items)
 }
 
@@ -563,10 +778,9 @@ fn read_string(input: &mut &[u8], budget: &mut Budget) -> Result<String, NbtErro
     if len > input.len() {
         return Err(NbtError::UnexpectedEnd);
     }
-    budget.charge(len)?;
     let (bytes, rest) = input.split_at(len);
     *input = rest;
-    decode_mutf8(bytes)
+    decode_mutf8(bytes, budget)
 }
 
 /// Writes a `u16` byte length, then `value` in modified UTF-8.
@@ -597,16 +811,25 @@ fn encode_mutf8(buf: &mut Vec<u8>, value: &str) {
     }
 }
 
-fn decode_mutf8(bytes: &[u8]) -> Result<String, NbtError> {
+fn decode_mutf8(bytes: &[u8], budget: &mut Budget) -> Result<String, NbtError> {
     // Most strings are ASCII without U+0000, where both encodings agree.
     if bytes.iter().all(|&b| (1..0x80).contains(&b)) {
-        return Ok(String::from_utf8(bytes.to_vec()).expect("ASCII is UTF-8"));
+        budget.charge(bytes.len())?;
+        let mut value = String::new();
+        value
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| NbtError::TooLarge)?;
+        value.push_str(std::str::from_utf8(bytes).expect("ASCII is UTF-8"));
+        return Ok(value);
     }
     let continuation = |b: Option<&u8>| match b {
         Some(&b) if b & 0xc0 == 0x80 => Ok(u16::from(b & 0x3f)),
         _ => Err(NbtError::InvalidString),
     };
-    let mut units = Vec::with_capacity(bytes.len());
+    let mut units = Vec::new();
+    units
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| NbtError::TooLarge)?;
     let mut iter = bytes.iter();
     while let Some(&b) = iter.next() {
         let unit = match b {
@@ -621,7 +844,18 @@ fn decode_mutf8(bytes: &[u8]) -> Result<String, NbtError> {
         };
         units.push(unit);
     }
-    String::from_utf16(&units).map_err(|_| NbtError::InvalidString)
+    let chars = || char::decode_utf16(units.iter().copied());
+    let len = chars().try_fold(0, |len, c| {
+        c.map(|c| len + c.len_utf8())
+            .map_err(|_| NbtError::InvalidString)
+    })?;
+    budget.charge(len)?;
+    let mut value = String::new();
+    value
+        .try_reserve_exact(len)
+        .map_err(|_| NbtError::TooLarge)?;
+    value.extend(chars().map(|c| c.expect("already validated")));
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -630,7 +864,7 @@ mod tests {
 
     fn round_trip(value: &Nbt) -> Vec<u8> {
         let mut buf = Vec::new();
-        value.write_network(&mut buf);
+        value.write_network(&mut buf).unwrap();
         assert_eq!(Nbt::read_network(&mut &buf[..]).as_ref(), Ok(value));
         buf
     }
@@ -652,7 +886,7 @@ mod tests {
         // The same example with the root name "hello world" that the page gives it.
         let value = Nbt::Compound([("name", "Bananrama")].into_iter().collect());
         let mut buf = Vec::new();
-        value.write_named("hello world", &mut buf);
+        value.write_named("hello world", &mut buf).unwrap();
         let mut expected = vec![0x0a, 0x00, 0x0b];
         expected.extend_from_slice(b"hello world");
         expected.extend_from_slice(&[0x08, 0x00, 0x04]);
@@ -694,7 +928,7 @@ mod tests {
     #[test]
     fn strings_use_modified_utf8() {
         let mut buf = Vec::new();
-        Nbt::from("\0ñ🦀").write_network(&mut buf);
+        Nbt::from("\0ñ🦀").write_network(&mut buf).unwrap();
         assert_eq!(
             buf,
             [
@@ -707,6 +941,53 @@ mod tests {
         assert_eq!(
             Nbt::read_network(&mut &lone[..]),
             Err(NbtError::InvalidString)
+        );
+    }
+
+    #[test]
+    fn failed_writes_leave_the_buffer_unchanged() {
+        let mut buf = vec![42];
+        let oversized = Nbt::from("\0".repeat(32_768));
+        assert_eq!(
+            oversized.write_named("", &mut buf),
+            Err(NbtError::StringTooLong)
+        );
+        let mut list = List::Empty;
+        for _ in 0..MAX_DEPTH {
+            list = List::List(vec![list]);
+        }
+        assert_eq!(
+            Nbt::List(list).write_network(&mut buf),
+            Err(NbtError::TooDeep)
+        );
+        let value = Nbt::Compound(Compound::from_iter([("name", "value")]));
+        assert_eq!(
+            value.write_named_within("", &mut buf, 5, usize::MAX),
+            Err(NbtError::TooLarge)
+        );
+        assert_eq!(
+            value.write_named_within("", &mut buf, 100, 1),
+            Err(NbtError::TooLarge)
+        );
+        assert_eq!(buf, [42]);
+
+        let quota = compound_bytes(1) + "namevalue".len();
+        value.write_named_within("", &mut buf, 100, quota).unwrap();
+        assert_eq!(
+            Nbt::read_named_within(&mut &buf[1..], quota),
+            Ok((String::new(), value))
+        );
+    }
+
+    #[test]
+    fn an_empty_list_needs_no_element_decoder() {
+        assert_eq!(
+            Nbt::read_network(&mut &[LIST, 255, 0, 0, 0, 0][..]),
+            Ok(Nbt::List(List::Empty))
+        );
+        assert_eq!(
+            Nbt::read_network(&mut &[LIST, 255, 0, 0, 0, 1][..]),
+            Err(NbtError::UnknownTag(255))
         );
     }
 
@@ -788,8 +1069,8 @@ mod tests {
     #[test]
     fn optional_network_nbt_uses_tag_end_for_none() {
         let mut buf = Vec::new();
-        Nbt::write_network_optional(None, &mut buf);
-        Nbt::write_network_optional(Some(&Nbt::Byte(5)), &mut buf);
+        Nbt::write_network_optional(None, &mut buf).unwrap();
+        Nbt::write_network_optional(Some(&Nbt::Byte(5)), &mut buf).unwrap();
         assert_eq!(buf, [0x00, 0x01, 0x05]);
         let mut input = &buf[..];
         assert_eq!(Nbt::read_network_optional(&mut input), Ok(None));

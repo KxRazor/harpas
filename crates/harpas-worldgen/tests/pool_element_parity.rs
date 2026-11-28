@@ -317,7 +317,7 @@ fn pool_elements_place_as_in_vanilla() {
     }
     let input_file = reference.temp.0.join("elements.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(input).write_named("", &mut bytes);
+    Nbt::Compound(input).write_named("", &mut bytes).unwrap();
     fs::write(&input_file, bytes).unwrap();
     reference.compile(&[
         (
@@ -432,7 +432,9 @@ fn pool_elements_place_as_in_vanilla() {
     // load and save Harpas's block entities too, so that both are compared in the same form.
     let normalize_input = reference.temp.0.join("entities.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(normalize).write_named("", &mut bytes);
+    Nbt::Compound(normalize)
+        .write_named("", &mut bytes)
+        .unwrap();
     fs::write(&normalize_input, bytes).unwrap();
     let normalize_output = reference.temp.0.join("entities-out.nbt");
     reference.java(

@@ -1288,7 +1288,7 @@ impl Game {
         let state = &mut self.players[index];
         if matches!(
             state.pending_map_chest,
-            Some(maps::PendingChestAction::Break(_))
+            Some(maps::PendingChestAction::Break(..))
         ) {
             state.pending_map_chest = None;
         }
@@ -1327,6 +1327,7 @@ impl Game {
     }
 
     fn start_digging(&mut self, index: usize, mode: player::GameMode, pos: block::BlockPos) {
+        self.players[index].pending_map_chest = None;
         if mode == player::GameMode::Creative {
             self.destroy_and_acknowledge(index, pos);
             return;
@@ -1394,6 +1395,10 @@ impl Game {
     }
 
     fn abort_digging(&mut self, index: usize, pos: block::BlockPos) {
+        if matches!(self.players[index].pending_map_chest, Some(maps::PendingChestAction::Break(at, _)) if at == pos)
+        {
+            self.players[index].pending_map_chest = None;
+        }
         let digging = &mut self.players[index].digging;
         digging.is_destroying = false;
         let destroy_pos = digging.destroy_pos;
@@ -1540,21 +1545,25 @@ impl Game {
             world.block_changed(pos);
             return false;
         }
-        if let Err(error) = world.prepare_chest_maps([pos]) {
-            if error.kind() == io::ErrorKind::WouldBlock {
-                self.players[index].pending_map_chest = Some(maps::PendingChestAction::Break(pos));
-            } else {
-                log::debug!("Cannot break chest at {pos:?}: {error}");
-            }
-            return false;
-        }
-        if !world.set_block(
+        match world.try_set_block(
             pos,
             block::removed(state),
             neighbor::UPDATE_ALL,
             neighbor::UPDATE_LIMIT,
         ) {
-            return false;
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(error) => {
+                if error.kind() == io::ErrorKind::WouldBlock {
+                    self.players[index].pending_map_chest = Some(maps::PendingChestAction::Break(
+                        pos,
+                        world.maps.watch([pos]),
+                    ));
+                } else {
+                    log::debug!("Cannot break block at {pos:?}: {error}");
+                }
+                return false;
+            }
         }
         // `playerWillDestroy`: the particles and sound of the broken block, for the other players nearby.
         let breaker = self.players[index].player.entity_id;
@@ -2887,12 +2896,10 @@ mod tests {
         tick(&mut game, 2);
         assert!(game.players[0].flying);
 
-        game.players[0].pending_map_chest =
-            Some(maps::PendingChestAction::Break(block::BlockPos {
-                x: 0,
-                y: 65,
-                z: 0,
-            }));
+        game.players[0].pending_map_chest = Some(maps::PendingChestAction::Break(
+            block::BlockPos { x: 0, y: 65, z: 0 },
+            Vec::new(),
+        ));
         let (reply, changed) = mpsc::channel();
         game.pending.push(Event::SetGameMode {
             targets: vec![1],

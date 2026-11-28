@@ -235,7 +235,7 @@ fn entities() {
 fn chunks() {
     let block_entity_nbt = Nbt::Compound([("id", "minecraft:chest")].into_iter().collect());
     let mut nbt = Vec::new();
-    block_entity_nbt.write_network(&mut nbt);
+    block_entity_nbt.write_network(&mut nbt).unwrap();
     round_trip!(
         clientbound::Packet,
         concat(&[
@@ -311,7 +311,7 @@ fn chat() {
     let signature = [0x5a; 256];
     let text = Nbt::from("Steve");
     let mut name = Vec::new();
-    text.write_network(&mut name);
+    text.write_network(&mut name).unwrap();
     round_trip!(
         clientbound::Packet,
         concat(&[

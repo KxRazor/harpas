@@ -15,7 +15,10 @@
 //! drops. Vanilla loads a chunk that an update reaches; here a block next to a chunk that is not loaded keeps its
 //! shape, so that it is never broken for missing support the server has not read.
 
+use std::io;
+
 use harpas_core::block::block_states;
+use harpas_core::block_behavior::block_behavior;
 use harpas_worldgen::BlockGetter;
 use harpas_worldgen::shape_update::{Direction, chest_shape};
 use log::error;
@@ -127,51 +130,92 @@ impl World {
     /// [`UPDATE_CLIENTS`], and unless `flags` has [`UPDATE_KNOWN_SHAPE`] the neighbors update their shapes,
     /// down to `recursion` levels. Returns whether the block changed.
     pub fn set_block(&mut self, pos: BlockPos, state: u32, flags: u32, recursion: u32) -> bool {
+        match self.try_set_block(pos, state, flags, recursion) {
+            Ok(changed) => changed,
+            Err(error) => {
+                log::debug!("Cannot change block at {pos:?}: {error}");
+                false
+            }
+        }
+    }
+
+    pub(crate) fn try_set_block(
+        &mut self,
+        pos: BlockPos,
+        state: u32,
+        flags: u32,
+        recursion: u32,
+    ) -> io::Result<bool> {
         let Some(old) = self.block_state(pos) else {
-            return false;
+            return Ok(false);
         };
         if old == state {
-            return false;
+            return Ok(false);
         }
         let old_name = block_states().name(old);
-        let new_name = block_states().name(state);
+        let Some(new_name) = block_states().name(state) else {
+            return Ok(false);
+        };
+        let Some(ChunkState::Loaded(chunk)) = self.chunk(pos.chunk()) else {
+            return Ok(false);
+        };
+        if block::section_at(chunk, pos)
+            .is_some_and(|section| !section.can_store_block_state(state))
+        {
+            return Ok(false);
+        }
         let was_chest = old_name == Some(CHEST);
-        let is_chest = new_name == Some(CHEST);
+        let is_chest = new_name == CHEST;
         let was_furnace = old_name == Some(FURNACE);
-        let is_furnace = new_name == Some(FURNACE);
+        let is_furnace = new_name == FURNACE;
+        let new_tag = if (is_chest || is_furnace) && old_name != Some(new_name) {
+            let tag = if block_behavior().has_block_entity(old) {
+                self.block_entity_tag(pos)?;
+                None
+            } else {
+                let tag = self.container_tag(pos, new_name)?;
+                if tag.is_some() {
+                    if is_chest {
+                        self.chest_items(pos)?;
+                    } else {
+                        self.furnace(pos)?;
+                    }
+                }
+                tag
+            };
+            Some(if is_chest {
+                self.chest_with_items(pos, tag, &[])?
+            } else {
+                self.furnace_with_items(pos, tag, &Furnace::default())?
+            })
+        } else {
+            None
+        };
         let contents = if was_chest && !is_chest {
             let items = if flags & UPDATE_SUPPRESS_DROPS == 0 {
                 self.unpack_chest_items(pos)
             } else {
                 self.chest_items(pos)
             };
-            match items {
-                Ok(items) => Some(items),
-                Err(error) => {
-                    // Keep loot seeds and unsupported stacks in the world until their codecs are available.
-                    log::debug!("Keeping chest at {pos:?}: {error}");
-                    return false;
-                }
-            }
+            Some(items?)
         } else {
             None
         };
         let furnace_slots = if was_furnace && !is_furnace {
-            match self.furnace(pos) {
-                Ok(furnace) => Some(furnace.slots),
-                Err(error) => {
-                    log::debug!("Keeping furnace at {pos:?}: {error}");
-                    return false;
-                }
-            }
+            Some(self.furnace(pos)?.slots)
         } else {
             None
         };
-        let Some(chunk) = self.chunk_mut(pos.chunk()) else {
-            return false;
-        };
-        if block::set(chunk, pos, state).is_none() {
-            return false;
+        let biome = self.default_biome;
+        let chunk = self
+            .chunk_mut(pos.chunk())
+            .expect("the chunk is still loaded");
+        block::set(chunk, pos, state, biome).expect("the block change was validated");
+        if was_chest && !is_chest {
+            self.maps.forget_chest(pos);
+        }
+        if let Some(tag) = new_tag {
+            self.store_container_tag(pos, tag);
         }
         if let Some(items) = contents
             && flags & UPDATE_SUPPRESS_DROPS == 0
@@ -187,18 +231,6 @@ impl World {
                     self.pop_resource(pos, stack);
                 }
             }
-        }
-        if is_furnace
-            && !was_furnace
-            && let Err(error) = self.save_furnace(pos, &Furnace::default())
-        {
-            log::debug!("Cannot initialize furnace at {pos:?}: {error}");
-        }
-        if is_chest
-            && !was_chest
-            && let Err(error) = self.save_chest(pos, &[])
-        {
-            log::debug!("Cannot initialize chest at {pos:?}: {error}");
         }
         if block::changes_light(old, state) {
             self.relight_around(pos);
@@ -235,7 +267,7 @@ impl World {
                 );
             }
         }
-        true
+        Ok(true)
     }
 
     /// Breaks a block as vanilla's `Level.destroyBlock`: its particles and sound play, it drops its loot unless

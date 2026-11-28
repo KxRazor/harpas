@@ -437,6 +437,17 @@ impl Section {
         old
     }
 
+    /// Sets a block state if it fits this section's registry width.
+    pub fn try_set_block_state(&mut self, x: usize, y: usize, z: usize, state: u32) -> Option<u32> {
+        self.can_store_block_state(state)
+            .then(|| self.set_block_state(x, y, z, state))
+    }
+
+    /// Whether this section's registry width can represent the state ID.
+    pub fn can_store_block_state(&self, state: u32) -> bool {
+        self.block_states.strategy.fits_id(state)
+    }
+
     /// The biome at biome coordinates 0 to 3, one per 4×4×4 blocks.
     pub fn biome(&self, x: usize, y: usize, z: usize) -> u32 {
         self.biomes.get(biome_index(x, y, z))

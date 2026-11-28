@@ -87,7 +87,7 @@ fn prepare(folder: &Folder, chunk: &Compound) {
     let region_dir = dimension_dir(&world, "minecraft:overworld").join("region");
     fs::create_dir_all(&region_dir).unwrap();
     let mut region = Region::open(&region_dir, 0, 0).unwrap();
-    region.set_chunk(0, 0, chunk);
+    region.set_chunk(0, 0, chunk).unwrap();
     region.save().unwrap();
 }
 

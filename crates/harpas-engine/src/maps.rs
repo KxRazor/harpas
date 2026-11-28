@@ -1,10 +1,10 @@
-//! Treasure maps are found and saved on a worker before a chest can publish their item stacks.
+//! Treasure previews are found on a worker and saved once the chest interaction is ready to commit.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::{Arc, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -197,10 +197,11 @@ impl MapData {
 }
 
 fn icon(kind: MapIconKind, x: f32, z: f32, direction: u8) -> MapIcon {
+    let inside = x.abs().max(z.abs()) <= 63.0;
     let coordinate = |n: f32| {
-        if n <= -63.0 {
+        if !inside && n <= -63.0 {
             -128
-        } else if n >= 63.0 {
+        } else if !inside && n >= 63.0 {
             127
         } else {
             (f64::from(n * 2.0) + 0.5) as i8
@@ -246,6 +247,10 @@ impl TreasureMap {
         let decorations = Compound::from_iter([("+", Nbt::Compound(marker))]);
         codec.set_saved_component(stack, DECORATIONS, &Nbt::Compound(decorations))
     }
+
+    pub(crate) fn is_on(self, stack: &ItemStack, codec: &ItemCodec) -> bool {
+        codec.saved_component(stack, MAP_ID) == Some(Nbt::Int(self.id))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -254,11 +259,13 @@ pub(crate) struct MapChest {
     pub(crate) seed: i64,
 }
 
-#[derive(Clone, Copy)]
 pub(crate) enum PendingChestAction {
-    Open(BlockPos),
-    Break(BlockPos),
+    Open(BlockPos, ChestWatch),
+    Break(BlockPos, ChestWatch),
 }
+
+// A token stays live only while a player has a pending action on the block.
+pub(crate) type ChestWatch = Vec<(BlockPos, Arc<()>)>;
 
 impl Game {
     pub(crate) fn retry_map_chests(&mut self) {
@@ -270,20 +277,34 @@ impl Game {
             let Some(action) = player.pending_map_chest.take() else {
                 continue;
             };
-            let (PendingChestAction::Open(pos) | PendingChestAction::Break(pos)) = action;
+            let (PendingChestAction::Open(pos, watch) | PendingChestAction::Break(pos, watch)) =
+                &action;
             let range = player.block_interaction_range() + 1.0;
             if player.disconnecting
                 || !player.data_ready
+                || player.is_dead()
                 || player.awaiting_teleport.is_some()
                 || pos.distance_squared(player.eye_position()) >= range * range
-                || harpas_core::block::block_states().name(self.block_at(pos))
-                    != Some(crate::chest::CHEST)
+                || !self.world.as_ref().is_some_and(|world| {
+                    world.maps.still_watched(watch)
+                        && match action {
+                            PendingChestAction::Open(pos, _) => crate::chest::Chest::at(world, pos)
+                                .is_some_and(|chest| {
+                                    chest.positions().eq(watch.iter().map(|(pos, _)| *pos))
+                                }),
+                            PendingChestAction::Break(pos, _) => {
+                                world.block_state(pos).and_then(|state| {
+                                    harpas_core::block::block_states().name(state)
+                                }) == Some(crate::chest::CHEST)
+                            }
+                        }
+                })
             {
                 continue;
             }
             match action {
-                PendingChestAction::Open(pos) => self.open_chest(index, pos),
-                PendingChestAction::Break(pos) => {
+                PendingChestAction::Open(pos, _) => self.open_chest(index, pos),
+                PendingChestAction::Break(pos, _) => {
                     self.destroy_block(index, pos);
                 }
             }
@@ -339,17 +360,22 @@ enum Request {
     Read(i32),
 }
 
+type MapPreview = (MapData, [i32; 2]);
+type SearchResult = io::Result<Option<MapPreview>>;
+
 enum Reply {
-    Found(MapChest, io::Result<Option<(TreasureMap, MapData)>>),
+    Found(MapChest, SearchResult),
     Read(i32, io::Result<Option<MapData>>),
 }
 
 pub(crate) struct Maps {
+    files: MapFiles,
     requests: Option<SyncSender<Request>>,
     replies: Option<mpsc::Receiver<Reply>>,
     worker: Option<JoinHandle<()>>,
     searching: HashSet<MapChest>,
-    ready: HashMap<MapChest, (Instant, io::Result<Option<TreasureMap>>)>,
+    ready: HashMap<MapChest, (Instant, SearchResult)>,
+    watched: HashMap<BlockPos, Weak<()>>,
     reading: HashSet<i32>,
     loaded: HashMap<i32, Option<MapData>>,
     load_order: VecDeque<i32>,
@@ -360,7 +386,7 @@ impl Maps {
         world: &Path,
         source: Option<(Arc<dyn ChunkSource>, Arc<ChunkStorage>)>,
     ) -> io::Result<Self> {
-        let mut files = MapFiles::new(world);
+        let reader = MapFiles::new(world);
         let (requests, jobs) = mpsc::sync_channel(16);
         let (done, replies) = mpsc::channel();
         let worker = thread::Builder::new()
@@ -374,18 +400,12 @@ impl Maps {
                                 let Some((source, storage)) = &source else {
                                     return Ok(None);
                                 };
-                                let Some((data, target)) =
-                                    source.treasure_map(chest.pos, storage)?
-                                else {
-                                    return Ok(None);
-                                };
-                                let id = files.create(data.to_nbt())?;
-                                Ok(Some((TreasureMap { id, target }, data)))
+                                source.treasure_map(chest.pos, storage)
                             })(),
                         ),
                         Request::Read(id) => Reply::Read(
                             id,
-                            files
+                            reader
                                 .read(id)
                                 .and_then(|data| data.as_ref().map(MapData::from_nbt).transpose()),
                         ),
@@ -396,11 +416,13 @@ impl Maps {
                 }
             })?;
         Ok(Self {
+            files: MapFiles::new(world),
             requests: Some(requests),
             replies: Some(replies),
             worker: Some(worker),
             searching: HashSet::new(),
             ready: HashMap::new(),
+            watched: HashMap::new(),
             reading: HashSet::new(),
             loaded: HashMap::new(),
             load_order: VecDeque::new(),
@@ -416,26 +438,26 @@ impl Maps {
     }
 
     pub(crate) fn poll(&mut self) {
+        self.watched.retain(|_, token| token.strong_count() != 0);
         self.ready
             .retain(|_, (time, _)| time.elapsed() < Duration::from_secs(60));
         while let Ok(reply) = self.replies.as_ref().unwrap().try_recv() {
             match reply {
                 Reply::Found(chest, result) => {
                     self.searching.remove(&chest);
-                    let result = result.map(|found| {
-                        found.map(|(map, data)| {
-                            self.cache(map.id, Some(data));
-                            map
-                        })
-                    });
                     self.ready.insert(chest, (Instant::now(), result));
                 }
                 Reply::Read(id, result) => {
                     self.reading.remove(&id);
-                    if let Err(error) = &result {
-                        log::warn!("Cannot read map {id}: {error}");
+                    match result {
+                        Ok(data) => self.cache(id, data),
+                        Err(error) => {
+                            log::warn!("Cannot read map {id}: {error}");
+                            if error.kind() == io::ErrorKind::InvalidData {
+                                self.cache(id, None);
+                            }
+                        }
                     }
-                    self.cache(id, result.unwrap_or(None));
                 }
             }
         }
@@ -467,10 +489,54 @@ impl Maps {
         Err(pending())
     }
 
-    pub(crate) fn prepared(&self, chest: MapChest) -> Option<TreasureMap> {
+    pub(crate) fn prepared(&self, chest: MapChest) -> Option<Option<&MapPreview>> {
         self.ready
             .get(&chest)
-            .and_then(|(_, result)| *result.as_ref().ok()?)
+            .and_then(|(_, result)| result.as_ref().ok().map(Option::as_ref))
+    }
+
+    pub(crate) fn next_id(&self) -> io::Result<i32> {
+        self.files.next_id()
+    }
+
+    pub(crate) fn publish(&mut self, first: i32, maps: Vec<MapData>) -> io::Result<()> {
+        self.files
+            .create_batch(first, &maps.iter().map(MapData::to_nbt).collect::<Vec<_>>())?;
+        for (offset, data) in maps.into_iter().enumerate() {
+            self.cache(first + offset as i32, Some(data));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn watch(&mut self, positions: impl IntoIterator<Item = BlockPos>) -> ChestWatch {
+        positions
+            .into_iter()
+            .map(|pos| {
+                let watch = self.watched.entry(pos).or_default();
+                let token = watch.upgrade().unwrap_or_else(|| {
+                    let token = Arc::new(());
+                    *watch = Arc::downgrade(&token);
+                    token
+                });
+                (pos, token)
+            })
+            .collect()
+    }
+
+    fn still_watched(&self, watch: &ChestWatch) -> bool {
+        watch.iter().all(|(pos, token)| {
+            self.watched
+                .get(pos)
+                .is_some_and(|current| current.as_ptr() == Arc::as_ptr(token))
+        })
+    }
+
+    pub(crate) fn forget_chest(&mut self, pos: BlockPos) {
+        self.watched.remove(&pos);
+    }
+
+    pub(crate) fn retain_chests(&mut self, loaded: impl Fn(BlockPos) -> bool) {
+        self.watched.retain(|&pos, _| loaded(pos));
     }
 
     pub(crate) fn consume(&mut self, chest: MapChest) {
@@ -498,6 +564,49 @@ impl Drop for Maps {
     }
 }
 
-fn pending() -> io::Error {
+pub(crate) fn pending() -> io::Error {
     io::Error::new(io::ErrorKind::WouldBlock, "treasure map search is pending")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_chest_does_not_keep_the_previous_chests_actions() {
+        let mut maps = Maps::start(Path::new("test"), None).unwrap();
+        let pos = BlockPos { x: 1, y: 2, z: 3 };
+        let watch = maps.watch([pos]);
+        assert!(maps.still_watched(&watch));
+        maps.forget_chest(pos);
+        let replacement = maps.watch([pos]);
+        assert!(!maps.still_watched(&watch));
+        assert!(maps.still_watched(&replacement));
+    }
+
+    #[test]
+    fn transient_map_read_errors_are_not_cached_as_missing() {
+        let mut maps = Maps::start(Path::new("test"), None).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        maps.replies = Some(receiver);
+        maps.reading.insert(1);
+        sender
+            .send(Reply::Read(1, Err(io::ErrorKind::Interrupted.into())))
+            .unwrap();
+        maps.poll();
+        assert!(!maps.reading.contains(&1));
+        assert!(!maps.loaded.contains_key(&1));
+        let data = MapData::treasure_preview([0, 0], |_, _| false);
+        sender.send(Reply::Read(1, Ok(Some(data)))).unwrap();
+        maps.poll();
+        assert!(maps.get(1).is_some());
+    }
+
+    #[test]
+    fn a_marker_on_the_visible_boundary_uses_its_on_map_coordinates() {
+        let marker = icon(MapIconKind::RedX, 63.0, -63.0, 8);
+        assert_eq!((marker.x, marker.z), (126, -125));
+        let outside = icon(MapIconKind::PlayerOffMap, 63.0, -64.0, 0);
+        assert_eq!((outside.x, outside.z), (127, -128));
+    }
 }

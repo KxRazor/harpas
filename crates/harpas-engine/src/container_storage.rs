@@ -86,6 +86,14 @@ impl World {
     }
 
     pub(crate) fn container_tag(&self, pos: BlockPos, kind: &str) -> io::Result<Option<&Compound>> {
+        let tag = self.block_entity_tag(pos)?;
+        if tag.is_some_and(|tag| !matches!(tag.get("id"), Some(Nbt::String(id)) if id == kind)) {
+            return Err(invalid("unexpected block entity at container position"));
+        }
+        Ok(tag)
+    }
+
+    pub(crate) fn block_entity_tag(&self, pos: BlockPos) -> io::Result<Option<&Compound>> {
         let Some(ChunkState::Loaded(chunk)) = self.chunk(pos.chunk()) else {
             return Err(invalid("container chunk is no longer loaded"));
         };
@@ -93,10 +101,8 @@ impl World {
             .iter()
             .filter(|entity| at(entity, pos));
         let tag = matching.next();
-        if tag.is_some_and(|tag| !matches!(tag.get("id"), Some(Nbt::String(id)) if id == kind))
-            || matching.next().is_some()
-        {
-            return Err(invalid("unexpected block entity at container position"));
+        if matching.next().is_some() {
+            return Err(invalid("duplicate block entities at container position"));
         }
         Ok(tag)
     }

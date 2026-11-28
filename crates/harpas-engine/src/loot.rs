@@ -15,7 +15,7 @@
 //! `entity_properties` conditions (read as false) and `dynamic` entries (which add nothing), and the functions
 //! that copy data into the item (`copy_components`, `copy_state`), which drop the item without it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek};
 use std::path::Path;
 
@@ -28,9 +28,89 @@ use log::warn;
 use serde_json::Value;
 
 use crate::inventory::ItemStack;
-use crate::item_data::{ItemCodec, STEW_EFFECTS};
+use crate::item_data::{ItemCodec, STEW_EFFECTS, invalid};
 
 pub(crate) mod chest;
+
+const MAX_WORK: usize = 16_384;
+const MAX_STACKS: usize = 4_096;
+
+fn check_structure(value: &Value, depth: usize, remaining: &mut usize) -> io::Result<()> {
+    if depth > 64 || *remaining == 0 {
+        return Err(invalid("loot table is too large or deeply nested"));
+    }
+    *remaining -= 1;
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .try_for_each(|value| check_structure(value, depth + 1, remaining)),
+        Value::Object(fields) => fields
+            .values()
+            .try_for_each(|value| check_structure(value, depth + 1, remaining)),
+        _ => Ok(()),
+    }
+}
+
+fn required<'a>(value: &'a Value, key: &str) -> io::Result<&'a Value> {
+    value
+        .get(key)
+        .ok_or_else(|| invalid(format!("missing loot field {key}")))
+}
+
+fn string<'a>(value: &'a Value, key: &str) -> io::Result<&'a str> {
+    required(value, key)?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| invalid(format!("loot field {key} must be a nonempty string")))
+}
+
+fn array(value: &Value) -> io::Result<&[Value]> {
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| invalid("expected a loot array"))
+}
+
+fn list<'a>(value: &'a Value, key: &str) -> io::Result<&'a [Value]> {
+    value.get(key).map_or(Ok(&[]), array)
+}
+
+fn integer(value: &Value) -> io::Result<i32> {
+    value
+        .as_f64()
+        .filter(|value| {
+            value.fract() == 0.0 && (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(value)
+        })
+        .map(|value| value as i32)
+        .ok_or_else(|| invalid("expected a 32-bit loot integer"))
+}
+
+fn probability(value: f32) -> io::Result<f32> {
+    if !(0.0..=1.0).contains(&value) {
+        return Err(invalid("loot probability must be between 0 and 1"));
+    }
+    Ok(value)
+}
+
+fn finite(value: &Value) -> io::Result<f32> {
+    value
+        .as_f64()
+        .map(|value| value as f32)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| invalid("expected a finite loot number"))
+}
+
+fn kind(id: &str) -> &str {
+    id.strip_prefix("minecraft:").unwrap_or(id)
+}
+
+fn item_id(name: &str) -> Option<u32> {
+    if name.contains(':') {
+        items().id(name)
+    } else {
+        items().id(&format!("minecraft:{name}"))
+    }
+}
 
 /// A number provider (`NumberProvider`).
 #[derive(Debug, Clone, PartialEq)]
@@ -41,55 +121,75 @@ enum Number {
 }
 
 impl Number {
-    fn parse(value: &Value) -> Option<Self> {
-        if let Some(n) = value.as_f64() {
-            return Some(Self::Constant(n as f32));
+    fn parse(value: &Value) -> io::Result<Self> {
+        if value.is_number() {
+            return Ok(Self::Constant(finite(value)?));
         }
-        let kind = value.get("type")?.as_str()?;
-        let field = |name| value.get(name).and_then(Self::parse).map(Box::new);
-        match kind {
-            "minecraft:constant" => Some(Self::Constant(value.get("value")?.as_f64()? as f32)),
-            "minecraft:uniform" => Some(Self::Uniform(field("min")?, field("max")?)),
-            "minecraft:binomial" => Some(Self::Binomial(field("n")?, field("p")?)),
-            _ => None,
+        let field = |name| Self::parse(required(value, name)?).map(Box::new);
+        Ok(match kind(string(value, "type")?) {
+            "constant" => Self::Constant(finite(required(value, "value")?)?),
+            "uniform" => Self::Uniform(field("min")?, field("max")?),
+            "binomial" => {
+                let p = field("p")?;
+                p.validate_probability()?;
+                Self::Binomial(field("n")?, p)
+            }
+            other => return Err(invalid(format!("unsupported loot number provider {other}"))),
+        })
+    }
+
+    fn validate_probability(&self) -> io::Result<()> {
+        if let Self::Constant(value) = self {
+            probability(*value)?;
         }
+        Ok(())
     }
 
     /// `getFloat`.
-    fn float(&self, random: &mut dyn RandomSource) -> f32 {
-        match self {
+    fn float(&self, context: &mut Context<'_>) -> io::Result<f32> {
+        context.charge(1)?;
+        Ok(match self {
             Self::Constant(n) => *n,
             Self::Uniform(min, max) => {
-                let (min, max) = (min.float(random), max.float(random));
+                let (min, max) = (min.float(context)?, max.float(context)?);
                 // `Mth.nextFloat`.
                 if min >= max {
                     min
                 } else {
-                    random.next_float() * (max - min) + min
+                    let width = max - min;
+                    if !width.is_finite() {
+                        return Err(invalid("loot number range is too wide"));
+                    }
+                    context.random.next_float() * width + min
                 }
             }
-            Self::Binomial(..) => self.int(random) as f32,
-        }
+            Self::Binomial(..) => self.int(context)? as f32,
+        })
     }
 
     /// `getInt`.
-    fn int(&self, random: &mut dyn RandomSource) -> i32 {
-        match self {
-            Self::Constant(n) => (n + 0.5).floor() as i32,
+    fn int(&self, context: &mut Context<'_>) -> io::Result<i32> {
+        context.charge(1)?;
+        Ok(match self {
+            Self::Constant(n) => round_f32(*n),
             Self::Uniform(min, max) => {
-                let (min, max) = (min.int(random), max.int(random));
+                let (min, max) = (min.int(context)?, max.int(context)?);
                 // `Mth.nextInt`.
                 if min >= max {
                     min
                 } else {
-                    random.next_int_bounded(max - min + 1) + min
+                    let width = i32::try_from(i64::from(max) - i64::from(min) + 1)
+                        .map_err(|_| invalid("loot number range is too wide"))?;
+                    context.random.next_int_bounded(width) + min
                 }
             }
             Self::Binomial(n, p) => {
-                let (n, p) = (n.int(random), p.float(random));
-                (0..n).filter(|_| random.next_float() < p).count() as i32
+                let n = n.int(context)?.max(0);
+                let p = probability(p.float(context)?)?;
+                context.charge(n as usize)?;
+                (0..n).filter(|_| context.random.next_float() < p).count() as i32
             }
-        }
+        })
     }
 }
 
@@ -111,7 +211,7 @@ enum Condition {
     },
     /// The tool is one of these items; a predicate on the tool's components never matches yet.
     MatchTool {
-        items: Option<Vec<String>>,
+        items: Option<HashSet<String>>,
         components: bool,
     },
     RandomChance(Number),
@@ -125,94 +225,125 @@ enum Condition {
 }
 
 impl Condition {
-    fn parse(value: &Value) -> Self {
-        let Some(kind) = value.get("condition").and_then(Value::as_str) else {
-            return Self::Unsupported;
-        };
-        let list = |name| {
-            value
-                .get(name)
-                .and_then(Value::as_array)
-                .map(|terms| terms.iter().map(Self::parse).collect())
-                .unwrap_or_default()
-        };
-        match kind {
-            "minecraft:survives_explosion" => Self::SurvivesExplosion,
-            "minecraft:block_state_property" => {
-                let properties = value
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .map(|properties| {
-                        properties
-                            .iter()
-                            .map(|(key, expected)| {
-                                let expected = match expected {
-                                    Value::String(s) => PropertyValue::Exact(s.clone()),
-                                    Value::Object(range) => PropertyValue::Range(
-                                        range.get("min").and_then(Value::as_i64),
-                                        range.get("max").and_then(Value::as_i64),
-                                    ),
-                                    other => PropertyValue::Exact(other.to_string()),
+    fn parse(value: &Value) -> io::Result<Self> {
+        let name = kind(string(value, "condition")?);
+        Ok(match name {
+            "survives_explosion" => Self::SurvivesExplosion,
+            "block_state_property" => {
+                let mut properties = Vec::new();
+                if let Some(entries) = value.get("properties") {
+                    let entries = entries
+                        .as_object()
+                        .ok_or_else(|| invalid("invalid loot block properties"))?;
+                    for (key, expected) in entries {
+                        let expected = match expected {
+                            Value::String(s) => PropertyValue::Exact(s.clone()),
+                            Value::Bool(_) | Value::Number(_) => {
+                                PropertyValue::Exact(expected.to_string())
+                            }
+                            Value::Object(range) => {
+                                let bound = |key| {
+                                    range
+                                        .get(key)
+                                        .map(|v: &Value| {
+                                            v.as_i64()
+                                                .or_else(|| v.as_str()?.parse().ok())
+                                                .ok_or_else(|| {
+                                                    invalid("invalid loot property bound")
+                                                })
+                                        })
+                                        .transpose()
                                 };
-                                (key.clone(), expected)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                                let (min, max) = (bound("min")?, bound("max")?);
+                                if matches!((min, max), (Some(min), Some(max)) if min > max) {
+                                    return Err(invalid("inverted loot property range"));
+                                }
+                                PropertyValue::Range(min, max)
+                            }
+                            _ => return Err(invalid("invalid loot property")),
+                        };
+                        properties.push((key.clone(), expected));
+                    }
+                }
                 Self::BlockState {
-                    block: value
-                        .get("block")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
+                    block: string(value, "block")?.to_owned(),
                     properties,
                 }
             }
-            "minecraft:match_tool" => {
-                let predicate = value.get("predicate");
-                let items = predicate
-                    .and_then(|p| p.get("items"))
-                    .map(|items| match items {
-                        Value::String(s) => vec![s.clone()],
-                        Value::Array(a) => a
-                            .iter()
-                            .filter_map(|s| s.as_str().map(str::to_owned))
-                            .collect(),
-                        _ => Vec::new(),
+            "match_tool" => {
+                let Some(predicate) = value.get("predicate") else {
+                    return Ok(Self::MatchTool {
+                        items: None,
+                        components: false,
                     });
-                let components = predicate.is_some_and(|p| {
-                    p.get("predicates").is_some() || p.get("components").is_some()
-                });
+                };
+                let predicate = predicate
+                    .as_object()
+                    .ok_or_else(|| invalid("invalid loot tool predicate"))?;
+                let items = predicate
+                    .get("items")
+                    .map(|items| {
+                        if let Some(item) = items.as_str() {
+                            return Ok(HashSet::from([item.to_owned()]));
+                        }
+                        array(items)?
+                            .iter()
+                            .map(|item| {
+                                item.as_str()
+                                    .map(str::to_owned)
+                                    .ok_or_else(|| invalid("invalid loot tool item"))
+                            })
+                            .collect::<io::Result<HashSet<_>>>()
+                    })
+                    .transpose()?;
+                let components =
+                    predicate.contains_key("predicates") || predicate.contains_key("components");
                 Self::MatchTool { items, components }
             }
-            "minecraft:random_chance" => value
-                .get("chance")
-                .and_then(Number::parse)
-                .map_or(Self::Unsupported, Self::RandomChance),
-            "minecraft:table_bonus" => value
-                .get("chances")
-                .and_then(Value::as_array)
-                .and_then(|c| c.first())
-                .and_then(Value::as_f64)
-                .map_or(Self::Unsupported, |chance| Self::TableBonus(chance as f32)),
-            "minecraft:any_of" => Self::AnyOf(list("terms")),
-            "minecraft:all_of" => Self::AllOf(list("terms")),
-            "minecraft:inverted" => value.get("term").map_or(Self::Unsupported, |term| {
-                Self::Inverted(Box::new(Self::parse(term)))
-            }),
+            "random_chance" => {
+                let chance = Number::parse(required(value, "chance")?)?;
+                chance.validate_probability()?;
+                Self::RandomChance(chance)
+            }
+            "table_bonus" => {
+                let chances = array(required(value, "chances")?)?;
+                let mut chances = chances
+                    .iter()
+                    .map(|chance| finite(chance).and_then(probability));
+                let first = chances
+                    .next()
+                    .ok_or_else(|| invalid("empty loot probability table"))??;
+                for chance in chances {
+                    chance?;
+                }
+                Self::TableBonus(first)
+            }
+            "any_of" | "all_of" => {
+                let terms = array(required(value, "terms")?)?
+                    .iter()
+                    .map(Self::parse)
+                    .collect::<io::Result<_>>()?;
+                if name == "any_of" {
+                    Self::AnyOf(terms)
+                } else {
+                    Self::AllOf(terms)
+                }
+            }
+            "inverted" => Self::Inverted(Box::new(Self::parse(required(value, "term")?)?)),
             _ => Self::Unsupported,
-        }
+        })
     }
 
-    fn test(&self, context: &mut Context<'_>) -> bool {
-        match self {
+    fn test(&self, context: &mut Context<'_>) -> io::Result<bool> {
+        context.charge(1)?;
+        Ok(match self {
             Self::SurvivesExplosion => true,
             Self::BlockState { block, properties } => {
                 let Some((name, values)) = context
                     .state
                     .and_then(|state| block_states().properties(state))
                 else {
-                    return false;
+                    return Ok(false);
                 };
                 name == block
                     && properties.iter().all(|(key, expected)| {
@@ -229,30 +360,43 @@ impl Condition {
             }
             Self::MatchTool { items, components } => {
                 if *components {
-                    return false;
+                    return Ok(false);
                 }
                 match items {
-                    Some(items) => context.tool.name().is_some_and(|name| {
-                        !context.tool.is_empty() && items.iter().any(|i| i == name)
-                    }),
+                    Some(items) => context
+                        .tool
+                        .name()
+                        .is_some_and(|name| !context.tool.is_empty() && items.contains(name)),
                     None => true,
                 }
             }
             Self::RandomChance(chance) => {
-                let chance = chance.float(context.random);
+                let chance = probability(chance.float(context)?)?;
                 context.random.next_float() < chance
             }
             Self::TableBonus(chance) => context.random.next_float() < *chance,
-            Self::AnyOf(terms) => terms.iter().any(|t| t.test(context)),
-            Self::AllOf(terms) => terms.iter().all(|t| t.test(context)),
-            Self::Inverted(term) => !term.test(context),
+            Self::AnyOf(terms) => {
+                for term in terms {
+                    if term.test(context)? {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
+            Self::AllOf(terms) => all(terms, context)?,
+            Self::Inverted(term) => !term.test(context)?,
             Self::Unsupported => false,
-        }
+        })
     }
 }
 
-fn all(conditions: &[Condition], context: &mut Context<'_>) -> bool {
-    conditions.iter().all(|c| c.test(context))
+fn all(conditions: &[Condition], context: &mut Context<'_>) -> io::Result<bool> {
+    for condition in conditions {
+        if !condition.test(context)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A loot function (`LootItemFunction`), with its own conditions.
@@ -263,9 +407,10 @@ enum Function {
         add: bool,
     },
     LimitCount {
-        min: Option<i32>,
-        max: Option<i32>,
+        min: Option<Number>,
+        max: Option<Number>,
     },
+    ExactCount(i32),
     LootingBonus {
         count: Number,
         limit: i32,
@@ -294,97 +439,96 @@ struct StewEffect {
 }
 
 impl StewEffect {
-    fn parse(value: &Value) -> Option<Self> {
-        Some(Self {
-            name: value["type"].as_str()?.to_owned(),
-            duration: Number::parse(&value["duration"])?,
+    fn parse(value: &Value) -> io::Result<Self> {
+        Ok(Self {
+            name: string(value, "type")?.to_owned(),
+            duration: Number::parse(required(value, "duration")?)?,
         })
     }
 
-    fn roll(&self, random: &mut dyn RandomSource) -> Nbt {
-        let duration = self.duration.int(random);
+    fn roll(&self, context: &mut Context<'_>) -> io::Result<Nbt> {
+        let duration = self.duration.int(context)?;
         let name = self.name.strip_prefix("minecraft:").unwrap_or(&self.name);
         // Vanilla's instant effects use the sampled duration directly. Other effects use ticks.
         let ticks = match name {
             "instant_health" | "instant_damage" | "saturation" => duration,
             _ => duration.saturating_mul(20),
         };
-        Nbt::List(List::Compound(vec![Compound::from_iter([
+        Ok(Nbt::List(List::Compound(vec![Compound::from_iter([
             ("id", Nbt::from(self.name.as_str())),
             ("duration", Nbt::Int(ticks)),
-        ])]))
+        ])])))
     }
 }
 
 impl Function {
-    fn parse(value: &Value) -> (Self, Vec<Condition>) {
-        let conditions = conditions(value);
-        let kind = value
-            .get("function")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let function = match kind {
-            "minecraft:set_count" => {
-                value
-                    .get("count")
-                    .and_then(Number::parse)
-                    .map_or(Self::None, |count| Self::SetCount {
-                        count,
-                        add: value.get("add").and_then(Value::as_bool).unwrap_or(false),
+    fn parse(value: &Value) -> io::Result<(Self, Vec<Condition>)> {
+        let name = kind(string(value, "function")?);
+        let function = match name {
+            "set_count" => Self::SetCount {
+                count: Number::parse(required(value, "count")?)?,
+                add: value
+                    .get("add")
+                    .map(|add| {
+                        add.as_bool()
+                            .ok_or_else(|| invalid("invalid loot count add flag"))
                     })
+                    .transpose()?
+                    .unwrap_or(false),
+            },
+            "limit_count" => {
+                let limit = required(value, "limit")?;
+                if limit.is_number() {
+                    return Ok((Self::ExactCount(integer(limit)?), conditions(value)?));
+                }
+                if !limit.is_object() {
+                    return Err(invalid("invalid loot count limit"));
+                }
+                let min = limit.get("min").map(Number::parse).transpose()?;
+                let max = limit.get("max").map(Number::parse).transpose()?;
+                if matches!((&min, &max), (Some(Number::Constant(min)), Some(Number::Constant(max))) if round_f32(*min) > round_f32(*max))
+                {
+                    return Err(invalid("inverted loot count range"));
+                }
+                Self::LimitCount { min, max }
             }
-            "minecraft:limit_count" => {
-                let limit = value.get("limit");
-                let bound = |name| {
-                    limit
-                        .and_then(|l| l.get(name))
-                        .and_then(Value::as_f64)
-                        .map(|n| n.floor() as i32)
-                };
-                Self::LimitCount {
-                    min: bound("min"),
-                    max: bound("max"),
+            "enchanted_count_increase" if value["enchantment"] == "minecraft:looting" => {
+                let limit = value.get("limit").map(integer).transpose()?.unwrap_or(0);
+                if limit < 0 {
+                    return Err(invalid("negative looting limit"));
+                }
+                Self::LootingBonus {
+                    count: Number::parse(required(value, "count")?)?,
+                    limit,
                 }
             }
-            "minecraft:enchanted_count_increase" if value["enchantment"] == "minecraft:looting" => {
-                Number::parse(&value["count"]).map_or(Self::None, |count| Self::LootingBonus {
-                    count,
-                    limit: value["limit"].as_i64().unwrap_or(0) as i32,
-                })
-            }
-            "minecraft:apply_bonus" => {
-                let parameters = value.get("parameters");
-                match value.get("formula").and_then(Value::as_str) {
-                    Some("minecraft:binomial_with_bonus_count") => Self::BinomialBonus {
-                        extra: parameters
-                            .and_then(|p| p.get("extra"))
-                            .and_then(Value::as_i64)
-                            .unwrap_or(0) as i32,
-                        probability: parameters
-                            .and_then(|p| p.get("probability"))
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0) as f32,
-                    },
-                    Some("minecraft:uniform_bonus_count") => Self::UniformBonus,
-                    _ => Self::None,
+            "apply_bonus" => match kind(string(value, "formula")?) {
+                "binomial_with_bonus_count" => {
+                    let parameters = required(value, "parameters")?;
+                    let extra = integer(required(parameters, "extra")?)?;
+                    if extra < 0 {
+                        return Err(invalid("negative loot trial count"));
+                    }
+                    Self::BinomialBonus {
+                        extra,
+                        probability: probability(finite(required(parameters, "probability")?)?)?,
+                    }
                 }
-            }
-            "minecraft:explosion_decay" | "minecraft:copy_components" | "minecraft:copy_state" => {
-                Self::None
-            }
-            "minecraft:enchant_randomly"
-                if value["options"].as_str() == Some(chest::ENCHANTMENT_TAG) =>
-            {
+                "uniform_bonus_count" => Self::UniformBonus,
+                _ => Self::None,
+            },
+            "explosion_decay" | "copy_components" | "copy_state" => Self::None,
+            "enchant_randomly" if value["options"].as_str() == Some(chest::ENCHANTMENT_TAG) => {
                 Self::EnchantRandomly
             }
-            "minecraft:set_potion" => value["id"]
-                .as_str()
-                .map_or(Self::None, |name| Self::SetPotion(name.to_owned())),
-            "minecraft:set_stew_effect" => value["effects"]
-                .as_array()
-                .and_then(|entries| entries.iter().map(StewEffect::parse).collect())
-                .map_or(Self::None, Self::SetStewEffect),
-            "minecraft:exploration_map"
+            "set_potion" => Self::SetPotion(string(value, "id")?.to_owned()),
+            "set_stew_effect" => Self::SetStewEffect(
+                array(required(value, "effects")?)?
+                    .iter()
+                    .map(StewEffect::parse)
+                    .collect::<io::Result<_>>()?,
+            ),
+            "exploration_map"
                 if value["decoration"] == "minecraft:red_x"
                     && value["zoom"].as_i64() == Some(1)
                     && value["destination"]
@@ -396,7 +540,7 @@ impl Function {
             {
                 Self::TreasureMap
             }
-            "minecraft:set_name" if value["target"] == "item_name" => value["name"]["translate"]
+            "set_name" if value["target"] == "item_name" => value["name"]["translate"]
                 .as_str()
                 .map_or(Self::None, |name| {
                     Self::SetTranslatedItemName(name.to_owned())
@@ -406,45 +550,56 @@ impl Function {
                 Self::None
             }
         };
-        (function, conditions)
+        Ok((function, conditions(value)?))
     }
 
     fn apply(&self, stack: &mut ItemStack, context: &mut Context<'_>) -> io::Result<()> {
-        let random = &mut *context.random;
+        context.charge(1)?;
         match self {
             Self::SetCount { count, add } => {
-                let n = count.int(random);
-                stack.count = if *add { stack.count + n } else { n };
+                let n = count.int(context)?;
+                if *add {
+                    add_count(stack, n)?;
+                } else {
+                    stack.count = n;
+                }
             }
             Self::LimitCount { min, max } => {
+                let min = min.as_ref().map(|min| min.int(context)).transpose()?;
+                let max = max.as_ref().map(|max| max.int(context)).transpose()?;
+                if matches!((min, max), (Some(min), Some(max)) if min > max) {
+                    return Err(invalid("inverted loot count range"));
+                }
                 if let Some(min) = min {
-                    stack.count = stack.count.max(*min);
+                    stack.count = stack.count.max(min);
                 }
                 if let Some(max) = max {
-                    stack.count = stack.count.min(*max);
+                    stack.count = stack.count.min(max);
                 }
             }
+            Self::ExactCount(count) => stack.count = *count,
             Self::LootingBonus { count, limit } if context.looting_level > 0 => {
-                let bonus = round_f32(context.looting_level as f32 * count.float(random));
-                stack.count = stack.count.wrapping_add(bonus);
+                let bonus = round_f32(context.looting_level as f32 * count.float(context)?);
+                add_count(stack, bonus)?;
                 if *limit > 0 {
                     stack.count = stack.count.min(*limit);
                 }
             }
             Self::BinomialBonus { extra, probability } => {
-                for _ in 0..*extra {
-                    if random.next_float() < *probability {
-                        stack.count += 1;
-                    }
-                }
+                context.charge(*extra as usize)?;
+                let bonus = (0..*extra)
+                    .filter(|_| context.random.next_float() < *probability)
+                    .count();
+                add_count(stack, bonus as i32)?;
             }
             // `count + random.nextInt(bonusMultiplier * 0 + 1)`: always 0, but the draw is made.
             Self::UniformBonus => {
-                stack.count += random.next_int_bounded(1);
+                add_count(stack, context.random.next_int_bounded(1))?;
             }
             Self::EnchantRandomly => {
                 if let Some((enchantments, codec)) = context.chest {
-                    enchantments.enchant(stack, codec, random)?;
+                    context.charge(enchantments.len())?;
+                    enchantments.enchant(stack, codec, context.random)?;
                 }
             }
             Self::SetPotion(name) => {
@@ -457,8 +612,9 @@ impl Function {
                     && stack.name() == Some("minecraft:suspicious_stew")
                     && !effects.is_empty()
                 {
-                    let effect = &effects[random.next_int_bounded(effects.len() as i32) as usize];
-                    codec.set_saved_component(stack, STEW_EFFECTS, &effect.roll(random))?;
+                    let effect =
+                        &effects[context.random.next_int_bounded(effects.len() as i32) as usize];
+                    codec.set_saved_component(stack, STEW_EFFECTS, &effect.roll(context)?)?;
                 }
             }
             Self::TreasureMap => {
@@ -487,20 +643,26 @@ impl Function {
     }
 }
 
-fn conditions(value: &Value) -> Vec<Condition> {
-    value
-        .get("conditions")
-        .and_then(Value::as_array)
-        .map(|c| c.iter().map(Condition::parse).collect())
-        .unwrap_or_default()
+fn add_count(stack: &mut ItemStack, count: i32) -> io::Result<()> {
+    stack.count = stack
+        .count
+        .checked_add(count)
+        .ok_or_else(|| invalid("loot count overflow"))?;
+    Ok(())
 }
 
-fn functions(value: &Value) -> Vec<(Function, Vec<Condition>)> {
-    value
-        .get("functions")
-        .and_then(Value::as_array)
-        .map(|f| f.iter().map(Function::parse).collect())
-        .unwrap_or_default()
+fn conditions(value: &Value) -> io::Result<Vec<Condition>> {
+    list(value, "conditions")?
+        .iter()
+        .map(Condition::parse)
+        .collect()
+}
+
+fn functions(value: &Value) -> io::Result<Vec<(Function, Vec<Condition>)>> {
+    list(value, "functions")?
+        .iter()
+        .map(Function::parse)
+        .collect()
 }
 
 /// Applies functions in order to a stack, each when its conditions pass (`LootItemFunction.decorate`).
@@ -510,7 +672,7 @@ fn decorate(
     context: &mut Context<'_>,
 ) -> io::Result<()> {
     for (function, conditions) in functions {
-        if all(conditions, context) {
+        if all(conditions, context)? {
             function.apply(stack, context)?;
         }
     }
@@ -521,7 +683,7 @@ fn decorate(
 #[derive(Debug, Clone, PartialEq)]
 enum Entry {
     Item {
-        item: Option<u32>,
+        item: u32,
         weight: i32,
         conditions: Vec<Condition>,
         functions: Vec<(Function, Vec<Condition>)>,
@@ -538,84 +700,115 @@ enum Entry {
 }
 
 impl Entry {
-    fn parse(value: &Value) -> Self {
-        let kind = value
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let weight = value.get("weight").and_then(Value::as_i64).unwrap_or(1) as i32;
-        let children = || {
-            value
-                .get("children")
-                .and_then(Value::as_array)
-                .map(|c| c.iter().map(Self::parse).collect())
-                .unwrap_or_default()
-        };
-        match kind {
-            "minecraft:item" => Self::Item {
-                item: value
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .and_then(|name| items().id(name)),
-                weight,
-                conditions: conditions(value),
-                functions: functions(value),
-            },
-            "minecraft:empty" => Self::Empty {
-                weight,
-                conditions: conditions(value),
-            },
-            "minecraft:alternatives" => Self::Alternatives(children(), conditions(value)),
-            "minecraft:group" => Self::Group(children(), conditions(value)),
-            "minecraft:sequence" => Self::Sequence(children(), conditions(value)),
-            _ => Self::Unsupported,
+    fn parse(value: &Value) -> io::Result<Self> {
+        let name = kind(string(value, "type")?);
+        let weight = value.get("weight").map(integer).transpose()?.unwrap_or(1);
+        if weight <= 0 {
+            return Err(invalid("loot weight must be positive"));
         }
+        let conditions = conditions(value)?;
+        let functions = functions(value)?;
+        let children = || {
+            array(required(value, "children")?)?
+                .iter()
+                .map(Self::parse)
+                .collect::<io::Result<Vec<_>>>()
+        };
+        Ok(match name {
+            "item" => {
+                let name = string(value, "name")?;
+                let item =
+                    item_id(name).ok_or_else(|| invalid(format!("unknown loot item {name}")))?;
+                Self::Item {
+                    item,
+                    weight,
+                    conditions,
+                    functions,
+                }
+            }
+            "empty" => Self::Empty { weight, conditions },
+            "alternatives" => Self::Alternatives(children()?, conditions),
+            "group" => Self::Group(children()?, conditions),
+            "sequence" => Self::Sequence(children()?, conditions),
+            "tag" | "dynamic" | "loot_table" => Self::Unsupported,
+            other => return Err(invalid(format!("unknown loot entry type {other}"))),
+        })
     }
 
     /// `expand`: the entries this one offers to the roll, if it runs.
-    fn expand<'a>(&'a self, context: &mut Context<'_>, out: &mut Vec<&'a Entry>) -> bool {
-        match self {
+    fn expand<'a>(
+        &'a self,
+        context: &mut Context<'_>,
+        out: &mut Vec<&'a Entry>,
+    ) -> io::Result<bool> {
+        context.charge(1)?;
+        Ok(match self {
             Self::Item { conditions, .. } | Self::Empty { conditions, .. } => {
-                if all(conditions, context) {
+                let offered = all(conditions, context)?;
+                if offered {
                     out.push(self);
-                    true
-                } else {
-                    false
                 }
+                offered
             }
             Self::Alternatives(children, conditions) => {
-                all(conditions, context) && children.iter().any(|child| child.expand(context, out))
-            }
-            Self::Group(children, conditions) => {
-                if !all(conditions, context) {
-                    return false;
+                if !all(conditions, context)? {
+                    return Ok(false);
                 }
                 for child in children {
-                    child.expand(context, out);
+                    if child.expand(context, out)? {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
+            Self::Group(children, conditions) => {
+                if !all(conditions, context)? {
+                    return Ok(false);
+                }
+                for child in children {
+                    child.expand(context, out)?;
                 }
                 true
             }
             Self::Sequence(children, conditions) => {
-                if !all(conditions, context) {
-                    return false;
+                if !all(conditions, context)? {
+                    return Ok(false);
                 }
                 for child in children {
-                    if !child.expand(context, out) {
+                    if !child.expand(context, out)? {
                         break;
                     }
                 }
                 true
             }
             Self::Unsupported => false,
-        }
+        })
     }
 
     fn weight(&self) -> i32 {
         match self {
-            Self::Item { weight, .. } | Self::Empty { weight, .. } => (*weight).max(0),
+            Self::Item { weight, .. } | Self::Empty { weight, .. } => *weight,
             _ => 0,
         }
     }
+
+    fn max_weight(&self) -> io::Result<i32> {
+        match self {
+            Self::Group(children, _) | Self::Sequence(children, _) => total_weight(children),
+            Self::Alternatives(children, _) => children
+                .iter()
+                .try_fold(0, |max, entry| Ok(max.max(entry.max_weight()?))),
+            _ => Ok(self.weight()),
+        }
+    }
+}
+
+fn total_weight(entries: &[Entry]) -> io::Result<i32> {
+    entries.iter().try_fold(0i32, |total, entry| {
+        total
+            .checked_add(entry.max_weight()?)
+            .ok_or_else(|| invalid("loot weight sum overflows"))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -646,44 +839,56 @@ struct Context<'a> {
     treasure_map: Option<crate::maps::TreasureMap>,
     /// Whether an `exploration_map` function was applied to an empty map, which searches for its target.
     treasure_requested: bool,
+    remaining_work: usize,
+}
+
+impl Context<'_> {
+    fn charge(&mut self, amount: usize) -> io::Result<()> {
+        self.remaining_work = self
+            .remaining_work
+            .checked_sub(amount)
+            .ok_or_else(|| invalid("loot evaluation exceeds its work limit"))?;
+        Ok(())
+    }
 }
 
 impl LootTable {
-    fn parse(value: &Value) -> Self {
-        let pools = value
-            .get("pools")
-            .and_then(Value::as_array)
-            .map(|pools| {
-                pools
-                    .iter()
-                    .map(|pool| Pool {
-                        rolls: pool
-                            .get("rolls")
-                            .and_then(Number::parse)
-                            .unwrap_or(Number::Constant(1.0)),
-                        bonus_rolls: pool
-                            .get("bonus_rolls")
-                            .and_then(Number::parse)
-                            .unwrap_or(Number::Constant(0.0)),
-                        entries: pool
-                            .get("entries")
-                            .and_then(Value::as_array)
-                            .map(|e| e.iter().map(Entry::parse).collect())
-                            .unwrap_or_default(),
-                        conditions: conditions(pool),
-                        functions: functions(pool),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self {
-            pools,
-            functions: functions(value),
-            random_sequence: value
-                .get("random_sequence")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+    fn parse(value: &Value) -> io::Result<Self> {
+        if !value.is_object() {
+            return Err(invalid("loot table must be an object"));
         }
+        let mut nodes_remaining = MAX_WORK;
+        check_structure(value, 0, &mut nodes_remaining)?;
+        let pools = list(value, "pools")?
+            .iter()
+            .map(|pool| {
+                let entries = array(required(pool, "entries")?)?
+                    .iter()
+                    .map(Entry::parse)
+                    .collect::<io::Result<Vec<_>>>()?;
+                total_weight(&entries)?;
+                Ok(Pool {
+                    rolls: Number::parse(required(pool, "rolls")?)?,
+                    bonus_rolls: pool
+                        .get("bonus_rolls")
+                        .map(Number::parse)
+                        .transpose()?
+                        .unwrap_or(Number::Constant(0.0)),
+                    entries,
+                    conditions: conditions(pool)?,
+                    functions: functions(pool)?,
+                })
+            })
+            .collect::<io::Result<_>>()?;
+        let random_sequence = value
+            .get("random_sequence")
+            .map(|_| string(value, "random_sequence").map(str::to_owned))
+            .transpose()?;
+        Ok(Self {
+            pools,
+            functions: functions(value)?,
+            random_sequence,
+        })
     }
 
     /// The stacks a broken block of `state` drops, broken with `tool` and no explosion (`getRandomItems`).
@@ -701,6 +906,7 @@ impl LootTable {
             chest: None,
             treasure_map: None,
             treasure_requested: false,
+            remaining_work: MAX_WORK,
         })
     }
 
@@ -719,49 +925,55 @@ impl LootTable {
             chest: None,
             treasure_map: None,
             treasure_requested: false,
+            remaining_work: MAX_WORK,
         })
     }
 
     /// Whether any entry, pool or the table itself can turn an empty map into an exploration map.
     pub(crate) fn has_treasure_map(&self) -> bool {
-        fn in_functions(functions: &[(Function, Vec<Condition>)]) -> bool {
-            functions
-                .iter()
-                .any(|(function, _)| *function == Function::TreasureMap)
+        self.has_function(&Function::TreasureMap)
+    }
+
+    fn has_function(&self, searched: &Function) -> bool {
+        fn in_functions(functions: &[(Function, Vec<Condition>)], searched: &Function) -> bool {
+            functions.iter().any(|(function, _)| function == searched)
         }
-        fn in_entry(entry: &Entry) -> bool {
+        fn in_entry(entry: &Entry, searched: &Function) -> bool {
             match entry {
-                Entry::Item { functions, .. } => in_functions(functions),
+                Entry::Item { functions, .. } => in_functions(functions, searched),
                 Entry::Alternatives(children, _)
                 | Entry::Group(children, _)
-                | Entry::Sequence(children, _) => children.iter().any(in_entry),
+                | Entry::Sequence(children, _) => {
+                    children.iter().any(|entry| in_entry(entry, searched))
+                }
                 Entry::Empty { .. } | Entry::Unsupported => false,
             }
         }
-        in_functions(&self.functions)
-            || self
-                .pools
-                .iter()
-                .any(|pool| in_functions(&pool.functions) || pool.entries.iter().any(in_entry))
+        in_functions(&self.functions, searched)
+            || self.pools.iter().any(|pool| {
+                in_functions(&pool.functions, searched)
+                    || pool.entries.iter().any(|entry| in_entry(entry, searched))
+            })
     }
 
     fn roll(&self, context: &mut Context<'_>) -> io::Result<Vec<ItemStack>> {
         let mut stacks = Vec::new();
         for pool in &self.pools {
-            if !all(&pool.conditions, context) {
+            context.charge(1)?;
+            if !all(&pool.conditions, context)? {
                 continue;
             }
             // Luck is 0, but the bonus rolls are still drawn.
-            let rolls = pool.rolls.int(context.random)
-                + (pool.bonus_rolls.float(context.random) * 0.0).floor() as i32;
+            let rolls = pool.rolls.int(context)?.max(0);
+            pool.bonus_rolls.float(context)?;
+            context.charge(rolls as usize)?;
             for _ in 0..rolls {
                 let mut offered = Vec::new();
                 for entry in &pool.entries {
-                    entry.expand(context, &mut offered);
+                    entry.expand(context, &mut offered)?;
                 }
-                let offered: Vec<_> = offered.into_iter().filter(|e| e.weight() > 0).collect();
                 let total: i32 = offered.iter().map(|e| e.weight()).sum();
-                if total == 0 || offered.is_empty() {
+                if total == 0 {
                     continue;
                 }
                 let chosen = if offered.len() == 1 {
@@ -777,9 +989,7 @@ impl LootTable {
                     entry
                 };
                 let Entry::Item {
-                    item: Some(item),
-                    functions,
-                    ..
+                    item, functions, ..
                 } = chosen
                 else {
                     continue;
@@ -802,6 +1012,10 @@ impl LootTable {
                 continue;
             }
             let max = stack.max_stack_size().unwrap_or(64);
+            let pieces = (stack.count as usize).div_ceil(max as usize);
+            if pieces > MAX_STACKS - split.len() {
+                return Err(invalid("loot emits too many stacks"));
+            }
             let mut left = stack.count;
             while left > 0 {
                 let count = left.min(max);
@@ -843,10 +1057,12 @@ impl LootTables {
             else {
                 continue;
             };
-            let mut text = String::new();
-            entry.read_to_string(&mut text)?;
-            let json: Value = serde_json::from_str(&text).map_err(io::Error::other)?;
-            tables.insert(&format!("minecraft:{block}"), &json);
+            let result = serde_json::from_reader(&mut entry)
+                .map_err(io::Error::other)
+                .and_then(|json| tables.insert(&format!("minecraft:{block}"), &json));
+            if let Err(error) = result {
+                warn!("Cannot load {block} loot: {error}");
+            }
         }
         match chest::ChestLootTables::load(&mut archive) {
             Ok(chests) => tables.chests = chests,
@@ -855,9 +1071,12 @@ impl LootTables {
         use crate::player::AnimalSpecies;
         for (species, name) in [(AnimalSpecies::Pig, "pig"), (AnimalSpecies::Cow, "cow")] {
             match archive.by_name(&format!("data/minecraft/loot_table/entities/{name}.json")) {
-                Ok(entry) => match serde_json::from_reader(entry) {
-                    Ok(json) => {
-                        tables.animals.insert(species, LootTable::parse(&json));
+                Ok(entry) => match serde_json::from_reader(entry)
+                    .map_err(io::Error::other)
+                    .and_then(|json| LootTable::parse(&json))
+                {
+                    Ok(table) => {
+                        tables.animals.insert(species, table);
                     }
                     Err(error) => warn!("Cannot read {name} loot: {error}"),
                 },
@@ -869,8 +1088,10 @@ impl LootTables {
     }
 
     /// Adds the table of a block from its JSON.
-    pub fn insert(&mut self, block: &str, json: &Value) {
-        self.blocks.insert(block.to_owned(), LootTable::parse(json));
+    pub fn insert(&mut self, block: &str, json: &Value) -> io::Result<()> {
+        self.blocks
+            .insert(block.to_owned(), LootTable::parse(json)?);
+        Ok(())
     }
 
     /// The number of block tables.
@@ -918,7 +1139,7 @@ mod tests {
                     "predicate": {"predicates": {"minecraft:enchantments": [{"enchantments": "minecraft:silk_touch"}]}}}]},
                 {"type": "minecraft:item", "name": "minecraft:cobblestone", "conditions": [{"condition": "minecraft:survives_explosion"}]}
             ]}]}]}),
-        );
+        ).unwrap();
         let mut random = LegacyRandom::new(0);
         let drops = table
             .drops(
@@ -937,7 +1158,7 @@ mod tests {
             "name": "minecraft:oak_slab", "functions": [{"function": "minecraft:set_count", "count": 2.0, "add": false,
             "conditions": [{"condition": "minecraft:block_state_property", "block": "minecraft:oak_slab",
             "properties": {"type": "double"}}]}, {"function": "minecraft:explosion_decay"}]}]}]}),
-        );
+        ).unwrap();
         let mut random = LegacyRandom::new(0);
         let double = state("minecraft:oak_slab", &[("type", "double")]);
         let bottom = state("minecraft:oak_slab", &[("type", "bottom")]);
@@ -962,7 +1183,7 @@ mod tests {
             "name": "minecraft:glowstone_dust", "functions": [
                 {"function": "minecraft:set_count", "count": {"type": "minecraft:uniform", "min": 2.0, "max": 4.0}},
                 {"function": "minecraft:limit_count", "limit": {"min": 1.0, "max": 4.0}}]}]}]}),
-        );
+        ).unwrap();
         for _ in 0..50 {
             let drops = glowstone
                 .drops(
@@ -988,7 +1209,8 @@ mod tests {
                     "limit": 4
                 }]
             }]}]
-        }));
+        }))
+        .unwrap();
         for (level, expected_count) in [(0, 1), (1, 2), (2, 4), (3, 4)] {
             let mut random = LegacyRandom::new(0);
             let mut expected_random = random.clone();
@@ -1012,7 +1234,7 @@ mod tests {
                     "predicate": {"items": "minecraft:shears"}}]},
                 {"type": "minecraft:item", "name": "minecraft:wheat_seeds", "conditions": [{"condition": "minecraft:location_check"}]}
             ]}]}]}),
-        );
+        ).unwrap();
         let mut random = LegacyRandom::new(0);
         let grass = state("minecraft:short_grass", &[]);
         let shears = ItemStack {
@@ -1030,5 +1252,70 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn count_limits_accept_scalar_and_dynamic_bounds() {
+        let make = |limit| {
+            LootTable::parse(&json!({"pools": [{"rolls": 1, "entries": [{
+                "type": "minecraft:item", "name": "minecraft:stone",
+                "functions": [{"function": "minecraft:set_count", "count": 10},
+                    {"function": "minecraft:limit_count", "limit": limit}]
+            }]}]}))
+            .unwrap()
+        };
+        for (table, expected) in [
+            (make(json!(3)), 3),
+            (
+                make(json!({"max": {"type": "minecraft:uniform", "min": 4, "max": 4}})),
+                4,
+            ),
+        ] {
+            let drops = table
+                .drops(
+                    state("minecraft:stone", &[]),
+                    &ItemStack::empty(),
+                    &mut LegacyRandom::new(0),
+                )
+                .unwrap();
+            assert_eq!(names(&drops), [("minecraft:stone", expected)]);
+        }
+    }
+
+    #[test]
+    fn invalid_loot_structures_and_weights_are_rejected_on_load() {
+        for table in [
+            json!({"pools": false}),
+            json!({"pools": [{"entries": []}]}),
+            json!({"pools": [{"rolls": 1, "entries": [{"type": "empty", "weight": -1}]}]}),
+            json!({"pools": [{"rolls": 1, "entries": [
+                {"type": "empty", "weight": i32::MAX}, {"type": "empty", "weight": 1}]}]}),
+            json!({"pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:stone", "functions": [
+                {"function": "limit_count", "limit": {"min": 3, "max": 2}}]}]}]}),
+        ] {
+            assert!(LootTable::parse(&table).is_err(), "{table}");
+        }
+    }
+
+    #[test]
+    fn rolls_trials_and_output_stacks_are_bounded() {
+        for (rolls, count) in [
+            (json!(i32::MAX), json!(1)),
+            (json!({"type": "binomial", "n": i32::MAX, "p": 1}), json!(1)),
+            (json!(1), json!(i32::MAX)),
+        ] {
+            let table = LootTable::parse(&json!({"pools": [{"rolls": rolls, "entries": [{
+                "type": "item", "name": "minecraft:stone", "functions": [{"function": "set_count", "count": count}]
+            }]}]})).unwrap();
+            assert!(
+                table
+                    .drops(
+                        state("minecraft:stone", &[]),
+                        &ItemStack::empty(),
+                        &mut LegacyRandom::new(0)
+                    )
+                    .is_err()
+            );
+        }
     }
 }

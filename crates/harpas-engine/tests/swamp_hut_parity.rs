@@ -382,7 +382,7 @@ fn hut_blocks_metadata_workers_and_vanilla_resumption_match() {
     let input_path = reference.temp.0.join("huts-input.nbt");
     let output_path = reference.temp.0.join("huts-output.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(inputs).write_named("", &mut bytes);
+    Nbt::Compound(inputs).write_named("", &mut bytes).unwrap();
     std::fs::write(&input_path, bytes).unwrap();
     reference.java(
         "SwampHutProbe",

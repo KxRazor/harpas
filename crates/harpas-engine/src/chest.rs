@@ -15,7 +15,7 @@ use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
 use crate::loot::LootTable;
 use crate::loot::chest::ChestLootTables;
-use crate::maps::MapChest;
+use crate::maps::{MapChest, MapData, TreasureMap, pending};
 use crate::world::{ChunkState, World};
 
 pub(crate) const CHEST: &str = "minecraft:chest";
@@ -147,10 +147,20 @@ struct ChestLoot {
     sequences: HashMap<String, RandomSequence>,
     world_random: Option<LegacyRandom>,
     maps: Vec<MapChest>,
+    search: Option<MapChest>,
+    first_map_id: Option<i32>,
+    new_maps: Vec<MapData>,
 }
 
 impl ChestLoot {
-    fn commit(self, world: &mut World) {
+    fn finish<T>(self, world: &mut World, result: io::Result<T>) -> io::Result<T> {
+        if let Some(chest) = self.search {
+            world.maps.prepare(chest)?;
+        }
+        let result = result?;
+        if let Some(first) = self.first_map_id {
+            world.maps.publish(first, self.new_maps)?;
+        }
         for (pos, tag) in self.tags {
             world.store_container_tag(pos, tag);
         }
@@ -161,6 +171,7 @@ impl ChestLoot {
         for chest in self.maps {
             world.maps.consume(chest);
         }
+        Ok(result)
     }
 }
 
@@ -184,64 +195,6 @@ fn chest_loot_table<'a>(
 }
 
 impl World {
-    /// Starts the treasure searches for the chests at `positions` whose loot will roll an exploration
-    /// map, and fails with `WouldBlock` until each search is done. The loot is rolled ahead with copies of
-    /// the random state, in the order the chests are unpacked, to learn which chests roll the map.
-    pub(crate) fn prepare_chest_maps(
-        &mut self,
-        positions: impl IntoIterator<Item = BlockPos>,
-    ) -> io::Result<()> {
-        let Some(loot) = self.loot.clone() else {
-            return Ok(());
-        };
-        let Some(chests) = loot.chests.as_ref() else {
-            return Ok(());
-        };
-        let mut tables = Vec::new();
-        for pos in positions {
-            if self
-                .block_state(pos)
-                .and_then(|state| block_states().name(state))
-                != Some(CHEST)
-            {
-                continue;
-            }
-            let Some(tag) = self
-                .chest_tag(pos)?
-                .filter(|tag| tag.get("LootTable").is_some())
-            else {
-                continue;
-            };
-            let (table, seed) = chest_loot_table(tag, chests)?;
-            tables.push((pos, table, seed));
-        }
-        let Some(last_map) = tables
-            .iter()
-            .rposition(|(_, table, _)| table.has_treasure_map())
-        else {
-            return Ok(());
-        };
-        let mut ahead = ChestLoot::default();
-        let mut searches = Vec::new();
-        // Earlier halves can advance the same random source even if they cannot roll a map.
-        for (pos, table, seed) in tables.into_iter().take(last_map + 1) {
-            let mut seeded = None;
-            let random = self.loot_random(table, seed, &mut ahead, &mut seeded);
-            if chests.rolls_treasure_map(table, self.block_item_codec(), random)? {
-                searches.push(MapChest { pos, seed });
-            }
-        }
-        let mut result = Ok(());
-        for chest in searches {
-            if let Err(error) = self.maps.prepare(chest)
-                && result.is_ok()
-            {
-                result = Err(error);
-            }
-        }
-        result
-    }
-
     /// The random source a chest's loot draws from: its saved seed, else the table's random sequence,
     /// else the world's random. Draws are kept in `loot` until it is committed.
     fn loot_random<'a>(
@@ -272,17 +225,20 @@ impl World {
         self.container_tag(pos, CHEST)
     }
 
+    #[cfg(test)]
     pub(crate) fn save_chest(&mut self, pos: BlockPos, slots: &[ItemStack]) -> io::Result<()> {
-        let tag = self.chest_with_items(pos, slots)?;
+        let tag = self.chest_with_items(pos, self.chest_tag(pos)?, slots)?;
         self.store_container_tag(pos, tag);
         Ok(())
     }
 
-    fn chest_with_items(&self, pos: BlockPos, slots: &[ItemStack]) -> io::Result<Compound> {
-        let mut tag = self
-            .chest_tag(pos)?
-            .cloned()
-            .unwrap_or_else(|| new_tag(pos, CHEST));
+    pub(crate) fn chest_with_items(
+        &self,
+        pos: BlockPos,
+        tag: Option<&Compound>,
+        slots: &[ItemStack],
+    ) -> io::Result<Compound> {
+        let mut tag = tag.cloned().unwrap_or_else(|| new_tag(pos, CHEST));
         tag.insert(
             "Items",
             Nbt::List(write_items(slots, self.block_item_codec())?),
@@ -299,11 +255,9 @@ impl World {
         &mut self,
         pos: BlockPos,
     ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
-        self.prepare_chest_maps([pos])?;
         let mut loot = ChestLoot::default();
-        let slots = self.prepare_chest_items(pos, self.chest_tag(pos)?, false, &mut loot)?;
-        loot.commit(self);
-        Ok(slots)
+        let slots = self.prepare_chest_items(pos, self.chest_tag(pos)?, false, &mut loot);
+        loot.finish(self, slots)
     }
 
     pub(crate) fn chest_menu(&self, chest: Chest) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
@@ -317,23 +271,11 @@ impl World {
         chest: Chest,
         spectator: bool,
     ) -> io::Result<(Vec<ItemStack>, Option<Nbt>)> {
-        if !spectator {
-            for pos in chest.positions() {
-                if self
-                    .chest_tag(pos)?
-                    .is_some_and(|tag| tag.get("lock").is_some())
-                {
-                    return Err(invalid("chest is locked"));
-                }
-            }
-            self.prepare_chest_maps(chest.positions())?;
-        }
         let mut loot = ChestLoot::default();
         let menu = self.chest_menu_using(chest, |pos, tag| {
             self.prepare_chest_items(pos, tag, spectator, &mut loot)
-        })?;
-        loot.commit(self);
-        Ok(menu)
+        });
+        loot.finish(self, menu)
     }
 
     fn prepare_chest_items(
@@ -356,10 +298,36 @@ impl World {
             .ok_or_else(|| invalid("chest loot data is unavailable"))?;
         let (table, seed) = chest_loot_table(tag, chests)?;
         let map = table.has_treasure_map().then_some(MapChest { pos, seed });
-        let treasure_map = map.and_then(|chest| self.maps.prepared(chest));
+        let preview = map.and_then(|chest| self.maps.prepared(chest));
+        let treasure_map = if let Some(Some((_, target))) = preview {
+            let first = match loot.first_map_id {
+                Some(id) => id,
+                None => self.maps.next_id()?,
+            };
+            let id = first
+                .checked_add(loot.new_maps.len() as i32)
+                .ok_or_else(|| io::Error::other("map IDs exhausted"))?;
+            Some(TreasureMap {
+                id,
+                target: *target,
+            })
+        } else {
+            None
+        };
         let mut seeded = None;
         let random = self.loot_random(table, seed, loot, &mut seeded);
-        let slots = chests.fill(table, self.block_item_codec(), random, treasure_map)?;
+        let codec = self.block_item_codec();
+        let (slots, requested) = chests.fill(table, codec, random, treasure_map)?;
+        if requested && preview.is_none() {
+            loot.search = map;
+            return Err(pending());
+        }
+        if let (Some(treasure), Some(Some((data, _)))) = (treasure_map, preview)
+            && slots.iter().any(|stack| treasure.is_on(stack, codec))
+        {
+            loot.first_map_id.get_or_insert(treasure.id);
+            loot.new_maps.push(data.clone());
+        }
         let mut updated = tag.clone();
         updated.remove("LootTable");
         updated.remove("LootTableSeed");
@@ -405,7 +373,10 @@ impl World {
         for (index, pos) in chest.positions().enumerate() {
             let range = index * CHEST_SLOTS..(index + 1) * CHEST_SLOTS;
             if updated[range.clone()] != before[range.clone()] {
-                tags.push((pos, self.chest_with_items(pos, &updated[range])?));
+                tags.push((
+                    pos,
+                    self.chest_with_items(pos, self.chest_tag(pos)?, &updated[range])?,
+                ));
             }
         }
         for (pos, tag) in tags {

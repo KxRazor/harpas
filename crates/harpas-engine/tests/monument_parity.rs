@@ -306,7 +306,7 @@ fn carved_monuments_on_workers_match_the_direct_api_and_survive_anvil() {
         let region = regions
             .entry((region_x, region_z))
             .or_insert_with(|| Region::open(&dir, region_x, region_z).unwrap());
-        region.set_chunk(x, z, nbt);
+        region.set_chunk(x, z, nbt).unwrap();
     }
     for region in regions.values_mut() {
         region.save().unwrap();

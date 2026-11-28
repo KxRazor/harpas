@@ -9,6 +9,7 @@
 //! Like vanilla, a damaged section is not fatal: an unknown block becomes air, an unknown biome becomes plains,
 //! and a container that cannot be read is replaced by its default, each with a warning.
 
+use std::collections::HashSet;
 use std::io;
 
 use harpas_core::block::{BlockStates, block_states};
@@ -46,6 +47,7 @@ impl Chunk {
     /// and a warning for each part replaced by its default. A chunk saved by another Minecraft version is an
     /// error whose source is a [`VersionError`](crate::VersionError).
     pub fn read(mut nbt: Compound, biomes: &[&str]) -> io::Result<(Self, Vec<String>)> {
+        check_biome_registry(biomes)?;
         check_chunk(&nbt).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let entries = match nbt.remove("sections") {
             None | Some(Nbt::List(List::Empty)) => Vec::new(),
@@ -67,16 +69,44 @@ impl Chunk {
     }
 
     /// The chunk's NBT, with the palettes compacted as vanilla writes them.
+    ///
+    /// # Panics
+    ///
+    /// If the chunk or its biome registry contains invalid IDs. Use [`Self::try_to_nbt`] for editable chunks.
     pub fn to_nbt(&self, biomes: &[&str]) -> Compound {
-        let mut nbt = self.rest.clone();
+        self.try_to_nbt(biomes)
+            .expect("a chunk with valid registry IDs")
+    }
+
+    /// Encodes a chunk, refusing IDs that are not present in the supplied registries.
+    pub fn try_to_nbt(&self, biomes: &[&str]) -> io::Result<Compound> {
+        check_biome_registry(biomes)?;
         let sections = self
             .sections
             .iter()
             .map(|section| write_section(section, biomes))
-            .collect();
+            .collect::<io::Result<_>>()?;
+        let mut nbt = self.rest.clone();
         nbt.insert("sections", Nbt::List(List::Compound(sections)));
-        nbt
+        Ok(nbt)
     }
+}
+
+/// Checks that each numeric biome ID has a unique, nonempty registry name.
+pub fn check_biome_registry(biomes: &[&str]) -> io::Result<()> {
+    if biomes.is_empty() {
+        return Err(invalid("the biome registry is empty"));
+    }
+    let mut names = HashSet::with_capacity(biomes.len());
+    if !biomes
+        .iter()
+        .all(|name| !name.is_empty() && names.insert(name))
+    {
+        return Err(invalid(
+            "the biome registry contains an empty or duplicate name",
+        ));
+    }
+    Ok(())
 }
 
 fn block_strategy(states: &BlockStates) -> Strategy {
@@ -137,27 +167,46 @@ fn read_container(
     warn: &mut impl FnMut(&str, String),
     mut entry: impl FnMut(&Nbt, &mut dyn FnMut(String)) -> u32,
 ) -> PalettedContainer {
-    let Nbt::Compound(nbt) = nbt else {
+    let Nbt::Compound(mut nbt) = nbt else {
         warn(what, "not a compound".to_owned());
         return PalettedContainer::filled(strategy, default);
     };
-    let palette: Vec<Nbt> = match nbt.get("palette") {
-        Some(Nbt::List(List::Compound(entries))) => {
-            entries.iter().cloned().map(Nbt::Compound).collect()
+    let mut convert = |value| entry(&value, &mut |problem| warn(what, problem));
+    let palette: Vec<_> = match nbt.remove("palette") {
+        Some(Nbt::List(List::Compound(entries)))
+            if what == "block_states" && entries.len() <= 4096 =>
+        {
+            entries
+                .into_iter()
+                .map(Nbt::Compound)
+                .map(&mut convert)
+                .collect()
         }
-        Some(Nbt::List(List::String(entries))) => {
-            entries.iter().cloned().map(Nbt::String).collect()
+        Some(Nbt::List(List::String(entries)))
+            if entries.len() <= if what == "biomes" { 64 } else { 4096 } =>
+        {
+            entries
+                .into_iter()
+                .map(Nbt::String)
+                .map(&mut convert)
+                .collect()
         }
-        _ => Vec::new(),
+        _ => {
+            warn(what, "missing or invalid palette".to_owned());
+            return PalettedContainer::filled(strategy, default);
+        }
     };
-    let data = match nbt.get("data") {
-        Some(Nbt::LongArray(data)) => data.iter().map(|&long| long as u64).collect(),
-        _ => Vec::new(),
+    let data: Vec<_> = match nbt.remove("data") {
+        Some(Nbt::LongArray(data)) => data.into_iter().map(|long| long as u64).collect(),
+        None => Vec::new(),
+        Some(_) => {
+            warn(what, "data is not a long array".to_owned());
+            return PalettedContainer::filled(strategy, default);
+        }
     };
-    let palette = palette
-        .iter()
-        .map(|value| entry(value, &mut |problem| warn(what, problem)))
-        .collect();
+    if palette.len() == 1 && !data.is_empty() {
+        warn(what, "a single-value palette has packed data".to_owned());
+    }
     PalettedContainer::unpack(strategy, Packed { palette, data }).unwrap_or_else(|e| {
         warn(what, e.to_string());
         PalettedContainer::filled(strategy, default)
@@ -190,10 +239,17 @@ fn read_block_states(
                     .iter()
                     .filter_map(|(key, value)| match value {
                         Nbt::String(value) => Some((key, value.as_str())),
-                        _ => None,
+                        _ => {
+                            warn(format!("{name} property {key} is not a string"));
+                            None
+                        }
                     })
                     .collect(),
-                _ => Vec::new(),
+                None => Vec::new(),
+                Some(_) => {
+                    warn(format!("{name} Properties is not a compound"));
+                    Vec::new()
+                }
             };
             match states.state(name, properties) {
                 Some((id, ignored)) => {
@@ -239,23 +295,29 @@ fn read_biomes(
     )
 }
 
-fn write_section(section: &ChunkSection, biomes: &[&str]) -> Compound {
+fn write_section(section: &ChunkSection, biomes: &[&str]) -> io::Result<Compound> {
     let mut nbt = Compound::new();
     nbt.insert("Y", section.y);
     if let Some(blocks_and_biomes) = &section.section {
         let states = block_states();
         let block_palette = |id: u32| {
-            let (name, properties) = states.properties(id).expect("a known block state");
+            let (name, properties) = states.properties(id).ok_or_else(|| {
+                invalid(format!("section {}: unknown block state {id}", section.y))
+            })?;
             let mut entry = Compound::new();
             entry.insert("Name", name);
             if !properties.is_empty() {
                 let properties: Compound = properties.into_iter().collect();
                 entry.insert("Properties", properties);
             }
-            entry
+            Ok(entry)
         };
         let packed = blocks_and_biomes.block_states().pack();
-        let palette = packed.palette.iter().map(|&id| block_palette(id)).collect();
+        let palette = packed
+            .palette
+            .iter()
+            .map(|&id| block_palette(id))
+            .collect::<io::Result<_>>()?;
         nbt.insert(
             "block_states",
             container(Nbt::List(List::Compound(palette)), packed.data),
@@ -264,17 +326,24 @@ fn write_section(section: &ChunkSection, biomes: &[&str]) -> Compound {
         let palette = packed
             .palette
             .iter()
-            .map(|&id| biomes[id as usize].to_owned())
-            .collect();
+            .map(|&id| {
+                biomes
+                    .get(id as usize)
+                    .map(|name| (*name).to_owned())
+                    .ok_or_else(|| invalid(format!("section {}: unknown biome ID {id}", section.y)))
+            })
+            .collect::<io::Result<_>>()?;
         nbt.insert(
             "biomes",
             container(Nbt::List(List::String(palette)), packed.data),
         );
     }
     for (key, value) in section.rest.iter() {
-        nbt.insert(key, value.clone());
+        if !matches!(key, "Y" | "block_states" | "biomes") {
+            nbt.insert(key, value.clone());
+        }
     }
-    nbt
+    Ok(nbt)
 }
 
 /// A container compound; vanilla leaves `data` out for a single value.
@@ -423,6 +492,20 @@ mod tests {
     fn an_unchanged_chunk_is_written_as_it_was_read() {
         let (chunk, _) = Chunk::read(vanilla_chunk(), BIOMES).unwrap();
         assert_eq!(chunk.to_nbt(BIOMES), vanilla_chunk());
+    }
+
+    #[test]
+    fn typed_section_fields_are_reserved_and_registry_ids_are_checked() {
+        let (mut chunk, _) = Chunk::read(vanilla_chunk(), BIOMES).unwrap();
+        let expected = chunk.to_nbt(BIOMES);
+        let entry = &mut chunk.sections[0];
+        entry.rest.insert("Y", 99);
+        entry.rest.insert("block_states", "bad state data");
+        entry.rest.insert("biomes", "bad biome data");
+        assert_eq!(chunk.try_to_nbt(BIOMES).unwrap(), expected);
+        assert!(chunk.try_to_nbt(&["minecraft:plains"]).is_err());
+        assert!(Chunk::read(vanilla_chunk(), &[]).is_err());
+        assert!(Chunk::read(vanilla_chunk(), &["minecraft:plains"; 2]).is_err());
     }
 
     #[test]

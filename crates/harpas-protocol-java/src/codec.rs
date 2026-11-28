@@ -271,7 +271,7 @@ pub fn read_nbt(input: &mut &[u8]) -> Result<Nbt, DecodeError> {
 
 /// Writes network NBT.
 pub fn write_nbt(buf: &mut Vec<u8>, value: &Nbt) {
-    value.write_network(buf);
+    value.write_network(buf).expect("encodable packet NBT");
 }
 
 /// Reads optional network NBT, where `TAG_End` alone means no value.
@@ -281,7 +281,7 @@ pub fn read_optional_nbt(input: &mut &[u8]) -> Result<Option<Nbt>, DecodeError> 
 
 /// Writes optional network NBT.
 pub fn write_optional_nbt(buf: &mut Vec<u8>, value: &Option<Nbt>) {
-    Nbt::write_network_optional(value.as_ref(), buf);
+    Nbt::write_network_optional(value.as_ref(), buf).expect("encodable packet NBT");
 }
 
 /// Reads exactly `N` bytes, with no length prefix.

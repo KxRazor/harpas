@@ -1,7 +1,7 @@
 //! The global 26.1 saved data for maps, shared by all dimensions.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use harpas_core::nbt::{Compound, Nbt};
@@ -31,6 +31,13 @@ impl MapFiles {
 
     /// Reserves an ID and saves the new map before any item can refer to it.
     pub fn create(&mut self, data: Compound) -> io::Result<i32> {
+        let id = self.next_id()?;
+        self.create_batch(id, &[data])?;
+        Ok(id)
+    }
+
+    /// Looks up the next ID without reserving it or changing the world.
+    pub fn next_id(&self) -> io::Result<i32> {
         let dir = self.directory()?;
         let index = dir.join("last_id.dat");
         let last = match self.last_id {
@@ -60,13 +67,75 @@ impl MapFiles {
                 }
             }
         };
-        let id = last
-            .checked_add(1)
+        last.checked_add(1)
+            .ok_or_else(|| io::Error::other("map IDs exhausted"))
+    }
+
+    /// Saves consecutive maps for one interaction, starting at the expected next ID.
+    pub fn create_batch(&mut self, first: i32, data: &[Compound]) -> io::Result<()> {
+        let Some(last_offset) = data.len().checked_sub(1) else {
+            return Ok(());
+        };
+        if self.next_id()? != first {
+            return Err(io::Error::other("map index changed before publication"));
+        }
+        let last = i32::try_from(last_offset)
+            .ok()
+            .and_then(|offset| first.checked_add(offset))
             .ok_or_else(|| io::Error::other("map IDs exhausted"))?;
-        write_data(&index, Compound::from_iter([("map", id)]), map_index)?;
-        self.last_id = Some(id);
-        write_data(&dir.join(format!("{id}.dat")), data, map_data)?;
-        Ok(id)
+        let dir = self.directory()?;
+        let maps = data
+            .iter()
+            .map(|data| file::encode_gzip(&document(data.clone())))
+            .collect::<io::Result<Vec<_>>>()?;
+        file::create_synced_dir(&dir)?;
+        let mut staged = Vec::new();
+        let mut published = Vec::new();
+        let result = (|| {
+            for (id, gzip) in (first..=last).zip(maps) {
+                let path = dir.join(format!("{id}.dat"));
+                let temp = path.with_extension("dat_new");
+                let mut file = file::create_staged(&temp)?;
+                staged.push((temp, path));
+                file.write_all(&gzip)?;
+                file.sync_all()?;
+            }
+            let index = dir.join("last_id.dat");
+            let root = document(Compound::from_iter([("map", last)]));
+            file::write_with_backup(&index, &index.with_extension("dat_new"), &root, map_index)?;
+            self.last_id = Some(last);
+            for (temp, path) in &staged {
+                match fs::symlink_metadata(path) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AlreadyExists,
+                            format!("{} already exists", path.display()),
+                        ));
+                    }
+                }
+                fs::rename(temp, path)?;
+                published.push(path.clone());
+            }
+            file::sync_dir(&dir)
+        })();
+        if let Err(error) = result {
+            // A saved index may keep reserved IDs, but a failed interaction has no new map files.
+            let cleanup = published
+                .iter()
+                .chain(staged.iter().map(|(temp, _)| temp))
+                .try_for_each(|path| file::remove_if_present(path).map(|_| ()))
+                .and_then(|()| file::sync_dir(&dir));
+            if let Err(cleanup) = cleanup {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("{error}; cleaning up map files: {cleanup}"),
+                ));
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn directory(&self) -> io::Result<PathBuf> {
@@ -89,12 +158,8 @@ fn map_index(root: Compound) -> io::Result<i32> {
     }
 }
 
-fn write_data<T>(
-    path: &Path,
-    data: Compound,
-    decode: impl Fn(Compound) -> io::Result<T>,
-) -> io::Result<()> {
+fn document(data: Compound) -> Compound {
     let mut root = Compound::from_iter([("DataVersion", DATA_VERSION)]);
     root.insert("data", data);
-    file::write_with_backup(path, &path.with_extension("dat_new"), &root, decode)
+    root
 }

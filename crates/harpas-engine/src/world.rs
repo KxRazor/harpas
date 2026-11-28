@@ -15,6 +15,7 @@ use harpas_anvil::{
     read_entity_chunk, read_level, recover, region_of, write_chunks,
 };
 use harpas_core::block::block_states;
+use harpas_core::chunk::Strategy;
 use harpas_core::nbt::{Compound, Nbt};
 use log::{error, warn};
 
@@ -239,7 +240,16 @@ impl ChunkStorage {
 
     /// Decodes a saved chunk with the server's biome registry.
     pub fn decode(&self, nbt: Compound) -> io::Result<Chunk> {
-        Chunk::read(nbt, &self.biome_names()).map(|(chunk, _)| chunk)
+        let (chunk, warnings) = Chunk::read(nbt, &self.biome_names())?;
+        for warning in warnings {
+            match (chunk.rest.get("xPos"), chunk.rest.get("zPos")) {
+                (Some(Nbt::Int(x)), Some(Nbt::Int(z))) => {
+                    warn!("chunk {x}, {z} in {}: {warning}", self.dir.display());
+                }
+                _ => warn!("chunk in {}: {warning}", self.dir.display()),
+            }
+        }
+        Ok(chunk)
     }
 
     /// Writes chunks, one region file at a time.
@@ -260,8 +270,8 @@ impl ChunkStorage {
                 .unwrap_or_else(|e| e.into_inner());
             let chunks: Vec<_> = chunks
                 .iter()
-                .map(|(pos, chunk)| ((pos.x, pos.z), chunk.to_nbt(&biomes)))
-                .collect();
+                .map(|(pos, chunk)| chunk.try_to_nbt(&biomes).map(|nbt| ((pos.x, pos.z), nbt)))
+                .collect::<io::Result<_>>()?;
             let chunks: Vec<_> = chunks.iter().map(|(pos, nbt)| (*pos, nbt)).collect();
             write_chunks(&self.dir, x, z, &chunks)?;
         }
@@ -468,6 +478,7 @@ pub struct World {
     spawn: [i32; 3],
     pub(crate) survival_rules: crate::survival::SurvivalRules,
     generates: bool,
+    pub(crate) default_biome: (Strategy, u32),
     chunks: HashMap<ChunkPos, ChunkState>,
     /// The chunks to keep loaded, most wanted first and each once, as [`World::want`] left them.
     wanted: Vec<ChunkPos>,
@@ -563,6 +574,7 @@ impl World {
         biomes: &[&str],
         generator: Option<Arc<dyn ChunkSource>>,
     ) -> io::Result<Self> {
+        harpas_anvil::check_biome_registry(biomes)?;
         let level = read_level(world_dir)?;
         let game_rules = harpas_anvil::read_game_rules(world_dir)?;
         let survival_rules = crate::survival::SurvivalRules::read(
@@ -698,6 +710,10 @@ impl World {
             spawn,
             survival_rules,
             generates,
+            default_biome: (
+                Strategy::biomes((usize::BITS - (biomes.len() - 1).leading_zeros()) as u8),
+                plains,
+            ),
             chunks: HashMap::new(),
             wanted: Vec::new(),
             wanted_set: HashSet::new(),
@@ -1824,6 +1840,8 @@ impl World {
             .retain_chunks(|pos| chunks.contains_key(&pos));
         self.active_furnaces
             .retain(|pos| chunks.contains_key(&pos.chunk()));
+        self.maps
+            .retain_chests(|pos| chunks.contains_key(&pos.chunk()));
         // A region is saved once its first unwanted chunk has waited long enough, with every chunk that
         // left the views since.
         let now = Instant::now();
@@ -2072,7 +2090,9 @@ mod tests {
         for &(pos, version) in chunks {
             let (x, z) = region_of(pos.x, pos.z);
             let mut region = Region::open(&folder.region_dir(), x, z).unwrap();
-            region.set_chunk(pos.x, pos.z, &chunk(pos, version).to_nbt(BIOMES));
+            region
+                .set_chunk(pos.x, pos.z, &chunk(pos, version).to_nbt(BIOMES))
+                .unwrap();
             region.save().unwrap();
         }
     }
@@ -2100,6 +2120,7 @@ mod tests {
             spawn: [0, 65, 0],
             survival_rules: Default::default(),
             generates: false,
+            default_biome: (Strategy::biomes(1), 0),
             chunks: HashMap::new(),
             wanted: Vec::new(),
             wanted_set: HashSet::new(),
@@ -2726,7 +2747,9 @@ mod tests {
         let mut previous = chunk(old, DATA_VERSION);
         previous.rest.insert("blending_data", Compound::new());
         let mut region = Region::open(&folder.region_dir(), 0, 0).unwrap();
-        region.set_chunk(old.x, old.z, &previous.to_nbt(BIOMES));
+        region
+            .set_chunk(old.x, old.z, &previous.to_nbt(BIOMES))
+            .unwrap();
         region.save().unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
         let generator = {
@@ -3953,7 +3976,8 @@ mod tests {
                 &json!({"pools": [{"rolls": 1,
                     "entries": [{"type": "minecraft:item", "name": format!("minecraft:{item}")}]
                 }]}),
-            );
+            )
+            .unwrap();
         }
         let mut world = World::open(&folder.0, BIOMES).unwrap();
         world.mining = Some(Arc::new(crate::mining::MiningRules::new(&rules).unwrap()));
@@ -5202,6 +5226,71 @@ mod tests {
     }
 
     #[test]
+    fn dropped_stacks_merge_to_their_effective_limit() {
+        use crate::inventory::{ComponentPatch, ItemStack};
+
+        let folder = Folder::new();
+        let pos = ChunkPos { x: 0, z: 0 };
+        save(&folder, &[(pos, DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos]);
+        let mut spawn = |id, x, count, age, pickup_delay| {
+            let stack = ItemStack {
+                item: harpas_core::item::items().id("minecraft:stone").unwrap(),
+                count,
+                components: Arc::new(ComponentPatch {
+                    max_stack_size: Some(80),
+                    ..ComponentPatch::default()
+                }),
+            };
+            let item = ItemEntity {
+                age,
+                pickup_delay,
+                ..ItemEntity::new(stack)
+            };
+            let handle = world.add_item(id, [x, -48.0, 8.5], [0.0; 3], item);
+            let slot = world.entities.slot(handle);
+            world.entities.tick_count[slot] = 39;
+            handle
+        };
+        let larger = spawn(1000, 8.5, 50, 20, 15);
+        let smaller = spawn(1001, 8.6, 30, 10, 10);
+        let too_large = spawn(1002, 10.5, 50, 20, 9);
+        let would_overflow = spawn(1003, 10.6, 31, 10, 12);
+        world.tick_entities(&[]);
+        assert!(!world.entities.contains(smaller));
+        assert_eq!(world.entities.item(larger).unwrap().stack.count, 80);
+        for (handle, count, age, delay) in [(too_large, 50, 21, 8), (would_overflow, 31, 11, 11)] {
+            let item = world.entities.item(handle).unwrap();
+            assert_eq!(
+                (item.stack.count, item.age, item.pickup_delay),
+                (count, age, delay)
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_container_data_refuses_placement_before_the_block_changes() {
+        let folder = Folder::new();
+        let pos = BlockPos { x: 8, y: -30, z: 8 };
+        save(&folder, &[(pos.chunk(), DATA_VERSION)]);
+        let mut world = World::open(&folder.0, BIOMES).unwrap();
+        load_chunks(&mut world, &[pos.chunk()]);
+        let old = world.block_state(pos).unwrap();
+        let chunk = world.chunk_contents_mut(pos.chunk()).unwrap();
+        chunk.rest.insert("block_entities", 123);
+        for name in [crate::chest::CHEST, crate::furnace::FURNACE] {
+            let state = block_states().default_state(name).unwrap();
+            assert_eq!(world.set_block_state(pos, state), None);
+            assert_eq!(world.block_state(pos), Some(old));
+        }
+        assert!(
+            matches!(world.chunk(pos.chunk()), Some(ChunkState::Loaded(chunk))
+            if chunk.rest.get("block_entities") == Some(&Nbt::Int(123)))
+        );
+    }
+
+    #[test]
     fn players_drop_items_where_they_look() {
         use crate::inventory::ItemStack;
         use harpas_core::item::items;
@@ -5320,8 +5409,10 @@ mod tests {
             json!({"pools": [{"rolls": 1.0, "bonus_rolls": 0.0, "conditions": [{"condition": "minecraft:survives_explosion"}],
                 "entries": [{"type": "minecraft:item", "name": name}]}], "random_sequence": format!("{name}_blocks")})
         };
-        loot.insert("minecraft:dandelion", &drops_itself("minecraft:dandelion"));
-        loot.insert("minecraft:torch", &drops_itself("minecraft:torch"));
+        loot.insert("minecraft:dandelion", &drops_itself("minecraft:dandelion"))
+            .unwrap();
+        loot.insert("minecraft:torch", &drops_itself("minecraft:torch"))
+            .unwrap();
         let world = game.world.as_mut().unwrap();
         world.set_shape_updates(shape_updates());
         world.set_loot_tables(Arc::new(loot));
@@ -6140,7 +6231,8 @@ mod tests {
             expected.extend(
                 chests
                     .fill(chests.get(id).unwrap(), &codec, sequence.random(), None)
-                    .unwrap(),
+                    .unwrap()
+                    .0,
             );
             assert_eq!(world.random_sequences.get(&name), Some(&sequence));
             assert!(
@@ -6271,6 +6363,24 @@ mod tests {
                 .get("LootTable")
                 .is_some()
         }));
+
+        let key = crate::maps::MapChest { pos: left, seed: 0 };
+        wait_until(|| {
+            world.maps.poll();
+            world.maps.prepared(key).is_some()
+        });
+        let files = harpas_anvil::MapFiles::new(&folder.0);
+        assert_eq!(files.next_id().unwrap(), 0);
+        assert!(files.read(0).unwrap().is_none());
+        let right_tag = world.chest_tag(right).unwrap().unwrap().clone();
+        let mut malformed = right_tag.clone();
+        malformed.remove("LootTable");
+        malformed.insert("Items", 123);
+        world.store_container_tag(right, malformed);
+        assert!(world.open_chest_menu(chest, false).is_err());
+        assert_eq!(world.random, initial);
+        assert!(files.read(0).unwrap().is_none());
+        world.store_container_tag(right, right_tag);
 
         let mut menu = Vec::new();
         wait_until(|| match world.open_chest_menu(chest, false) {

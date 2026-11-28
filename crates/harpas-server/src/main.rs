@@ -1593,7 +1593,9 @@ mod tests {
             };
             let (rx, rz) = region_of(x, 0);
             let mut region = Region::open(&dir, rx, rz).unwrap();
-            region.set_chunk(x, 0, &chunk.to_nbt(harpas_java::biome_names()));
+            region
+                .set_chunk(x, 0, &chunk.to_nbt(harpas_java::biome_names()))
+                .unwrap();
             region.save().unwrap();
         }
         let info = ServerInfo {

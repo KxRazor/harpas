@@ -77,7 +77,7 @@ fn player_inventory_nbt_and_component_values_survive_a_vanilla_round_trip() {
     );
     let harpas_path = reference.temp.0.join("harpas.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(saved).write_network(&mut bytes);
+    Nbt::Compound(saved).write_network(&mut bytes).unwrap();
     fs::write(&harpas_path, bytes).unwrap();
     let round_trip_path = reference.temp.0.join("round-trip.nbt");
     reference.java(

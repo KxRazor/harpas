@@ -11,7 +11,7 @@ use log::warn;
 use serde_json::Value;
 use zip::ZipArchive;
 
-use super::{Context, LootTable};
+use super::{Context, Function, LootTable, MAX_WORK};
 use crate::inventory::{CHEST_SLOTS, ItemStack};
 use crate::item_data::{ItemCodec, invalid};
 use crate::maps::TreasureMap;
@@ -42,52 +42,31 @@ impl ChestLootTables {
                 Err(zip::result::ZipError::FileNotFound) => continue,
                 Err(error) => Err(io::Error::other(error)),
             };
-            match data {
-                Ok(data) => {
-                    tables.insert(name, LootTable::parse(&data));
+            match data.and_then(|data| LootTable::parse(&data)) {
+                Ok(table) => {
+                    tables.insert(name, table);
                 }
                 Err(error) => warn!("Cannot load chest loot table {name}: {error}"),
             }
         }
-        if tables.is_empty() {
-            return Ok(None);
-        }
-        let mut names = Vec::new();
-        collect_tag(
-            archive,
-            "enchantment",
-            ENCHANTMENT_TAG,
-            &mut Vec::new(),
-            &mut names,
-        )?;
-        let mut enchantments = Vec::new();
-        for name in names {
-            let path = name
-                .strip_prefix("minecraft:")
-                .ok_or_else(|| invalid("invalid loot enchantment ID"))?;
-            let definition = json(archive, &format!("data/minecraft/enchantment/{path}.json"))?;
-            let max_level = definition["max_level"]
-                .as_i64()
-                .and_then(|level| i32::try_from(level).ok())
-                .filter(|level| *level > 0)
-                .ok_or_else(|| invalid("invalid loot enchantment level"))?;
-            let supported = definition
-                .get("supported_items")
-                .map(|value| supported_items(archive, value))
-                .transpose()?
-                .unwrap_or_default();
-            enchantments.push(LootEnchantment {
-                name,
-                max_level,
-                supported,
-            });
-        }
-        if enchantments.is_empty() {
-            return Err(invalid("chest loot enchantment tag is empty"));
-        }
-        Ok(Some(Self {
+        let enchantments = if tables
+            .values()
+            .any(|table| table.has_function(&Function::EnchantRandomly))
+        {
+            match load_enchantments(archive) {
+                Ok(enchantments) => enchantments,
+                Err(error) => {
+                    warn!("Cannot load chest loot enchantments: {error}");
+                    tables.retain(|_, table| !table.has_function(&Function::EnchantRandomly));
+                    LootEnchantments(Vec::new())
+                }
+            }
+        } else {
+            LootEnchantments(Vec::new())
+        };
+        Ok((!tables.is_empty()).then_some(Self {
             tables,
-            enchantments: LootEnchantments(enchantments),
+            enchantments,
         }))
     }
 
@@ -96,29 +75,6 @@ impl ChestLootTables {
     }
 
     pub(crate) fn fill(
-        &self,
-        table: &LootTable,
-        codec: &ItemCodec,
-        random: &mut dyn RandomSource,
-        treasure_map: Option<TreasureMap>,
-    ) -> io::Result<[ItemStack; CHEST_SLOTS]> {
-        self.fill_reporting_map(table, codec, random, treasure_map)
-            .map(|(contents, _)| contents)
-    }
-
-    /// Fills a chest without a treasure map, to learn whether the real fill would search for one. The
-    /// search allocates a map ID, so vanilla only makes it when the map entry is rolled.
-    pub(crate) fn rolls_treasure_map(
-        &self,
-        table: &LootTable,
-        codec: &ItemCodec,
-        random: &mut dyn RandomSource,
-    ) -> io::Result<bool> {
-        self.fill_reporting_map(table, codec, random, None)
-            .map(|(_, requested)| requested)
-    }
-
-    fn fill_reporting_map(
         &self,
         table: &LootTable,
         codec: &ItemCodec,
@@ -133,6 +89,7 @@ impl ChestLootTables {
             chest: Some((&self.enchantments, codec)),
             treasure_map,
             treasure_requested: false,
+            remaining_work: MAX_WORK,
         };
         let rolled = table.roll(&mut context)?;
         let requested = context.treasure_requested;
@@ -147,8 +104,66 @@ impl ChestLootTables {
 }
 
 fn json(archive: &mut ZipArchive<impl Read + Seek>, path: &str) -> io::Result<Value> {
-    let entry = archive.by_name(path).map_err(io::Error::other)?;
+    let entry = archive.by_name(path).map_err(|error| match error {
+        zip::result::ZipError::FileNotFound => {
+            io::Error::new(io::ErrorKind::NotFound, path.to_owned())
+        }
+        _ => io::Error::other(error),
+    })?;
     serde_json::from_reader(entry).map_err(io::Error::other)
+}
+
+fn resource(id: &str) -> io::Result<(&str, &str)> {
+    let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    let name_byte =
+        |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte);
+    if namespace.is_empty()
+        || !namespace.bytes().all(name_byte)
+        || !path
+            .split('/')
+            .all(|part| !matches!(part, "" | "." | "..") && part.bytes().all(name_byte))
+    {
+        return Err(invalid(format!("invalid loot registry ID {id}")));
+    }
+    Ok((namespace, path))
+}
+
+fn load_enchantments(archive: &mut ZipArchive<impl Read + Seek>) -> io::Result<LootEnchantments> {
+    let mut names = Vec::new();
+    collect_tag(
+        archive,
+        "enchantment",
+        ENCHANTMENT_TAG,
+        true,
+        &mut Vec::new(),
+        &mut names,
+    )?;
+    let mut enchantments = Vec::new();
+    for (name, required) in names {
+        let (namespace, path) = resource(&name)?;
+        let definition = match json(
+            archive,
+            &format!("data/{namespace}/enchantment/{path}.json"),
+        ) {
+            Err(error) if !required && error.kind() == io::ErrorKind::NotFound => continue,
+            result => result?,
+        };
+        let max_level = super::integer(&definition["max_level"])?;
+        if !(1..=255).contains(&max_level) {
+            return Err(invalid("invalid loot enchantment level"));
+        }
+        let supported = definition
+            .get("supported_items")
+            .map(|value| supported_items(archive, value))
+            .transpose()?
+            .unwrap_or_default();
+        enchantments.push(LootEnchantment {
+            name,
+            max_level,
+            supported,
+        });
+    }
+    Ok(LootEnchantments(enchantments))
 }
 
 // Tag entries keep their order across nested tags and duplicate IDs.
@@ -156,31 +171,54 @@ fn collect_tag(
     archive: &mut ZipArchive<impl Read + Seek>,
     registry: &str,
     tag: &str,
+    required: bool,
     active: &mut Vec<String>,
-    names: &mut Vec<String>,
+    names: &mut Vec<(String, bool)>,
 ) -> io::Result<()> {
-    let path = tag
-        .strip_prefix("#minecraft:")
+    let name = tag
+        .strip_prefix('#')
         .ok_or_else(|| invalid(format!("invalid {registry} tag {tag}")))?;
-    if active.iter().any(|name| name == path) {
-        return Err(invalid(format!("recursive {registry} tag {tag}")));
+    let (namespace, path) = resource(name)?;
+    let name = format!("{namespace}:{path}");
+    if active.len() >= 64 || active.contains(&name) {
+        return Err(invalid(format!(
+            "recursive or too deeply nested {registry} tag {tag}"
+        )));
     }
-    active.push(path.to_owned());
-    let data = json(
+    let data = match json(
         archive,
-        &format!("data/minecraft/tags/{registry}/{path}.json"),
-    )?;
-    let entries = data["values"]
-        .as_array()
-        .ok_or_else(|| invalid(format!("invalid entries for {registry} tag {tag}")))?;
+        &format!("data/{namespace}/tags/{registry}/{path}.json"),
+    ) {
+        Err(error) if !required && error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        result => result?,
+    };
+    let entries = super::array(super::required(&data, "values")?)?;
+    active.push(name);
     for value in entries {
-        let name = value
-            .as_str()
-            .ok_or_else(|| invalid(format!("invalid entry in {registry} tag {tag}")))?;
+        let (name, required) = if let Some(name) = value.as_str() {
+            (name, true)
+        } else {
+            let name = super::string(value, "id")?;
+            let required = value
+                .get("required")
+                .map(|flag| {
+                    flag.as_bool()
+                        .ok_or_else(|| invalid("invalid loot tag required flag"))
+                })
+                .transpose()?
+                .unwrap_or(true);
+            (name, required)
+        };
         if name.starts_with('#') {
-            collect_tag(archive, registry, name, active, names)?;
-        } else if !names.iter().any(|id| id == name) {
-            names.push(name.to_owned());
+            collect_tag(archive, registry, name, required, active, names)?;
+        } else {
+            let (namespace, path) = resource(name)?;
+            let name = format!("{namespace}:{path}");
+            if let Some((_, was_required)) = names.iter_mut().find(|(id, _)| *id == name) {
+                *was_required |= required;
+            } else {
+                names.push((name, required));
+            }
         }
     }
     active.pop();
@@ -194,27 +232,28 @@ fn supported_items(
     let mut names = Vec::new();
     match value {
         Value::String(tag) if tag.starts_with('#') => {
-            collect_tag(archive, "item", tag, &mut Vec::new(), &mut names)?;
+            collect_tag(archive, "item", tag, true, &mut Vec::new(), &mut names)?;
         }
-        Value::String(name) => names.push(name.clone()),
+        Value::String(name) => names.push((name.clone(), true)),
         Value::Array(entries) => {
             for entry in entries {
                 let name = entry
                     .as_str()
                     .ok_or_else(|| invalid("invalid supported enchantment item"))?;
-                names.push(name.to_owned());
+                names.push((name.to_owned(), true));
             }
         }
         _ => return Err(invalid("invalid supported enchantment items")),
     }
-    names
-        .iter()
-        .map(|name| {
-            items()
-                .id(name)
-                .ok_or_else(|| invalid(format!("unknown item {name}")))
-        })
-        .collect()
+    let mut supported = HashSet::new();
+    for (name, required) in names {
+        if let Some(id) = super::item_id(&name) {
+            supported.insert(id);
+        } else if required {
+            return Err(invalid(format!("unknown item {name}")));
+        }
+    }
+    Ok(supported)
 }
 
 #[derive(Debug)]
@@ -228,6 +267,10 @@ struct LootEnchantment {
 pub(super) struct LootEnchantments(Vec<LootEnchantment>);
 
 impl LootEnchantments {
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub(super) fn enchant(
         &self,
         stack: &mut ItemStack,
@@ -292,4 +335,66 @@ fn spread(rolled: Vec<ItemStack>, random: &mut dyn RandomSource) -> Vec<ItemStac
     stacks.extend(splittable);
     shuffle(&mut stacks, random);
     stacks
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Write};
+
+    use zip::write::SimpleFileOptions;
+
+    use super::*;
+
+    #[test]
+    fn missing_enchantments_only_disable_dependent_tables() {
+        let load = |tag: &str| {
+            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for (path, json) in [
+                (
+                    "loot_table/chests/simple_dungeon",
+                    r##"{"pools":[{"rolls":1,"entries":[{"type":"item","name":"minecraft:book","functions":[{"function":"enchant_randomly","options":"#minecraft:on_random_loot"}]}]}]}"##,
+                ),
+                (
+                    "loot_table/chests/buried_treasure",
+                    r#"{"pools":[{"rolls":1,"entries":[{"type":"item","name":"minecraft:diamond"}]}]}"#,
+                ),
+                (
+                    "loot_table/chests/desert_pyramid",
+                    r#"{"pools":[{"rolls":false,"entries":[]}]}"#,
+                ),
+                ("tags/enchantment/on_random_loot", tag),
+                (
+                    "enchantment/sharpness",
+                    r##"{"max_level":5,"supported_items":"#minecraft:loot_test"}"##,
+                ),
+                (
+                    "tags/item/loot_test",
+                    r#"{"values":[{"id":"minecraft:iron_sword"},{"id":"custom:missing","required":false}]}"#,
+                ),
+            ] {
+                zip.start_file(
+                    format!("data/minecraft/{path}.json"),
+                    SimpleFileOptions::default(),
+                )
+                .unwrap();
+                zip.write_all(json.as_bytes()).unwrap();
+            }
+            let mut archive = ZipArchive::new(zip.finish().unwrap()).unwrap();
+            ChestLootTables::load(&mut archive).unwrap().unwrap()
+        };
+        let tables = load(
+            r##"{"values":["minecraft:sharpness",{"id":"#custom:missing","required":false},{"id":"custom:missing","required":false}]}"##,
+        );
+        assert!(tables.get("chests/simple_dungeon").is_some());
+        assert_eq!(tables.enchantments.0.len(), 1);
+        assert!(
+            tables.enchantments.0[0]
+                .supported
+                .contains(&items().id("minecraft:iron_sword").unwrap())
+        );
+        let tables = load(r#"{"values":[{"id":"custom:missing"}]}"#);
+        assert!(tables.get("chests/simple_dungeon").is_none());
+        assert!(tables.get("chests/buried_treasure").is_some());
+        assert!(tables.get("chests/desert_pyramid").is_none());
+    }
 }

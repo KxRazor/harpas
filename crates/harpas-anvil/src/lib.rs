@@ -17,7 +17,7 @@ mod region;
 mod version;
 mod world;
 
-pub use chunk::{Chunk, ChunkSection};
+pub use chunk::{Chunk, ChunkSection, check_biome_registry};
 pub use file::Source;
 pub use journal::{Recovery, recover};
 pub use maps::MapFiles;

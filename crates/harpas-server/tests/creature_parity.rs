@@ -534,9 +534,10 @@ fn compare_cow_descent(height: i32, landing_x: Range<f64>) {
         });
     for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
         assert_eq!(saved[1], HERDER_POSITION[1]);
+        // The landing window triggers the item switch; coasting west can take the cow past its start.
         assert!(
-            landing_x.contains(&saved[0]),
-            "cow was not stopped below the {height}-block ledge in {server}: {saved:?}"
+            saved[0] < landing_x.end,
+            "cow was saved too close to the {height}-block ledge in {server}: {saved:?}"
         );
         assert!(
             (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,

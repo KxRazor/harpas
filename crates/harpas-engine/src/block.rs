@@ -10,9 +10,10 @@
 
 use std::sync::OnceLock;
 
-use harpas_anvil::Chunk;
+use harpas_anvil::{Chunk, ChunkSection};
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::block_behavior;
+use harpas_core::chunk::{PalettedContainer, Section, Strategy};
 use harpas_core::nbt::{List, Nbt};
 use harpas_worldgen::generator::HeightmapType;
 use harpas_worldgen::placement::{Fluid, fluid};
@@ -171,18 +172,21 @@ pub(crate) fn is_game_master_block(state: u32) -> bool {
 
 /// The block state at `pos` in `chunk`, which must hold it; air where the chunk has no section.
 pub(crate) fn get(chunk: &Chunk, pos: BlockPos) -> u32 {
+    section_at(chunk, pos).map_or(0, |section| {
+        section.block_state(
+            (pos.x & 15) as usize,
+            (pos.y & 15) as usize,
+            (pos.z & 15) as usize,
+        )
+    })
+}
+
+pub(crate) fn section_at(chunk: &Chunk, pos: BlockPos) -> Option<&Section> {
     chunk
         .sections
         .iter()
         .find(|section| i32::from(section.y) == pos.y >> 4)
         .and_then(|section| section.section.as_ref())
-        .map_or(0, |section| {
-            section.block_state(
-                (pos.x & 15) as usize,
-                (pos.y & 15) as usize,
-                (pos.z & 15) as usize,
-            )
-        })
 }
 
 /// The first air above the world's surface in this column, from the live heightmap.
@@ -192,9 +196,16 @@ pub(crate) fn surface_height(chunk: &Chunk, x: i32, z: i32) -> i32 {
         && let Some(Nbt::LongArray(packed)) = maps.get(kind.nbt_key())
         && packed.len() == HEIGHT_LONGS
     {
-        return packed_height(packed, ((z & 15) << 4 | (x & 15)) as usize);
+        let height = packed_height(packed, ((z & 15) << 4 | (x & 15)) as usize);
+        if height <= MAX_Y + 1 {
+            return height;
+        }
     }
-    (MIN_Y..=MAX_Y)
+    column_height(chunk, kind, x, z, MAX_Y + 1)
+}
+
+fn column_height(chunk: &Chunk, kind: HeightmapType, x: i32, z: i32, top: i32) -> i32 {
+    (MIN_Y..top)
         .rev()
         .find(|&y| kind.matches(get(chunk, BlockPos { x, y, z })))
         .map_or(MIN_Y, |y| y + 1)
@@ -202,27 +213,51 @@ pub(crate) fn surface_height(chunk: &Chunk, x: i32, z: i32) -> i32 {
 
 /// Sets the block state at `pos` in `chunk`, which must hold it, as `LevelChunk.setBlockState`: updates the
 /// final heightmaps and removes the block entity of a replaced block. Returns the old state, or none when the
-/// state did not change or the chunk has no section there.
-pub(crate) fn set(chunk: &mut Chunk, pos: BlockPos, state: u32) -> Option<u32> {
-    let section = chunk
-        .sections
-        .iter_mut()
-        .find(|section| i32::from(section.y) == pos.y >> 4)?
-        .section
-        .as_mut()?;
+/// state did not change or the position or state is invalid.
+pub(crate) fn set(
+    chunk: &mut Chunk,
+    pos: BlockPos,
+    state: u32,
+    (biomes, plains): (Strategy, u32),
+) -> Option<u32> {
+    let states = block_states();
+    if !(MIN_Y..=MAX_Y).contains(&pos.y) || states.name(state).is_none() || get(chunk, pos) == state
+    {
+        return None;
+    }
+    let y = (pos.y >> 4) as i8;
+    let index = if let Some(index) = chunk.sections.iter().position(|section| section.y == y) {
+        index
+    } else {
+        let index = chunk
+            .sections
+            .iter()
+            .position(|section| section.y > y)
+            .unwrap_or(chunk.sections.len());
+        chunk.sections.insert(
+            index,
+            ChunkSection {
+                y,
+                section: None,
+                rest: Default::default(),
+            },
+        );
+        index
+    };
+    let section = chunk.sections[index].section.get_or_insert_with(|| {
+        Section::new(
+            PalettedContainer::filled(Strategy::block_states(states.global_bits()), 0),
+            PalettedContainer::filled(biomes, plains),
+        )
+    });
     let (x, y, z) = (
         (pos.x & 15) as usize,
         (pos.y & 15) as usize,
         (pos.z & 15) as usize,
     );
-    let old = section.set_block_state(x, y, z, state);
-    if old == state {
-        return None;
-    }
+    let old = section.try_set_block_state(x, y, z, state)?;
     update_heightmaps(chunk, pos, state);
-    let states = block_states();
-    let block = |id| states.properties(id).map(|(name, _)| name);
-    if block_behavior().has_block_entity(old) && block(old) != block(state) {
+    if block_behavior().has_block_entity(old) && states.name(old) != states.name(state) {
         remove_block_entity(chunk, pos);
     }
     Some(old)
@@ -230,8 +265,11 @@ pub(crate) fn set(chunk: &mut Chunk, pos: BlockPos, state: u32) -> Option<u32> {
 
 /// Vanilla's `Heightmap.update` for each heightmap the chunk has saved.
 fn update_heightmaps(chunk: &mut Chunk, pos: BlockPos, state: u32) {
-    let Some(Nbt::Compound(mut maps)) = chunk.rest.remove("Heightmaps") else {
+    if !matches!(chunk.rest.get("Heightmaps"), Some(Nbt::Compound(_))) {
         return;
+    }
+    let Some(Nbt::Compound(mut maps)) = chunk.rest.remove("Heightmaps") else {
+        unreachable!()
     };
     for kind in HeightmapType::FINAL {
         let Some(Nbt::LongArray(packed)) = maps.get(kind.nbt_key()) else {
@@ -241,25 +279,27 @@ fn update_heightmaps(chunk: &mut Chunk, pos: BlockPos, state: u32) {
             continue;
         };
         let index = ((pos.z & 15) << 4 | (pos.x & 15)) as usize;
-        let first_available = heights[index];
-        if pos.y <= first_available - 2 {
-            continue;
-        }
-        let height = if kind.matches(state) {
-            if pos.y < first_available {
-                continue;
+        let mut repaired = false;
+        for (column, height) in heights.iter_mut().enumerate() {
+            if *height > MAX_Y + 1 {
+                let x = (pos.x & !15) + (column % 16) as i32;
+                let z = (pos.z & !15) + (column / 16) as i32;
+                *height = column_height(chunk, kind, x, z, MAX_Y + 1);
+                repaired = true;
             }
-            pos.y + 1
-        } else if first_available - 1 == pos.y {
-            (MIN_Y..pos.y)
-                .rev()
-                .find(|&y| kind.matches(get(chunk, BlockPos { y, ..pos })))
-                .map_or(MIN_Y, |y| y + 1)
+        }
+        let first_available = heights[index];
+        let height = if kind.matches(state) {
+            first_available.max(pos.y + 1)
+        } else if first_available == pos.y + 1 {
+            column_height(chunk, kind, pos.x, pos.z, pos.y)
         } else {
-            continue;
+            first_available
         };
-        heights[index] = height;
-        maps.insert(kind.nbt_key(), Nbt::LongArray(pack(&heights)));
+        if repaired || height != first_available {
+            heights[index] = height;
+            maps.insert(kind.nbt_key(), Nbt::LongArray(pack(&heights)));
+        }
     }
     chunk.rest.insert("Heightmaps", Nbt::Compound(maps));
 }
@@ -295,8 +335,14 @@ fn pack(heights: &[i32; 256]) -> Vec<i64> {
 }
 
 fn remove_block_entity(chunk: &mut Chunk, pos: BlockPos) {
-    let Some(Nbt::List(List::Compound(mut entities))) = chunk.rest.remove("block_entities") else {
+    if !matches!(
+        chunk.rest.get("block_entities"),
+        Some(Nbt::List(List::Compound(_)))
+    ) {
         return;
+    }
+    let Some(Nbt::List(List::Compound(mut entities))) = chunk.rest.remove("block_entities") else {
+        unreachable!()
     };
     entities.retain(|entity| {
         let coordinate = |name| match entity.get(name) {
@@ -373,16 +419,24 @@ mod tests {
         let mut chunk = chunk();
         let air = state("minecraft:air");
         let top = BlockPos { x: 3, y: -49, z: 5 };
-        assert_eq!(set(&mut chunk, top, air), Some(state("minecraft:stone")));
+        assert_eq!(
+            set(&mut chunk, top, air, (Strategy::biomes(0), 0)),
+            Some(state("minecraft:stone"))
+        );
         for kind in HeightmapType::FINAL {
             assert_eq!(height(&chunk, kind, 3, 5), -49);
             assert_eq!(height(&chunk, kind, 4, 5), -48);
         }
         // A block below the top changes no height.
-        set(&mut chunk, BlockPos { y: -60, ..top }, air);
+        set(
+            &mut chunk,
+            BlockPos { y: -60, ..top },
+            air,
+            (Strategy::biomes(0), 0),
+        );
         assert_eq!(height(&chunk, HeightmapType::WorldSurface, 3, 5), -49);
         // Setting the same state is no change.
-        assert_eq!(set(&mut chunk, top, air), None);
+        assert_eq!(set(&mut chunk, top, air, (Strategy::biomes(0), 0)), None);
     }
 
     #[test]
@@ -393,16 +447,74 @@ mod tests {
                 &mut chunk,
                 BlockPos { x: 0, y, z: 0 },
                 state("minecraft:air"),
+                (Strategy::biomes(0), 0),
             );
         }
         assert_eq!(height(&chunk, HeightmapType::MotionBlocking, 0, 0), MIN_Y);
     }
 
     #[test]
+    fn an_omitted_section_can_be_edited_without_losing_light_or_height_metadata() {
+        let mut chunk = chunk();
+        let pos = BlockPos { x: 0, y: -32, z: 0 };
+        let y = (pos.y >> 4) as i8;
+        chunk.sections.push(ChunkSection {
+            y,
+            section: None,
+            rest: Compound::from_iter([("Marker", 1)]),
+        });
+        let mut maps = match chunk.rest.remove("Heightmaps").unwrap() {
+            Nbt::Compound(maps) => maps,
+            _ => unreachable!(),
+        };
+        let mut heights = pack(&[-48; 256]);
+        heights[0] = (heights[0] & !511) | 511;
+        maps.insert(
+            HeightmapType::WorldSurface.nbt_key(),
+            Nbt::LongArray(heights),
+        );
+        maps.insert("OtherMap", Nbt::Int(9));
+        chunk.rest.insert("Heightmaps", maps);
+        assert_eq!(surface_height(&chunk, 0, 0), -48);
+        assert_eq!(get(&chunk, pos), 0);
+        assert_eq!(
+            set(
+                &mut chunk,
+                pos,
+                state("minecraft:stone"),
+                (Strategy::biomes(1), 1)
+            ),
+            Some(0)
+        );
+        assert_eq!(surface_height(&chunk, 0, 0), pos.y + 1);
+        assert_eq!(section_at(&chunk, pos).unwrap().biome(0, 0, 0), 1);
+        assert_eq!(chunk.sections[1].rest.get("Marker"), Some(&Nbt::Int(1)));
+        assert!(
+            matches!(chunk.rest.get("Heightmaps"), Some(Nbt::Compound(maps)) if maps.get("OtherMap") == Some(&Nbt::Int(9)))
+        );
+        let absent = BlockPos { y: -16, ..pos };
+        assert_eq!(
+            set(
+                &mut chunk,
+                absent,
+                state("minecraft:stone"),
+                (Strategy::biomes(1), 1)
+            ),
+            Some(0)
+        );
+        assert_eq!(chunk.sections[2].y, -1);
+    }
+
+    #[test]
     fn water_left_by_a_waterlogged_block_still_blocks_motion_heightmaps() {
         let mut chunk = chunk();
         let top = BlockPos { x: 0, y: -49, z: 0 };
-        set(&mut chunk, top, removed(state("minecraft:seagrass")));
+        set(
+            &mut chunk,
+            top,
+            removed(state("minecraft:seagrass")),
+            (Strategy::biomes(0), 0),
+        );
         assert_eq!(get(&chunk, top), state("minecraft:water"));
         assert_eq!(height(&chunk, HeightmapType::MotionBlocking, 0, 0), -48);
         assert_eq!(height(&chunk, HeightmapType::WorldSurface, 0, 0), -48);
@@ -413,7 +525,12 @@ mod tests {
     fn replacing_a_block_with_a_block_entity_removes_its_entity() {
         let mut chunk = chunk();
         let chest = BlockPos { x: 1, y: -50, z: 2 };
-        set(&mut chunk, chest, state("minecraft:chest"));
+        set(
+            &mut chunk,
+            chest,
+            state("minecraft:chest"),
+            (Strategy::biomes(0), 0),
+        );
         let entity = |pos: BlockPos| {
             let mut entity = Compound::new();
             entity.insert("id", "minecraft:chest");
@@ -427,7 +544,12 @@ mod tests {
             "block_entities",
             Nbt::List(List::Compound(vec![entity(chest), entity(other)])),
         );
-        set(&mut chunk, chest, state("minecraft:air"));
+        set(
+            &mut chunk,
+            chest,
+            state("minecraft:air"),
+            (Strategy::biomes(0), 0),
+        );
         assert_eq!(
             chunk.rest.get("block_entities"),
             Some(&Nbt::List(List::Compound(vec![entity(other)])))

@@ -1015,7 +1015,10 @@ impl World {
         let Some(max) = b.max_stack_size() else {
             return;
         };
-        if a.count + b.count > max || a.item != b.item || a.components != b.components {
+        let Some(total) = a.count.checked_add(b.count).filter(|&total| total <= max) else {
+            return;
+        };
+        if a.is_empty() || b.is_empty() || a.item != b.item || a.components != b.components {
             return;
         }
         let (into, from) = if b.count < a.count {
@@ -1025,23 +1028,13 @@ impl World {
         };
         let from_item = self.entities.item(from).expect("an item").clone();
         let into_item = self.entities.item_mut(into).expect("an item");
-        let room = into_item.stack.max_stack_size().unwrap_or(64).min(64) - into_item.stack.count;
-        let moved = room.min(from_item.stack.count);
-        into_item.stack.count += moved;
+        into_item.stack.count = total;
         into_item.pickup_delay = into_item.pickup_delay.max(from_item.pickup_delay);
         into_item.age = into_item.age.min(from_item.age);
         let into_slot = self.entities.slot(into);
         self.entities.server[into_slot].dirty = true;
         self.entities.mark_changed(into);
-        let left = from_item.stack.count - moved;
-        if left <= 0 {
-            self.entities.remove(from);
-        } else {
-            self.entities.item_mut(from).expect("an item").stack.count = left;
-            let from_slot = self.entities.slot(from);
-            self.entities.server[from_slot].dirty = true;
-            self.entities.mark_changed(from);
-        }
+        self.entities.remove(from);
     }
 
     /// Runs the tick of every entity whose chunk a player sees, in order, and removes expired entities

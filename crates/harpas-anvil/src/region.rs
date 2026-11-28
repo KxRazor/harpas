@@ -21,7 +21,9 @@ use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::ZlibEncoder;
 use harpas_core::nbt::{Compound, Nbt};
 
-use crate::file::{MAX_INFLATED, check_dir, inflate, open_regular, read_nbt};
+use crate::file::{
+    MAX_INFLATED, check_dir, create_synced_dir, encode_nbt, inflate, open_regular, read_nbt,
+};
 use crate::journal::{self, Journal};
 
 const SECTOR: usize = 4096;
@@ -168,7 +170,7 @@ fn write_chunks_with(
     // A previous save of this region that failed after its commit is completed before staging anew.
     journal::complete(dir, x, z)?;
     step()?;
-    fs::create_dir_all(dir)?;
+    create_synced_dir(dir)?;
     let current = match open_regular(&path, OpenOptions::new().read(true).write(true)) {
         Ok(file) => Some(file),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -232,16 +234,19 @@ fn write_chunks_with(
         .map_or(0, |time| time.as_secs() as u32);
     for (&index, &(chunk_x, chunk_z, chunk)) in &new {
         let external_name = format!("c.{chunk_x}.{chunk_z}.mcc");
-        let was_external = stored_externally(&mut file, be_u32(&header, index * 4), len)?;
-        let data = compress(chunk);
-        let mut record = Vec::with_capacity((data.len() + 5).next_multiple_of(SECTOR));
+        let data = compress(chunk)?;
         let external = (data.len() + 5).div_ceil(SECTOR) > MAX_SECTORS;
+        let had_external = has_external(&dir.join(&external_name))?;
+        let mut record = Vec::new();
         if external {
             step()?;
             journal.stage(dir, external_name.clone(), &data)?;
             record.extend_from_slice(&1u32.to_be_bytes());
             record.push(ZLIB | EXTERNAL);
         } else {
+            if had_external {
+                journal.remove(external_name);
+            }
             record.extend_from_slice(&(data.len() as u32 + 1).to_be_bytes());
             record.push(ZLIB);
             record.extend_from_slice(&data);
@@ -263,9 +268,6 @@ fn write_chunks_with(
         header[index * 4..index * 4 + 4].copy_from_slice(&location.to_be_bytes());
         header[SECTOR + index * 4..SECTOR + index * 4 + 4]
             .copy_from_slice(&timestamp.to_be_bytes());
-        if was_external && !external {
-            journal.remove(external_name);
-        }
     }
     // The chunks reach the disk before the header that points to them is committed.
     step()?;
@@ -295,27 +297,30 @@ fn free_sectors(used: &[bool], count: usize) -> usize {
     start
 }
 
-/// Whether the chunk at `location` of a region file `len` bytes long is stored in a `.mcc` file.
-fn stored_externally(file: &mut fs::File, location: u32, len: u64) -> io::Result<bool> {
-    let start = u64::from(location >> 8) * SECTOR as u64;
-    if location >> 8 < 2 || start + 5 > len {
-        return Ok(false);
+/// Includes unreadable external files and orphans from previous saves.
+fn has_external(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            Err(invalid(format!("{} is a directory", path.display())))
+        }
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
-    file.seek(SeekFrom::Start(start + 4))?;
-    let mut compression = [0];
-    file.read_exact(&mut compression)?;
-    Ok(compression[0] & EXTERNAL != 0)
 }
 
 /// A chunk's NBT compressed with zlib, as vanilla stores it.
-fn compress(chunk: &Compound) -> Vec<u8> {
-    let mut nbt = Vec::new();
-    Nbt::Compound(chunk.clone()).write_named("", &mut nbt);
+fn compress(chunk: &Compound) -> io::Result<Vec<u8>> {
+    let nbt = encode_nbt(chunk)?;
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(&nbt)
-        .expect("writing to a Vec cannot fail");
-    encoder.finish().expect("writing to a Vec cannot fail")
+    encoder.write_all(&nbt)?;
+    let data = encoder.finish()?;
+    if data.len() > MAX_INFLATED {
+        return Err(invalid(format!(
+            "external chunk exceeds {MAX_INFLATED} bytes"
+        )));
+    }
+    Ok(data)
 }
 
 /// What a region holds for one chunk.
@@ -342,8 +347,6 @@ pub struct Region {
     x: i32,
     z: i32,
     slots: Vec<Slot>,
-    /// Which chunks have a `.mcc` file on disk, to remove the ones a save no longer needs.
-    external: Vec<bool>,
 }
 
 impl Region {
@@ -358,7 +361,6 @@ impl Region {
             x,
             z,
             slots: (0..CHUNKS).map(|_| Slot::Empty).collect(),
-            external: vec![false; CHUNKS],
         };
         let path = region.path();
         let mut source = match open_regular(&path, OpenOptions::new().read(true)) {
@@ -382,14 +384,11 @@ impl Region {
             }
             let timestamp = be_u32(&file, SECTOR + index * 4);
             region.slots[index] = match region.read_slot(&file, index, location) {
-                Ok((compression, data)) => {
-                    region.external[index] = compression & EXTERNAL != 0;
-                    Slot::Stored {
-                        timestamp,
-                        compression: compression & !EXTERNAL,
-                        data,
-                    }
-                }
+                Ok((compression, data)) => Slot::Stored {
+                    timestamp,
+                    compression: compression & !EXTERNAL,
+                    data,
+                },
                 Err(reason) => Slot::Corrupt(reason),
             };
         }
@@ -473,9 +472,9 @@ impl Region {
     }
 
     /// Sets the chunk's NBT, compressed with zlib as vanilla does, and stamps it with the current time.
-    pub fn set_chunk(&mut self, chunk_x: i32, chunk_z: i32, chunk: &Compound) {
+    pub fn set_chunk(&mut self, chunk_x: i32, chunk_z: i32, chunk: &Compound) -> io::Result<()> {
         let index = self.index(chunk_x, chunk_z);
-        let data = compress(chunk);
+        let data = compress(chunk)?;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |time| time.as_secs() as u32);
@@ -484,6 +483,7 @@ impl Region {
             compression: ZLIB,
             data,
         };
+        Ok(())
     }
 
     /// Removes the chunk.
@@ -519,10 +519,10 @@ impl Region {
         }
         // A previous save of this region that failed after its commit is completed before staging anew.
         journal::complete(&self.dir, self.x, self.z)?;
-        fs::create_dir_all(&self.dir)?;
+        create_synced_dir(&self.dir)?;
         let mut journal = Journal::default();
         let mut file = vec![0; 2 * SECTOR];
-        let mut external = vec![false; CHUNKS];
+        let mut external = [false; CHUNKS];
         for (index, slot) in self.slots.iter().enumerate() {
             let Slot::Stored {
                 timestamp,
@@ -532,8 +532,19 @@ impl Region {
             else {
                 continue;
             };
+            decode_chunk(*compression, data).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "cannot save {}: {}: {error}",
+                        self.path().display(),
+                        self.external_name(index)
+                    ),
+                )
+            })?;
             let offset = file.len() / SECTOR;
             if (data.len() + 5).div_ceil(SECTOR) > MAX_SECTORS {
+                has_external(&self.external_path(index))?;
                 step()?;
                 journal.stage(&self.dir, self.external_name(index), data)?;
                 external[index] = true;
@@ -556,12 +567,18 @@ impl Region {
         }
         step()?;
         journal.stage(&self.dir, self.name(), &file)?;
-        for index in (0..CHUNKS).filter(|&index| self.external[index] && !external[index]) {
-            journal.remove(self.external_name(index));
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if let Some((x, z)) = name.to_str().and_then(journal::parse_external)
+                && region_of(x, z) == (self.x, self.z)
+                && !external[self.index(x, z)]
+                && has_external(&entry.path())?
+            {
+                journal.remove(name.into_string().expect("a canonical chunk filename"));
+            }
         }
-        journal.commit(&self.dir, self.x, self.z, step)?;
-        self.external = external;
-        Ok(())
+        journal.commit(&self.dir, self.x, self.z, step)
     }
 }
 
@@ -666,7 +683,9 @@ mod tests {
     /// A chunk's NBT as a region file stores it, before compression.
     fn nbt(chunk: &Compound) -> Vec<u8> {
         let mut buf = Vec::new();
-        Nbt::Compound(chunk.clone()).write_named("", &mut buf);
+        Nbt::Compound(chunk.clone())
+            .write_named("", &mut buf)
+            .unwrap();
         buf
     }
 
@@ -752,8 +771,8 @@ mod tests {
     fn saved_chunks_read_back_from_a_sector_aligned_file() {
         let folder = Folder::new();
         let mut region = Region::open(&folder.0, -1, 2).unwrap();
-        region.set_chunk(-1, 64, &chunk(-1, 64));
-        region.set_chunk(-32, 95, &chunk(-32, 95));
+        region.set_chunk(-1, 64, &chunk(-1, 64)).unwrap();
+        region.set_chunk(-32, 95, &chunk(-32, 95)).unwrap();
         region.save().unwrap();
 
         let file = fs::read(folder.0.join("r.-1.2.mca")).unwrap();
@@ -778,7 +797,9 @@ mod tests {
     #[test]
     fn chunks_that_inflate_past_the_limit_are_refused() {
         let mut nbt = Vec::new();
-        Nbt::Compound(chunk(0, 0)).write_named("", &mut nbt);
+        Nbt::Compound(chunk(0, 0))
+            .write_named("", &mut nbt)
+            .unwrap();
         // Zeros after the chunk compress to almost nothing, as a decompression bomb does.
         let mut bomb = nbt.clone();
         bomb.resize(1024 * 1024, 0);
@@ -904,8 +925,8 @@ mod tests {
         // Over 1020 KiB once compressed.
         large.insert("Noise", Nbt::ByteArray(noise(1_100_000)));
         let mut region = Region::open(&dir, 1, -1).unwrap();
-        region.set_chunk(33, -1, &large);
-        region.set_chunk(34, -1, &chunk(34, -1));
+        region.set_chunk(33, -1, &large).unwrap();
+        region.set_chunk(34, -1, &chunk(34, -1)).unwrap();
         region.save().unwrap();
 
         let mcc = dir.join("c.33.-1.mcc");
@@ -924,7 +945,7 @@ mod tests {
         assert_eq!(region.chunk(34, -1).unwrap(), Some(chunk(34, -1)));
 
         // Once the chunk is small again, its .mcc file goes.
-        region.set_chunk(33, -1, &chunk(33, -1));
+        region.set_chunk(33, -1, &chunk(33, -1)).unwrap();
         region.save().unwrap();
         assert!(!mcc.exists());
         let region = Region::open(&dir, 1, -1).unwrap();
@@ -942,7 +963,7 @@ mod tests {
     fn removed_chunks_are_not_saved() {
         let folder = Folder::new();
         let mut region = Region::open(&folder.0, 0, 0).unwrap();
-        region.set_chunk(7, 7, &chunk(7, 7));
+        region.set_chunk(7, 7, &chunk(7, 7)).unwrap();
         region.save().unwrap();
         region.remove_chunk(7, 7);
         region.save().unwrap();
@@ -1012,7 +1033,7 @@ mod tests {
         let template = Folder::new();
         let mut staged = Region::open(&template.0, 0, 0).unwrap();
         for ((x, z), chunk) in &generations[0] {
-            staged.set_chunk(*x, *z, chunk);
+            staged.set_chunk(*x, *z, chunk).unwrap();
         }
         staged.save().unwrap();
         assert_eq!(
@@ -1020,7 +1041,7 @@ mod tests {
             ["c.0.0.mcc", "c.2.0.mcc", "r.0.0.mca"]
         );
         for ((x, z), chunk) in &generations[1] {
-            staged.set_chunk(*x, *z, chunk);
+            staged.set_chunk(*x, *z, chunk).unwrap();
         }
 
         let mut new_from = None;
@@ -1077,7 +1098,7 @@ mod tests {
 
             // Saving again leaves no trace of the interruption.
             let mut region = Region::open(&dir, 0, 0).unwrap();
-            region.set_chunk(3, 0, &versioned(3, 0, 3, false));
+            region.set_chunk(3, 0, &versioned(3, 0, 3, false)).unwrap();
             region.save().unwrap();
             recover(&dir).unwrap();
             let expected: &[&str] = if version == 2 {
@@ -1125,8 +1146,8 @@ mod tests {
     fn written_chunks_read_back_beside_the_chunks_already_there() {
         let folder = Folder::new();
         let mut region = Region::open(&folder.0, 0, 0).unwrap();
-        region.set_chunk(0, 0, &versioned(0, 0, 1, false));
-        region.set_chunk(1, 0, &versioned(1, 0, 1, false));
+        region.set_chunk(0, 0, &versioned(0, 0, 1, false)).unwrap();
+        region.set_chunk(1, 0, &versioned(1, 0, 1, false)).unwrap();
         region.save().unwrap();
         let before = fs::read(folder.0.join("r.0.0.mca")).unwrap();
 
@@ -1395,7 +1416,7 @@ mod tests {
         );
 
         let mut region = Region::open(&folder.0, 0, 0).unwrap();
-        region.set_chunk(0, 0, &chunk(0, 0));
+        region.set_chunk(0, 0, &chunk(0, 0)).unwrap();
         region.save().unwrap();
         for name in [
             "r.0.0.mca.tmp",
@@ -1420,5 +1441,83 @@ mod tests {
         ] {
             assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         }
+    }
+
+    #[test]
+    fn retry_in_the_same_region_removes_an_external_file_installed_during_recovery() {
+        let folder = Folder::new();
+        let mut region = Region::open(&folder.0, 0, 0).unwrap();
+        region.set_chunk(0, 0, &versioned(0, 0, 1, true)).unwrap();
+        let committed = folder.0.join("r.0.0.mca.journal");
+        let external = folder.0.join("c.0.0.mcc");
+        assert!(
+            region
+                .save_with(&mut || {
+                    if committed.exists() {
+                        Err(io::Error::other("interrupted"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err()
+        );
+        assert!(committed.exists());
+        assert!(!external.exists());
+        let replacement = versioned(0, 0, 2, false);
+        region.set_chunk(0, 0, &replacement).unwrap();
+        region.save().unwrap();
+        assert_eq!(read_chunk(&folder.0, 0, 0).unwrap(), Some(replacement));
+        assert!(!external.exists());
+        assert!(!committed.exists());
+    }
+
+    #[test]
+    fn recovery_refuses_an_oversized_journal_or_an_incomplete_live_header() {
+        let folder = Folder::new();
+        let path = folder.0.join("r.0.0.mca.journal");
+        fs::write(&path, vec![b'x'; 64 * 1024 + 1]).unwrap();
+        assert!(
+            recover(&folder.0)
+                .unwrap_err()
+                .to_string()
+                .contains("oversized")
+        );
+        let live = folder.0.join("r.0.0.mca");
+        fs::write(&live, [0; 100]).unwrap();
+        for operation in ["header", "install"] {
+            fs::write(
+                &path,
+                format!("harpas region journal 1\n{operation} r.0.0.mca\nend\n"),
+            )
+            .unwrap();
+            assert!(
+                recover(&folder.0)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("incomplete region header")
+            );
+            assert!(path.exists());
+            assert_eq!(fs::read(&live).unwrap(), [0; 100]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_an_unreadable_external_chunk_unlinks_its_file() {
+        let folder = Folder::new();
+        let mut region = Region::open(&folder.0, 0, 0).unwrap();
+        region.set_chunk(0, 0, &versioned(0, 0, 1, true)).unwrap();
+        region.save().unwrap();
+        let external = folder.0.join("c.0.0.mcc");
+        let target = folder.0.join("not-a-chunk");
+        fs::rename(&external, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &external).unwrap();
+        let mut region = Region::open(&folder.0, 0, 0).unwrap();
+        assert!(region.chunk(0, 0).is_err());
+        region.remove_chunk(0, 0);
+        region.save().unwrap();
+        assert_eq!(read_chunk(&folder.0, 0, 0).unwrap(), None);
+        assert!(!external.exists());
+        assert!(target.exists());
     }
 }

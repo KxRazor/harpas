@@ -193,7 +193,7 @@ fn jigsaw_chunks_match_vanilla() {
         let name = start.structure.replace(':', "-");
         let input_file = reference.temp.0.join(format!("{name}.nbt"));
         let mut bytes = Vec::new();
-        Nbt::Compound(input).write_named("", &mut bytes);
+        Nbt::Compound(input).write_named("", &mut bytes).unwrap();
         fs::write(&input_file, bytes).unwrap();
         let output = reference.temp.0.join(format!("{name}-out.nbt"));
         reference.java(
@@ -362,7 +362,9 @@ fn jigsaw_chunks_match_vanilla() {
         }
         let normalize_input = reference.temp.0.join(format!("{name}-entities.nbt"));
         let mut bytes = Vec::new();
-        Nbt::Compound(normalize).write_named("", &mut bytes);
+        Nbt::Compound(normalize)
+            .write_named("", &mut bytes)
+            .unwrap();
         fs::write(&normalize_input, bytes).unwrap();
         let normalize_output = reference.temp.0.join(format!("{name}-entities-out.nbt"));
         reference.java(

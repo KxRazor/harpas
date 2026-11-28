@@ -56,7 +56,8 @@ the engine: it takes and gives NBT, so the engine, its worker threads and the pa
   and the new one takes its place. Reading falls back to the `_old` backup when the file is missing or
   damaged, so a crash at any point leaves a readable file.
 - Map images live in `data/minecraft/maps/<id>.dat`, with `last_id.dat` recording the last allocated ID.
-  A worker saves the treasure map before the chest can give out an item with that ID.
+  A worker finds the treasure and builds the map preview. The logic thread saves the map after validating the
+  chest interaction, before giving out an item with the new ID.
 - The rest of the world folder (statistics, advancements, saved data such as raids and scoreboards)
   uses vanilla's files and formats.
 

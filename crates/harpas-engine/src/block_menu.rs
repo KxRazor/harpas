@@ -112,7 +112,10 @@ impl Game {
             Ok(menu) => menu,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 self.players[index].pending_map_chest =
-                    Some(crate::maps::PendingChestAction::Open(position));
+                    Some(crate::maps::PendingChestAction::Open(
+                        position,
+                        world.maps.watch(chest.positions()),
+                    ));
                 return;
             }
             Err(error) => {

@@ -473,7 +473,7 @@ fn compare_cases(reference: &Reference, inputs: Compound, expected: Compound) {
     let input = reference.temp.0.join("input.nbt");
     let output = reference.temp.0.join("output.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(inputs).write_named("", &mut bytes);
+    Nbt::Compound(inputs).write_named("", &mut bytes).unwrap();
     std::fs::write(&input, bytes).unwrap();
     reference.java(
         "MineshaftProbe",

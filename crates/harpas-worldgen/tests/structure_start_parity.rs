@@ -251,7 +251,7 @@ fn compare_seed(
     std::fs::write(&mansion_file, mansion_list.join("\n") + "\n").unwrap();
     let saved_file = reference.temp.0.join("saved-starts.nbt");
     let mut bytes = Vec::new();
-    Nbt::Compound(saved).write_named("", &mut bytes);
+    Nbt::Compound(saved).write_named("", &mut bytes).unwrap();
     std::fs::write(&saved_file, bytes).unwrap();
     let output = reference.temp.0.join("starts.txt");
     let mut args = vec![

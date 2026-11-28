@@ -281,18 +281,7 @@ impl World {
     }
 
     pub(crate) fn save_furnace(&mut self, pos: BlockPos, furnace: &Furnace) -> io::Result<()> {
-        let mut tag = self
-            .container_tag(pos, FURNACE)?
-            .cloned()
-            .unwrap_or_else(|| new_tag(pos, FURNACE));
-        tag.insert(
-            "Items",
-            Nbt::List(write_items(&furnace.slots, self.block_item_codec())?),
-        );
-        for (key, value) in TIMER_KEYS.into_iter().zip(furnace.properties()) {
-            tag.insert(key, value);
-        }
-        tag.insert("RecipesUsed", Nbt::Compound(furnace.recipes_used.clone()));
+        let tag = self.furnace_with_items(pos, self.container_tag(pos, FURNACE)?, furnace)?;
         self.store_container_tag(pos, tag);
         if self
             .recipes
@@ -304,6 +293,24 @@ impl World {
             self.active_furnaces.remove(&pos);
         }
         Ok(())
+    }
+
+    pub(crate) fn furnace_with_items(
+        &self,
+        pos: BlockPos,
+        tag: Option<&Compound>,
+        furnace: &Furnace,
+    ) -> io::Result<Compound> {
+        let mut tag = tag.cloned().unwrap_or_else(|| new_tag(pos, FURNACE));
+        tag.insert(
+            "Items",
+            Nbt::List(write_items(&furnace.slots, self.block_item_codec())?),
+        );
+        for (key, value) in TIMER_KEYS.into_iter().zip(furnace.properties()) {
+            tag.insert(key, value);
+        }
+        tag.insert("RecipesUsed", Nbt::Compound(furnace.recipes_used.clone()));
+        Ok(tag)
     }
 
     pub(crate) fn tick_furnace(

@@ -230,7 +230,7 @@ fn seed_world(region_dir: &Path) {
         ]),
     };
     let mut region = Region::open(region_dir, 0, 0).unwrap();
-    region.set_chunk(0, 0, &chunk.to_nbt(BIOMES));
+    region.set_chunk(0, 0, &chunk.to_nbt(BIOMES)).unwrap();
     region.save().unwrap();
 }
 

@@ -196,7 +196,7 @@ fn save_chest_fixture(region_dir: &Path, position: BlockPos, kind: &str, tag: &C
         ]),
     };
     let mut region = Region::open(region_dir, cx >> 5, 0).unwrap();
-    region.set_chunk(cx, 0, &chunk.to_nbt(BIOMES));
+    region.set_chunk(cx, 0, &chunk.to_nbt(BIOMES)).unwrap();
     region.save().unwrap();
 }
 
@@ -746,7 +746,9 @@ fn check_chest(double: bool) {
     let harpas_path = reference.temp.0.join("harpas.nbt");
     let reopened_path = reference.temp.0.join("reopened.nbt");
     let mut bytes = Vec::new();
-    Nbt::List(List::Compound(saved)).write_network(&mut bytes);
+    Nbt::List(List::Compound(saved))
+        .write_network(&mut bytes)
+        .unwrap();
     fs::write(&harpas_path, bytes).unwrap();
     reference.java(
         "ChestProbe",

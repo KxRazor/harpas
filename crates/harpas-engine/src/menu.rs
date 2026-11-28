@@ -483,7 +483,8 @@ impl Inventory {
                         self.set(index, with_count(&theirs, max));
                         self.set(other, with_count(&theirs, theirs.count - max));
                         let mut back = ours;
-                        if !self.add(&mut back, context.creative) {
+                        self.add(&mut back, context.creative);
+                        if !back.is_empty() {
                             drops.push(back);
                         }
                     } else {
@@ -775,6 +776,31 @@ mod tests {
         let drops = inventory.click(-999, 0, 0, &context);
         assert_eq!(drops.len(), 1);
         assert!(inventory.carried.is_empty());
+    }
+
+    #[test]
+    fn swapping_fuel_drops_the_displaced_remainder_after_a_partial_insert() {
+        let context = Context {
+            recipes: None,
+            creative: false,
+        };
+        let mut inventory = Inventory {
+            kind: MenuKind::Furnace,
+            ..Inventory::default()
+        };
+        for index in inventory.kind.player_slots() {
+            inventory.slots[index] = stack("minecraft:stone", 64);
+        }
+        let hotbar = inventory.storage_slot(0);
+        let coal = inventory.storage_slot(1);
+        inventory.slots[hotbar] = stack("minecraft:bucket", 4);
+        inventory.slots[coal] = stack("minecraft:coal", 62);
+        inventory.slots[FUEL] = stack("minecraft:coal", 5);
+        let drops = inventory.click(FUEL as i16, 0, 2, &context);
+        assert_eq!(held(&inventory, FUEL), (Some("minecraft:bucket"), 1));
+        assert_eq!(held(&inventory, hotbar), (Some("minecraft:bucket"), 3));
+        assert_eq!(held(&inventory, coal), (Some("minecraft:coal"), 64));
+        assert_eq!(drops, [stack("minecraft:coal", 3)]);
     }
 
     #[test]

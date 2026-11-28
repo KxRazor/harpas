@@ -233,6 +233,7 @@ impl Game {
                 .all(|c| (f64::from(*c) - 0.5).abs() < 1.000_000_1);
             if inside {
                 if pos.y <= block::MAX_Y && self.players[index].awaiting_teleport.is_none() {
+                    self.players[index].pending_map_chest = None;
                     self.use_item_on_block(index, off_hand, pos, face, cursor);
                 }
                 self.send_block(index, pos);

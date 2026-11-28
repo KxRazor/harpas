@@ -52,10 +52,11 @@ fn newest() -> &'static str {
 /// A world or chunk saved by another Minecraft version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionError {
-    /// The data version that saved it; `None` before 1.9, which recorded none.
+    /// The data version that saved it, if it was recorded as an integer.
     pub data_version: Option<i32>,
     /// The name of the version that saved it, when `level.dat` records it.
     pub name: Option<String>,
+    malformed: bool,
     /// What was checked: a world or a chunk.
     what: &'static str,
 }
@@ -70,6 +71,13 @@ impl VersionError {
 
 impl fmt::Display for VersionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.malformed {
+            return write!(
+                f,
+                "this {} has a malformed DataVersion (expected an integer)",
+                self.what
+            );
+        }
         let saved_by = match (&self.name, self.data_version) {
             (Some(name), Some(version)) => format!("Minecraft {name} (data version {version})"),
             (None, Some(version)) => format!("data version {version}"),
@@ -117,7 +125,8 @@ pub fn check_chunk(chunk: &Compound) -> Result<(), VersionError> {
 }
 
 fn check(nbt: &Compound, name: Option<String>, what: &'static str) -> Result<(), VersionError> {
-    let data_version = match nbt.get("DataVersion") {
+    let tag = nbt.get("DataVersion");
+    let data_version = match tag {
         Some(Nbt::Int(version)) => Some(*version),
         _ => None,
     };
@@ -130,6 +139,7 @@ fn check(nbt: &Compound, name: Option<String>, what: &'static str) -> Result<(),
     Err(VersionError {
         data_version,
         name,
+        malformed: tag.is_some() && data_version.is_none(),
         what,
     })
 }
@@ -209,5 +219,14 @@ mod tests {
         // A data version of the wrong type counts as missing.
         chunk.insert("DataVersion", "4786");
         assert_eq!(check_chunk(&chunk).unwrap_err().data_version, None);
+    }
+
+    #[test]
+    fn malformed_data_versions_are_not_reported_as_ancient_worlds() {
+        let mut value = level(None, None);
+        value.insert("DataVersion", "4786");
+        let error = check_level(&value).unwrap_err();
+        assert!(error.to_string().contains("malformed DataVersion"));
+        assert!(!error.is_newer());
     }
 }

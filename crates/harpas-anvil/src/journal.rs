@@ -37,6 +37,8 @@ const JOURNAL: &str = ".journal";
 const HEADER_PATCH: &str = ".header";
 /// The location and timestamp sectors of a region file.
 const HEADER_LEN: usize = 8192;
+// One region and at most 1024 external chunks, with room for their longest names.
+const MAX_JOURNAL_LEN: usize = 64 * 1024;
 
 /// What an interrupted save left in a region folder, and what [`recover`] did with it.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -222,7 +224,7 @@ impl Journal {
             let file = match open_regular(&staged, OpenOptions::new().read(true)) {
                 Ok(file) => file,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    check_regular_file(&path)?;
+                    check_header(&path)?;
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -261,6 +263,9 @@ impl Journal {
                             error
                         }
                     })?;
+                    if parse_region(name).is_some() {
+                        check_header(&path)?;
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -280,6 +285,17 @@ impl Journal {
     }
 }
 
+fn check_header(path: &Path) -> io::Result<()> {
+    let file = open_regular(path, OpenOptions::new().read(true))?;
+    if file.metadata()?.len() < HEADER_LEN as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{}: incomplete region header", path.display()),
+        ));
+    }
+    Ok(())
+}
+
 /// Whether a save of region `x`, `z` in `dir` was committed and not completed.
 pub(crate) fn pending(dir: &Path, x: i32, z: i32) -> io::Result<bool> {
     match check_regular_file(&journal_path(dir, x, z)) {
@@ -293,14 +309,20 @@ pub(crate) fn pending(dir: &Path, x: i32, z: i32) -> io::Result<bool> {
 pub(crate) fn complete(dir: &Path, x: i32, z: i32) -> io::Result<bool> {
     check_dir(dir)?;
     let path = journal_path(dir, x, z);
-    let mut file = match open_regular(&path, OpenOptions::new().read(true)) {
+    let file = match open_regular(&path, OpenOptions::new().read(true)) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
     };
     let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    drop(file);
+    file.take(MAX_JOURNAL_LEN as u64 + 1)
+        .read_to_string(&mut text)?;
+    if text.len() > MAX_JOURNAL_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{}: oversized region journal", path.display()),
+        ));
+    }
     let journal = Journal::decode(&text, x, z).map_err(|reason| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -339,7 +361,7 @@ fn parse_region(name: &str) -> Option<(i32, i32)> {
 }
 
 /// The chunk coordinates in an external chunk file name, `c.x.z.mcc`.
-fn parse_external(name: &str) -> Option<(i32, i32)> {
+pub(crate) fn parse_external(name: &str) -> Option<(i32, i32)> {
     parse_coordinates(name.strip_prefix("c.")?.strip_suffix(".mcc")?)
 }
 

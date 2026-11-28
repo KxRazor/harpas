@@ -41,6 +41,19 @@ pub(crate) fn read_nbt(mut nbt: &[u8]) -> Result<Nbt, NbtError> {
     Nbt::read_named_within(&mut nbt, MAX_NBT_MEMORY).map(|(_, root)| root)
 }
 
+pub(crate) fn encode_nbt(root: &Compound) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    root.write_named_within("", &mut bytes, MAX_INFLATED, MAX_NBT_MEMORY)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    Ok(bytes)
+}
+
+pub(crate) fn encode_gzip(root: &Compound) -> io::Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&encode_nbt(root)?)?;
+    encoder.finish()
+}
+
 /// Which file a value was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -142,6 +155,25 @@ pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Creates a directory tree, persisting each new entry before using it.
+pub(crate) fn create_synced_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    if let Some(parent) = dir.parent() {
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        if !dir.try_exists()? {
+            create_synced_dir(parent)?;
+            fs::create_dir_all(dir)?;
+        }
+        // Also sync an existing entry: the previous attempt may have failed after mkdir.
+        return sync_dir(parent);
+    }
+    fs::create_dir_all(dir)
+}
+
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
@@ -155,7 +187,10 @@ fn read_gzip(path: &Path) -> io::Result<Option<Compound>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
-    let nbt = inflate(GzDecoder::new(file), MAX_INFLATED).map_err(|e| invalid(path, e))?;
+    let nbt = inflate(GzDecoder::new(file), MAX_INFLATED).map_err(|error| match error.kind() {
+        io::ErrorKind::InvalidInput | io::ErrorKind::UnexpectedEof => invalid(path, error),
+        _ => contextual(path, error),
+    })?;
     match read_nbt(&nbt) {
         Ok(Nbt::Compound(root)) => Ok(Some(root)),
         Ok(_) => Err(invalid(path, "the NBT root is not a compound")),
@@ -168,7 +203,7 @@ fn read_document<T>(
     decode: &impl Fn(Compound) -> io::Result<T>,
 ) -> io::Result<Option<T>> {
     read_gzip(path)?
-        .map(|root| decode(root).map_err(|error| invalid(path, error)))
+        .map(|root| decode(root).map_err(|error| contextual(path, error)))
         .transpose()
 }
 
@@ -193,7 +228,15 @@ pub(crate) fn read_with_backup<T>(
     }
     match read_document(&with_suffix(path, "_old"), &decode) {
         Ok(Some(root)) => Ok(Some((root, Source::Backup))),
-        Err(error) if matches!(current, Ok(None)) => Err(error),
+        Err(error)
+            if matches!(current, Ok(None))
+                || (current
+                    .as_ref()
+                    .is_err_and(|e| e.kind() == io::ErrorKind::InvalidData)
+                    && error.kind() != io::ErrorKind::InvalidData) =>
+        {
+            Err(error)
+        }
         _ => current.map(|_| None),
     }
 }
@@ -205,16 +248,13 @@ pub(crate) fn write_with_backup<T>(
     root: &Compound,
     decode: impl Fn(Compound) -> io::Result<T>,
 ) -> io::Result<()> {
-    let mut nbt = Vec::new();
-    Nbt::Compound(root.clone()).write_named("", &mut nbt);
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&nbt)?;
+    let gzip = encode_gzip(root)?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    fs::create_dir_all(parent)?;
-    write_synced(new_path, &encoder.finish()?)?;
+    create_synced_dir(parent)?;
+    write_synced(new_path, &gzip)?;
     match read_document(path, &decode) {
         Ok(Some(_)) => {
             fs::rename(path, with_suffix(path, "_old"))?;
@@ -233,4 +273,8 @@ fn invalid(path: &Path, error: impl ToString) -> io::Error {
         io::ErrorKind::InvalidData,
         format!("{}: {}", path.display(), error.to_string()),
     )
+}
+
+fn contextual(path: &Path, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }

@@ -182,7 +182,7 @@ fn table_recipes_and_shift_clicks_match_vanilla() {
             rest,
         };
         let mut region = Region::open(&region_dir, 0, 0).unwrap();
-        region.set_chunk(0, 0, &chunk.to_nbt(biomes));
+        region.set_chunk(0, 0, &chunk.to_nbt(biomes)).unwrap();
         region.save().unwrap();
         let recipes = harpas_engine::recipe::Recipes::from_zip_path(&reference.server_jar).unwrap();
         let (handle, thread) = harpas_engine::start_with_world(

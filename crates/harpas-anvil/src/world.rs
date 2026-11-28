@@ -113,7 +113,7 @@ fn settings_seed(root: &Compound) -> io::Result<i64> {
 ///
 /// Existing settings always win over the proposed seed. The template must contain the complete `data`
 /// compound, including the dimensions; its seed is replaced before the file is written. A world with a
-/// `level.dat` or a region directory but no generation settings is rejected rather than assigned a new seed.
+/// `level.dat`, regions or player data but no generation settings is rejected rather than assigned a new seed.
 /// `None` as the source means settings were created; otherwise it identifies the file that was read.
 pub fn open_or_create_world_gen_settings(
     world: &Path,
@@ -127,6 +127,8 @@ pub fn open_or_create_world_gen_settings(
     if read_level(world)?.is_some()
         || world.join("dimensions").try_exists()?
         || world.join("region").try_exists()?
+        || world.join("players").try_exists()?
+        || world.join("playerdata").try_exists()?
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -160,6 +162,7 @@ pub fn write_world_gen_settings(world: &Path, root: &Compound) -> io::Result<()>
             "world generation settings have no data compound",
         ));
     }
+    settings_seed(root)?;
     let path = settings_path(world)?;
     file::write_with_backup(
         &path,
@@ -377,6 +380,72 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_save_keeps_the_live_level_and_its_backup() {
+        let folder = Folder::new();
+        write_level(&folder.0, &level("first")).unwrap();
+        write_level(&folder.0, &level("second")).unwrap();
+        let mut invalid = level("bad");
+        invalid.insert("Oversized", "x".repeat(65_536));
+        assert_eq!(
+            write_level(&folder.0, &invalid).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(files(&folder.0), ["level.dat", "level.dat_old"]);
+        assert_eq!(
+            read_level(&folder.0).unwrap(),
+            Some((level("second"), Source::Current))
+        );
+        fs::remove_file(folder.0.join("level.dat")).unwrap();
+        assert_eq!(
+            read_level(&folder.0).unwrap(),
+            Some((level("first"), Source::Backup))
+        );
+    }
+
+    #[test]
+    fn backup_decode_errors_keep_their_io_kind() {
+        let folder = Folder::new();
+        let primary = folder.0.join("level.dat");
+        let backup = folder.0.join("level.dat_old");
+        fs::write(&primary, b"not gzip").unwrap();
+        file::write_synced(&backup, &file::encode_gzip(&level("backup")).unwrap()).unwrap();
+        let error =
+            file::read_with_backup::<()>(&primary, |_| Err(io::ErrorKind::PermissionDenied.into()))
+                .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn a_restoration_with_only_player_data_keeps_its_seed_unset() {
+        let folder = Folder::new();
+        write_player(&folder.0, 42, &Compound::new()).unwrap();
+        let mut template = Compound::new();
+        template.insert(
+            "data",
+            Compound::from_iter([("dimensions", Compound::new())]),
+        );
+        assert!(open_or_create_world_gen_settings(&folder.0, &template, 999).is_err());
+        assert_eq!(read_world_seed(&folder.0).unwrap(), None);
+        assert!(read_player(&folder.0, 42).unwrap().is_some());
+    }
+
+    #[test]
+    fn an_invalid_batch_does_not_allocate_or_publish_maps() {
+        use crate::MapFiles;
+
+        let folder = Folder::new();
+        let mut maps = MapFiles::new(&folder.0);
+        let valid = Compound::from_iter([("Name", "previous")]);
+        assert_eq!(maps.create(valid.clone()).unwrap(), 0);
+        let invalid = Compound::from_iter([("Name", "x".repeat(65_536))]);
+        assert!(maps.create_batch(1, &[valid.clone(), invalid]).is_err());
+        assert_eq!(maps.next_id().unwrap(), 1);
+        assert_eq!(MapFiles::new(&folder.0).next_id().unwrap(), 1);
+        assert_eq!(maps.read(0).unwrap(), Some(valid));
+        assert_eq!(maps.read(1).unwrap(), None);
+    }
+
+    #[test]
     fn damaged_files_without_a_backup_are_errors() {
         let folder = Folder::new();
         fs::write(folder.0.join("level.dat"), b"not gzip").unwrap();
@@ -384,7 +453,9 @@ mod tests {
 
         // Valid NBT without a Data compound.
         let mut nbt = Vec::new();
-        Nbt::Compound(level("bare")).write_named("", &mut nbt);
+        Nbt::Compound(level("bare"))
+            .write_named("", &mut nbt)
+            .unwrap();
         let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
         gzip.write_all(&nbt).unwrap();
         let malformed = gzip.finish().unwrap();
@@ -473,7 +544,9 @@ mod tests {
         let mut data = Compound::new();
         data.insert("seed", 42_i32);
         settings.insert("data", data);
-        write_world_gen_settings(&folder.0, &settings).unwrap();
+        assert!(write_world_gen_settings(&folder.0, &settings).is_err());
+        let path = settings_path(&folder.0).unwrap();
+        file::write_with_backup(&path, &path.with_extension("dat_new"), &settings, Ok).unwrap();
         let error = read_world_seed(&folder.0).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }

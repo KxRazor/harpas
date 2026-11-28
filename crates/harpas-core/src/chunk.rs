@@ -28,7 +28,12 @@ pub struct Strategy {
 
 impl Strategy {
     /// Block states of a section: 4,096 values, palettes of 4 to 8 bits.
+    ///
+    /// # Panics
+    ///
+    /// If `global_bits` is greater than 32.
     pub const fn block_states(global_bits: u8) -> Self {
+        assert!(global_bits <= 32, "global IDs are at most 32 bits");
         Self {
             len: 4096,
             min_bits: 4,
@@ -38,7 +43,12 @@ impl Strategy {
     }
 
     /// Biomes of a section: 64 values, palettes of 1 to 3 bits.
+    ///
+    /// # Panics
+    ///
+    /// If `global_bits` is greater than 32.
     pub const fn biomes(global_bits: u8) -> Self {
+        assert!(global_bits <= 32, "global IDs are at most 32 bits");
         Self {
             len: 64,
             min_bits: 1,
@@ -47,13 +57,12 @@ impl Strategy {
         }
     }
 
-    /// Bits per index in memory for a palette of `size` values.
-    fn bits(&self, size: usize) -> u8 {
-        match ceil_log2(size) {
-            0 => 0,
-            bits if bits <= self.max_bits => bits.max(self.min_bits),
-            _ => self.global_bits,
-        }
+    fn exceeds_local_palette(&self, size: usize) -> bool {
+        size > (1 << self.max_bits)
+    }
+
+    fn fits_id(&self, id: u32) -> bool {
+        u64::from(id) < (1 << self.global_bits)
     }
 
     /// Bits per index in Anvil files for a palette of `size` values, which always keep a palette.
@@ -95,6 +104,13 @@ pub enum UnpackError {
         /// Values in the palette.
         palette: usize,
     },
+    /// A palette value does not fit the global ID width.
+    GlobalId {
+        /// The value that does not fit.
+        id: u32,
+        /// Available bits per ID.
+        bits: u8,
+    },
 }
 
 impl fmt::Display for UnpackError {
@@ -109,6 +125,7 @@ impl fmt::Display for UnpackError {
             Self::Index { index, palette } => {
                 write!(f, "palette index {index} out of a palette of {palette}")
             }
+            Self::GlobalId { id, bits } => write!(f, "global ID {id} does not fit in {bits} bits"),
         }
     }
 }
@@ -151,11 +168,12 @@ impl BitStorage {
     }
 
     fn set(&mut self, index: usize, value: u64) {
+        let mask = self.mask();
+        debug_assert!(value <= mask);
         let per_long = self.per_long();
         let shift = (index % per_long) * usize::from(self.bits);
-        let mask = self.mask() << shift;
         let long = &mut self.data[index / per_long];
-        *long = (*long & !mask) | (value << shift);
+        *long = (*long & !(mask << shift)) | (value << shift);
     }
 }
 
@@ -183,7 +201,12 @@ pub struct PalettedContainer {
 
 impl PalettedContainer {
     /// A container with `value` everywhere.
+    ///
+    /// # Panics
+    ///
+    /// If `value` does not fit the strategy's global ID width.
     pub fn filled(strategy: Strategy, value: u32) -> Self {
+        assert!(strategy.fits_id(value), "global ID {value} out of range");
         Self {
             strategy,
             palette: vec![value],
@@ -222,8 +245,16 @@ impl PalettedContainer {
     }
 
     /// Sets the value at `index` and returns the old one. The palette grows as vanilla's does, and never shrinks.
+    ///
+    /// # Panics
+    ///
+    /// If the index is out of bounds or the value does not fit the strategy's global ID width.
     pub fn set(&mut self, index: usize, value: u32) -> u32 {
         assert!(index < self.strategy.len, "index {index} out of range");
+        assert!(
+            self.strategy.fits_id(value),
+            "global ID {value} out of range"
+        );
         let old = self.get(index);
         if old == value {
             return old;
@@ -247,11 +278,16 @@ impl PalettedContainer {
 
     /// Moves the storage to the bits the palette now needs.
     fn resize(&mut self) {
-        let bits = self.strategy.bits(self.palette.len());
-        if bits == self.storage.bits {
+        let size = self.palette.len();
+        let global = self.strategy.exceeds_local_palette(size);
+        let bits = if global {
+            self.strategy.global_bits
+        } else {
+            self.strategy.packed_bits(size)
+        };
+        if !global && bits == self.storage.bits {
             return;
         }
-        let global = bits == self.strategy.global_bits && bits > self.strategy.max_bits;
         let mut storage = BitStorage::new(bits, self.strategy.len);
         for index in 0..self.strategy.len {
             let raw = self.storage.get(index);
@@ -294,11 +330,17 @@ impl PalettedContainer {
         Packed { palette, data }
     }
 
-    /// Reads a container in vanilla's Anvil form, checking it as vanilla does.
+    /// Reads a container in vanilla's Anvil form, validating indices and global ID widths.
     pub fn unpack(strategy: Strategy, packed: Packed) -> Result<Self, UnpackError> {
         let Packed { palette, data } = packed;
         if palette.is_empty() {
             return Err(UnpackError::EmptyPalette);
+        }
+        if let Some(&id) = palette.iter().find(|&&id| !strategy.fits_id(id)) {
+            return Err(UnpackError::GlobalId {
+                id,
+                bits: strategy.global_bits,
+            });
         }
         let bits = strategy.packed_bits(palette.len());
         if bits == 0 {
@@ -320,6 +362,16 @@ impl PalettedContainer {
                     palette: palette.len(),
                 });
             }
+        }
+        if strategy.global_bits <= strategy.max_bits
+            && strategy.exceeds_local_palette(palette.len())
+        {
+            // Resolved Anvil entries can repeat IDs in a registry too small to need direct storage.
+            let mut compact = Self::filled(strategy, palette[stored.get(0) as usize]);
+            for index in 1..strategy.len {
+                compact.set(index, palette[stored.get(index) as usize]);
+            }
+            return Ok(compact);
         }
         let mut container = Self {
             strategy,
@@ -375,6 +427,10 @@ impl Section {
     }
 
     /// Sets a block state and returns the old one.
+    ///
+    /// # Panics
+    ///
+    /// If the coordinates are outside the section or `state` does not fit the global ID width.
     pub fn set_block_state(&mut self, x: usize, y: usize, z: usize, state: u32) -> u32 {
         let old = self.block_states.set(block_index(x, y, z), state);
         if old != state {
@@ -389,6 +445,10 @@ impl Section {
     }
 
     /// Sets a biome and returns the old one.
+    ///
+    /// # Panics
+    ///
+    /// If the coordinates are outside the section or `biome` does not fit the global ID width.
     pub fn set_biome(&mut self, x: usize, y: usize, z: usize, biome: u32) -> u32 {
         let old = self.biomes.set(biome_index(x, y, z), biome);
         if old != biome {
@@ -595,6 +655,55 @@ mod tests {
             (container.get(0), container.get(1), container.get(2)),
             (1, 2, 3)
         );
+    }
+
+    #[test]
+    fn unpacking_switches_to_global_ids_even_at_the_same_width() {
+        let strategy = Strategy::biomes(4);
+        let mut original = PalettedContainer::filled(strategy, 15);
+        for index in 1..9 {
+            original.set(index, 15 - index as u32);
+        }
+        let packed = original.pack();
+        let container = PalettedContainer::unpack(strategy, packed.clone()).unwrap();
+        assert_eq!((container.bits(), container.palette()), (4, None));
+        assert_eq!(container.data()[0] & 0xff, 0xef);
+        assert_eq!(container.pack(), packed);
+    }
+
+    #[test]
+    fn out_of_range_ids_are_rejected_before_writing() {
+        let strategy = Strategy::biomes(4);
+        for count in [8, 9] {
+            let mut container = PalettedContainer::filled(strategy, 0);
+            for index in 1..count {
+                container.set(index, index as u32);
+            }
+            let before = container.clone();
+            let write = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                container.set(0, 16);
+            }));
+            assert!(write.is_err());
+            assert_eq!(container, before);
+
+            let mut packed = container.pack();
+            packed.palette[0] = 16;
+            assert_eq!(
+                PalettedContainer::unpack(strategy, packed),
+                Err(UnpackError::GlobalId { id: 16, bits: 4 })
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_biome_ids_from_anvil_fit_a_small_registry() {
+        let packed = Packed {
+            palette: vec![0; 9],
+            data: vec![0x8765_4321_0876_5432; 4],
+        };
+        let container = PalettedContainer::unpack(Strategy::biomes(0), packed).unwrap();
+        assert_eq!(container.bits(), 0);
+        assert_eq!(container.palette(), Some(&[0][..]));
     }
 
     #[test]

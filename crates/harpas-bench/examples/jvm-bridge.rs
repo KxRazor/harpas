@@ -276,13 +276,13 @@ fn fixture() -> Result<PathBuf> {
     let mut nonce = [0; 16];
     getrandom::fill(&mut nonce).map_err(std::io::Error::other)?;
     let stage = output.join(format!("build-{:032x}", u128::from_ne_bytes(nonce)));
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        std::fs::DirBuilder::new().mode(0o700).create(&stage)?;
     }
-    builder.create(&stage)?;
+    #[cfg(not(unix))]
+    std::fs::create_dir(&stage)?;
     let result = build_fixture(&stage, &jar, source);
     let cleanup = std::fs::remove_dir_all(&stage);
     result?;

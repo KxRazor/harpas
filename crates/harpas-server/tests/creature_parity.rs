@@ -566,21 +566,21 @@ fn saved_cow_crosses_a_dry_trench_matches_vanilla() {
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn saved_cow_swims_across_a_shallow_trench_matches_vanilla() {
     for dry_detour in [true, false] {
-        let [vanilla, harpas] = observe_saved_cow_following(
+        let [(_, vanilla_saved), (harpas_switch, harpas_saved)] = observe_saved_cow_following(
             CowCourse::WaterTrench { dry_detour },
             lead_cow_through_water,
         );
-        for (server, (at, saved)) in [("vanilla", vanilla), ("Harpas", harpas)] {
+        for (server, saved) in [("vanilla", vanilla_saved), ("Harpas", harpas_saved)] {
             assert_eq!(saved[1], UPPER_HERDER_POSITION[1]);
             assert!(
                 (0.0..6.0).contains(&saved[0]) && (0.0..5.0).contains(&saved[2]),
                 "cow did not stay on the far bank in {server} (dry detour {dry_detour}): {saved:?}"
             );
-            assert!(
-                (saved[0] - at[0]).hypot(saved[2] - at[2]) < 1.0,
-                "cow did not stop in {server}: switched at {at:?}, saved at {saved:?}"
-            );
         }
+        assert!(
+            (harpas_saved[0] - harpas_switch[0]).hypot(harpas_saved[2] - harpas_switch[2]) < 1.0,
+            "cow did not stop in Harpas (dry detour {dry_detour}): switched at {harpas_switch:?}, saved at {harpas_saved:?}"
+        );
     }
 }
 
@@ -786,8 +786,7 @@ fn lead_cow(port: u16, reference: Option<&mut Server>) -> (f64, f64) {
         // West is 90 degrees, encoded as 64 in the protocol.
         (x < cow.x - 1.25 && (48..=80).contains(&head_yaw)).then_some(())
     });
-    play_packet(&mut client, play::serverbound::SetHeldItem { slot: 0 });
-    std::thread::sleep(Duration::from_millis(650));
+    put_away_wheat(&mut client);
     (x, westward_speed)
 }
 
@@ -869,30 +868,37 @@ fn lead_cow_across_trench(port: u16, reference: Option<&mut Server>) -> [f64; 3]
     )
 }
 
-fn lead_cow_through_water(port: u16, reference: Option<&mut Server>) -> [f64; 3] {
+fn lead_cow_through_water(port: u16, mut reference: Option<&mut Server>) -> [f64; 3] {
     let server = if reference.is_some() {
         "vanilla"
     } else {
         "Harpas"
     };
-    let (mut client, cow) = hold_wheat(port, reference, UPPER_HERDER_POSITION);
+    let (mut client, cow) = hold_wheat(port, reference.as_deref_mut(), UPPER_HERDER_POSITION);
     let bank = UPPER_HERDER_POSITION[1];
     assert_eq!(cow.y, bank);
     let mut swam = false;
-    let at = follow_cow_until(
+    let at = observe_cow_until(
         &mut client,
         &cow,
         &format!("cow swims across the trench and reaches the far bank in {server}"),
-        |[x, y, z]| {
+        |[x, y, z], on_ground| {
             // Feet above the bottom and below the water's surface, away from either bank.
             swam |= (7.0..8.0).contains(&x)
                 && (bank - 0.9..bank - 0.15).contains(&y)
                 && (0.5..3.5).contains(&z);
-            // Let the whole cow reach the bank before it can resume its idle movement.
-            (y - bank).abs() < 0.001 && (4.6..5.1).contains(&x)
+            // The whole cow must be on the bank when the reference is frozen.
+            on_ground && (y - bank).abs() < 0.001 && (4.6..5.1).contains(&x)
         },
     );
     assert!(swam, "cow did not swim across in {server}: {at:?}");
+    if let Some(reference) = reference {
+        // Capture the successful crossing before vanilla's random stroll can move the cow.
+        writeln!(reference.child.stdin.as_mut().unwrap(), "tick freeze").unwrap();
+        reference.wait_for("The game is frozen");
+    } else {
+        put_away_wheat(&mut client);
+    }
     at
 }
 
@@ -902,29 +908,43 @@ fn follow_cow_until(
     expectation: &str,
     mut reached: impl FnMut([f64; 3]) -> bool,
 ) -> [f64; 3] {
+    let at = observe_cow_until(client, cow, expectation, |at, _| reached(at));
+    put_away_wheat(client);
+    at
+}
+
+fn observe_cow_until(
+    client: &mut Client,
+    cow: &play::clientbound::SpawnEntity,
+    expectation: &str,
+    mut reached: impl FnMut([f64; 3], bool) -> bool,
+) -> [f64; 3] {
     let mut at = [cow.x, cow.y, cow.z];
     client.matching(expectation, |packet| {
-        let delta = match packet {
+        let (delta, on_ground) = match packet {
             Packet::EntityPositionSync(pos) if pos.entity_id == cow.entity_id => {
                 at = [pos.x, pos.y, pos.z];
-                [0; 3]
+                ([0; 3], pos.on_ground)
             }
             Packet::UpdateEntityPosition(pos) if pos.entity_id == cow.entity_id => {
-                [pos.delta_x, pos.delta_y, pos.delta_z]
+                ([pos.delta_x, pos.delta_y, pos.delta_z], pos.on_ground)
             }
             Packet::UpdateEntityPositionAndRotation(pos) if pos.entity_id == cow.entity_id => {
-                [pos.delta_x, pos.delta_y, pos.delta_z]
+                ([pos.delta_x, pos.delta_y, pos.delta_z], pos.on_ground)
             }
             _ => return None,
         };
         for (coord, change) in at.iter_mut().zip(delta) {
             *coord += f64::from(change) / 4096.0;
         }
-        reached(at).then_some(())
+        reached(at, on_ground).then_some(())
     });
+    at
+}
+
+fn put_away_wheat(client: &mut Client) {
     play_packet(client, play::serverbound::SetHeldItem { slot: 0 });
     std::thread::sleep(Duration::from_millis(650));
-    at
 }
 
 fn saved_animal_combat(kind: &str, name: &str, entity_type: i32, meat: &str) {

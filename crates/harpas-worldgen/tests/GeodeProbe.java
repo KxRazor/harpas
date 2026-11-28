@@ -74,7 +74,8 @@ public final class GeodeProbe {
                             ((ProtoChunk)world.getChunk(cx, cz)).setPersistedStatus(ChunkStatus.CARVERS);
                     for (int dy = -18; dy <= 18; dy++) for (int dz = -18; dz <= 18; dz++) for (int dx = -18; dx <= 18; dx++) {
                         var at = p.offset(dx, dy, dz);
-                        if (at.getY() >= -64 && at.getY() < 320) world.setBlock(at, initial(test, dx, dy, dz), 2);
+                        // The starting terrain is already carved, including chunks that FEATURES cannot write.
+                        if (!height.isOutsideBuildHeight(at)) world.getChunk(at).setBlockState(at, initial(test, dx, dy, dz), 2);
                     }
                     int[] before = blocks(world, p);
                     var random = new WorldgenRandom(legacy ? new LegacyRandomSource(seed) : new XoroshiroRandomSource(seed));

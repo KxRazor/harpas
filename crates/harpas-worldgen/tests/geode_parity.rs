@@ -80,7 +80,6 @@ fn prepare(test: usize, seed: i64) -> RegionFeatureWorld {
         })
     });
     let mut world = RegionFeatureWorld::new(chunks, 0).unwrap();
-    world.start_region(seed ^ 0x0123_4567_89ab_cdef, x >> 4, z >> 4);
     for dy in -18..=18 {
         for dz in -18..=18 {
             for dx in -18..=18 {
@@ -88,6 +87,7 @@ fn prepare(test: usize, seed: i64) -> RegionFeatureWorld {
             }
         }
     }
+    world.start_region(seed ^ 0x0123_4567_89ab_cdef, x >> 4, z >> 4);
     world
 }
 

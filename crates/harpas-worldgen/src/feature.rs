@@ -187,9 +187,10 @@ enum RegionBiomes {
     Stored(BiomeManager),
 }
 
-/// The 3x3 chunks a FEATURES pass reads and writes.
+/// The chunks available to a FEATURES pass.
 ///
-/// Reads and writes outside the region are rejected.
+/// Once the pass starts, only supplied chunks within one chunk of its center are writable.
+/// Reads can still access any supplied chunk.
 pub struct RegionFeatureWorld {
     chunks: HashMap<(i32, i32), GeneratedChunk>,
     biomes: RegionBiomes,
@@ -197,6 +198,7 @@ pub struct RegionFeatureWorld {
     height: i32,
     random: Option<XoroshiroRandom>,
     seed: i64,
+    center: Option<(i32, i32)>,
 }
 
 impl RegionFeatureWorld {
@@ -239,6 +241,7 @@ impl RegionFeatureWorld {
             height,
             random: None,
             seed: 0,
+            center: None,
         })
     }
 
@@ -294,6 +297,11 @@ impl RegionFeatureWorld {
             z.rem_euclid(16) as usize,
         ))
     }
+
+    fn in_write_radius(&self, (x, z): (i32, i32)) -> bool {
+        self.center
+            .is_none_or(|(cx, cz)| x.abs_diff(cx).max(z.abs_diff(cz)) <= 1)
+    }
 }
 
 impl BlockGetter for RegionFeatureWorld {
@@ -324,6 +332,9 @@ impl FeatureWorld for RegionFeatureWorld {
         let Some((key, lx, y, lz)) = self.local(x, y, z) else {
             return false;
         };
+        if !self.in_write_radius(key) {
+            return false;
+        }
         let Some(chunk) = self.chunks.get_mut(&key) else {
             return false;
         };
@@ -374,8 +385,8 @@ impl FeatureWorld for RegionFeatureWorld {
     }
 
     fn can_write(&self, x: i32, z: i32) -> bool {
-        self.chunks
-            .contains_key(&(x.div_euclid(16), z.div_euclid(16)))
+        let key = (x.div_euclid(16), z.div_euclid(16));
+        self.in_write_radius(key) && self.chunks.contains_key(&key)
     }
 
     fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32) {
@@ -390,6 +401,9 @@ impl FeatureWorld for RegionFeatureWorld {
         let Some((key, lx, y, lz)) = self.local(x, y, z) else {
             return false;
         };
+        if !self.in_write_radius(key) {
+            return false;
+        }
         let Some(chunk) = self.chunks.get_mut(&key) else {
             return false;
         };
@@ -399,6 +413,7 @@ impl FeatureWorld for RegionFeatureWorld {
     fn start_region(&mut self, world_seed: i64, chunk_x: i32, chunk_z: i32) {
         self.seed = world_seed;
         self.random = Some(region_random(world_seed, chunk_x, chunk_z));
+        self.center = Some((chunk_x, chunk_z));
     }
 
     fn region_random(&mut self) -> Option<&mut XoroshiroRandom> {
@@ -1587,12 +1602,17 @@ mod tests {
 
     #[test]
     fn region_world_routes_reads_writes_and_heightmaps() {
-        let chunks = vec![flat_stone_chunk_at(0, 0), flat_stone_chunk_at(1, 0)];
+        let chunks = (0..=2).map(|x| flat_stone_chunk_at(x, 0));
         let mut world = RegionFeatureWorld::new(chunks, 0).expect("region");
         let iron = block_states().default_state("minecraft:iron_ore").unwrap();
+        assert!(world.set_block_state(40, 30, 5, iron));
+        world.start_region(42, 0, 0);
+        assert!(!world.can_write(40, 5));
+        assert!(!world.set_block_state(40, 30, 5, 0));
+        assert_eq!(world.block_state(40, 30, 5), iron);
+        assert!(world.can_write(20, 5));
         assert!(world.set_block_state(20, 30, 5, iron));
         assert_eq!(world.block_state(20, 30, 5), iron);
-        assert!(!world.set_block_state(40, 30, 5, iron));
         assert_eq!(world.heightmap(HeightmapType::OceanFloorWg, 20, 5), 64);
         assert!(world.chunk(0, 0).is_some());
         assert!(world.into_chunk(1, 0).is_some());

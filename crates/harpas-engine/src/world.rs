@@ -5923,6 +5923,9 @@ mod tests {
             game.players[0].experience.total, 2,
             "an empty click awards nothing"
         );
+        let pending = Compound::from_iter([("minecraft:removed_recipe", 3)]);
+        let mut recipes_used = pending.clone();
+        recipes_used.insert("harpas:smelting/0", 1);
         for (slot, button, mode) in [(2, 0, 0), (2, 40, 2), (2, 0, 4), (3, 0, 6)] {
             let world = game.world.as_mut().unwrap();
             let tag = world.container_tag(pos, FURNACE).unwrap();
@@ -5930,10 +5933,7 @@ mod tests {
             let mut furnace = world.furnace(pos).unwrap();
             furnace.slots[2] = output.clone();
             let mut tag = world.furnace_with_items(pos, tag, &furnace).unwrap();
-            tag.insert(
-                "RecipesUsed",
-                Compound::from_iter([("harpas:smelting/0", 1)]),
-            );
+            tag.insert("RecipesUsed", recipes_used.clone());
             world.store_container_tag(pos, tag);
             game.players[0].inventory.carried = if mode == 6 {
                 output
@@ -5942,13 +5942,22 @@ mod tests {
             };
             let total = game.players[0].experience.total;
             game.click_container(0, 1, -1, slot, button, mode, Vec::new(), None);
-            let furnace = game.world.as_ref().unwrap().furnace(pos).unwrap();
-            assert!(furnace.slots[2].is_empty());
-            assert!(!furnace.has_pending_experience());
+            let world = game.world.as_ref().unwrap();
+            assert!(world.furnace(pos).unwrap().slots[2].is_empty());
+            let tag = world.container_tag(pos, FURNACE).unwrap().unwrap();
+            assert_eq!(
+                tag.get("RecipesUsed"),
+                Some(&Nbt::Compound(pending.clone()))
+            );
             assert_eq!(game.players[0].experience.total, total + 2);
         }
-        assert!(game.world.as_ref().unwrap().furnace(pos).unwrap().slots[2].is_empty());
+        let world = game.world.as_mut().unwrap();
+        let mut tag = world.container_tag(pos, FURNACE).unwrap().unwrap().clone();
+        tag.insert("RecipesUsed", recipes_used);
+        world.store_container_tag(pos, tag);
+        let total = game.players[0].experience.total;
         assert!(game.destroy_block(0, pos));
+        assert_eq!(game.players[0].experience.total, total + 2);
         assert!(game.players[0].block_menu.is_none());
         let world = game.world.as_ref().unwrap();
         assert!(!world.active_furnaces.contains(&pos));

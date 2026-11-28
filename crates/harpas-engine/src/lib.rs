@@ -1574,13 +1574,7 @@ impl Game {
                 .recipes
                 .as_ref()
                 .map_or(0, |recipes| furnace.claim_experience(recipes, &mut random));
-            if furnace.has_pending_experience() {
-                log::warn!(
-                    "Cannot break furnace at {pos:?}: recipes for pending experience are unavailable"
-                );
-                return false;
-            }
-            Some((points, random))
+            Some((points, random, furnace.has_pending_experience()))
         } else {
             None
         };
@@ -1604,7 +1598,12 @@ impl Game {
                 return false;
             }
         }
-        if let Some((points, random)) = reward {
+        if let Some((points, random, unresolved)) = reward {
+            if unresolved {
+                log::warn!(
+                    "Removed furnace at {pos:?} with pending experience for unavailable recipes"
+                );
+            }
             self.players[index].random = random;
             self.players[index].award_furnace_experience(points);
         }
@@ -2471,30 +2470,49 @@ mod tests {
     }
 
     #[test]
-    fn starvation_death_clears_fall_distance_on_respawn() {
+    fn death_clears_fall_distance_and_only_keeps_experience_with_keep_inventory() {
         use harpas_core::nbt::Compound;
 
-        let mut game = game();
-        let _received = join(&mut game, 1, "Hungry", 2);
-        game.connections();
-        let player = &mut game.players[0];
-        player.player.profile.game_mode = GameMode::Survival;
-        player.fall_distance = 8.0;
-        player.vitals.health = 1.0;
-        player.vitals.food = 0;
-        player.vitals.saturation = 0.0;
-        player.vitals.food_timer = 79;
         let level = Compound::from_iter([(
             "difficulty_settings",
             Compound::from_iter([("difficulty", "hard")]),
         )]);
-        game.tick_survival(survival::SurvivalRules::read(None, Some(&level)));
-        assert!(game.players[0].is_dead());
+        for keep_inventory in [false, true] {
+            let mut game = game();
+            let received = join(&mut game, 1, "Hungry", 2);
+            game.connections();
+            let player = &mut game.players[0];
+            player.player.profile.game_mode = GameMode::Survival;
+            player.fall_distance = 8.0;
+            player.vitals.health = 1.0;
+            player.vitals.food = 0;
+            player.vitals.saturation = 0.0;
+            player.vitals.food_timer = 79;
+            player.experience.add(12);
+            let experience = if keep_inventory {
+                player.experience
+            } else {
+                Default::default()
+            };
 
-        input(&mut game, 1, Input::Respawn);
-        game.connections();
-        assert_eq!(game.players[0].vitals.health, 20.0);
-        assert_eq!(game.players[0].fall_distance, 0.0);
+            let rules =
+                Compound::from_iter([("minecraft:keep_inventory", i8::from(keep_inventory))]);
+            game.tick_survival(survival::SurvivalRules::read(Some(&rules), Some(&level)));
+            assert!(game.players[0].is_dead());
+            assert_eq!(game.players[0].experience, experience);
+            received.try_iter().for_each(drop);
+
+            input(&mut game, 1, Input::Respawn);
+            game.connections();
+            assert_eq!(game.players[0].vitals.health, 20.0);
+            assert_eq!(game.players[0].fall_distance, 0.0);
+            assert_eq!(game.players[0].experience, experience);
+            assert!(
+                received
+                    .try_iter()
+                    .any(|output| output == experience.update())
+            );
+        }
     }
 
     #[test]

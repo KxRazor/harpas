@@ -1401,6 +1401,7 @@ impl Game {
         let mut drops = transient;
         if !rules.keep_inventory {
             drops.extend(std::mem::take(&mut player.inventory).slots);
+            player.experience = Default::default();
         }
         player.pending_map_chest = None;
         let Position { x, y, z, .. } = player.player.position;
@@ -1477,6 +1478,7 @@ impl Game {
             death_location: player.death_location,
         });
         player.send(player.vitals.update());
+        player.send(player.experience.update());
         let contents = crate::place::initial_contents(&mut player.inventory);
         player.send(contents);
         player.send(Output::SelectedHotbarSlot(player.inventory.selected as i32));

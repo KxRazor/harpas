@@ -153,11 +153,6 @@ impl PlayerInventory {
             root.insert("equipment", equipment);
         }
         root.insert("SelectedItemSlot", self.selected as i32);
-        if self.experience != Experience::default() {
-            root.insert("XpP", self.experience.progress);
-            root.insert("XpLevel", self.experience.level);
-            root.insert("XpTotal", self.experience.total);
-        }
         if let Some(mode) = self.mode {
             root.insert("playerGameType", mode.current.id());
             if let Some(previous) = mode.previous {
@@ -175,6 +170,9 @@ impl PlayerInventory {
             }
         }
         if let Some(vitals) = self.vitals {
+            root.insert("XpP", self.experience.progress);
+            root.insert("XpLevel", self.experience.level);
+            root.insert("XpTotal", self.experience.total);
             root.insert("Health", Nbt::Float(vitals.health));
             root.insert("Fire", Nbt::Short(vitals.fire_ticks));
             root.insert("AbsorptionAmount", Nbt::Float(vitals.absorption));
@@ -987,6 +985,9 @@ mod autosave_tests {
             output,
         );
         let mut root = new_player(1);
+        root.insert("XpP", Nbt::Float(0.5));
+        root.insert("XpLevel", 3);
+        root.insert("XpTotal", 30);
         let hunger = Compound::from_iter([
             ("id", Nbt::from(EffectKind::Hunger.id())),
             ("duration", Nbt::Int(15)),
@@ -1006,6 +1007,8 @@ mod autosave_tests {
         root.insert("AbsorptionAmount", Nbt::Float(2.0));
         let document = Arc::new(PlayerInventory::read(root, &ItemCodec::default()).unwrap());
         crate::Game::restore_inventory(&mut player, document);
+        assert_eq!(player.experience.level, 3);
+        player.experience = Experience::default();
         player.inventory.slots[36] = ItemStack {
             item: 1,
             count: 16,
@@ -1049,6 +1052,9 @@ mod autosave_tests {
             .flush()
             .unwrap();
         let snapshot = writes.lock().unwrap()[0].clone();
+        assert_eq!(snapshot.get("XpP"), Some(&Nbt::Float(0.0)));
+        assert_eq!(snapshot.get("XpLevel"), Some(&Nbt::Int(0)));
+        assert_eq!(snapshot.get("XpTotal"), Some(&Nbt::Int(0)));
         assert_eq!(snapshot.get("Health"), Some(&Nbt::Float(16.0)));
         assert_eq!(snapshot.get("AbsorptionAmount"), Some(&Nbt::Float(2.0)));
         let Some(Nbt::List(List::Compound(attributes))) = snapshot.get("attributes") else {

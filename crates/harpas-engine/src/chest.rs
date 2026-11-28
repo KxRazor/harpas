@@ -164,22 +164,23 @@ impl ChestLoot {
     }
 }
 
-/// An unopened chest whose loot table can roll an exploration map, with the table.
-fn map_chest<'a>(
-    pos: BlockPos,
+/// Reads the loot table and seed of an unopened chest.
+fn chest_loot_table<'a>(
     tag: &Compound,
     chests: &'a ChestLootTables,
-) -> Option<(MapChest, &'a LootTable)> {
+) -> io::Result<(&'a LootTable, i64)> {
     let Some(Nbt::String(id)) = tag.get("LootTable") else {
-        return None;
+        return Err(invalid("invalid chest loot table ID"));
     };
-    let table = chests.get(id).filter(|table| table.has_treasure_map())?;
+    let table = chests
+        .get(id)
+        .ok_or_else(|| invalid(format!("chest loot table {id} is unavailable")))?;
     let seed = match tag.get("LootTableSeed") {
         None => 0,
         Some(Nbt::Long(seed)) => *seed,
-        _ => return None,
+        _ => return Err(invalid("invalid chest loot seed")),
     };
-    Some((MapChest { pos, seed }, table))
+    Ok((table, seed))
 }
 
 impl World {
@@ -196,8 +197,7 @@ impl World {
         let Some(chests) = loot.chests.as_ref() else {
             return Ok(());
         };
-        let mut ahead = ChestLoot::default();
-        let mut searches = Vec::new();
+        let mut tables = Vec::new();
         for pos in positions {
             if self
                 .block_state(pos)
@@ -206,16 +206,29 @@ impl World {
             {
                 continue;
             }
-            let Some(tag) = self.chest_tag(pos)? else {
+            let Some(tag) = self
+                .chest_tag(pos)?
+                .filter(|tag| tag.get("LootTable").is_some())
+            else {
                 continue;
             };
-            let Some((chest, table)) = map_chest(pos, tag, chests) else {
-                continue;
-            };
+            let (table, seed) = chest_loot_table(tag, chests)?;
+            tables.push((pos, table, seed));
+        }
+        let Some(last_map) = tables
+            .iter()
+            .rposition(|(_, table, _)| table.has_treasure_map())
+        else {
+            return Ok(());
+        };
+        let mut ahead = ChestLoot::default();
+        let mut searches = Vec::new();
+        // Earlier halves can advance the same random source even if they cannot roll a map.
+        for (pos, table, seed) in tables.into_iter().take(last_map + 1) {
             let mut seeded = None;
-            let random = self.loot_random(table, chest.seed, &mut ahead, &mut seeded);
+            let random = self.loot_random(table, seed, &mut ahead, &mut seeded);
             if chests.rolls_treasure_map(table, self.block_item_codec(), random)? {
-                searches.push(chest);
+                searches.push(MapChest { pos, seed });
             }
         }
         let mut result = Ok(());
@@ -336,23 +349,13 @@ impl World {
         if spectator {
             return Err(invalid("spectators cannot open a chest with pending loot"));
         }
-        let Some(Nbt::String(id)) = tag.get("LootTable") else {
-            return Err(invalid("invalid chest loot table ID"));
-        };
         let chests = self
             .loot
             .as_ref()
             .and_then(|loot| loot.chests.as_ref())
             .ok_or_else(|| invalid("chest loot data is unavailable"))?;
-        let table = chests
-            .get(id)
-            .ok_or_else(|| invalid(format!("chest loot table {id} is unavailable")))?;
-        let seed = match tag.get("LootTableSeed") {
-            None => 0,
-            Some(Nbt::Long(seed)) => *seed,
-            _ => return Err(invalid("invalid chest loot seed")),
-        };
-        let map = map_chest(pos, tag, chests).map(|(chest, _)| chest);
+        let (table, seed) = chest_loot_table(tag, chests)?;
+        let map = table.has_treasure_map().then_some(MapChest { pos, seed });
         let treasure_map = map.and_then(|chest| self.maps.prepared(chest));
         let mut seeded = None;
         let random = self.loot_random(table, seed, loot, &mut seeded);

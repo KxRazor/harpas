@@ -6156,6 +6156,151 @@ mod tests {
     }
 
     #[test]
+    fn double_chest_searches_for_a_map_after_rolling_the_first_half() {
+        use std::io::{Cursor, Write};
+
+        use crate::chest::{CHEST, Chest};
+        use crate::inventory::CHEST_SLOTS;
+        use crate::item_data::ItemCodec;
+        use crate::loot::LootTables;
+        use zip::write::SimpleFileOptions;
+
+        struct TreasureSource(BlockPos);
+
+        impl ChunkSource for TreasureSource {
+            fn resumes(&self, _: &str) -> bool {
+                false
+            }
+
+            fn generate(
+                &self,
+                _: ChunkPos,
+                _: Option<Compound>,
+                _: &ChunkStorage,
+            ) -> io::Result<Generated> {
+                Err(io::Error::other("the test only loads saved terrain"))
+            }
+
+            fn treasure_map(
+                &self,
+                pos: BlockPos,
+                _: &ChunkStorage,
+            ) -> io::Result<Option<(crate::MapData, [i32; 2])>> {
+                assert_eq!(pos, self.0);
+                let target = [40, 50];
+                Ok(Some((
+                    crate::MapData::treasure_preview(target, |_, _| false),
+                    target,
+                )))
+            }
+
+            fn flush(&self, _: &ChunkStorage) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let folder = Folder::new();
+        let left = BlockPos { x: 8, y: -51, z: 9 };
+        let right = BlockPos { x: 9, ..left };
+        save(&folder, &[(left.chunk(), DATA_VERSION)]);
+        let mut world =
+            World::open_with_source(&folder.0, BIOMES, Arc::new(TreasureSource(left))).unwrap();
+        load_chunks(&mut world, &[left.chunk()]);
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, json) in [
+            (
+                "loot_table/chests/simple_dungeon",
+                r#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"#,
+            ),
+            (
+                "loot_table/chests/underwater_ruin_small",
+                r#"{"pools":[{"rolls":1,"entries":[
+                    {"type":"minecraft:item","name":"minecraft:map","functions":[
+                        {"function":"minecraft:exploration_map","decoration":"minecraft:red_x",
+                         "zoom":1,"skip_existing_chunks":false}]},
+                    {"type":"minecraft:empty"}]}]}"#,
+            ),
+            (
+                "tags/enchantment/on_random_loot",
+                r#"{"values":["minecraft:sharpness"]}"#,
+            ),
+            ("enchantment/sharpness", r#"{"max_level":5}"#),
+        ] {
+            zip.start_file(
+                format!("data/minecraft/{path}.json"),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(json.as_bytes()).unwrap();
+        }
+        world.set_loot_tables(Arc::new(
+            LootTables::from_zip_reader(zip.finish().unwrap()).unwrap(),
+        ));
+        let codec = Arc::new(ItemCodec::new(
+            &["minecraft:map_id", "minecraft:map_decorations"].map(str::to_owned),
+        ));
+        world.set_item_codec(Arc::clone(&codec));
+        for (pos, kind, table) in [
+            (right, "right", "chests/simple_dungeon"),
+            (left, "left", "chests/underwater_ruin_small"),
+        ] {
+            let state = block_states()
+                .state(CHEST, [("facing", "north"), ("type", kind)])
+                .unwrap()
+                .0;
+            world.set_block_state(pos, state).unwrap();
+            let mut tag = crate::container_storage::new_tag(pos, CHEST);
+            tag.insert("LootTable", table);
+            world.store_container_tag(pos, tag);
+        }
+        let chest = Chest::at(&world, left).unwrap();
+        assert!(chest.is_double());
+        // From seed zero the left table picks nothing on its own, but picks a map after the right half is filled.
+        let initial = LegacyRandom::new(0);
+        world.random = initial.clone();
+        assert!(
+            matches!(world.open_chest_menu(chest, false), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+            "opening must wait for the treasure search"
+        );
+        assert_eq!(world.random, initial);
+        assert!(chest.positions().all(|pos| {
+            world
+                .chest_tag(pos)
+                .unwrap()
+                .unwrap()
+                .get("LootTable")
+                .is_some()
+        }));
+
+        let mut menu = Vec::new();
+        wait_until(|| match world.open_chest_menu(chest, false) {
+            Ok((items, _)) => {
+                menu = items;
+                true
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => false,
+            Err(error) => panic!("{error}"),
+        });
+        assert!(
+            menu[..CHEST_SLOTS]
+                .iter()
+                .any(|item| item.name() == Some("minecraft:diamond"))
+        );
+        let map = menu[CHEST_SLOTS..]
+            .iter()
+            .find(|item| item.name() == Some("minecraft:filled_map"))
+            .expect("the left half has the exploration map");
+        assert_eq!(
+            codec.saved_component(map, "minecraft:map_id"),
+            Some(Nbt::Int(0))
+        );
+        let committed = world.random.clone();
+        assert_ne!(committed, initial);
+        assert_eq!(world.open_chest_menu(chest, false).unwrap().0, menu);
+        assert_eq!(world.random, committed);
+    }
+
+    #[test]
     fn chests_search_for_a_treasure_map_only_when_their_loot_rolls_one() {
         use std::io::{Cursor, Write};
 

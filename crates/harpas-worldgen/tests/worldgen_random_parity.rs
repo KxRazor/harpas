@@ -5,6 +5,15 @@ use harpas_core::random::{AnyRandom, LegacyRandom, RandomSource, WorldgenRandom,
 use reference::Reference;
 
 #[test]
+#[should_panic(expected = "incomplete Java probe output")]
+fn partial_probe_output_is_rejected() {
+    let directory = reference::TempDir::new();
+    let output = directory.0.join("partial.txt");
+    std::fs::write(&output, "1\n2\n# end of pro").unwrap();
+    reference::read_text(output);
+}
+
+#[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
 fn worldgen_random_bit_sampling_matches_vanilla() {
     let reference = Reference::required();
@@ -14,7 +23,7 @@ fn worldgen_random_bit_sampling_matches_vanilla() {
     )]);
     let output = reference.temp.0.join("worldgen-random.txt");
     reference.java("WorldgenRandomProbe", [output.display().to_string()]);
-    let text = std::fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut expected = text.lines().map(|line| line.parse::<i64>().unwrap());
     for legacy in [true, false] {
         for seed in [0, 42, -1, i64::MIN] {
@@ -24,12 +33,13 @@ fn worldgen_random_bit_sampling_matches_vanilla() {
                 AnyRandom::Xoroshiro(XoroshiroRandom::new(seed))
             };
             let mut random = WorldgenRandom::new(source);
+            let decoration = random.set_decoration_seed(seed, -32, 48);
             assert_eq!(
-                Some(random.set_decoration_seed(seed, -32, 48)),
+                Some(decoration),
                 expected.next(),
                 "decoration: legacy={legacy}, seed={seed}"
             );
-            random.set_feature_seed(seed, 0, 3);
+            random.set_feature_seed(decoration, 17, 3);
             for _ in 0..128 {
                 assert_eq!(Some(i64::from(random.next_int())), expected.next());
                 for bound in [1, 16, 37, 1_500_000_000] {

@@ -932,7 +932,18 @@ impl OutputReceiver {
     /// Takes the messages that are ready.
     #[cfg(test)]
     pub(crate) fn try_iter(&self) -> impl Iterator<Item = Output> + '_ {
-        std::iter::from_fn(|| self.try_recv().ok())
+        let mut disconnected = false;
+        std::iter::from_fn(move || {
+            if disconnected {
+                return None;
+            }
+            let output = self.try_recv().ok()?;
+            disconnected = matches!(
+                output,
+                Output::Disconnect(_) | Output::DisconnectTranslated { .. }
+            );
+            Some(output)
+        })
     }
 }
 

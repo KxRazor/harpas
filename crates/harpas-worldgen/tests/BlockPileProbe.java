@@ -41,7 +41,7 @@ public final class BlockPileProbe {
         for (var json : fixtures.getAsJsonArray("features"))
             features.add(ConfiguredFeature.DIRECT_CODEC.parse(ops, json).getOrThrow());
         var cases = fixtures.getAsJsonArray("cases");
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (long seed : new long[]{0, 42, -4172144997902289642L}) for (boolean legacy : new boolean[]{false, true})
                 for (int config = 0; config < features.size(); config++) for (int test = 0; test < cases.size(); test++) {
                     var fixture = cases.get(test).getAsJsonObject();

@@ -70,7 +70,7 @@ public final class FreezeTopLayerProbe {
         var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes));
         var factory = PalettedContainerFactory.create(access);
         var height = LevelHeightAccessor.create(-64, 384);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (var biome : biomes.listElements().sorted(Comparator.comparing(h -> h.key().identifier().toString())).toList())
                 for (int ground : HEIGHTS) {
                     var proto = new ProtoChunk(new ChunkPos(0, -1), UpgradeData.EMPTY, height, factory, null);
@@ -83,6 +83,16 @@ public final class FreezeTopLayerProbe {
                         if (ground >= -64) world.setBlock(new BlockPos(x, ground, z), material(index), 2);
                         if (ground >= -64 && ground < 319 && index % 7 == 0)
                             world.setBlock(new BlockPos(x, ground + 1, z), Blocks.SHORT_GRASS.defaultBlockState(), 2);
+                    }
+                    if (ground >= 62 && ground < 319) {
+                        for (int x = 15; x <= 16; x++) {
+                            var state = x == 15 ? material(16) : material(3);
+                            world.setBlock(new BlockPos(x, ground - 1, -1), Blocks.STONE.defaultBlockState(), 2);
+                            world.setBlock(new BlockPos(x, ground, -1), state, 2);
+                            world.setBlock(new BlockPos(x, ground + 1, -1), Blocks.AIR.defaultBlockState(), 2);
+                            if (world.getBlockState(new BlockPos(x, ground, -1)) != state)
+                                throw new AssertionError("snow or water fixture was not placed");
+                        }
                     }
                     var random = new WorldgenRandom(new XoroshiroRandomSource(42));
                     boolean result = Feature.FREEZE_TOP_LAYER.place(FeatureConfiguration.NONE, world, null, random, new BlockPos(15, -1000, -1));

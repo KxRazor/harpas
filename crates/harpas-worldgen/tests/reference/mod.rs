@@ -2,14 +2,45 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Take, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub struct TempDir(pub PathBuf);
+
+/// Checks the trailer without loading large parity outputs into memory.
+#[allow(dead_code)]
+pub fn open_text(path: impl AsRef<Path>) -> BufReader<Take<File>> {
+    const END: &[u8] = b"# end of probe\n";
+    let path = path.as_ref();
+    let mut file =
+        File::open(path).unwrap_or_else(|error| panic!("open {}: {error}", path.display()));
+    let length = file.metadata().unwrap().len();
+    let mut trailer = [0; END.len()];
+    assert!(
+        length >= END.len() as u64
+            && file.seek(SeekFrom::End(-(END.len() as i64))).is_ok()
+            && file.read_exact(&mut trailer).is_ok()
+            && trailer == END,
+        "incomplete Java probe output: {}",
+        path.display()
+    );
+    file.rewind().unwrap();
+    BufReader::new(file.take(length - END.len() as u64))
+}
+
+#[allow(dead_code)]
+pub fn read_text(path: impl AsRef<Path>) -> String {
+    let mut text = String::new();
+    open_text(path)
+        .read_to_string(&mut text)
+        .expect("read Java probe output");
+    text
+}
 
 /// Whether to compare a small sample instead of the full one, as pull requests do with
 /// `HARPAS_PARITY_SAMPLE=reduced`. Not every test uses it.
@@ -69,7 +100,7 @@ pub fn describe_element(element: &harpas_worldgen::PoolElementDef) -> String {
 }
 
 impl TempDir {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "harpas-worldgen-vanilla-parity-{}-{}",
@@ -126,6 +157,14 @@ impl Reference {
             .current_dir(&self.temp.0)
             .arg("-cp")
             .arg(&self.classpath);
+        for (name, source) in [
+            ("ProbeOutput.java", include_str!("ProbeOutput.java")),
+            ("ProbeTerrain.java", include_str!("ProbeTerrain.java")),
+        ] {
+            let path = self.temp.0.join(name);
+            fs::write(&path, source).unwrap_or_else(|error| panic!("write {name}: {error}"));
+            javac.arg(path);
+        }
         for (name, source) in sources {
             let path = self.temp.0.join(name);
             fs::write(&path, source).unwrap();
@@ -220,10 +259,13 @@ fn unpack_reference(jar: &Path, dir: &Path) -> (PathBuf, Vec<PathBuf>) {
 }
 
 fn run(command: &mut Command) {
-    let output = command.output().expect("run Java parity probe");
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("run {command:?}: {error}"));
     assert!(
         output.status.success(),
-        "Java parity probe failed:\n{}\n{}",
+        "Java parity command failed ({}):\n{}\n{}\n{command:?}",
+        output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -237,6 +279,7 @@ const SERVER_TIMEOUT: Duration = Duration::from_secs(300);
 pub struct Server {
     child: Child,
     lines: Receiver<String>,
+    reader: Option<JoinHandle<std::io::Result<()>>>,
     log: Vec<String>,
 }
 
@@ -253,16 +296,18 @@ impl Server {
             .expect("start the reference server");
         let stdout = child.stdout.take().unwrap();
         let (send, lines) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if send.send(line).is_err() {
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if send.send(line?).is_err() {
                     break;
                 }
             }
+            Ok(())
         });
         let mut server = Self {
             child,
             lines,
+            reader: Some(reader),
             log: Vec::new(),
         };
         server.wait_for("Done (");
@@ -310,7 +355,14 @@ impl Server {
                         return;
                     }
                 }
-                Err(_) => panic!(
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.join_reader();
+                    panic!(
+                        "reference server exited before logging {text:?}:\n{}",
+                        self.tail(50)
+                    );
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!(
                     "the reference server did not log {text:?}:\n{}",
                     self.log.join("\n")
                 ),
@@ -322,15 +374,33 @@ impl Server {
     pub fn stop(mut self) -> String {
         self.command("stop");
         let deadline = Instant::now() + SERVER_TIMEOUT;
-        while self.child.try_wait().unwrap().is_none() {
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("wait for reference server") {
+                break status;
+            }
             assert!(
                 Instant::now() < deadline,
                 "the reference server did not stop"
             );
             std::thread::sleep(Duration::from_millis(50));
-        }
+        };
+        self.join_reader();
         self.log.extend(self.lines.try_iter());
+        assert!(
+            status.success(),
+            "reference server exited with {status}:\n{}",
+            self.tail(50)
+        );
         self.log.join("\n")
+    }
+
+    fn join_reader(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            reader
+                .join()
+                .expect("reference console reader panicked")
+                .expect("read reference console");
+        }
     }
 }
 
@@ -338,6 +408,9 @@ impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if !std::thread::panicking() {
+            self.join_reader();
+        }
     }
 }
 

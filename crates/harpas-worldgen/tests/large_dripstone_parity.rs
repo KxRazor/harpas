@@ -6,8 +6,8 @@ use std::fs;
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::{
-    FeatureCompiler, FeatureWorld, GeneratedChunk, HeightmapType, RegionFeatureWorld, WorldgenData,
-    place_feature,
+    BlockGetter, FeatureCompiler, FeatureWorld, GeneratedChunk, HeightmapType, RegionFeatureWorld,
+    WorldgenData, place_feature,
 };
 use serde_json::{Value, json};
 
@@ -129,7 +129,7 @@ fn prepare(test: usize) -> RegionFeatureWorld {
                 for x in 0..16 {
                     for py in (floor(test) - 12).max(-64)..=(ceiling(test) + 12).min(319) {
                         let state = initial(test, cx * 16 + x as i32, py, cz * 16 + z as i32);
-                        if !block_states().is_air(state) {
+                        if state != 0 {
                             chunk.set_block_state(x, py, z, state);
                         }
                     }
@@ -183,6 +183,9 @@ fn compare<R: RandomSource>(
     test: usize,
 ) -> usize {
     let mut world = prepare(test);
+    if test == 18 {
+        assert_eq!(world.block_state(15, y(test), -1), state("cave_air"));
+    }
     let mut random = WorldgenRandom::new(source);
     let placed = place_feature(&mut world, feature, &mut random, [15, y(test), -1]);
     assert_eq!(
@@ -323,7 +326,7 @@ fn large_dripstone_matches_vanilla() {
                 .join(","),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     for radius in [1, 2, 4, 19, 60] {
         for scale in [0.0, 0.4, 1.0, 2.0, 20.0] {

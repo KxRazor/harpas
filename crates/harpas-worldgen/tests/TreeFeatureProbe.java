@@ -92,8 +92,7 @@ public final class TreeFeatureProbe {
         }
         var configured = lookup.lookupOrThrow(Registries.CONFIGURED_FEATURE);
 
-        var discard = new DataOutputStream(OutputStream.nullOutputStream());
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (int argument = 5; argument < args.length; argument++) {
                 var coordinates = args[argument].split(",");
                 int cx = Integer.parseInt(coordinates[0]), cz = Integer.parseInt(coordinates[1]);
@@ -104,7 +103,7 @@ public final class TreeFeatureProbe {
                         var proto = new ProtoChunk(at, UpgradeData.EMPTY, height, factory, null);
                         var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, proto, seed);
                         var manager = new StructureManager(region, new WorldOptions(seed, false, false), null);
-                        ChunkParityProbe.writeChunk(discard, seed, biomes, factory, generator, random, region, manager, proto);
+                        ChunkParityProbe.generateCarved(seed, factory, generator, random, region, manager, proto);
                         proto.setPersistedStatus(ChunkStatus.CARVERS);
                         chunks.put(key(at.x(), at.z()), proto);
                     }

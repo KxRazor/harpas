@@ -169,11 +169,12 @@ fn reference_order(positions: impl IntoIterator<Item = (i32, i32)>) -> Vec<(i32,
 fn clipped_bounds(piece: &StructurePiece, chunk: &GeneratedChunk) -> Option<BoundingBox> {
     let b = piece.bounding_box;
     let (cx, cz) = (chunk.chunk_x() * 16, chunk.chunk_z() * 16);
+    let writable_min_y = chunk.min_y() + 1;
     if !matches!(
         piece.kind.as_str(),
         "minecraft:msroom" | "minecraft:mscrossing" | "minecraft:msstairs" | "minecraft:mscorridor"
     ) || !b.intersects_columns(cx, cz, cx + 15, cz + 15)
-        || b.max[1] < chunk.min_y()
+        || b.max[1] < writable_min_y
         || b.min[1] >= chunk.min_y() + chunk.height()
     {
         return None;
@@ -181,7 +182,7 @@ fn clipped_bounds(piece: &StructurePiece, chunk: &GeneratedChunk) -> Option<Boun
     Some(BoundingBox {
         min: [
             (b.min[0] - 1).max(cx),
-            (b.min[1] - 1).max(chunk.min_y()),
+            (b.min[1] - 1).max(writable_min_y),
             (b.min[2] - 1).max(cz),
         ],
         max: [
@@ -279,10 +280,8 @@ impl Mine<'_> {
         [x, b.min[1] + y, z]
     }
 
-    fn contains(&self, [x, y, z]: [i32; 3]) -> bool {
-        (x >> 4, z >> 4) == (self.chunk.chunk_x(), self.chunk.chunk_z())
-            && y >= self.chunk.min_y()
-            && y < self.chunk.min_y() + self.chunk.height()
+    fn contains(&self, pos: [i32; 3]) -> bool {
+        super::in_writable_area(self.chunk, pos)
     }
 
     fn read(&self, pos: [i32; 3]) -> u32 {

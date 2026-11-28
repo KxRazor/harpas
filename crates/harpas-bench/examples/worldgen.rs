@@ -27,9 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("usage: worldgen <vanilla data pack>".into());
     };
     let data = Arc::new(WorldgenData::from_zip_path(std::path::Path::new(&pack))?);
-    let templates = Arc::new(StructureTemplates::from_zip_path(std::path::Path::new(
-        &pack,
-    ))?);
+    let templates = Arc::new(StructureTemplates::default());
     let generator = harpas_engine::worldgen::overworld_generator(
         SEED,
         data,

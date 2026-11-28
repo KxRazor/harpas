@@ -1,5 +1,5 @@
 // Test driver: decodes shipped recipes with vanilla's codecs, matches and assembles them on a 3x3 input,
-// then calls the real CraftingMenu.quickMoveStack. The isolated player records drops and has no server,
+// then dispatches a real quick-move click. The isolated player records drops and has no server,
 // network, statistics or recipe book. Results are installed explicitly because ContainerLevelAccess.NULL
 // does not run the live level's recipe lookup; matching, assembly, slot movement and consumption are vanilla's.
 import java.io.*;
@@ -106,7 +106,7 @@ public final class CraftingTableProbe {
             }
             var result = new JsonObject();
             result.add("before", snapshot(menu));
-            menu.quickMoveStack(player, test.get("move").getAsInt());
+            menu.clicked(test.get("move").getAsInt(), 0, ContainerInput.QUICK_MOVE, player);
             result.add("after", snapshot(menu));
             var drops = new JsonArray();
             for (var dropped : player.drops) drops.add(describe(dropped));

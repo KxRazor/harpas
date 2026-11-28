@@ -482,7 +482,7 @@ fn overworld_biome_parameters_match_vanilla() {
     )]);
     let output = reference.temp.0.join("parameters.txt");
     reference.java("BiomeParameterProbe", [output.display().to_string()]);
-    let vanilla = std::fs::read_to_string(&output).unwrap();
+    let vanilla = reference::read_text(&output);
     let harpas: Vec<_> = overworld_biome_parameters()
         .into_iter()
         .map(|(point, biome)| {

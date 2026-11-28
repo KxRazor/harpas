@@ -38,7 +38,7 @@ public final class StructurePlacementProbe {
         var sets = state.possibleStructureSets().stream()
             .sorted(Comparator.comparing(set -> set.unwrapKey().orElseThrow().identifier().toString())).toList();
 
-        try (var out = new PrintWriter(args[0])) {
+        try (var out = new ProbeOutput(args[0])) {
             for (var set : sets) {
                 var name = set.unwrapKey().orElseThrow().identifier();
                 out.println("set " + name);

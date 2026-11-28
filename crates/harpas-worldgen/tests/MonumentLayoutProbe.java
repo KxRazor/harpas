@@ -33,7 +33,7 @@ public final class MonumentLayoutProbe {
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
-        try (var out = new PrintWriter(args[1])) {
+        try (var out = new ProbeOutput(args[1])) {
             for (String line : Files.readAllLines(Path.of(args[0]))) {
                 String[] words = line.split(" ");
                 int mode = Integer.parseInt(words[0]);

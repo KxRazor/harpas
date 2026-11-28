@@ -2,8 +2,7 @@
 
 mod reference;
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 
 use harpas_core::random::LegacyRandom;
 use harpas_worldgen::{JointType, Rotation, StructureTemplates, WorldgenData};
@@ -87,8 +86,6 @@ fn templates_and_pools_match_vanilla() {
         expected.push(format!("shuffled {}", shuffled.join(" | ")));
     }
 
-    let id_file = reference.temp.0.join("template-ids.txt");
-    std::fs::write(&id_file, ids.join("\n") + "\n").unwrap();
     reference.compile(&[
         (
             "StructurePlacementProbe.java",
@@ -99,9 +96,12 @@ fn templates_and_pools_match_vanilla() {
     let output = reference.temp.0.join("templates.txt");
     reference.java(
         "TemplateProbe",
-        [output.display().to_string(), id_file.display().to_string()],
+        [
+            output.display().to_string(),
+            reference.server_jar.display().to_string(),
+        ],
     );
-    let vanilla: Vec<_> = BufReader::new(File::open(&output).unwrap())
+    let vanilla: Vec<_> = reference::open_text(&output)
         .lines()
         .map(Result::unwrap)
         .collect();

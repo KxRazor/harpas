@@ -310,7 +310,7 @@ fn geodes_match_vanilla() {
             input.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut compiler = FeatureCompiler::new(&data);
     let mut coverage = Coverage::default();

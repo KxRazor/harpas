@@ -1,0 +1,1 @@
+- Keep vanilla's bottom block layer intact when placing mineshafts, pyramids, temples, huts and strongholds.

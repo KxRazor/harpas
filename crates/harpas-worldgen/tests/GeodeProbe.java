@@ -61,7 +61,7 @@ public final class GeodeProbe {
         var ops = RegistryOps.create(com.mojang.serialization.JsonOps.INSTANCE, lookup);
         for (var entry : JsonParser.parseString(Files.readString(Path.of(args[3]))).getAsJsonObject().entrySet())
             features.put(entry.getKey(), ConfiguredFeature.DIRECT_CODEC.parse(ops, entry.getValue()).getOrThrow());
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (String s : args[2].split(",")) for (boolean legacy : new boolean[]{false, true})
                 for (var entry : features.entrySet()) for (int test = 0; test < 16; test++) {
                     long seed = Long.parseLong(s);

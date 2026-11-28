@@ -2,8 +2,7 @@
 
 mod reference;
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::Path;
 
 use harpas_worldgen::{NoiseBasedChunkGenerator, StructureState, WorldgenData};
@@ -43,7 +42,7 @@ fn compare_seed(data: &WorldgenData, seed: i64, output: &Path) -> usize {
     let generator = NoiseBasedChunkGenerator::overworld(seed, data).expect("compile generator");
     let state = StructureState::new(seed, data, &generator).expect("structure state");
     let mut compared = 0;
-    let mut lines = BufReader::new(File::open(output).unwrap()).lines();
+    let mut lines = reference::open_text(output).lines();
     let mut check = |expected: String| {
         let vanilla = lines.next().expect("missing Java result").unwrap();
         assert_eq!(vanilla, expected, "structure placement for seed {seed}");

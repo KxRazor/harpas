@@ -204,9 +204,12 @@ fn jigsaw_chunks_match_vanilla() {
             ],
         );
         let bytes = fs::read(output).unwrap();
-        let (_, Nbt::Compound(results)) = Nbt::read_named(&mut bytes.as_slice()).unwrap() else {
+        let mut payload = bytes.as_slice();
+        let (_, Nbt::Compound(results)) = Nbt::read_named(&mut payload).unwrap() else {
             panic!("output compound")
         };
+        assert!(payload.is_empty(), "trailing jigsaw output for {name}");
+        assert_eq!(results.len(), targets.len(), "jigsaw case count for {name}");
 
         let mut normalize = Compound::new();
         let mut pending = Vec::new();
@@ -303,6 +306,7 @@ fn jigsaw_chunks_match_vanilla() {
             let before = blocks(&carved[&(x, z)]);
             placing += usize::from(*expected != before);
             let actual = blocks(&chunk);
+            assert_eq!(expected.len(), actual.len(), "{label}: block count");
             let differing: Vec<usize> = (0..expected.len())
                 .filter(|&i| expected[i] != actual[i])
                 .collect();

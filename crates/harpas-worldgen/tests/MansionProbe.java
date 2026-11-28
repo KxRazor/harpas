@@ -101,15 +101,16 @@ public final class MansionProbe {
                 proto.setBlockState(pos.set(cx * 16 + x, y, cz * 16 + z), Block.stateById(blocks[((y + 64) * 16 + z) * 16 + x]), 0);
             proto.setPersistedStatus(ChunkStatus.CARVERS);
             Heightmap.primeHeightmaps(proto, EnumSet.allOf(Heightmap.Types.class));
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             int[] surrounding = input.getIntArray("surrounding").orElseThrow();
             var ring = new HashMap<BlockPos, net.minecraft.world.level.block.state.BlockState>();
             var ringWrites = new CompoundTag();
             var farWrites = new CompoundTag();
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(MansionProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, arguments);
                     case "registryAccess" -> registries;
                     case "getLevel" -> mobLevel;
                     case "environmentAttributes" -> net.minecraft.world.attribute.EnvironmentAttributeReader.EMPTY;
@@ -123,7 +124,12 @@ public final class MansionProbe {
                     case "getBrightness" -> arguments[0] == net.minecraft.world.level.LightLayer.SKY ? 15 : 0;
                     case "getMinY" -> -64;
                     case "getMaxY" -> 319;
-                    case "getHeight" -> arguments == null ? 384 : null;
+                    case "getHeight" -> arguments == null ? proto.getHeight() : ProbeTerrain.height((WorldGenLevel) proxy,
+                        (Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]);
+                    case "getHeightmapPos" -> {
+                        var at = (BlockPos) arguments[1];
+                        yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
+                    }
                     case "getSeed" -> seed;
                     case "getBlockState" -> {
                         var at = (BlockPos) arguments[0];
@@ -134,20 +140,19 @@ public final class MansionProbe {
                         if (x < 0 || x >= 18 || z < 0 || z >= 18) throw new AssertionError("read outside provided terrain in " + name + ": " + at);
                         yield Block.stateById(surrounding[((at.getY() + 64) * 18 + z) * 18 + x]);
                     }
+                    case "ensureCanWrite" -> ProbeTerrain.canWrite(chunkPos, (BlockPos) arguments[0]);
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
+                        if (!ProbeTerrain.canWrite(chunkPos, at)) yield false;
                         var state = (net.minecraft.world.level.block.state.BlockState) arguments[1];
                         if (at.getY() < -64 || at.getY() >= 320) yield false;
                         if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) {
                             int x = at.getX() - cx * 16, z = at.getZ() - cz * 16;
                             String key = at.getX() + "," + at.getY() + "," + at.getZ();
-                            if (x >= -1 && x <= 16 && z >= -1 && z <= 16) {
-                                ring.put(at, state);
-                                ringWrites.putInt(key, Block.getId(state));
-                                yield true;
-                            }
-                            farWrites.putInt(key, Block.getId(state));
-                            yield false;
+                            ring.put(at, state);
+                            var writes = x >= -1 && x <= 16 && z >= -1 && z <= 16 ? ringWrites : farWrites;
+                            writes.putInt(key, Block.getId(state));
+                            yield true;
                         }
                         var before = proto.getBlockState(at);
                         proto.setBlockState(at, state, 0);
@@ -159,16 +164,17 @@ public final class MansionProbe {
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
             var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("start"), seed);
-            if (start == null) throw new AssertionError("failed to load the start of " + name);
+            if (start == null || !start.isValid()) throw new AssertionError("failed to load the start of " + name);
             var random = new WorldgenRandom(new XoroshiroRandomSource(0));
             long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
             random.setFeatureSeed(decoration, index, step.ordinal());
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            start.placeInChunk(world, null, null, random, bounds, chunkPos);
+            var bounds = ProbeTerrain.writableArea(proto);
+            if (ProbeTerrain.intersectsChunk(start, chunkPos))
+                start.placeInChunk(world, null, null, random, bounds, chunkPos);
             var result = new CompoundTag();
             int[] after = new int[384 * 256];
             for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
-                after[((y + 64) * 16 + z) * 16 + x] = Block.getId(proto.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
+                after[((y + 64) * 16 + z) * 16 + x] = Block.getId(ProbeTerrain.paletteState(proto, pos.set(cx * 16 + x, y, cz * 16 + z)));
             result.putIntArray("blocks", after);
             var tags = new ListTag();
             entities.values().stream().sorted(Comparator.comparingLong(be -> be.getBlockPos().asLong()))

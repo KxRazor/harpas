@@ -2,12 +2,10 @@
 //! vanilla's `BlockState.rotate` and `BlockState.mirror`.
 mod reference;
 
-use std::collections::BTreeMap;
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_worldgen::{Mirror, Rotation};
 use reference::Reference;
+use std::collections::BTreeMap;
 
 #[test]
 #[ignore = "needs Mojang's server: docs/parity.md#locally"]
@@ -19,7 +17,7 @@ fn every_block_state_turns_and_reflects_as_in_vanilla() {
     )]);
     let output = reference.temp.0.join("block-transform.txt");
     reference.java("BlockTransformProbe", [output.display().to_string()]);
-    let text = fs::read_to_string(&output).expect("read the vanilla block transforms");
+    let text = reference::read_text(&output);
 
     let states = block_states();
     let describe = |id: u32| format!("{:?}", states.properties(id).expect("a state"));

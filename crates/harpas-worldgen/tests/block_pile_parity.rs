@@ -259,7 +259,7 @@ fn block_piles_match_vanilla() {
             fixtures.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut compiler = FeatureCompiler::new(&data);
     let mut changed = 0;

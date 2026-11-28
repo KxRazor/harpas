@@ -317,7 +317,7 @@ fn compare(pack: &Path, world: &Path, observed: &Value) {
     let saved = saved_furnace(&region);
     let progress = saved.properties[2] as usize;
     assert!((80..200).contains(&progress));
-    saved.compare(&cooking[progress]);
+    saved.compare(&observed["saved_cooking"][progress]);
     {
         let engine = Engine::start(world, &recipes);
         let session = engine.menu();

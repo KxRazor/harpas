@@ -88,6 +88,21 @@ public final class ChestLootProbe {
         }
     }
 
+    static void resetCase(ProbeLevel level, java.lang.reflect.Field random) throws Exception {
+        level.latestMap = null;
+        level.mapData = null;
+        level.drops = new ArrayList<>();
+        level.server.sequences = new RandomSequences();
+        random.set(level, RandomSource.create(0));
+    }
+
+    static void captureMap(CompoundTag tag, String key, ProbeLevel level,
+            com.mojang.serialization.DynamicOps<net.minecraft.nbt.Tag> ops) {
+        if (level.mapData != null) {
+            tag.put(key, MapItemSavedData.type(level.latestMap).codec().encodeStart(ops, level.mapData).getOrThrow());
+        }
+    }
+
     // Calls the vanilla random-spread search and provides vanilla-generated structure starts on demand.
     static final class MapSearch extends StructureManager {
         final ChunkGenerator generator;
@@ -174,7 +189,6 @@ public final class ChestLootProbe {
                 level.rules = new GameRules(FeatureFlags.VANILLA_SET);
                 var randomField = Level.class.getDeclaredField("random");
                 randomField.setAccessible(true);
-                randomField.set(level, RandomSource.create(0));
                 var lookup = level.server.registries.lookup();
                 for (var pending : BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(lookup)) pending.apply();
                 var componentNames = BuiltInRegistries.DATA_COMPONENT_TYPE.keySet().stream()
@@ -209,27 +223,26 @@ public final class ChestLootProbe {
                     level.search = new MapSearch(level.access);
                 }
                 for (int i = 6; i < args.length; i++) {
-                    // Only seeds that roll the map create map data.
-                    level.latestMap = null;
-                    level.mapData = null;
+                    resetCase(level, randomField);
                     var chest = ChestProbe.make(ChestProbe.SINGLE, ChestType.SINGLE, "Loot Chest", lookup);
                     chest.setLevel(level);
                     chest.setLootTable(table, Long.parseLong(args[i]));
                     var pending = chest.saveWithFullMetadata(lookup);
                     tags.add(pending);
-                    level.server.sequences = new RandomSequences();
                     chest.unpackLootTable(null);
                     tags.add(chest.saveWithFullMetadata(lookup));
+                    var removal = new CompoundTag();
+                    captureMap(removal, "OpenMapData", level, ops);
+                    removal.putLong("OpenRandomTail", level.getRandom().nextLong());
 
-                    level.server.sequences = new RandomSequences();
+                    resetCase(level, randomField);
                     var unopened = ChestProbe.load(chest.getBlockPos(), ChestType.SINGLE, pending, lookup);
                     unopened.setLevel(level);
-                    level.drops = new ArrayList<>();
                     unopened.preRemoveSideEffects(unopened.getBlockPos(), unopened.getBlockState());
                     var drops = new ListTag();
                     for (var drop : level.drops) drops.add(ItemStack.CODEC.encodeStart(ops, drop).getOrThrow());
-                    var removal = new CompoundTag();
                     removal.put("Drops", drops);
+                    removal.putLong("BreakRandomTail", level.getRandom().nextLong());
                     var stewBytes = new CompoundTag();
                     var type = DataComponents.SUSPICIOUS_STEW_EFFECTS;
                     for (int slot = 0; slot < chest.getContainerSize(); slot++) {
@@ -244,10 +257,7 @@ public final class ChestLootProbe {
                         }
                     }
                     removal.put("StewBytes", stewBytes);
-                    if (level.mapData != null) {
-                        removal.put("MapData", MapItemSavedData.type(level.latestMap).codec()
-                            .encodeStart(ops, level.mapData).getOrThrow());
-                    }
+                    captureMap(removal, "BreakMapData", level, ops);
                     tags.add(removal);
                 }
                 try (var out = new java.io.DataOutputStream(Files.newOutputStream(Path.of(args[0])))) {

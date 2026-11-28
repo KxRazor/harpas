@@ -153,13 +153,10 @@ impl Hut<'_> {
 
     fn block(&mut self, pos: [i32; 3], state: u32) {
         let [x, y, z] = self.position(pos);
-        if (x >> 4, z >> 4) == (self.chunk.chunk_x(), self.chunk.chunk_z()) {
+        if super::in_writable_area(self.chunk, [x, y, z]) {
             self.chunk
                 .set_block_state((x & 15) as usize, y, (z & 15) as usize, state);
-            if y >= self.chunk.min_y()
-                && y < self.chunk.min_y() + self.chunk.height()
-                && block_states().properties(state).unwrap().0 == "minecraft:oak_fence"
-            {
+            if block_states().properties(state).unwrap().0 == "minecraft:oak_fence" {
                 self.chunk
                     .mark_fluid_postprocessing((x & 15) as u8, y, (z & 15) as u8);
             }

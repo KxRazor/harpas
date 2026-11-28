@@ -70,7 +70,7 @@ public final class DesertWellFeatureProbe {
         var factory = PalettedContainerFactory.create(access);
         var height = LevelHeightAccessor.create(-64, 384);
         var feature = new ConfiguredFeature<>(Feature.DESERT_WELL, FeatureConfiguration.NONE);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (long seed : new long[] {0, 1, 3, 42, -4172144997902289642L}) for (boolean legacy : new boolean[] {false, true}) {
                 for (int test = 0; test < 32; test++) {
                     int y = y(test);

@@ -4,7 +4,6 @@
 // Arguments: <output> <seed>...
 // Writes, for each seed, the cells of the base grid, the third floor's grid and each floor's rooms, column by
 // column, then the next value of the random the layout drew from.
-import java.io.PrintWriter;
 import java.lang.reflect.Field;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
@@ -30,7 +29,7 @@ public final class MansionLayoutProbe {
             "net.minecraft.world.level.levelgen.structure.structures.WoodlandMansionPieces$MansionGrid");
         var constructor = type.getDeclaredConstructor(RandomSource.class);
         constructor.setAccessible(true);
-        try (var out = new PrintWriter(args[0])) {
+        try (var out = new ProbeOutput(args[0])) {
             for (int index = 1; index < args.length; index++) {
                 var random = RandomSource.create(Long.parseLong(args[index]));
                 var layout = constructor.newInstance(random);

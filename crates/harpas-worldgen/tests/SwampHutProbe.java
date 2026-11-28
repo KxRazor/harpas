@@ -27,9 +27,6 @@ public final class SwampHutProbe {
         var registries = server.registries();
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var hut = structures.getValue(net.minecraft.resources.Identifier.parse("swamp_hut"));
-        var step = hut.step();
-        var inStep = structures.stream().filter(s -> s.step() == step).toList();
-        int index = inStep.indexOf(hut);
 
         var context = new StructurePieceSerializationContext(server.resources(), registries, null);
         var cases = NbtIo.read(Path.of(args[0]));
@@ -52,20 +49,22 @@ public final class SwampHutProbe {
                 var list = (ListTag) initialPost.get(section);
                 for (var value : list) proto.addPackedPostProcess(new it.unimi.dsi.fastutil.shorts.ShortArrayList(new short[]{((ShortTag) value).shortValue()}), section);
             }
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(SwampHutProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
-                    case "getHeight" -> proto.getHeight((Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]) + 1;
+                    case "getHeight" -> arguments == null ? proto.getHeight() : ProbeTerrain.targetHeight(proto,
+                        (Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]);
                     case "getHeightmapPos" -> {
                         var at = (BlockPos) arguments[1];
-                        yield new BlockPos(at.getX(), proto.getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()) + 1, at.getZ());
+                        yield new BlockPos(at.getX(), ProbeTerrain.targetHeight(proto, (Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
-                    case "getFluidState" -> proto.getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getFluidState" -> ProbeTerrain.targetState(proto, (BlockPos) arguments[0]).getFluidState();
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, arguments);
                     case "scheduleTick" -> null;
                     case "getMinY" -> -64;
-                    case "getBlockState" -> proto.getBlockState((BlockPos) arguments[0]);
+                    case "getBlockState" -> ProbeTerrain.targetState(proto, (BlockPos) arguments[0]);
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
                         if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) throw new AssertionError("write outside target chunk");
@@ -81,25 +80,14 @@ public final class SwampHutProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
-                if (start.getStructure() != hut) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, index, step.ordinal());
-                placeBlocks(start, context, world, random, bounds, chunkPos);
-            }
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == hut).toList(), seed, chunkPos,
+                (start, random) -> placeBlocks(start, context, world, random, bounds, chunkPos));
             var result = snapshot(proto, starts, entities, context, registries).copy();
-            var post = new ListTag();
-            for (var section : proto.getPostProcessing()) {
-                var entries = new ListTag();
-                if (section != null) for (short value : section) entries.add(ShortTag.valueOf(value));
-                post.add(entries);
-            }
-            result.put("PostProcessing", post);
+            result.put("PostProcessing", ProbeTerrain.postProcessing(proto));
             // A carvers chunk will run FEATURES again in vanilla. Reload the saved records before doing so.
             var restored = result.getCompoundOrEmpty("starts");
             starts.clear();
@@ -107,19 +95,26 @@ public final class SwampHutProbe {
             for (String id : restored.keySet()) {
                 var start = StructureStart.loadStaticStart(context, restored.getCompoundOrEmpty(id), seed);
                 starts.add(start);
-                if (start.getStructure() != hut) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, index, step.ordinal());
-                placeBlocks(start, context, world, random, bounds, chunkPos);
             }
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == hut).toList(), seed, chunkPos,
+                (start, random) -> placeBlocks(start, context, world, random, bounds, chunkPos));
             var resumed = snapshot(proto, starts, entities, context, registries);
-            var comparable = result.copy();
-            comparable.remove("PostProcessing");
-            // Fixtures also compare a second Harpas placement. HPos < 0 intentionally repeats the height
-            // adjustment, as vanilla does; normal-height worker chunks must resume unchanged.
-            var expectedResume = input.contains("resumed") ? input.getCompoundOrEmpty("resumed") : comparable;
-            if (!expectedResume.equals(resumed)) throw new AssertionError("resumption differs for " + name);
+            resumed.put("PostProcessing", ProbeTerrain.postProcessing(proto));
+            // A saved, height-aligned hut repeats its fence marks without moving blocks.
+            var expectedResume = input.contains("resumed") ? input.getCompoundOrEmpty("resumed") : result.copy();
+            if (!input.contains("resumed")) {
+                var marks = expectedResume.getListOrEmpty("PostProcessing");
+                for (int section = 0; section < marks.size(); section++) {
+                    var entries = (ListTag) marks.get(section);
+                    int firstNew = section < initialPost.size() ? ((ListTag) initialPost.get(section)).size() : 0;
+                    for (int i = firstNew, end = entries.size(); i < end; i++) entries.add(entries.get(i));
+                }
+            }
+            if (!expectedResume.equals(resumed)) {
+                var fields = expectedResume.keySet().stream()
+                    .filter(key -> !java.util.Objects.equals(expectedResume.get(key), resumed.get(key))).toList();
+                throw new AssertionError("resumption differs for " + name + ": " + fields);
+            }
             results.put(name, result);
         }
         NbtIo.write(results, Path.of(args[1]));
@@ -129,12 +124,7 @@ public final class SwampHutProbe {
 
     static CompoundTag snapshot(ProtoChunk proto, List<StructureStart> starts, Map<BlockPos, BlockEntity> entities,
             StructurePieceSerializationContext context, net.minecraft.core.RegistryAccess registries) {
-        var result = BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
-        var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(),
-            start.createTag(context, start.getChunkPos()));
-        result.put("starts", saved);
-        return result;
+        return BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
     }
 
     // Suppress entity spawning only while observing blocks, then restore the original flags. Harpas leaves

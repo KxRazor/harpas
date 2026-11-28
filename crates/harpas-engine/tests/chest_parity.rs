@@ -365,18 +365,30 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
     let enchantments = reference.temp.0.join("enchantments.txt");
     let potions = reference.temp.0.join("potions.txt");
     let effects = reference.temp.0.join("effects.txt");
-    reference.java(
-        "ChestLootProbe",
-        [&tags, &components, &enchantments]
-            .map(|path| path.display().to_string())
-            .into_iter()
-            .chain([table.to_owned()])
-            .chain([&potions, &effects].map(|path| path.display().to_string()))
-            .chain(seeds.iter().map(i64::to_string)),
-    );
+    let run = |output: &Path, seeds: &[i64]| {
+        reference.java(
+            "ChestLootProbe",
+            [output, &components, &enchantments]
+                .map(|path| path.display().to_string())
+                .into_iter()
+                .chain([table.to_owned()])
+                .chain([&potions, &effects].map(|path| path.display().to_string()))
+                .chain(seeds.iter().map(i64::to_string)),
+        );
+    };
+    run(&tags, seeds);
     let tags = read_tags(&tags);
     let (cases, _) = tags.as_chunks::<3>();
     assert_eq!(tags.len(), seeds.len() * 3);
+    if seeds.len() > 1 {
+        let isolated = reference.temp.0.join("isolated-loot.nbt");
+        run(&isolated, &seeds[seeds.len() - 1..]);
+        assert_eq!(
+            read_tags(&isolated),
+            tags[tags.len() - 3..],
+            "isolated and batched loot"
+        );
+    }
     let names = fs::read_to_string(components).unwrap();
     let enchantments = fs::read_to_string(enchantments).unwrap();
     let potions = fs::read_to_string(potions).unwrap();
@@ -435,15 +447,19 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
         let Some(Nbt::List(List::Compound(items))) = expected.get("Items") else {
             panic!("expected loot for seed {seed}");
         };
-        let expected_map = match removal.get("MapData") {
+        let map_data = |key| match removal.get(key) {
             Some(Nbt::Compound(map)) => Some(map),
             None => None,
             _ => panic!("invalid vanilla map data"),
         };
+        let expected_map = map_data("OpenMapData");
+        let broken_map = map_data("BreakMapData");
         if table == "shipwreck_map" {
             assert!(expected_map.is_some(), "seed {seed} must find a treasure");
+            assert!(broken_map.is_some(), "seed {seed} must drop a treasure map");
         } else if map_source.is_none() {
             assert!(expected_map.is_none());
+            assert!(broken_map.is_none());
         }
         let mut slots = vec![ItemStack::empty(); 27];
         for tag in items {
@@ -562,6 +578,16 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
         let Some(Nbt::List(List::Compound(drops))) = removal.get("Drops") else {
             panic!("expected drops for seed {seed}");
         };
+        let (Some(Nbt::Long(open_tail)), Some(Nbt::Long(break_tail))) = (
+            removal.get("OpenRandomTail"),
+            removal.get("BreakRandomTail"),
+        ) else {
+            panic!("missing level RNG snapshots for seed {seed}");
+        };
+        assert_ne!(
+            open_tail, break_tail,
+            "breaking scatters the loot for seed {seed}"
+        );
         let mut drops: Vec<_> = drops.iter().map(|tag| codec.read(tag).unwrap()).collect();
         let mode = if seed == 0 {
             drops.push(
@@ -607,16 +633,27 @@ fn check_chest_loot(table: &str, seeds: &[i64], required_items: &[&str]) {
             &session,
             |output| matches!(output, Output::SectionBlocks(blocks) if blocks.iter().any(|&(p, state)| p == pos && block_states().is_air(state))),
         );
-        for expected in drops {
+        let mut drops = drops.into_iter();
+        while let Some(mut expected) = drops.next() {
             let Output::SpawnItem { stack, .. } = receive(&session, |output| {
                 matches!(output, Output::SpawnItem { .. })
             }) else {
                 unreachable!()
             };
+            // Vanilla scatters a slot in random portions; Harpas drops it as one stack.
+            while expected.count < stack.count {
+                let portion = drops.next().expect("missing Vanilla drop portion");
+                assert_eq!(expected.item, portion.item, "drop item for seed {seed}");
+                assert_eq!(
+                    expected.components, portion.components,
+                    "drop components for seed {seed}"
+                );
+                expected.count += portion.count;
+            }
             assert_eq!(stack, expected, "dropped stack for seed {seed}");
         }
         drop(engine);
-        check_map_file(&world, expected_map);
+        check_map_file(&world, broken_map);
         assert!(
             !std::iter::from_fn(|| session.try_recv())
                 .any(|output| matches!(output, Output::SpawnItem { .. }))

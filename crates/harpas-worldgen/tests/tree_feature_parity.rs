@@ -5,18 +5,16 @@
 //! created there.
 mod reference;
 
-use harpas_worldgen::BlockGetter;
-use std::collections::BTreeSet;
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::nbt::Nbt;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::BlockGetter;
 use harpas_worldgen::{
     FeatureCompiler, FeatureWorld, NoiseBasedChunkGenerator, RegionFeatureWorld, WorldgenData,
     place_feature,
 };
 use reference::Reference;
+use std::collections::BTreeSet;
 
 const SEED: i64 = -4_172_144_997_902_289_642;
 /// The configured features compared, cycled through in each chunk: huge brown and red mushrooms around the first
@@ -190,7 +188,7 @@ fn trees_match_vanilla() {
     ];
     args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
     reference.java("TreeFeatureProbe", args);
-    let text = fs::read_to_string(&output).expect("read the vanilla tree output");
+    let text = reference::read_text(&output);
 
     let mut compiler = FeatureCompiler::new(&data);
     let features: Vec<_> = FEATURES

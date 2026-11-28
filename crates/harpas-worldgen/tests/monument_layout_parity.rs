@@ -3,7 +3,7 @@
 mod reference;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 
 use harpas_core::random::{LegacyRandom, RandomSource};
 use harpas_worldgen::{
@@ -130,7 +130,7 @@ fn monument_layouts_match_vanilla() {
         "MonumentLayoutProbe",
         [inputs.display().to_string(), output.display().to_string()],
     );
-    let mut actual = BufReader::new(fs::File::open(output).unwrap()).lines();
+    let mut actual = reference::open_text(output).lines();
     for case in cases.lines() {
         let numbers: Vec<i64> = case
             .split_whitespace()

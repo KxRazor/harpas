@@ -63,11 +63,12 @@ public final class WorldgenReferenceProbe {
         @Override public net.minecraft.world.level.biome.BiomeManager getBiomeManager() { return biomes; }
         @Override public net.minecraft.world.level.ChunkPos getCenter() { return center; }
         @Override public boolean isOldChunkAround(net.minecraft.world.level.ChunkPos pos, int radius) { return false; }
-        @Override public boolean ensureCanWrite(net.minecraft.core.BlockPos pos) { return true; }
+        @Override public boolean ensureCanWrite(net.minecraft.core.BlockPos pos) { return ProbeTerrain.canWrite(center, pos); }
         // The Overworld's sea level, which WorldGenRegion asks the level for and BlueIceFeature reads.
         @Override public int getSeaLevel() { return 63; }
         // WorldGenRegion.setBlock without the level's points of interest, which a test region has no level for.
         @Override public boolean setBlock(net.minecraft.core.BlockPos pos, BlockState state, int flags, int recursion) {
+            if (!ensureCanWrite(pos) || height.isOutsideBuildHeight(pos)) return false;
             var chunk = getChunk(pos.getX() >> 4, pos.getZ() >> 4);
             var old = chunk.setBlockState(pos, state, flags);
             if (state.hasBlockEntity()) {
@@ -108,6 +109,7 @@ public final class WorldgenReferenceProbe {
         @Override public net.minecraft.world.level.chunk.ChunkAccess getChunk(int x, int z) { return getChunk(x,z,null,false); }
         @Override public net.minecraft.world.level.chunk.ChunkAccess getChunk(int x, int z,
                 net.minecraft.world.level.chunk.status.ChunkStatus status, boolean required) {
+            if (!ProbeTerrain.canRead(center, x, z)) throw new AssertionError("read outside generation region: " + x + "," + z + " from " + center);
             long key = ((long)x << 32) ^ (z & 0xffffffffL);
             return chunks.computeIfAbsent(key, ignored -> new net.minecraft.world.level.chunk.ProtoChunk(
                 new net.minecraft.world.level.ChunkPos(x,z), net.minecraft.world.level.chunk.UpgradeData.EMPTY,
@@ -338,7 +340,7 @@ public final class WorldgenReferenceProbe {
             net.minecraft.world.level.levelgen.carver.WorldCarver.CarveSkipChecker.class);
         ellipsoidMethod.setAccessible(true);
 
-        try (PrintWriter out = new PrintWriter(args[0])) {
+        try (PrintWriter out = new ProbeOutput(args[0])) {
             var carvers = lookup.lookupOrThrow(net.minecraft.core.registries.Registries.CONFIGURED_CARVER)
                 .listElements().sorted(java.util.Comparator.comparing(h -> h.key().identifier().toString())).toList();
             for (var holder : carvers) {

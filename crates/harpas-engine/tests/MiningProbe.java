@@ -87,11 +87,13 @@ public final class MiningProbe {
                         example.addProperty("maximum", tool.getMaxDamage());
                         tool.mineBlock(miner.level, state, BlockPos.ZERO, miner);
                         example.addProperty("damage", tool.getDamageValue());
-                        if (tool.getDamageValue() > 0) {
-                            tool.setDamageValue(tool.getMaxDamage() - 1);
-                            tool.mineBlock(miner.level, state, BlockPos.ZERO, miner);
-                        }
+                        tool.setDamageValue(tool.getMaxDamage() - 2);
+                        tool.mineBlock(miner.level, state, BlockPos.ZERO, miner);
+                        if (tool.isEmpty()) throw new AssertionError("tool broke below its limit");
+                        example.addProperty("near_limit_damage", tool.getDamageValue());
+                        tool.mineBlock(miner.level, state, BlockPos.ZERO, miner);
                         example.addProperty("broken", tool.isEmpty());
+                        example.addProperty("limit_damage", tool.isEmpty() ? 0 : tool.getDamageValue());
                         cases.add(example);
                     }
                 }

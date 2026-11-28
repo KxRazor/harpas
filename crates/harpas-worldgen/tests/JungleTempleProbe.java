@@ -27,10 +27,6 @@ public final class JungleTempleProbe {
         var registries = server.registries();
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var temple = structures.getValue(net.minecraft.resources.Identifier.parse("jungle_pyramid"));
-        var step = temple.step();
-        var inStep = structures.stream().filter(s -> s.step() == step).toList();
-        int index = inStep.indexOf(temple);
-        if (index != 4 || step.ordinal() != 4) throw new AssertionError("26.1 temple seed order");
 
         var context = new StructurePieceSerializationContext(server.resources(), registries, null);
         var cases = NbtIo.read(Path.of(args[0]));
@@ -53,7 +49,7 @@ public final class JungleTempleProbe {
                 var list = (ListTag) initialPost.get(section);
                 for (var value : list) proto.addPackedPostProcess(new it.unimi.dsi.fastutil.shorts.ShortArrayList(new short[]{((ShortTag) value).shortValue()}), section);
             }
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             for (var value : input.getListOrEmpty("initial_entities")) {
                 var entity = (CompoundTag) value;
                 var at = new BlockPos(entity.getIntOr("x", 0), entity.getIntOr("y", 0), entity.getIntOr("z", 0));
@@ -63,15 +59,17 @@ public final class JungleTempleProbe {
             }
             int[] surrounding = input.getIntArray("surrounding").orElseThrow();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(JungleTempleProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
-                    case "getHeight" -> proto.getHeight((Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]) + 1;
+                    case "getHeight" -> arguments == null ? proto.getHeight() : ProbeTerrain.height((WorldGenLevel) proxy,
+                        (Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]);
                     case "getHeightmapPos" -> {
                         var at = (BlockPos) arguments[1];
-                        yield new BlockPos(at.getX(), proto.getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()) + 1, at.getZ());
+                        yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
-                    case "getFluidState" -> proto.getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, arguments);
                     case "scheduleTick" -> null;
                     case "getMinY" -> -64;
                     case "getMaxY" -> 319;
@@ -81,7 +79,7 @@ public final class JungleTempleProbe {
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
                         int x = at.getX() - cx * 16 + 1, z = at.getZ() - cz * 16 + 1;
                         if (x < 0 || x >= 18 || z < 0 || z >= 18) throw new AssertionError("read outside supplied neighborhood");
-                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.AIR.defaultBlockState()
+                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.VOID_AIR.defaultBlockState()
                             : Block.stateById(surrounding[((at.getY() + 64) * 18 + z) * 18 + x]);
                     }
                     case "setBlock" -> {
@@ -102,31 +100,19 @@ public final class JungleTempleProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
-                if (start.getStructure() != temple) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, index, step.ordinal());
-                placeBlocks(start, context, world, random, bounds, chunkPos);
-            }
-            var result = snapshot(proto, starts, entities, context, registries).copy();
-            var post = new ListTag();
-            for (var section : proto.getPostProcessing()) {
-                var entries = new ListTag();
-                if (section != null) for (short value : section) entries.add(ShortTag.valueOf(value));
-                post.add(entries);
-            }
-            result.put("PostProcessing", post);
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == temple).toList(), seed, chunkPos,
+                (start, random) -> placeBlocks(start, context, world, random, bounds, chunkPos));
+            var persisted = starts.stream().filter(start -> input.getBooleanOr("keep_neighbor_starts", true)
+                || start.getChunkPos().equals(chunkPos)).toList();
+            var result = snapshot(proto, persisted, entities, context, registries);
+            result.put("PostProcessing", ProbeTerrain.postProcessing(proto));
             var saved = result.getCompoundOrEmpty("starts");
-            for (var start : starts) {
+            for (var start : persisted) {
                 var id = structures.getKey(start.getStructure()).toString();
-                if (!input.getBooleanOr("keep_neighbor_starts", true) && !start.getChunkPos().equals(chunkPos)) {
-                    saved.remove(id); continue;
-                }
                 if (input.getBooleanOr("defer_containers", false) && start.getStructure() == temple) {
                     var original = input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id).getListOrEmpty("Children");
                     var children = saved.getCompoundOrEmpty(id).getListOrEmpty("Children");
@@ -145,12 +131,7 @@ public final class JungleTempleProbe {
 
     static CompoundTag snapshot(ProtoChunk proto, List<StructureStart> starts, Map<BlockPos, BlockEntity> entities,
             StructurePieceSerializationContext context, net.minecraft.core.RegistryAccess registries) {
-        var result = BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
-        var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(),
-            start.createTag(context, start.getChunkPos()));
-        result.put("starts", saved);
-        return result;
+        return BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
     }
 
     static void placeBlocks(StructureStart start, StructurePieceSerializationContext context, WorldGenLevel world,

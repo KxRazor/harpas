@@ -386,7 +386,7 @@ fn lush_vegetation_matches_vanilla() {
             configs.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut placed = 0;
     for &seed in seeds {

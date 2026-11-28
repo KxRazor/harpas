@@ -2,8 +2,6 @@
 //! The blocks the stage places are compared by `feature_blocks_parity`.
 mod reference;
 
-use std::fs;
-
 use harpas_worldgen::{FeatureIndex, WorldgenData};
 use reference::Reference;
 
@@ -21,7 +19,7 @@ fn feature_stage_matches_vanilla() {
     let names: Vec<_> = data.placed_features.keys().collect();
     let output = reference.temp.0.join("features.txt");
     reference.java("FeatureStageProbe", [output.display().to_string()]);
-    let text = fs::read_to_string(&output).expect("read the vanilla feature order");
+    let text = reference::read_text(&output);
     let mut step = 0;
     for line in text.lines() {
         let expected: Vec<_> = line

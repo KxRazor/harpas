@@ -68,10 +68,7 @@ impl StructureStart {
             };
             for &pos in positions {
                 let [x, y, z] = position(piece, pos);
-                if (x >> 4, z >> 4) != (chunk.chunk_x(), chunk.chunk_z())
-                    || y < chunk.min_y()
-                    || y >= chunk.min_y() + chunk.height()
-                {
+                if !super::in_writable_area(chunk, [x, y, z]) {
                     continue;
                 }
                 for [dx, dz] in [[0, -1], [1, 0], [0, 1], [-1, 0]] {
@@ -105,10 +102,8 @@ impl Room<'_> {
         position(self.piece, [x, y, z])
     }
 
-    fn contains(&self, [x, y, z]: [i32; 3]) -> bool {
-        (x >> 4, z >> 4) == (self.chunk.chunk_x(), self.chunk.chunk_z())
-            && y >= self.chunk.min_y()
-            && y < self.chunk.min_y() + self.chunk.height()
+    fn contains(&self, pos: [i32; 3]) -> bool {
+        super::in_writable_area(self.chunk, pos)
     }
 
     fn read(&self, pos: [i32; 3]) -> u32 {

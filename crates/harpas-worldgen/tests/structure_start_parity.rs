@@ -3,8 +3,7 @@
 mod reference;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::Path;
 
 use harpas_core::nbt::{Compound, Nbt};
@@ -303,7 +302,7 @@ fn sample_saved(
 }
 
 fn read_lines(path: &Path) -> Vec<String> {
-    BufReader::new(File::open(path).unwrap())
+    reference::open_text(path)
         .lines()
         .map(Result::unwrap)
         .collect()

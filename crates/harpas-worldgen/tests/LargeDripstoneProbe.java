@@ -62,7 +62,7 @@ public final class LargeDripstoneProbe {
         var factory = PalettedContainerFactory.create(access);
         var height = LevelHeightAccessor.create(-64, 384);
         var configs = JsonParser.parseString(Files.readString(Path.of(args[2]))).getAsJsonArray();
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             // Compare the profile before its integer truncation too, independently of terrain and randomness.
             var profile = DripstoneUtils.class.getDeclaredMethod("getDripstoneHeight", double.class, double.class, double.class, double.class);
             profile.setAccessible(true);
@@ -79,7 +79,7 @@ public final class LargeDripstoneProbe {
                         for (int z = cz * 16; z < cz * 16 + 16; z++) for (int x = cx * 16; x < cx * 16 + 16; x++)
                             for (int y = Math.max(-64, floor(test) - 12); y <= Math.min(319, ceiling(test) + 12); y++) {
                                 var state = initial(test, x, y, z);
-                                if (!state.isAir()) chunk.setBlockState(new BlockPos(x, y, z), state, 0);
+                                if (state != Blocks.AIR.defaultBlockState()) chunk.setBlockState(new BlockPos(x, y, z), state, 0);
                             }
                         Heightmap.primeHeightmaps(chunk, EnumSet.allOf(Heightmap.Types.class));
                         chunk.setPersistedStatus(ChunkStatus.CARVERS);
@@ -89,6 +89,11 @@ public final class LargeDripstoneProbe {
                         if (method.getName().equals("setBlock")) writes.add(((BlockPos)a[0]).immutable());
                         return method.invoke(region, a);
                     });
+                    if (test == 18) {
+                        var origin = new BlockPos(15, y(test), -1);
+                        if (!ProbeTerrain.paletteState(region.getChunk(origin), origin).is(Blocks.CAVE_AIR))
+                            throw new AssertionError("expected stored cave air at " + origin);
+                    }
                     var random = new WorldgenRandom(legacy ? new LegacyRandomSource(seed) : new XoroshiroRandomSource(seed));
                     var cfg = LargeDripstoneConfiguration.CODEC.parse(com.mojang.serialization.JsonOps.INSTANCE, configs.get(config)).getOrThrow();
                     boolean placed = Feature.LARGE_DRIPSTONE.place(cfg, world, null, random, new BlockPos(15, y(test), -1));

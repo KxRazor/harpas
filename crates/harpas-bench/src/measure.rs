@@ -8,25 +8,25 @@ const BATCH_TIME: Duration = Duration::from_millis(60);
 
 /// Median time of one call to `f`, in nanoseconds.
 pub fn time(mut f: impl FnMut()) -> f64 {
-    // Warm up, and find how many calls fill a batch.
-    let start = Instant::now();
-    let mut calls = 0u64;
-    while start.elapsed() < BATCH_TIME {
-        f();
-        calls += 1;
+    // Calibrate with the same batches that will be measured.
+    let mut calls = 1u64;
+    while batch(&mut f, calls) < BATCH_TIME {
+        calls = calls.checked_mul(2).expect("benchmark batch size");
     }
     let mut samples: Vec<f64> = (0..BATCHES)
-        .map(|_| {
-            let start = Instant::now();
-            for _ in 0..calls {
-                f();
-            }
-            start.elapsed().as_nanos() as f64 / calls as f64
-        })
+        .map(|_| batch(&mut f, calls).as_nanos() as f64 / calls as f64)
         .collect();
     samples.sort_by(f64::total_cmp);
     black_box(&samples);
     samples[BATCHES / 2]
+}
+
+fn batch(f: &mut impl FnMut(), calls: u64) -> Duration {
+    let start = Instant::now();
+    for _ in 0..calls {
+        f();
+    }
+    start.elapsed()
 }
 
 /// Formats nanoseconds as microseconds with one decimal.

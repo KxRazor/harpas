@@ -155,9 +155,16 @@ fn mansion_blocks_match_vanilla() {
         ],
     );
     let bytes = std::fs::read(output_path).unwrap();
-    let (_, Nbt::Compound(actual)) = Nbt::read_named(&mut bytes.as_slice()).unwrap() else {
+    let mut payload = bytes.as_slice();
+    let (_, Nbt::Compound(actual)) = Nbt::read_named(&mut payload).unwrap() else {
         panic!("output")
     };
+    assert!(payload.is_empty(), "trailing mansion output");
+    assert_eq!(
+        actual.len(),
+        expected.len() + 2,
+        "mansion cases and seed metadata"
+    );
     let int = |tag: &Compound, key: &str| match tag.get(key) {
         Some(Nbt::Int(value)) => *value,
         _ => panic!("missing {key}"),
@@ -209,6 +216,7 @@ fn mansion_blocks_match_vanilla() {
             panic!("blocks")
         };
         let got = blocks(world.chunk(cx, cz).unwrap());
+        assert_eq!(want.len(), got.len(), "{name}: block count");
         let mut diffs = Vec::new();
         for (i, (&a, &b)) in want.iter().zip(&got).enumerate() {
             if a != b {

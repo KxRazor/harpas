@@ -2,7 +2,6 @@
 mod reference;
 
 use harpas_worldgen::BlockGetter;
-use std::fs;
 use std::sync::Arc;
 
 use harpas_core::block::block_states;
@@ -87,7 +86,7 @@ fn region(scenario: usize) -> RegionFeatureWorld {
                 for lx in 0..16 {
                     for y in -64..320 {
                         let block = terrain(scenario, cx * 16 + lx as i32, y, cz * 16 + lz as i32);
-                        if !block_states().is_air(block) {
+                        if block != 0 {
                             chunk.set_block_state(lx, y, lz, block);
                         }
                     }
@@ -110,6 +109,13 @@ fn compare<R: RandomSource>(
     origin: [i32; 3],
 ) -> bool {
     let mut world = region(scenario);
+    if matches!(scenario, 2 | 5) {
+        assert_eq!(
+            world.block_state(3, 40, 1),
+            state(if scenario == 2 { "cave_air" } else { "lava" }),
+            "{label}: terrain"
+        );
+    }
     let mut random = WorldgenRandom::new(source);
     let placed = place_feature(&mut world, feature, &mut random, origin);
     assert_eq!(
@@ -160,7 +166,7 @@ fn fossils_match_vanilla() {
     ]);
     let output = reference.temp.0.join("fossils.txt");
     reference.java("FossilFeatureProbe", [output.display().to_string()]);
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut compiler = FeatureCompiler::with_templates(&data, templates);
     let (mut cases, mut placed) = (0, 0);

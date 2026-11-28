@@ -103,7 +103,7 @@ fn placement_modifiers_match_vanilla() {
         ];
         args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
         reference.java("PlacementProbe", args);
-        let text = fs::read_to_string(&output).expect("read the vanilla placement output");
+        let text = reference::read_text(&output);
 
         let mut expected: BTreeMap<(i32, i32), FeaturePositions> = BTreeMap::new();
         let mut current = None;

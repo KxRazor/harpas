@@ -13,7 +13,8 @@
 use std::sync::Arc;
 
 use crate::furnace::{FUEL, INPUT, RESULT as SMELTED};
-use crate::inventory::{Inventory, ItemStack, MenuKind};
+use crate::inventory::{Inventory, ItemStack, MenuKind, OFF_HAND};
+use crate::item_data::ItemCodec;
 use crate::recipe::{Recipes, remainder};
 
 /// The result slot of the inventory menu.
@@ -31,9 +32,10 @@ pub(crate) struct QuickCraft {
     slots: Vec<usize>,
 }
 
-/// What a click needs from the world: the recipes and whether the player is in Creative.
+/// What a click needs from the world and whether the player is in Creative.
 pub(crate) struct Context<'a> {
     pub(crate) recipes: Option<&'a Recipes>,
+    pub(crate) codec: &'a ItemCodec,
     pub(crate) creative: bool,
 }
 
@@ -79,6 +81,16 @@ fn with_count(stack: &ItemStack, count: i32) -> ItemStack {
 impl Inventory {
     fn is_crafting_result(&self, slot: usize) -> bool {
         matches!(self.kind, MenuKind::Player | MenuKind::CraftingTable) && slot == RESULT
+    }
+
+    fn may_pickup(&self, slot: usize, context: &Context<'_>) -> bool {
+        context.creative
+            || self.kind != MenuKind::Player
+            || !ARMOR.contains(&slot)
+            || context
+                .codec
+                .enchantment_level(&self.slots[slot], "minecraft:binding_curse")
+                == 0
     }
 
     /// `Slot.mayPlace`.
@@ -165,7 +177,7 @@ impl Inventory {
         drops: &mut Vec<ItemStack>,
     ) -> Option<ItemStack> {
         let held = self.slots[slot].clone();
-        if held.is_empty() {
+        if held.is_empty() || !self.may_pickup(slot, context) {
             return None;
         }
         if self.is_crafting_result(slot) {
@@ -307,11 +319,14 @@ impl Inventory {
         drops: &mut Vec<ItemStack>,
     ) -> ItemStack {
         let mut stack = self.slots[index].clone();
-        if stack.is_empty() {
+        if stack.is_empty() || !self.may_pickup(index, context) {
             return ItemStack::empty();
         }
         let original = stack.clone();
         let armor = armor_slot(&original).filter(|&slot| self.slots[slot].is_empty());
+        let off_hand = self.kind == MenuKind::Player
+            && original.name() == Some("minecraft:shield")
+            && self.slots[OFF_HAND].is_empty();
         let kind = self.kind;
         let player = kind.player_slots();
         let mut move_to =
@@ -355,6 +370,7 @@ impl Inventory {
                     let a = armor.expect("an armor slot");
                     move_to(a, a + 1, false)
                 }
+                _ if off_hand => move_to(OFF_HAND, OFF_HAND + 1, false),
                 9..=35 => move_to(36, 45, false),
                 36..=44 => move_to(9, 36, false),
                 _ => move_to(9, 45, false),
@@ -452,6 +468,9 @@ impl Inventory {
             2 if (0..9).contains(&button) || button == 40 => {
                 let Some(index) = index else { return drops };
                 let other = self.storage_slot(button as usize);
+                if index == other || !self.may_pickup(index, context) {
+                    return drops;
+                }
                 let theirs = self.slots[other].clone();
                 let ours = self.slots[index].clone();
                 if theirs.is_empty() && ours.is_empty() {
@@ -588,7 +607,9 @@ impl Inventory {
             if same_item_same_components(&held, &carried) {
                 let n = if primary { carried.count } else { 1 };
                 self.carried = self.safe_insert(index, carried, n, context);
-            } else if carried.count <= self.slot_max(index, &carried) {
+            } else if self.may_pickup(index, context)
+                && carried.count <= self.slot_max(index, &carried)
+            {
                 self.carried = held;
                 self.set(index, carried);
             }
@@ -665,6 +686,9 @@ impl Inventory {
                             _ => max_stack(&source),
                         };
                         let placed = (share + held).min(cap);
+                        if placed < held {
+                            continue;
+                        }
                         remaining -= placed - held;
                         self.set(slot, with_count(&source, placed));
                     }
@@ -749,6 +773,7 @@ mod tests {
     fn clicks_pick_up_split_put_down_and_swap() {
         let context = Context {
             recipes: None,
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut inventory = Inventory::default();
@@ -779,9 +804,50 @@ mod tests {
     }
 
     #[test]
+    fn binding_curse_blocks_all_ways_to_take_armor_and_shields_shift_to_offhand() {
+        use harpas_core::nbt::{Compound, Nbt};
+
+        let codec = ItemCodec::new(&["minecraft:enchantments".into()])
+            .with_enchantments(&["minecraft:binding_curse"]);
+        let mut context = Context {
+            recipes: None,
+            codec: &codec,
+            creative: false,
+        };
+        let mut cursed = stack("minecraft:iron_helmet", 1);
+        codec
+            .set_saved_component(
+                &mut cursed,
+                "minecraft:enchantments",
+                &Nbt::Compound(Compound::from_iter([("minecraft:binding_curse", 1)])),
+            )
+            .unwrap();
+        let mut menu = Inventory::default();
+        menu.slots[5] = cursed.clone();
+        for mode in [0, 1, 2, 4] {
+            let drops = menu.click(5, 0, mode, &context);
+            assert!(drops.iter().all(ItemStack::is_empty));
+            assert_eq!(menu.slots[5], cursed);
+        }
+        menu.carried = stack("minecraft:diamond_helmet", 1);
+        menu.click(5, 0, 0, &context);
+        assert_eq!(menu.slots[5], cursed);
+        menu.carried = ItemStack::empty();
+        context.creative = true;
+        menu.click(5, 40, 2, &context);
+        assert_eq!(menu.slots[OFF_HAND], cursed);
+        menu.slots[OFF_HAND] = ItemStack::empty();
+        let shield = stack("minecraft:shield", 1);
+        menu.slots[9] = shield.clone();
+        menu.click(9, 0, 1, &context);
+        assert_eq!(menu.slots[OFF_HAND], shield);
+    }
+
+    #[test]
     fn swapping_fuel_drops_the_displaced_remainder_after_a_partial_insert() {
         let context = Context {
             recipes: None,
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut inventory = Inventory {
@@ -807,6 +873,7 @@ mod tests {
     fn dragging_shares_the_stack_among_the_slots() {
         let context = Context {
             recipes: None,
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut inventory = Inventory {
@@ -831,6 +898,7 @@ mod tests {
         let recipes = recipes();
         let context = Context {
             recipes: Some(&recipes),
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut inventory = Inventory {
@@ -882,6 +950,7 @@ mod tests {
         let recipes = Recipes::from_json(&HashMap::new(), recipes.iter());
         let context = Context {
             recipes: Some(&recipes),
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut menu = table();
@@ -908,6 +977,7 @@ mod tests {
     fn table_clicks_map_hotbar_and_offhand_and_do_not_expose_the_hidden_slot() {
         let context = Context {
             recipes: None,
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut menu = table();
@@ -942,6 +1012,7 @@ mod tests {
         let recipes = Recipes::from_json(&HashMap::new(), recipes.iter());
         let context = Context {
             recipes: Some(&recipes),
+            codec: ItemCodec::fallback(),
             creative: false,
         };
         let mut menu = table();

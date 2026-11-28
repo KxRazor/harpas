@@ -469,13 +469,23 @@ impl World {
             } else if new != fluid {
                 fluid = new;
                 state = new.legacy_block();
-                self.set_block(pos, state, neighbor::UPDATE_ALL, neighbor::UPDATE_LIMIT);
-                if let Some(kind) = new.kind() {
-                    self.schedule_fluid_tick(pos, kind, delay);
+                if !matches!(
+                    self.set_block_with_fluid_delay(
+                        pos,
+                        state,
+                        neighbor::UPDATE_ALL,
+                        neighbor::UPDATE_LIMIT,
+                        Some(delay)
+                    ),
+                    Ok(true)
+                ) {
+                    return;
                 }
             }
         }
-        self.spread(family, pos, state, fluid);
+        if self.block_state(pos) == Some(state) {
+            self.spread(family, pos, state, fluid);
+        }
     }
 
     /// `getSpreadDelay`: lava rising from flowing to flowing waits four times longer three times out of four.
@@ -548,9 +558,11 @@ impl World {
             return;
         }
         let below_pos = step(pos, Direction::Down);
-        let below = self.state_at(below_pos);
-        let below_fluid = FluidState::of(below);
-        if self.can_maybe_pass_through(family, Direction::Down, state, below, below_fluid) {
+        let below = self.block_state(below_pos);
+        if let Some(below) = below
+            && let below_fluid = FluidState::of(below)
+            && self.can_maybe_pass_through(family, Direction::Down, state, below, below_fluid)
+        {
             let new = self.new_liquid(family, below_pos, below);
             if self.can_be_replaced_with(below_pos, below_fluid, new.kind(), Direction::Down)
                 && can_hold_specific_fluid(below, new.kind())
@@ -562,7 +574,8 @@ impl World {
                 return;
             }
         }
-        if fluid.is_source() || !self.is_water_hole(family, state, below) {
+        if fluid.is_source() || !below.is_some_and(|below| self.is_water_hole(family, state, below))
+        {
             self.spread_to_sides(family, pos, fluid, state);
         }
     }
@@ -628,26 +641,36 @@ impl World {
         if amount <= 0 {
             return;
         }
-        for (direction, new) in self.spread_directions(family, pos, state) {
+        for direction in self.spread_directions(family, pos, state) {
+            if self.block_state(pos) != Some(state) {
+                break;
+            }
             let target = step(pos, direction);
-            let target_state = self.state_at(target);
-            self.spread_to(family, target, target_state, direction, new);
+            let Some(target_state) = self.block_state(target) else {
+                continue;
+            };
+            let existing = FluidState::of(target_state);
+            if self.can_maybe_pass_through(family, direction, state, target_state, existing) {
+                let new = self.new_liquid(family, target, target_state);
+                if can_hold_specific_fluid(target_state, new.kind())
+                    && self.can_be_replaced_with(target, existing, new.kind(), direction)
+                {
+                    self.spread_to(family, target, target_state, direction, new);
+                }
+            }
         }
     }
 
     /// `FlowingFluid.getSpread`: the sides nearest a hole within the slope distance, in `Direction` order, each
     /// with the fluid it would take.
-    fn spread_directions(
-        &self,
-        family: Family,
-        pos: BlockPos,
-        state: u32,
-    ) -> Vec<(Direction, FluidState)> {
+    fn spread_directions(&self, family: Family, pos: BlockPos, state: u32) -> Vec<Direction> {
         let mut best = 1000;
-        let mut found: Vec<(Direction, FluidState)> = Vec::new();
+        let mut found = Vec::new();
         for direction in HORIZONTAL {
             let neighbor_pos = step(pos, direction);
-            let neighbor = self.state_at(neighbor_pos);
+            let Some(neighbor) = self.block_state(neighbor_pos) else {
+                continue;
+            };
             let neighbor_fluid = FluidState::of(neighbor);
             if !self.can_maybe_pass_through(family, direction, state, neighbor, neighbor_fluid) {
                 continue;
@@ -666,24 +689,20 @@ impl World {
             }
             if distance <= best {
                 if self.can_be_replaced_with(neighbor_pos, neighbor_fluid, new.kind(), direction) {
-                    found.retain(|(d, _)| *d != direction);
-                    found.push((direction, new));
+                    found.push(direction);
                 }
                 best = distance;
             }
         }
         // An `EnumMap` iterates in `Direction` order: north, south, west, east.
-        found.sort_by_key(|(direction, _)| Direction::ALL.iter().position(|d| d == direction));
+        found.sort_by_key(|direction| Direction::ALL.iter().position(|d| d == direction));
         found
     }
 
     /// `SpreadContext.isHole`.
     fn is_hole(&self, family: Family, pos: BlockPos) -> bool {
-        self.is_water_hole(
-            family,
-            self.state_at(pos),
-            self.state_at(step(pos, Direction::Down)),
-        )
+        self.block_state(step(pos, Direction::Down))
+            .is_some_and(|below| self.is_water_hole(family, self.state_at(pos), below))
     }
 
     /// `FlowingFluid.getSlopeDistance`.
@@ -701,7 +720,9 @@ impl World {
                 continue;
             }
             let neighbor_pos = step(pos, direction);
-            let neighbor = self.state_at(neighbor_pos);
+            let Some(neighbor) = self.block_state(neighbor_pos) else {
+                continue;
+            };
             let neighbor_fluid = FluidState::of(neighbor);
             if self.can_maybe_pass_through(family, direction, state, neighbor, neighbor_fluid)
                 && can_hold_specific_fluid(neighbor, Some(family.flowing()))
@@ -810,7 +831,7 @@ impl World {
 
     /// A liquid block placed, or whose neighbor changed, schedules its fluid's tick (`LiquidBlock.onPlace` and
     /// `neighborChanged`).
-    pub(crate) fn liquid_changed(&mut self, pos: BlockPos, state: u32) {
+    pub(crate) fn liquid_changed(&mut self, pos: BlockPos, state: u32, delay: Option<i32>) {
         if !matches!(
             block_states().name(state),
             Some("minecraft:water" | "minecraft:lava")
@@ -820,7 +841,7 @@ impl World {
         if self.should_spread_liquid(pos, state)
             && let Some(kind) = FluidState::of(state).kind()
         {
-            self.schedule_fluid_tick(pos, kind, kind.tick_delay());
+            self.schedule_fluid_tick(pos, kind, delay.unwrap_or_else(|| kind.tick_delay()));
         }
     }
 

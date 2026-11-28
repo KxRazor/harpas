@@ -205,6 +205,10 @@ pub(crate) fn receive(
                                 .map_err(io::Error::other)?;
                             continue;
                         }
+                        play::PlayerActionStatus::SwapItemInHand => {
+                            session.send(Input::SwapHands).map_err(io::Error::other)?;
+                            continue;
+                        }
                         _ => continue,
                     };
                     Input::Dig {
@@ -664,6 +668,16 @@ pub(crate) fn send(
                 health,
                 food,
                 saturation,
+            }
+            .into(),
+            Output::Experience {
+                progress,
+                level,
+                total,
+            } => clientbound::SetExperience {
+                progress,
+                level,
+                total_experience: total,
             }
             .into(),
             Output::Absorption { entity_id, amount } => clientbound::SetEntityMetadata {

@@ -937,6 +937,18 @@ impl TickWork for Game {
                             }
                             continue;
                         }
+                        player::Input::SwapHands => {
+                            if let Some(index) = self.active(entity_id)
+                                && self.players[index].player.profile.game_mode
+                                    != player::GameMode::Spectator
+                            {
+                                let inventory = &mut self.players[index].inventory;
+                                let selected = inventory.hand_slot(false);
+                                inventory.slots.swap(selected, inventory::OFF_HAND);
+                                self.stop_using_item(index);
+                            }
+                            continue;
+                        }
                         player::Input::Sprinting(sprinting) => {
                             if let Some(index) = self.active(entity_id) {
                                 self.players[index].sprinting = sprinting;
@@ -1007,6 +1019,7 @@ impl TickWork for Game {
                             | player::Input::StopUsingItem
                             | player::Input::UseItemOn { .. }
                             | player::Input::DropSelected { .. }
+                            | player::Input::SwapHands
                             | player::Input::ClickContainer { .. }
                             | player::Input::CloseContainer(_) => {
                                 unreachable!()
@@ -1169,6 +1182,9 @@ impl Game {
                 flying: player.flying,
             });
             player.send(player.vitals.update());
+            if player.experience != player::Experience::default() {
+                player.send(player.experience.update());
+            }
             for (kind, effect_id) in player::EffectKind::ALL.into_iter().zip(effect_ids) {
                 if player.effects[kind as usize].is_some() {
                     player.send_effect(kind, effect_id, false);
@@ -1545,6 +1561,23 @@ impl Game {
             world.block_changed(pos);
             return false;
         }
+        let reward = if harpas_core::block::block_states().name(state) == Some(furnace::FURNACE) {
+            let mut furnace = match world.furnace(pos) {
+                Ok(furnace) => furnace,
+                Err(error) => {
+                    log::warn!("Cannot load furnace at {pos:?}: {error}");
+                    return false;
+                }
+            };
+            let mut random = player.random.clone();
+            let points = world
+                .recipes
+                .as_ref()
+                .map_or(0, |recipes| furnace.claim_experience(recipes, &mut random));
+            Some((points, random, furnace.has_pending_experience()))
+        } else {
+            None
+        };
         match world.try_set_block(
             pos,
             block::removed(state),
@@ -1564,6 +1597,15 @@ impl Game {
                 }
                 return false;
             }
+        }
+        if let Some((points, random, unresolved)) = reward {
+            if unresolved {
+                log::warn!(
+                    "Removed furnace at {pos:?} with pending experience for unavailable recipes"
+                );
+            }
+            self.players[index].random = random;
+            self.players[index].award_furnace_experience(points);
         }
         // `playerWillDestroy`: the particles and sound of the broken block, for the other players nearby.
         let breaker = self.players[index].player.entity_id;
@@ -1606,6 +1648,7 @@ impl Game {
         // The particles and sound of the blocks that broke with it, for every player nearby.
         let events = world.take_level_events();
         send_level_events(&self.players, &events);
+        self.close_removed_crafting_tables();
         for viewer in 0..self.players.len() {
             if self.players[viewer]
                 .block_menu
@@ -2427,30 +2470,49 @@ mod tests {
     }
 
     #[test]
-    fn starvation_death_clears_fall_distance_on_respawn() {
+    fn death_clears_fall_distance_and_only_keeps_experience_with_keep_inventory() {
         use harpas_core::nbt::Compound;
 
-        let mut game = game();
-        let _received = join(&mut game, 1, "Hungry", 2);
-        game.connections();
-        let player = &mut game.players[0];
-        player.player.profile.game_mode = GameMode::Survival;
-        player.fall_distance = 8.0;
-        player.vitals.health = 1.0;
-        player.vitals.food = 0;
-        player.vitals.saturation = 0.0;
-        player.vitals.food_timer = 79;
         let level = Compound::from_iter([(
             "difficulty_settings",
             Compound::from_iter([("difficulty", "hard")]),
         )]);
-        game.tick_survival(survival::SurvivalRules::read(None, Some(&level)));
-        assert!(game.players[0].is_dead());
+        for keep_inventory in [false, true] {
+            let mut game = game();
+            let received = join(&mut game, 1, "Hungry", 2);
+            game.connections();
+            let player = &mut game.players[0];
+            player.player.profile.game_mode = GameMode::Survival;
+            player.fall_distance = 8.0;
+            player.vitals.health = 1.0;
+            player.vitals.food = 0;
+            player.vitals.saturation = 0.0;
+            player.vitals.food_timer = 79;
+            player.experience.add(12);
+            let experience = if keep_inventory {
+                player.experience
+            } else {
+                Default::default()
+            };
 
-        input(&mut game, 1, Input::Respawn);
-        game.connections();
-        assert_eq!(game.players[0].vitals.health, 20.0);
-        assert_eq!(game.players[0].fall_distance, 0.0);
+            let rules =
+                Compound::from_iter([("minecraft:keep_inventory", i8::from(keep_inventory))]);
+            game.tick_survival(survival::SurvivalRules::read(Some(&rules), Some(&level)));
+            assert!(game.players[0].is_dead());
+            assert_eq!(game.players[0].experience, experience);
+            received.try_iter().for_each(drop);
+
+            input(&mut game, 1, Input::Respawn);
+            game.connections();
+            assert_eq!(game.players[0].vitals.health, 20.0);
+            assert_eq!(game.players[0].fall_distance, 0.0);
+            assert_eq!(game.players[0].experience, experience);
+            assert!(
+                received
+                    .try_iter()
+                    .any(|output| output == experience.update())
+            );
+        }
     }
 
     #[test]
@@ -2860,6 +2922,9 @@ mod tests {
         input(&mut game, 1, movement(1.5, 0.0));
         tick(&mut game, 3);
         assert!(matches!(output.try_recv(), Ok(Output::OwnPosition(p)) if p.x == 1.5));
+        game.players[0].player.profile.game_mode = GameMode::Survival;
+        game.players[0].client_floating = true;
+        game.players[0].floating_ticks = 80;
         input(&mut game, 1, movement(100.0, 0.0));
         tick(&mut game, 4);
         assert!(
@@ -2873,14 +2938,46 @@ mod tests {
             "wrong teleport confirmation must not release movement"
         );
         input(&mut game, 1, Input::ConfirmTeleport(2));
-        input(&mut game, 1, movement(2.5, 0.0));
         tick(&mut game, 6);
+        assert!(
+            output.try_recv().is_err(),
+            "stale floating state after correction"
+        );
+        assert_eq!(game.players[0].floating_ticks, 0);
+        input(&mut game, 1, movement(2.5, 0.0));
+        tick(&mut game, 7);
         assert!(matches!(output.try_recv(), Ok(Output::OwnPosition(p)) if p.x == 2.5));
         input(&mut game, 1, movement(f64::NAN, 0.0));
-        tick(&mut game, 7);
+        tick(&mut game, 8);
         assert_eq!(
             output.try_recv(),
             Ok(Output::Disconnect("Invalid player movement"))
+        );
+    }
+
+    #[test]
+    fn creative_without_a_world_checks_the_resolved_stack_limit() {
+        use inventory::{ComponentPatch, ItemStack};
+
+        let mut game = game();
+        let output = join(&mut game, 1, "Steve", 10);
+        tick(&mut game, 1);
+        output.try_iter().for_each(drop);
+        let stack = ItemStack {
+            item: harpas_core::item::items()
+                .id("minecraft:diamond_pickaxe")
+                .unwrap(),
+            count: 2,
+            components: Arc::new(ComponentPatch {
+                added: vec![(2, vec![100])], // max_damage does not change the stack limit.
+                ..Default::default()
+            }),
+        };
+        game.set_creative_slot(0, 9, stack);
+        assert!(game.players[0].inventory.slots[9].is_empty());
+        assert_eq!(
+            output.try_recv(),
+            Ok(Output::Disconnect("Network Protocol Error"))
         );
     }
 

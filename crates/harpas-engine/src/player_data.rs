@@ -12,7 +12,7 @@ use harpas_core::nbt::{Compound, List, Nbt};
 
 use crate::inventory::{Inventory, ItemStack, SLOTS};
 use crate::item_data::{ItemCodec, invalid};
-use crate::player::{EffectKind, GameMode, PlayerState};
+use crate::player::{EffectKind, Experience, GameMode, PlayerState};
 use crate::survival::{ActiveEffect, ActiveEffects, Vitals};
 
 const CAPACITY: usize = 64;
@@ -34,6 +34,7 @@ pub struct PlayerInventory {
     root: Arc<Compound>,
     mode: Option<SavedGameMode>,
     vitals: Option<Vitals>,
+    experience: Experience,
     effects: ActiveEffects,
 }
 
@@ -84,12 +85,25 @@ impl PlayerInventory {
             Some(Nbt::Int(value @ 0..=8)) => *value as usize,
             _ => return Err(invalid("SelectedItemSlot must be an integer from 0 to 8")),
         };
+        let xp_int = |key| match root.get(key) {
+            Some(Nbt::Int(value)) => (*value).max(0),
+            _ => 0,
+        };
+        let experience = Experience {
+            progress: match root.get("XpP") {
+                Some(Nbt::Float(value)) if (0.0..1.0).contains(value) => *value,
+                _ => 0.0,
+            },
+            level: xp_int("XpLevel"),
+            total: xp_int("XpTotal"),
+        };
         Ok(Self {
             slots,
             selected,
             root: Arc::new(root),
             mode: None,
             vitals: None,
+            experience,
             effects: Default::default(),
         })
     }
@@ -156,6 +170,9 @@ impl PlayerInventory {
             }
         }
         if let Some(vitals) = self.vitals {
+            root.insert("XpP", self.experience.progress);
+            root.insert("XpLevel", self.experience.level);
+            root.insert("XpTotal", self.experience.total);
             root.insert("Health", Nbt::Float(vitals.health));
             root.insert("Fire", Nbt::Short(vitals.fire_ticks));
             root.insert("AbsorptionAmount", Nbt::Float(vitals.absorption));
@@ -196,6 +213,7 @@ impl PlayerInventory {
                 flying: player.flying,
             }),
             vitals: Some(player.vitals),
+            experience: player.experience,
             effects: player.effects.clone(),
         }
     }
@@ -646,6 +664,7 @@ impl crate::Game {
     ) {
         data.restore_game_mode(player);
         data.restore_vitals(player);
+        player.experience = data.experience;
         player.inventory.slots = data.slots.clone();
         player.inventory.selected = data.selected;
         player.data_ready = true;
@@ -966,6 +985,9 @@ mod autosave_tests {
             output,
         );
         let mut root = new_player(1);
+        root.insert("XpP", Nbt::Float(0.5));
+        root.insert("XpLevel", 3);
+        root.insert("XpTotal", 30);
         let hunger = Compound::from_iter([
             ("id", Nbt::from(EffectKind::Hunger.id())),
             ("duration", Nbt::Int(15)),
@@ -985,6 +1007,8 @@ mod autosave_tests {
         root.insert("AbsorptionAmount", Nbt::Float(2.0));
         let document = Arc::new(PlayerInventory::read(root, &ItemCodec::default()).unwrap());
         crate::Game::restore_inventory(&mut player, document);
+        assert_eq!(player.experience.level, 3);
+        player.experience = Experience::default();
         player.inventory.slots[36] = ItemStack {
             item: 1,
             count: 16,
@@ -1028,6 +1052,9 @@ mod autosave_tests {
             .flush()
             .unwrap();
         let snapshot = writes.lock().unwrap()[0].clone();
+        assert_eq!(snapshot.get("XpP"), Some(&Nbt::Float(0.0)));
+        assert_eq!(snapshot.get("XpLevel"), Some(&Nbt::Int(0)));
+        assert_eq!(snapshot.get("XpTotal"), Some(&Nbt::Int(0)));
         assert_eq!(snapshot.get("Health"), Some(&Nbt::Float(16.0)));
         assert_eq!(snapshot.get("AbsorptionAmount"), Some(&Nbt::Float(2.0)));
         let Some(Nbt::List(List::Compound(attributes))) = snapshot.get("attributes") else {

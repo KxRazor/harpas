@@ -34,6 +34,13 @@ pub enum Layer {
 }
 
 impl Layer {
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::Uniform(level) => *level < 16,
+            Self::Values(bytes) => bytes.len() == LAYER_BYTES,
+        }
+    }
+
     fn new(values: Vec<u8>) -> Self {
         match values.first() {
             Some(&first) if first >> 4 == first & 15 && values.iter().all(|v| *v == first) => {
@@ -78,6 +85,34 @@ pub struct Light {
 }
 
 impl Light {
+    pub(crate) fn is_valid(&self) -> bool {
+        let mut seen = [false; SECTIONS + 2];
+        self.sections.iter().all(|section| {
+            let Some(index) = section
+                .y
+                .checked_sub(MIN_SECTION - 1)
+                .and_then(|index| seen.get_mut(index as usize))
+            else {
+                return false;
+            };
+            !std::mem::replace(index, true) && section.sky.is_valid() && section.block.is_valid()
+        })
+    }
+
+    /// Whether a full sky layer can be omitted without changing the light inherited from above.
+    pub fn inherits_full_sky(&self, y: i32) -> bool {
+        self.sections
+            .iter()
+            .filter(|section| section.y > y)
+            .min_by_key(|section| section.y)
+            .is_none_or(|above| match &above.sky {
+                Layer::Uniform(level) => *level == 15,
+                Layer::Values(bytes) => bytes
+                    .get(..SKY_ROW_BYTES)
+                    .is_some_and(|row| row.iter().all(|&byte| byte == 255)),
+            })
+    }
+
     pub(crate) fn brightness(&self, pos: BlockPos) -> Option<u8> {
         let section = self
             .sections
@@ -102,7 +137,15 @@ pub(crate) fn saved_brightness(chunk: &Chunk, pos: BlockPos) -> Option<u8> {
         .find(|section| i32::from(section.y) == section_y)
         .and_then(|section| saved_layer(&section.rest, "BlockLight"))
         .map_or(0, |bytes| nibble(bytes[index / 2] as u8, index));
-    let sky = chunk
+    let sky = saved_sky(chunk, section_y).map_or(15, |(y, bytes)| {
+        let index = if y == section_y { index } else { index & 255 };
+        nibble(bytes[index / 2] as u8, index)
+    });
+    Some(block.max(sky))
+}
+
+fn saved_sky(chunk: &Chunk, section_y: i32) -> Option<(i32, &[i8])> {
+    chunk
         .sections
         .iter()
         .filter(|section| i32::from(section.y) >= section_y)
@@ -113,11 +156,6 @@ pub(crate) fn saved_brightness(chunk: &Chunk, pos: BlockPos) -> Option<u8> {
             ))
         })
         .min_by_key(|(y, _)| *y)
-        .map_or(15, |(y, bytes)| {
-            let index = if y == section_y { index } else { index & 255 };
-            nibble(bytes[index / 2] as u8, index)
-        });
-    Some(block.max(sky))
 }
 
 fn saved_layer<'a>(rest: &'a Compound, name: &str) -> Option<&'a [i8]> {
@@ -125,6 +163,18 @@ fn saved_layer<'a>(rest: &'a Compound, name: &str) -> Option<&'a [i8]> {
         Some(Nbt::ByteArray(bytes)) if bytes.len() == LAYER_BYTES => Some(bytes),
         _ => None,
     }
+}
+
+pub(crate) fn has_valid_saved_light(chunk: &Chunk) -> bool {
+    chunk.rest.get("isLightOn") == Some(&Nbt::Byte(1)) && valid_saved_layers(chunk)
+}
+
+fn valid_saved_layers(chunk: &Chunk) -> bool {
+    chunk.sections.iter().all(|section| {
+        ["SkyLight", "BlockLight"].into_iter().all(|name| {
+            section.rest.get(name).is_none() || saved_layer(&section.rest, name).is_some()
+        })
+    })
 }
 
 /// The chunk being lit and the chunks around it, with their sections by height.
@@ -199,26 +249,30 @@ fn layer_bytes(layer: &Layer) -> Vec<i8> {
 }
 
 const LAYER_BYTES: usize = 2048;
+const SKY_ROW_BYTES: usize = LAYER_BYTES / 16;
 
 /// `chunk` at vanilla's `light` status, with `light` in its sections, as vanilla saves a chunk it has lit.
 pub fn with_light(chunk: &Chunk, light: &Light) -> Chunk {
     let mut lit = chunk.clone();
-    lit.rest.insert("Status", "minecraft:light");
     write_light(&mut lit, light);
+    if lit.rest.get("isLightOn") == Some(&Nbt::Byte(1)) {
+        lit.rest.insert("Status", "minecraft:light");
+    }
     lit
 }
 
 /// Writes `light` into the sections of `chunk`, keeping its status.
 ///
-/// A sky layer that is all fifteen is left out, as vanilla leaves it out, and every block layer is written, so
+/// A full sky layer is left out when it can be inherited from above, and every block layer is written, so
 /// the chunk is sent with the same light whether it was computed or read back. `isLightOn` tells vanilla that
 /// the light is correct, so it keeps it instead of lighting the chunk again.
 pub fn write_light(chunk: &mut Chunk, light: &Light) {
-    chunk.rest.insert("isLightOn", Nbt::Byte(1));
+    if !light.is_valid() {
+        chunk.rest.insert("isLightOn", Nbt::Byte(0));
+        return;
+    }
     for section in &light.sections {
-        let Ok(y) = i8::try_from(section.y) else {
-            continue;
-        };
+        let y = section.y as i8;
         let index = match chunk.sections.iter().position(|saved| saved.y == y) {
             Some(index) => index,
             None => {
@@ -231,7 +285,7 @@ pub fn write_light(chunk: &mut Chunk, light: &Light) {
             }
         };
         let rest = &mut chunk.sections[index].rest;
-        if section.sky == Layer::Uniform(15) {
+        if section.sky == Layer::Uniform(15) && light.inherits_full_sky(section.y) {
             rest.remove("SkyLight");
         } else {
             rest.insert("SkyLight", Nbt::ByteArray(layer_bytes(&section.sky)));
@@ -239,10 +293,11 @@ pub fn write_light(chunk: &mut Chunk, light: &Light) {
         rest.insert("BlockLight", Nbt::ByteArray(layer_bytes(&section.block)));
     }
     chunk.sections.sort_by_key(|section| section.y);
+    let valid = valid_saved_layers(chunk);
+    chunk.rest.insert("isLightOn", Nbt::Byte(i8::from(valid)));
 }
 
-/// The light saved in the sections of `chunk`, for the sections of `like`: a missing sky layer is all fifteen,
-/// as [`write_light`] leaves it out, and a missing block layer is all zero.
+/// The light represented by saved layers: missing sky inherits the bottom row of the next layer above.
 pub fn saved_light(chunk: &Chunk, like: &Light) -> Light {
     let layer = |rest: Option<&Compound>, name: &str, missing: u8| match rest
         .and_then(|r| saved_layer(r, name))
@@ -262,7 +317,19 @@ pub fn saved_light(chunk: &Chunk, like: &Light) -> Light {
                     .map(|saved| &saved.rest);
                 SectionLight {
                     y: section.y,
-                    sky: layer(rest, "SkyLight", 15),
+                    sky: saved_sky(chunk, section.y).map_or(Layer::Uniform(15), |(y, bytes)| {
+                        let bytes = if y == section.y {
+                            bytes.iter().map(|&byte| byte as u8).collect()
+                        } else {
+                            bytes[..SKY_ROW_BYTES]
+                                .iter()
+                                .cycle()
+                                .take(LAYER_BYTES)
+                                .map(|&byte| byte as u8)
+                                .collect()
+                        };
+                        Layer::new(bytes)
+                    }),
                     block: layer(rest, "BlockLight", 0),
                 }
             })
@@ -372,6 +439,37 @@ impl Drop for Lighter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relight_detects_dark_sky_inherited_from_another_section() {
+        let mut saved = Chunk {
+            sections: vec![ChunkSection {
+                y: 1,
+                rest: Compound::from_iter([("SkyLight", Nbt::ByteArray(vec![0; LAYER_BYTES]))]),
+                section: None,
+            }],
+            rest: Compound::from_iter([("isLightOn", Nbt::Byte(1))]),
+        };
+        let sky = Light {
+            sections: vec![SectionLight {
+                y: 0,
+                sky: Layer::Uniform(15),
+                block: Layer::Uniform(0),
+            }],
+        };
+        assert!(has_valid_saved_light(&saved));
+        let previous = saved_light(&saved, &sky);
+        assert_eq!(previous.sections[0].sky, Layer::Uniform(0));
+        assert_eq!(changed_sections(&previous, &sky), sky);
+        saved.sections[0]
+            .rest
+            .insert("BlockLight", Nbt::ByteArray(vec![0]));
+        assert!(!has_valid_saved_light(&saved));
+        let mut invalid = sky;
+        invalid.sections[0].sky = Layer::Uniform(16);
+        write_light(&mut saved, &invalid);
+        assert_eq!(saved.rest.get("isLightOn"), Some(&Nbt::Byte(0)));
+    }
 
     #[test]
     fn a_lit_chunk_is_saved_at_light_with_every_layer_but_full_sky() {

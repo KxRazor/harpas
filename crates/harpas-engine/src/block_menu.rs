@@ -88,6 +88,7 @@ impl Game {
     }
 
     pub(crate) fn open_crafting_table(&mut self, index: usize, position: BlockPos) {
+        self.close_removed_crafting_tables();
         let id = self.open_block_menu(
             index,
             position,
@@ -96,6 +97,21 @@ impl Game {
         );
         self.players[index].send(Output::OpenCraftingTable(id));
         self.broadcast_full_state(index);
+    }
+
+    pub(crate) fn close_removed_crafting_tables(&mut self) {
+        let Some(world) = &mut self.world else { return };
+        if world.broken_crafting_tables.is_empty() {
+            return;
+        }
+        let broken = std::mem::take(&mut world.broken_crafting_tables);
+        for index in 0..self.players.len() {
+            if self.players[index].block_menu.as_ref().is_some_and(|menu| {
+                matches!(menu.backing, Backing::CraftingTable) && broken.contains(&menu.position)
+            }) {
+                self.close_block_menu(index);
+            }
+        }
     }
 
     pub(crate) fn open_chest(&mut self, index: usize, position: BlockPos) {
@@ -137,15 +153,23 @@ impl Game {
 
     pub(crate) fn open_furnace(&mut self, index: usize, position: BlockPos) {
         let Some(world) = &self.world else { return };
-        let Ok(tag) = world.container_tag(position, FURNACE) else {
-            return;
+        let tag = match world.container_tag(position, FURNACE) {
+            Ok(tag) => tag,
+            Err(error) => {
+                log::warn!("Cannot load furnace at {position:?}: {error}");
+                return;
+            }
         };
         if tag.is_some_and(|tag| tag.get("lock").is_some()) {
             return;
         }
         let title = tag.and_then(|tag| tag.get("CustomName").cloned());
-        let Ok(furnace) = world.furnace(position) else {
-            return;
+        let furnace = match world.furnace(position) {
+            Ok(furnace) => furnace,
+            Err(error) => {
+                log::warn!("Cannot load furnace at {position:?}: {error}");
+                return;
+            }
         };
         let mut menu = block_inventory(MenuKind::Furnace);
         menu.slots[..FURNACE_SLOTS].clone_from_slice(&furnace.slots);

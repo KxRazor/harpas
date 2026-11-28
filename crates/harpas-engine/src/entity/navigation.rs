@@ -61,6 +61,10 @@ impl CowNavigation {
                 return steer(from, to, false);
             }
             self.landing = None;
+            if (floor(x), level, floor(z)) != (landing.x, landing.y, landing.z) {
+                self.route = None;
+                self.retry_in = 0;
+            }
         }
         if !over_shallow_water && (!on_ground || (y - f64::from(level)).abs() > 1.0e-7) {
             *self = Self::default();
@@ -77,9 +81,11 @@ impl CowNavigation {
             goal.y = level;
         }
         self.retry_in = self.retry_in.saturating_sub(1);
-        if self.goal != Some(goal) || self.retry_in == 0 {
+        let direct = self.route.as_ref().is_some_and(Vec::is_empty);
+        let clear = direct && goal.y == level && ground.can_walk(from, target, level);
+        if self.goal != Some(goal) || self.retry_in == 0 || (direct && !clear) {
             // Prefer the player over the block centers whenever the straight approach is clear.
-            if goal.y == level && ground.can_walk(from, target, level) {
+            if clear || (!direct && goal.y == level && ground.can_walk(from, target, level)) {
                 self.route = Some(Vec::new());
             } else if self.goal != Some(goal)
                 || self

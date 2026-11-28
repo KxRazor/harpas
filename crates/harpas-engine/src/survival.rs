@@ -519,6 +519,12 @@ impl Game {
                 .as_ref()
                 .map_or_else(|| ItemCodec::fallback(), World::block_item_codec);
             let stew_effects = codec.stew_effects(held);
+            let potion_effect = if matches!(consumable.effect, Some(ConsumeEffect::ApplyPotion(_)))
+            {
+                None
+            } else {
+                codec.potion_effect(held)
+            };
             let mut remainder = consumable.remainder.take().unwrap_or_default();
             held.count -= 1;
             if held.is_empty() {
@@ -547,7 +553,11 @@ impl Game {
                 }
                 _ => Vec::new(),
             };
-            for effect in stew_effects.into_iter().chain(default_effects) {
+            for effect in stew_effects
+                .into_iter()
+                .chain(default_effects)
+                .chain(potion_effect)
+            {
                 let slot = &mut player.effects[effect.kind as usize];
                 let new = slot.is_none();
                 let changed = if let Some(active) = slot {
@@ -1019,7 +1029,7 @@ impl Game {
         } else {
             damage - animal.last_damage
         };
-        if taken <= 0.0 || animal.nbt.get("Invulnerable") == Some(&Nbt::Byte(1)) {
+        if taken <= 0.0 || crate::entity_data::nbt_bool(&animal.nbt, "Invulnerable") {
             return;
         }
         animal.last_damage = damage;
@@ -1391,6 +1401,7 @@ impl Game {
         let mut drops = transient;
         if !rules.keep_inventory {
             drops.extend(std::mem::take(&mut player.inventory).slots);
+            player.experience = Default::default();
         }
         player.pending_map_chest = None;
         let Position { x, y, z, .. } = player.player.position;
@@ -1467,6 +1478,7 @@ impl Game {
             death_location: player.death_location,
         });
         player.send(player.vitals.update());
+        player.send(player.experience.update());
         let contents = crate::place::initial_contents(&mut player.inventory);
         player.send(contents);
         player.send(Output::SelectedHotbarSlot(player.inventory.selected as i32));

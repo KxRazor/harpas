@@ -154,7 +154,7 @@ fn prepare(test: usize) -> RegionFeatureWorld {
                 for x in 0..16 {
                     for py in (floor(test) - 12).max(-64)..=(ceiling(test) + 12).min(319) {
                         let state = initial(test, cx * 16 + x as i32, py, cz * 16 + z as i32);
-                        if !block_states().is_air(state) {
+                        if state != 0 {
                             chunk.set_block_state(x, py, z, state);
                         }
                     }
@@ -218,6 +218,9 @@ fn compare<R: RandomSource>(
     test: usize,
 ) -> usize {
     let before = prepare(test);
+    if test == 18 {
+        assert_eq!(before.block_state(15, y(test), -1), state("cave_air"));
+    }
     let mut world = prepare(test);
     let mut random = WorldgenRandom::new(source);
     let mut total = 0;
@@ -338,7 +341,7 @@ fn dripstone_cluster_matches_vanilla() {
                 .join(","),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut compiler = FeatureCompiler::new(&data);
     let mut placed = 0;

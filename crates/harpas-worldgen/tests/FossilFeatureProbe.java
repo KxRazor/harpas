@@ -66,7 +66,7 @@ public final class FossilFeatureProbe {
         var features = registries.lookupOrThrow(Registries.CONFIGURED_FEATURE);
         var height = LevelHeightAccessor.create(-64, 384);
         var factory = PalettedContainerFactory.create(registries);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (String name : new String[] {"fossil_coal", "fossil_diamonds"}) {
                 ConfiguredFeature<?, ?> feature = features.getOrThrow(net.minecraft.resources.ResourceKey.create(
                     Registries.CONFIGURED_FEATURE, Identifier.withDefaultNamespace(name))).value();
@@ -83,16 +83,22 @@ public final class FossilFeatureProbe {
                                 for (int x = cx * 16; x < cx * 16 + 16; x++) for (int z = cz * 16; z < cz * 16 + 16; z++)
                                     for (int by = -64; by < 320; by++) {
                                         var state = terrain(scenario, x, by, z);
-                                        if (!state.isAir()) chunk.setBlockState(pos.set(x, by, z), state, 0);
+                                        if (state != Blocks.AIR.defaultBlockState()) chunk.setBlockState(pos.set(x, by, z), state, 0);
                                     }
                                 chunk.setPersistedStatus(ChunkStatus.CARVERS);
+                            }
+                            if (scenario == 2) {
+                                var cave = new BlockPos(0, 45, 0);
+                                if (!ProbeTerrain.paletteState(region.getChunk(cave), cave).is(Blocks.CAVE_AIR))
+                                    throw new AssertionError("missing cave air at " + cave);
                             }
                             var random = new WorldgenRandom(legacy ? new LegacyRandomSource(seed) : new XoroshiroRandomSource(seed));
                             boolean placed = feature.place(region, generator, random, new BlockPos(origin[0], y, origin[1]));
                             out.println("case " + name + " " + scenario + " " + origin[0] + " " + origin[1] + " " + y + " " + seed + " "
                                 + legacy + " " + placed + " " + random.nextInt());
                             for (int by = -64; by < 320; by++) for (int z = -16; z < 32; z++) for (int x = -16; x < 32; x++) {
-                                var state = region.getBlockState(pos.set(x, by, z));
+                                pos.set(x, by, z);
+                                var state = ProbeTerrain.paletteState(region.getChunk(pos), pos);
                                 if (state != terrain(scenario, x, by, z))
                                     out.println("block " + x + " " + by + " " + z + " " + Block.getId(state));
                             }

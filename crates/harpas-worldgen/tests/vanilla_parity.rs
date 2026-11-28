@@ -2,8 +2,7 @@
 
 mod reference;
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::Path;
 
 use harpas_core::random::{LegacyRandom, RandomSource};
@@ -51,7 +50,7 @@ impl CarvingEnvironment for ProbeAquifer {
 
 fn compare_seed(data: &WorldgenData, seed: i64, output: &Path) {
     let generator = NoiseBasedChunkGenerator::overworld(seed, data).expect("compile generator");
-    let mut lines = BufReader::new(File::open(output).unwrap()).lines();
+    let mut lines = reference::open_text(output).lines();
     let mut check = |expected: String| {
         let actual = lines.next().expect("missing Java result").unwrap();
         assert_eq!(expected, actual, "worldgen mismatch for seed {seed}");

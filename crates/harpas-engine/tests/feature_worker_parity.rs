@@ -95,7 +95,7 @@ fn vanilla(reference: &Reference, seed: i64, supported: &Path) -> Vec<(Blocks, V
     ];
     args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
     reference.java("FeatureBlocksProbe", args);
-    let text = fs::read_to_string(&output).expect("read the vanilla feature output");
+    let text = reference::read_text(&output);
     fs::remove_file(&output).unwrap();
     let mut lines = text.lines().peekable();
     CHUNKS

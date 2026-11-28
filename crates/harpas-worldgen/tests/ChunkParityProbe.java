@@ -88,14 +88,10 @@ public final class ChunkParityProbe {
         net.minecraft.util.Util.shutdownExecutors();
     }
 
-    // Shared by the terrain-adaptation probe: the stages and binary comparison format stay identical.
-    static void writeChunk(DataOutputStream out, long seed, net.minecraft.core.Registry<Biome> biomes,
-            PalettedContainerFactory factory, NoiseBasedChunkGenerator generator, RandomState random,
-            WorldgenReferenceProbe.TestRegion region, StructureManager structures, ProtoChunk proto) throws Exception {
+    static void generateCarved(long seed, PalettedContainerFactory factory, NoiseBasedChunkGenerator generator,
+            RandomState random, WorldgenReferenceProbe.TestRegion region, StructureManager structures, ProtoChunk proto) throws Exception {
         var chunkPos = proto.getPos();
-        int cx = chunkPos.x(), cz = chunkPos.z();
-        var height = LevelHeightAccessor.create(-64, 384);
-        var pos = new BlockPos.MutableBlockPos();
+        var height = proto.getHeightAccessorForGeneration();
         var createBiomes = NoiseBasedChunkGenerator.class.getDeclaredMethod("doCreateBiomes", Blender.class,
             RandomState.class, StructureManager.class, ChunkAccess.class);
         createBiomes.setAccessible(true);
@@ -120,11 +116,20 @@ public final class ChunkParityProbe {
         generator.buildSurface(region, structures, random, proto);
         Stage carve = () -> generator.applyCarvers(region, seed, random, biomeManager, structures, proto);
         onNewThread(carve);
+        Heightmap.primeHeightmaps(proto, EnumSet.allOf(Heightmap.Types.class));
+    }
 
+    // Shared by the terrain-adaptation probe: the stages and binary comparison format stay identical.
+    static void writeChunk(DataOutputStream out, long seed, net.minecraft.core.Registry<Biome> biomes,
+            PalettedContainerFactory factory, NoiseBasedChunkGenerator generator, RandomState random,
+            WorldgenReferenceProbe.TestRegion region, StructureManager structures, ProtoChunk proto) throws Exception {
+        generateCarved(seed, factory, generator, random, region, structures, proto);
+        int cx = proto.getPos().x(), cz = proto.getPos().z();
+        var pos = new BlockPos.MutableBlockPos();
         for (int y = -64; y < 320; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
-                    int id = Block.getId(proto.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
+                    int id = Block.getId(ProbeTerrain.paletteState(proto, pos.set(cx * 16 + x, y, cz * 16 + z)));
                     if (id > 0xffff) throw new IllegalStateException("state " + id);
                     out.writeShort(id);
                 }
@@ -149,7 +154,6 @@ public final class ChunkParityProbe {
                 out.writeShort(value);
             }
         }
-        Heightmap.primeHeightmaps(proto, EnumSet.allOf(Heightmap.Types.class));
         for (var kind : Heightmap.Types.values()) {
             writeLongs(out, proto.getOrCreateHeightmapUnprimed(kind).getRawData());
         }
@@ -160,13 +164,17 @@ public final class ChunkParityProbe {
     }
 
     static void onNewThread(Stage stage) {
-        var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
-        var thread = new Thread(() -> {
-            try { stage.run(); } catch (Exception error) { failure.set(error); }
-        });
+        var task = new java.util.concurrent.FutureTask<Void>(() -> { stage.run(); return null; });
+        var thread = new Thread(task);
         thread.start();
-        try { thread.join(); } catch (InterruptedException error) { throw new IllegalStateException(error); }
-        if (failure.get() != null) throw new IllegalStateException(failure.get());
+        try {
+            task.get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(error);
+        } catch (java.util.concurrent.ExecutionException error) {
+            throw new IllegalStateException(error.getCause());
+        }
     }
 
     static void writeLongs(DataOutputStream out, long[] values) throws java.io.IOException {

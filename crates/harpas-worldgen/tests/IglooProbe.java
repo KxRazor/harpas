@@ -27,10 +27,6 @@ public final class IglooProbe {
         var registries = server.registries();
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var igloo = structures.getValue(net.minecraft.resources.Identifier.parse("igloo"));
-        var step = igloo.step();
-        var inStep = structures.stream().filter(s -> s.step() == step).toList();
-        int index = inStep.indexOf(igloo);
-        if (index != 3 || step.ordinal() != 4) throw new AssertionError("26.1 igloo seed order");
 
         var storage = net.minecraft.world.level.storage.LevelStorageSource.createDefault(Path.of("igloo-worlds")).createAccess("test");
         var manager = new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager(
@@ -56,7 +52,7 @@ public final class IglooProbe {
                 var list = (ListTag) initialPost.get(section);
                 for (var value : list) proto.addPackedPostProcess(new it.unimi.dsi.fastutil.shorts.ShortArrayList(new short[]{((ShortTag) value).shortValue()}), section);
             }
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             for (var value : input.getListOrEmpty("initial_entities")) {
                 var entity = (CompoundTag) value;
                 var at = new BlockPos(entity.getIntOr("x", 0), entity.getIntOr("y", 0), entity.getIntOr("z", 0));
@@ -70,11 +66,17 @@ public final class IglooProbe {
             var edges = new HashMap<BlockPos, net.minecraft.world.level.block.state.BlockState>();
             var edgeWrites = new CompoundTag();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(IglooProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
                     case "getHeight" -> {
+                        if (arguments == null) yield proto.getHeight();
                         int x = (int) arguments[1], z = (int) arguments[2];
-                        if ((x >> 4) != cx || (z >> 4) != cz) yield input.getIntArray("heights").orElseThrow()[(z - cz * 16 + 16) * 48 + x - cx * 16 + 16];
+                        if ((x >> 4) != cx || (z >> 4) != cz) {
+                            if (edges.keySet().stream().anyMatch(at -> at.getX() == x && at.getZ() == z))
+                                yield ProbeTerrain.height((WorldGenLevel) proxy, (Heightmap.Types) arguments[0], x, z);
+                            yield input.getIntArray("heights").orElseThrow()[(z - cz * 16 + 16) * 48 + x - cx * 16 + 16];
+                        }
                         yield proto.getHeight((Heightmap.Types) arguments[0], x, z) + 1;
                     }
                     case "getHeightmapPos" -> {
@@ -82,7 +84,7 @@ public final class IglooProbe {
                         yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, arguments);
                     case "registryAccess" -> registries;
                     case "getLevel" -> null;
                     case "getRandom" -> net.minecraft.util.RandomSource.create(0);
@@ -94,27 +96,31 @@ public final class IglooProbe {
                     case "getSeed" -> seed;
                     case "getBlockState" -> {
                         var at = (BlockPos) arguments[0];
+                        if (proto.isOutsideBuildHeight(at)) yield Blocks.VOID_AIR.defaultBlockState();
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
                         if (edges.containsKey(at)) yield edges.get(at);
                         int x = at.getX() - cx * 16 + 1, z = at.getZ() - cz * 16 + 1;
                         if (x < 0 || x >= 18 || z < 0 || z >= 18) {
                             int[] column = input.getCompoundOrEmpty("extra_columns").getIntArray(at.getX() + "," + at.getZ()).orElseThrow();
-                            yield at.getY() < -64 || at.getY() >= 320 ? Blocks.AIR.defaultBlockState() : Block.stateById(column[at.getY()+64]);
+                            yield Block.stateById(column[at.getY() + 64]);
                         }
-                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.AIR.defaultBlockState()
-                            : Block.stateById(surrounding[((at.getY() + 64) * 18 + z) * 18 + x]);
+                        yield Block.stateById(surrounding[((at.getY() + 64) * 18 + z) * 18 + x]);
                     }
+                    case "ensureCanWrite" -> ProbeTerrain.canWrite(chunkPos, (BlockPos) arguments[0]);
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
+                        if (!ProbeTerrain.canWrite(chunkPos, at) || proto.isOutsideBuildHeight(at)) yield false;
                         if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) {
                             // IglooPieces seals the ladder hole without checking the chunk bounds. Its
                             // owning worker observes this same write on its own pass; compare that chunk there.
                             var state = (net.minecraft.world.level.block.state.BlockState) arguments[1];
                             if (state == Blocks.SNOW_BLOCK.defaultBlockState()
-                                && input.getCompoundOrEmpty("extra_columns").contains(at.getX() + "," + at.getZ()))
-                                yield false;
+                                && input.getCompoundOrEmpty("extra_columns").contains(at.getX() + "," + at.getZ())) {
+                                edges.put(at, state);
+                                yield true;
+                            }
                             int x = at.getX() - cx * 16, z = at.getZ() - cz * 16;
-                            if (x >= -1 && x <= 16 && z >= -1 && z <= 16 && at.getY() >= -64 && at.getY() < 320) {
+                            if (x >= -1 && x <= 16 && z >= -1 && z <= 16) {
                                 edges.put(at, state);
                                 edgeWrites.putInt(at.getX() + "," + at.getY() + "," + at.getZ(), Block.getId(state));
                                 yield true;
@@ -136,33 +142,17 @@ public final class IglooProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
-                if (start.getStructure() != igloo) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, index, step.ordinal());
-                start.placeInChunk(world, null, null, random, bounds, chunkPos);
-            }
-            var result = snapshot(proto, starts, entities, context, registries).copy();
-            var post = new ListTag();
-            for (var section : proto.getPostProcessing()) {
-                var entries = new ListTag();
-                if (section != null) for (short value : section) entries.add(ShortTag.valueOf(value));
-                post.add(entries);
-            }
-            result.put("PostProcessing", post);
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == igloo).toList(), seed, chunkPos,
+                (start, random) -> start.placeInChunk(world, null, null, random, bounds, chunkPos));
+            var persisted = starts.stream().filter(start -> input.getBooleanOr("keep_neighbor_starts", true)
+                || start.getChunkPos().equals(chunkPos)).toList();
+            var result = snapshot(proto, persisted, entities, context, registries);
+            result.put("PostProcessing", ProbeTerrain.postProcessing(proto));
             result.put("edge_writes", edgeWrites);
-            var saved = result.getCompoundOrEmpty("starts");
-            for (var start : starts) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!input.getBooleanOr("keep_neighbor_starts", true) && !start.getChunkPos().equals(chunkPos)) {
-                    saved.remove(id); continue;
-                }
-            }
             results.put(name, result);
         }
         NbtIo.write(results, Path.of(args[1]));
@@ -173,12 +163,7 @@ public final class IglooProbe {
 
     static CompoundTag snapshot(ProtoChunk proto, List<StructureStart> starts, Map<BlockPos, BlockEntity> entities,
             StructurePieceSerializationContext context, net.minecraft.core.RegistryAccess registries) {
-        var result = BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
-        var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(),
-            start.createTag(context, start.getChunkPos()));
-        result.put("starts", saved);
-        return result;
+        return BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
     }
 
 }

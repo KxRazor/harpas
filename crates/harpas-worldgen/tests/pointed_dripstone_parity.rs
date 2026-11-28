@@ -1,11 +1,9 @@
 //! Small dripstone blocks, live heightmaps, results and random consumption compared with vanilla.
 mod reference;
 
-use harpas_worldgen::BlockGetter;
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::BlockGetter;
 use harpas_worldgen::{
     FeatureCompiler, FeatureWorld, GeneratedChunk, HeightmapType, RegionFeatureWorld, WorldgenData,
     place_feature,
@@ -215,7 +213,7 @@ fn pointed_dripstone_matches_vanilla() {
             reference.server_jar.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut compiler = FeatureCompiler::new(&data);
     for seed in [0, 42, -4_172_144_997_902_289_642] {

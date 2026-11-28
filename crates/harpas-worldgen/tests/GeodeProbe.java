@@ -61,7 +61,7 @@ public final class GeodeProbe {
         var ops = RegistryOps.create(com.mojang.serialization.JsonOps.INSTANCE, lookup);
         for (var entry : JsonParser.parseString(Files.readString(Path.of(args[3]))).getAsJsonObject().entrySet())
             features.put(entry.getKey(), ConfiguredFeature.DIRECT_CODEC.parse(ops, entry.getValue()).getOrThrow());
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (String s : args[2].split(",")) for (boolean legacy : new boolean[]{false, true})
                 for (var entry : features.entrySet()) for (int test = 0; test < 16; test++) {
                     long seed = Long.parseLong(s);
@@ -74,7 +74,8 @@ public final class GeodeProbe {
                             ((ProtoChunk)world.getChunk(cx, cz)).setPersistedStatus(ChunkStatus.CARVERS);
                     for (int dy = -18; dy <= 18; dy++) for (int dz = -18; dz <= 18; dz++) for (int dx = -18; dx <= 18; dx++) {
                         var at = p.offset(dx, dy, dz);
-                        if (at.getY() >= -64 && at.getY() < 320) world.setBlock(at, initial(test, dx, dy, dz), 2);
+                        // The starting terrain is already carved, including chunks that FEATURES cannot write.
+                        if (!height.isOutsideBuildHeight(at)) world.getChunk(at).setBlockState(at, initial(test, dx, dy, dz), 2);
                     }
                     int[] before = blocks(world, p);
                     var random = new WorldgenRandom(legacy ? new LegacyRandomSource(seed) : new XoroshiroRandomSource(seed));

@@ -53,7 +53,7 @@ public final class SculkFeatureProbe {
         var features = registries.lookupOrThrow(Registries.CONFIGURED_FEATURE);
         var height = LevelHeightAccessor.create(-64, 384);
         var factory = PalettedContainerFactory.create(registries);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (String name : new String[] {"sculk_patch_deep_dark", "sculk_patch_ancient_city", "sculk_vein"}) {
                 ConfiguredFeature<?, ?> feature = features.getOrThrow(net.minecraft.resources.ResourceKey.create(
                     Registries.CONFIGURED_FEATURE, Identifier.withDefaultNamespace(name))).value();

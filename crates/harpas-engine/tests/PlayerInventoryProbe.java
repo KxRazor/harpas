@@ -115,10 +115,18 @@ public final class PlayerInventoryProbe {
                 "{\"minecraft:potion_contents\":{\"potion\":\"minecraft:water_breathing\"}}",
                 "{\"minecraft:potion_contents\":{\"custom_color\":1193046,\"custom_name\":\"test_potion\"}}",
                 "{\"minecraft:potion_contents\":{}}",
+                "{\"!minecraft:tool\":{}}",
+                "{\"!minecraft:food\":{}}",
             };
             for (int i = 0; i < components.length; i++) {
-                var json = JsonParser.parseString("{\"id\":\"minecraft:stone\",\"count\":1,\"components\":" + components[i] + "}");
-                player.inventory.setItem(i, ItemStack.CODEC.parse(jsonOps, json).getOrThrow());
+                String item = i == components.length - 2 ? "diamond_pickaxe" : i == components.length - 1 ? "apple" : "stone";
+                var json = JsonParser.parseString("{\"id\":\"minecraft:" + item + "\",\"count\":1,\"components\":" + components[i] + "}");
+                var stack = ItemStack.CODEC.parse(jsonOps, json).getOrThrow();
+                if (item.equals("diamond_pickaxe") && (!new ItemStack(Items.DIAMOND_PICKAXE).has(DataComponents.TOOL) || stack.has(DataComponents.TOOL)))
+                    throw new AssertionError("pickup fixture must remove its default tool component");
+                if (item.equals("apple") && (!new ItemStack(Items.APPLE).has(DataComponents.FOOD) || stack.has(DataComponents.FOOD)))
+                    throw new AssertionError("apple fixture must remove its default food component");
+                player.inventory.setItem(i, stack);
             }
             equipment.set(EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
             equipment.set(EquipmentSlot.CHEST, new ItemStack(Items.IRON_CHESTPLATE));

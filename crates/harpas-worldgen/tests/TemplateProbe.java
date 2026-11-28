@@ -1,12 +1,9 @@
 // Test driver only: loads the owner-provided server's structure templates and template pools with its own code and
 // writes what laying out jigsaw structures uses.
 //
-// Arguments: <output> <file of template ids, one per line>
+// Arguments: <output> <Vanilla game jar>
 // Writes each template's size, and its bounding box and jigsaw blocks for every rotation at two positions, then
 // each template pool's fallback, elements and a shuffled order.
-import java.io.PrintWriter;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Locale;
@@ -36,12 +33,18 @@ public final class TemplateProbe {
         Locale.setDefault(Locale.ROOT);
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
-        try (var out = new PrintWriter(args[0])) {
-            for (var id : Files.readAllLines(Path.of(args[1]))) {
-                var parts = id.split(":", 2);
-                var path = "/data/" + parts[0] + "/structure/" + parts[1] + ".nbt";
+        try (var out = new ProbeOutput(args[0]); var jar = new java.util.jar.JarFile(args[1])) {
+            var pattern = java.util.regex.Pattern.compile("data/([^/]+)/structure/(.+)\\.nbt");
+            var entriesById = new java.util.TreeMap<String, java.util.jar.JarEntry>();
+            for (var entry : jar.stream().toList()) {
+                var path = pattern.matcher(entry.getName());
+                if (path.matches()) entriesById.put(path.group(1) + ":" + path.group(2), entry);
+            }
+            if (entriesById.isEmpty()) throw new AssertionError("no structure templates in " + args[1]);
+            for (var entry : entriesById.entrySet()) {
+                var id = entry.getKey();
                 StructureTemplate template = new StructureTemplate();
-                try (var stream = TemplateProbe.class.getResourceAsStream(path)) {
+                try (var stream = jar.getInputStream(entry.getValue())) {
                     template.load(BuiltInRegistries.BLOCK, NbtIo.readCompressed(stream, NbtAccounter.unlimitedHeap()));
                 }
                 var size = template.getSize();

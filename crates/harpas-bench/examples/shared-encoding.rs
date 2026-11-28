@@ -320,6 +320,7 @@ fn main() {
     let manual_ns = time(|| {
         out.copy_from_slice(&frame);
         manual.encrypt(black_box(&mut out));
+        black_box(&out);
     });
     let mut bedrock_conn = BedrockConnection::new(session_key());
     let ctr = time(|| bedrock_conn.send(black_box(&bedrock_batch)));
@@ -395,9 +396,9 @@ fn main() {
         let bedrock_shared = time(|| {
             let mut batch = Vec::with_capacity(bedrock.len());
             chunk::encode_bedrock_batch(&mut batch, &column, BedrockIds::Hashed);
-            let compressed = compressor.compress(&batch, Format::Raw).to_vec();
+            let compressed = compressor.compress(&batch, Format::Raw);
             for conn in &mut bedrock_conns {
-                conn.send(&compressed);
+                conn.send(compressed);
             }
         });
         let per = |ns: f64| micros(ns / viewers as f64);

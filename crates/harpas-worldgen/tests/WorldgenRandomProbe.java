@@ -1,13 +1,13 @@
 // Test driver only: WorldgenRandom uses BitRandomSource sampling even with a Xoroshiro source.
-import java.io.PrintWriter;
 import net.minecraft.world.level.levelgen.*;
 public final class WorldgenRandomProbe {
     public static void main(String[] args) throws Exception {
-        try (var out = new PrintWriter(args[0])) {
+        try (var out = new ProbeOutput(args[0])) {
             for (boolean legacy : new boolean[] {true, false}) for (long seed : new long[] {0, 42, -1, Long.MIN_VALUE}) {
                 var random = new WorldgenRandom(legacy ? new LegacyRandomSource(seed) : new XoroshiroRandomSource(seed));
-                out.println(random.setDecorationSeed(seed, -32, 48));
-                random.setFeatureSeed(seed, 0, 3);
+                long decoration = random.setDecorationSeed(seed, -32, 48);
+                out.println(decoration);
+                random.setFeatureSeed(decoration, 17, 3);
                 for (int i = 0; i < 128; i++) {
                     out.println(random.nextInt());
                     for (int bound : new int[] {1, 16, 37, 1500000000}) out.println(random.nextInt(bound));

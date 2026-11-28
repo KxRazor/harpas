@@ -68,7 +68,7 @@ public final class MonsterRoomProbe {
         var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes));
         var factory = PalettedContainerFactory.create(access);
         var height = LevelHeightAccessor.create(-64, 384);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (String s : args[1].split(",")) for (boolean legacy : new boolean[]{false, true}) for (int test = 0; test < 48; test++) {
                 long seed = Long.parseLong(s);
                 int y = y(test);

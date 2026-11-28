@@ -35,7 +35,8 @@ public final class MonumentExteriorProbe {
         int[] palette = Arrays.stream(lines.getFirst().split(" ")).mapToInt(Integer::parseInt).toArray();
         var children = MonumentBuilding.class.getDeclaredField("childPieces");
         children.setAccessible(true);
-        try (var out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(Path.of(args[1]))))) {
+        try (var out = new DataOutputStream(new BufferedOutputStream(new java.util.zip.GZIPOutputStream(
+                Files.newOutputStream(Path.of(args[1])), 65536)))) {
             for (String line : lines.subList(1, lines.size())) {
                 int[] v = Arrays.stream(line.split(" ")).mapToInt(Integer::parseInt).toArray();
                 int ox = v[0], oy = v[1], oz = v[2], direction = v[3], mode = v[4], sea = v[5];
@@ -53,17 +54,13 @@ public final class MonumentExteriorProbe {
                         case "getMaxY" -> minY + height - 1;
                         case "getSeaLevel" -> sea;
                         case "scheduleTick" -> null;
-                        case "getFluidState" -> {
-                            var p = (BlockPos) a[0];
-                            yield (p.getY() < minY || p.getY() >= minY + height ? Blocks.AIR.defaultBlockState()
-                                : Block.stateById(blocks[((p.getY() - minY) * 16 + (p.getZ() & 15)) * 16 + (p.getX() & 15)])).getFluidState();
-                        }
+                        case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) a[0]).getFluidState();
                         case "getBlockState" -> {
                             var p = (BlockPos) a[0];
+                            if (p.getY() < minY || p.getY() >= minY + height) yield Blocks.VOID_AIR.defaultBlockState();
                             if ((p.getX() >> 4) != cx || (p.getZ() >> 4) != cz)
                                 throw new AssertionError("read outside target chunk");
-                            yield p.getY() < minY || p.getY() >= minY + height ? Blocks.AIR.defaultBlockState()
-                                : Block.stateById(blocks[((p.getY() - minY) * 16 + (p.getZ() & 15)) * 16 + (p.getX() & 15)]);
+                            yield Block.stateById(blocks[((p.getY() - minY) * 16 + (p.getZ() & 15)) * 16 + (p.getX() & 15)]);
                         }
                         case "setBlock" -> {
                             var p = (BlockPos) a[0];

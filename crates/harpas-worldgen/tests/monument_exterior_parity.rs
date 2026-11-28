@@ -4,6 +4,7 @@ mod reference;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 
+use flate2::bufread::GzDecoder;
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource};
 use harpas_worldgen::{
@@ -105,7 +106,7 @@ fn terrain(x: i32, y: i32, z: i32, base_y: i32, mode: i32, sea: i32, palette: &[
     }]
 }
 
-struct Input(BufReader<File>);
+struct Input(BufReader<GzDecoder<BufReader<File>>>);
 impl Input {
     fn int(&mut self) -> i32 {
         let mut bytes = [0; 4];
@@ -239,7 +240,9 @@ fn monument_exteriors_match_vanilla() {
         "MonumentExteriorProbe",
         [inputs.display().to_string(), output.display().to_string()],
     );
-    let mut actual = Input(BufReader::new(File::open(output).unwrap()));
+    let mut actual = Input(BufReader::new(GzDecoder::new(BufReader::new(
+        File::open(output).unwrap(),
+    ))));
     let mut failures = Vec::new();
     let mut reported = std::collections::BTreeSet::new();
     let data = WorldgenData::from_json_entries([(

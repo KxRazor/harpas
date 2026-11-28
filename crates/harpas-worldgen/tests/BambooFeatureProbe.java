@@ -34,6 +34,10 @@ public final class BambooFeatureProbe {
         var at = test == 21 ? Blocks.WATER : test == 22 ? Blocks.SHORT_GRASS
             : test == 23 ? Blocks.CAVE_AIR : test == 24 ? Blocks.VOID_AIR : Blocks.AIR;
         region.setBlock(new BlockPos(15, y, -1), at.defaultBlockState(), 2);
+        if (test == 23 || test == 24) {
+            region.setBlock(new BlockPos(0, y, -16), Blocks.STONE.defaultBlockState(), 2);
+            if (!region.getBlockState(new BlockPos(15, y, -1)).is(at)) throw new AssertionError("missing " + at);
+        }
         if (test < 17) region.setBlock(new BlockPos(15, y + test, -1), Blocks.STONE.defaultBlockState(), 2);
     }
 
@@ -59,7 +63,7 @@ public final class BambooFeatureProbe {
         var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes));
         var factory = PalettedContainerFactory.create(access);
         var height = LevelHeightAccessor.create(-64, 384);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (long seed : new long[] {0, 42, -4172144997902289642L}) {
                 for (float probability : new float[] {0, 0.2f, 1}) {
                     var feature = new ConfiguredFeature<>(Feature.BAMBOO, new ProbabilityFeatureConfiguration(probability));

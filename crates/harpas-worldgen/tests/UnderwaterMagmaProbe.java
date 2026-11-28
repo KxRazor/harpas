@@ -75,7 +75,7 @@ public final class UnderwaterMagmaProbe {
         var access = new RegistryAccess.ImmutableRegistryAccess(List.of(BuiltInRegistries.BLOCK, biomes));
         var factory = PalettedContainerFactory.create(access);
         var height = LevelHeightAccessor.create(-64, 384);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (long seed : new long[]{0, 42, -4172144997902289642L}) for (boolean legacy : new boolean[]{false, true})
                 for (int test = 0; test < 36; test++) {
                     var proto = new ProtoChunk(new ChunkPos(0, -1), UpgradeData.EMPTY, height, factory, null);

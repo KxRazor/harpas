@@ -479,10 +479,13 @@ fn compare_cases(reference: &Reference, inputs: Compound, expected: Compound) {
         "MineshaftProbe",
         [input.display().to_string(), output.display().to_string()],
     );
-    let bytes = std::fs::read(output).unwrap();
-    let (_, Nbt::Compound(actual)) = Nbt::read_named(&mut bytes.as_slice()).unwrap() else {
+    let bytes = std::fs::read(&output).unwrap();
+    let mut payload = bytes.as_slice();
+    let (_, Nbt::Compound(actual)) = Nbt::read_named(&mut payload).unwrap() else {
         panic!("probe result");
     };
+    assert!(payload.is_empty(), "trailing bytes in {}", output.display());
+    assert_eq!(actual.len(), expected.len(), "mineshaft case count");
     let mut differences = 0;
     for (name, want) in expected.iter() {
         let Some(Nbt::Compound(got)) = actual.get(name) else {
@@ -496,6 +499,7 @@ fn compare_cases(reference: &Reference, inputs: Compound, expected: Compound) {
                 let Some(Nbt::IntArray(got)) = got.get(key) else {
                     panic!("{name} {key}");
                 };
+                assert_eq!(want.len(), got.len(), "{name} {key} size");
                 for (i, (a, b)) in want.iter().zip(got).enumerate() {
                     if a != b {
                         eprintln!(

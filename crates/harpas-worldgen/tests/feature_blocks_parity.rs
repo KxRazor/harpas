@@ -146,7 +146,7 @@ fn feature_blocks_match_vanilla() {
         ];
         args.extend(CHUNKS.iter().map(|(x, z)| format!("{x},{z}")));
         reference.java("FeatureBlocksProbe", args);
-        let text = fs::read_to_string(&output).expect("read the vanilla feature output");
+        let text = reference::read_text(&output);
         let mut lines = text.lines().peekable();
 
         let generator =
@@ -204,6 +204,7 @@ fn feature_blocks_match_vanilla() {
                 );
             }
             let required = match chunk {
+                (-119, -11) | (-393, 14) => Some("minecraft:lava"),
                 (204, -236) => Some("minecraft:bamboo"),
                 (-400, 368) => Some("minecraft:mossy_cobblestone"),
                 (-348, -421) => Some("minecraft:suspicious_sand"),

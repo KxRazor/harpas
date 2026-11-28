@@ -76,8 +76,17 @@ public final class StructureStartProbe {
         var factory = PalettedContainerFactory.create(registries);
         var manager = new StructureManager(null, new WorldOptions(seed, true, false), null);
         var chunks = new HashMap<Long, ChunkAccess>();
+        var referenceChunks = new ArrayList<ChunkPos>();
+        var referenceSources = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+        for (var line : Files.readAllLines(Path.of(args[3]))) {
+            var coordinates = line.split(" ");
+            var target = new ChunkPos(Integer.parseInt(coordinates[0]), Integer.parseInt(coordinates[1]));
+            referenceChunks.add(target);
+            for (int dx = -8; dx <= 8; dx++) for (int dz = -8; dz <= 8; dz++)
+                referenceSources.add(key(target.x() + dx, target.z() + dz));
+        }
 
-        try (var out = new PrintWriter(args[0])) {
+        try (var out = new ProbeOutput(args[0])) {
             for (int x : heightCoordinates()) {
                 for (int z : heightCoordinates()) {
                     out.println("height " + x + " " + z + " "
@@ -89,8 +98,8 @@ public final class StructureStartProbe {
                 for (int z = -radius; z < radius; z++) {
                     var proto = new ProtoChunk(new ChunkPos(x, z), UpgradeData.EMPTY, height, factory, null);
                     generator.createStructures(registries, state, manager, proto, templates, Level.OVERWORLD);
-                    chunks.put(key(x, z), proto);
                     var starts = new ArrayList<>(proto.getAllStarts().entrySet());
+                    if (!starts.isEmpty() && referenceSources.contains(key(x, z))) chunks.put(key(x, z), proto);
                     starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
                     for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());
                 }
@@ -115,12 +124,17 @@ public final class StructureStartProbe {
                 starts.sort(Comparator.comparing(entry -> structures.getKey(entry.getKey()).toString()));
                 for (var entry : starts) write(out, structures.getKey(entry.getKey()).toString(), entry.getValue());
             }
-            for (var line : Files.readAllLines(Path.of(args[3]))) {
-                var coordinates = line.split(" ");
-                int x = Integer.parseInt(coordinates[0]), z = Integer.parseInt(coordinates[1]);
-                var target = (ProtoChunk) chunks.get(key(x, z));
+            for (var position : referenceChunks) {
+                int x = position.x(), z = position.z();
+                var target = chunks.get(key(x, z));
+                if (target == null) target = new ProtoChunk(position, UpgradeData.EMPTY, height, factory, null);
                 var region = WorldgenReferenceProbe.TestRegion.create(registries, height, factory, target, seed);
-                region.chunks = chunks;
+                // Only starts are needed by createReferences; discard empty chunks after this lookup.
+                for (int dx = -8; dx <= 8; dx++) for (int dz = -8; dz <= 8; dz++) {
+                    long source = key(x + dx, z + dz);
+                    var chunk = chunks.get(source);
+                    if (chunk != null) region.chunks.put(source, chunk);
+                }
                 generator.createReferences(region, manager, target);
                 var references = new ArrayList<String>();
                 for (var entry : target.getAllReferences().entrySet()) {
@@ -166,6 +180,7 @@ public final class StructureStartProbe {
     }
 
     static void write(PrintWriter out, String structure, StructureStart start) throws Exception {
+        if (!start.isValid()) throw new AssertionError("invalid generated start for " + structure);
         var chunk = start.getChunkPos();
         String key = structure + ":" + chunk.x() + "," + chunk.z();
         if (saved.contains(key)) {

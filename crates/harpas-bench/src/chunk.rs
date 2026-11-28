@@ -117,7 +117,16 @@ pub struct Column {
 impl Column {
     /// Generates a plains-like column: deepslate, then stone with caves and ores, a grass surface with a tree
     /// and a pond, then air.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the column's block coordinates do not fit in an `i32`.
     pub fn generate(x: i32, z: i32) -> Column {
+        let range = (i32::MIN / 16)..=(i32::MAX / 16);
+        assert!(
+            range.contains(&x) && range.contains(&z),
+            "column outside block-coordinate range: {x},{z}"
+        );
         let surface = 8;
         let sections = (0..SECTIONS)
             .map(|i| match i {
@@ -467,6 +476,14 @@ mod tests {
     use super::*;
     use harpas_protocol_java::codec::{read_i16, read_i64, read_u8, read_varint};
     use harpas_protocol_java::v26_1::play::clientbound::Packet;
+
+    #[test]
+    fn synthetic_column_rejects_coords_outside_the_block_range() {
+        assert!(std::panic::catch_unwind(|| Column::generate(i32::MAX / 16 + 1, 0)).is_err());
+        assert!(std::panic::catch_unwind(|| Column::generate(0, i32::MIN / 16 - 1)).is_err());
+        let boundary = Column::generate(i32::MIN / 16, i32::MAX / 16);
+        assert_eq!(boundary.sections.len(), SECTIONS);
+    }
 
     #[test]
     fn palette_sizes_look_like_real_terrain() {

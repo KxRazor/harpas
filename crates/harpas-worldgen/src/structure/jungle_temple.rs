@@ -71,10 +71,8 @@ impl Temple<'_> {
         [x, b.min[1] + y, z]
     }
 
-    fn contains(&self, [x, y, z]: [i32; 3]) -> bool {
-        (x >> 4, z >> 4) == (self.chunk.chunk_x(), self.chunk.chunk_z())
-            && y >= self.chunk.min_y()
-            && y < self.chunk.min_y() + self.chunk.height()
+    fn contains(&self, pos: [i32; 3]) -> bool {
+        super::in_writable_area(self.chunk, pos)
     }
 
     fn block(&mut self, pos: [i32; 3], block: u32) {

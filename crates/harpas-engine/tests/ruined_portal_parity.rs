@@ -157,16 +157,13 @@ fn snapshot(
     tag
 }
 
-#[test]
-#[ignore = "needs Mojang's server: docs/parity.md#locally"]
-fn ruined_portal_blocks_and_metadata_match_vanilla() {
+fn portal_reference() -> (Reference, Arc<WorldgenData>, Arc<StructureTemplates>) {
     let reference = Reference::required();
     let mut data = WorldgenData::from_zip_path(&reference.server_jar).unwrap();
     // This probe compares its own structure pass; mineshaft_parity covers mine blocks.
     data.structure_sets.shift_remove("minecraft:mineshafts");
     let data = Arc::new(data);
     let templates = Arc::new(StructureTemplates::from_zip_path(&reference.server_jar).unwrap());
-    let generator = RuinedPortalGenerator::new(&data).unwrap();
     reference.compile(&[
         (
             "StructurePlacementProbe.java",
@@ -181,15 +178,24 @@ fn ruined_portal_blocks_and_metadata_match_vanilla() {
             include_str!("../../harpas-worldgen/tests/RuinedPortalProbe.java"),
         ),
     ]);
+    (reference, data, templates)
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn ruined_portal_blocks_and_metadata_match_vanilla() {
+    let (reference, data, templates) = portal_reference();
+    let generator = RuinedPortalGenerator::new(&data).unwrap();
     for &seed in reference::sampled_seeds(&[0, -4_172_144_997_902_289_642]) {
-        let mut inputs = Compound::new();
-        let mut expected = Compound::new();
         let mut names: Vec<_> = templates
             .ids()
             .filter(|n| n.starts_with("minecraft:ruined_portal/"))
             .collect();
         names.sort_unstable();
+        // Bound the probe's in-memory columns and output to the cases for one template.
         for (ti, &name) in names.iter().enumerate() {
+            let mut inputs = Compound::new();
+            let mut expected = Compound::new();
             for scenario in 0..10 {
                 let rotation = Rotation::ALL[(ti + scenario) % 4];
                 let mirror = if scenario < 4 {
@@ -291,9 +297,15 @@ fn ruined_portal_blocks_and_metadata_match_vanilla() {
                     }
                 }
             }
+            compare(&reference, inputs, expected);
         }
-        compare(&reference, inputs, expected);
     }
+}
+
+#[test]
+#[ignore = "needs Mojang's server: docs/parity.md#locally"]
+fn ruined_portal_workers_and_saved_neighbors_match_vanilla() {
+    let (reference, data, templates) = portal_reference();
     let mut inputs = Compound::new();
     let mut expected = Compound::new();
     worker_cases(&reference, &data, &templates, &mut inputs, &mut expected);
@@ -315,10 +327,16 @@ fn compare(reference: &Reference, inputs: Compound, expected: Compound) {
             output_path.display().to_string(),
         ],
     );
-    let bytes = std::fs::read(output_path).unwrap();
-    let (_, Nbt::Compound(actual)) = Nbt::read_named(&mut bytes.as_slice()).unwrap() else {
+    let bytes = std::fs::read(&output_path).unwrap();
+    let mut payload = bytes.as_slice();
+    let (_, Nbt::Compound(actual)) = Nbt::read_named(&mut payload).unwrap() else {
         panic!("output")
     };
+    assert!(
+        payload.is_empty(),
+        "trailing bytes in {}",
+        output_path.display()
+    );
     assert_eq!(actual.len(), expected.len(), "portal case count");
     let mut failures = Vec::new();
     for (name, tag) in expected.iter() {
@@ -517,8 +535,8 @@ fn worker_cases(
             let min_z = bounds.min[2];
             let max_x = bounds.max[0];
             let max_z = bounds.max[2];
-            for x in (min_x >> 4)..=(max_x >> 4) {
-                for z in (min_z >> 4)..=(max_z >> 4) {
+            for x in ((min_x - 2) >> 4)..=((max_x + 2) >> 4) {
+                for z in ((min_z - 2) >> 4)..=((max_z + 2) >> 4) {
                     let mut nearby = Vec::new();
                     for nx in x - 8..=x + 8 {
                         for nz in z - 8..=z + 8 {
@@ -578,6 +596,22 @@ fn worker_cases(
                     all.push(source.clone());
                 }
                 let mut inp = input_with_terrain(&baseline, seed, &all, &block);
+                // Other starts may inspect the blocks immediately beyond the receiving chunk's clip.
+                let Some(Nbt::Compound(mut columns)) = inp.remove("columns") else {
+                    panic!("portal columns");
+                };
+                for x in pos.x * 16 - 2..=pos.x * 16 + 17 {
+                    for z in pos.z * 16 - 2..=pos.z * 16 + 17 {
+                        let key = format!("{x},{z}");
+                        if columns.get(&key).is_none() {
+                            columns.insert(
+                                key,
+                                Nbt::IntArray((-64..320).map(|y| block(x, y, z) as i32).collect()),
+                            );
+                        }
+                    }
+                }
+                inp.insert("columns", columns);
                 inp.insert("keep_neighbor_starts", 0_i8);
                 // Workers place every structure that reaches the chunk, such as an ocean monument owned by
                 // a neighbor, so vanilla must place them too. References reach at most 8 chunks.

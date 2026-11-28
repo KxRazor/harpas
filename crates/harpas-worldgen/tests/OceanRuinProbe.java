@@ -42,11 +42,7 @@ public final class OceanRuinProbe {
         var registries = server.registries();
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var ruin = structures.getValue(net.minecraft.resources.Identifier.parse("ocean_ruin_cold"));
-        var step = ruin.step();
-        var inStep = structures.stream().filter(s -> s.step() == step).toList();
-        int index = inStep.indexOf(ruin);
-        if (index != 7 || step.ordinal() != 4 || inStep.indexOf(structures.getValue(net.minecraft.resources.Identifier.parse("ocean_ruin_warm"))) != 8)
-            throw new AssertionError("26.1 ocean ruin seed order");
+        var warm = structures.getValue(net.minecraft.resources.Identifier.parse("ocean_ruin_warm"));
 
         var storage = net.minecraft.world.level.storage.LevelStorageSource.createDefault(Path.of("ocean-ruin-worlds")).createAccess("test");
         var manager = new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager(
@@ -76,7 +72,7 @@ public final class OceanRuinProbe {
                 var list = (ListTag) initialPost.get(section);
                 for (var value : list) proto.addPackedPostProcess(new it.unimi.dsi.fastutil.shorts.ShortArrayList(new short[]{((ShortTag) value).shortValue()}), section);
             }
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             for (var value : input.getListOrEmpty("initial_entities")) {
                 var entity = (CompoundTag) value;
                 var at = new BlockPos(entity.getIntOr("x", 0), entity.getIntOr("y", 0), entity.getIntOr("z", 0));
@@ -85,6 +81,7 @@ public final class OceanRuinProbe {
                 entities.put(at, loaded);
             }
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(OceanRuinProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
                     case "getHeight" -> {
@@ -97,7 +94,7 @@ public final class OceanRuinProbe {
                         yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, arguments);
                     case "registryAccess" -> registries;
                     case "getLevel" -> level;
                     case "getSeaLevel" -> 63;
@@ -113,7 +110,7 @@ public final class OceanRuinProbe {
                         var at = (BlockPos) arguments[0];
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
                         int[] column = input.getCompoundOrEmpty("columns").getIntArray(at.getX() + "," + at.getZ()).orElseThrow(() -> new AssertionError("missing column " + at));
-                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.AIR.defaultBlockState() : Block.stateById(column[at.getY()+64]);
+                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.VOID_AIR.defaultBlockState() : Block.stateById(column[at.getY()+64]);
                     }
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
@@ -132,33 +129,16 @@ public final class OceanRuinProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!id.equals("minecraft:ocean_ruin_cold") && !id.equals("minecraft:ocean_ruin_warm")) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, id.endsWith("_warm") ? 8 : index, step.ordinal());
-                start.placeInChunk(world, null, null, random, bounds, chunkPos);
-            }
-            var result = snapshot(proto, starts, entities, context, registries).copy();
-            var post = new ListTag();
-            for (var section : proto.getPostProcessing()) {
-                var entries = new ListTag();
-                if (section != null) for (short value : section) entries.add(ShortTag.valueOf(value));
-                post.add(entries);
-            }
-            result.put("PostProcessing", post);
-            var saved = result.getCompoundOrEmpty("starts");
-            for (var start : starts) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!input.getBooleanOr("keep_neighbor_starts", true) && !start.getChunkPos().equals(chunkPos)) {
-                    saved.remove(id); continue;
-                }
-            }
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == ruin || s.getStructure() == warm).toList(), seed, chunkPos,
+                (start, random) -> start.placeInChunk(world, null, null, random, bounds, chunkPos));
+            var persisted = starts.stream().filter(start -> input.getBooleanOr("keep_neighbor_starts", true)
+                || start.getChunkPos().equals(chunkPos)).toList();
+            var result = snapshot(proto, persisted, entities, context, registries);
+            result.put("PostProcessing", ProbeTerrain.postProcessing(proto));
             results.put(name, result);
         }
         try (var stream = new java.io.DataOutputStream(new java.io.BufferedOutputStream(java.nio.file.Files.newOutputStream(Path.of(args[1]))))) {
@@ -171,12 +151,7 @@ public final class OceanRuinProbe {
 
     static CompoundTag snapshot(ProtoChunk proto, List<StructureStart> starts, Map<BlockPos, BlockEntity> entities,
             StructurePieceSerializationContext context, net.minecraft.core.RegistryAccess registries) {
-        var result = BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
-        var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(),
-            start.createTag(context, start.getChunkPos()));
-        result.put("starts", saved);
-        return result;
+        return BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
     }
 
 }

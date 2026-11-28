@@ -77,7 +77,7 @@ public final class RuinedPortalProbe {
                 var list = (ListTag) initialPost.get(section);
                 for (var value : list) proto.addPackedPostProcess(new it.unimi.dsi.fastutil.shorts.ShortArrayList(new short[]{((ShortTag) value).shortValue()}), section);
             }
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             for (var value : input.getListOrEmpty("initial_entities")) {
                 var entity = (CompoundTag) value;
                 var at = new BlockPos(entity.getIntOr("x", 0), entity.getIntOr("y", 0), entity.getIntOr("z", 0));
@@ -85,27 +85,22 @@ public final class RuinedPortalProbe {
                 if (loaded == null) throw new AssertionError("cannot load block entity");
                 entities.put(at, loaded);
             }
+            var pass = new ChunkPos[] {chunkPos};
+            var columns = input.getCompoundOrEmpty("columns");
             var external = new HashMap<BlockPos, net.minecraft.world.level.block.state.BlockState>();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(RuinedPortalProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
                     case "holderLookup" -> registries.lookupOrThrow((net.minecraft.resources.ResourceKey) arguments[0]);
-                    case "getHeight" -> {
-                        int x = (int) arguments[1], z = (int) arguments[2];
-                        int height = -64;
-                        for (int y = 319; y >= -64; y--) {
-                            var state = ((WorldGenLevel) proxy).getBlockState(new BlockPos(x, y, z));
-                            boolean matches = arguments[0] == Heightmap.Types.WORLD_SURFACE_WG ? !state.isAir() : state.blocksMotion();
-                            if (matches) { height = y + 1; break; }
-                        }
-                        yield height;
-                    }
+                    case "getHeight" -> arguments == null ? proto.getHeight() : ProbeTerrain.height((WorldGenLevel) proxy,
+                        (Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]);
                     case "getHeightmapPos" -> {
                         var at = (BlockPos) arguments[1];
                         yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, pass[0], arguments);
                     case "registryAccess" -> registries;
                     case "getLevel" -> level;
                     case "getSeaLevel" -> 63;
@@ -120,15 +115,18 @@ public final class RuinedPortalProbe {
                     case "getSeed" -> seed;
                     case "getBlockState" -> {
                         var at = (BlockPos) arguments[0];
+                        if (proto.isOutsideBuildHeight(at)) yield Blocks.VOID_AIR.defaultBlockState();
+                        if (!ProbeTerrain.canRead(pass[0], at.getX() >> 4, at.getZ() >> 4))
+                            throw new AssertionError("read outside generation region: " + at);
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
                         if (external.containsKey(at)) yield external.get(at);
-                        int[] column = input.getCompoundOrEmpty("columns").getIntArray(at.getX() + "," + at.getZ()).orElseThrow(() -> new AssertionError("missing column " + at));
-                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.AIR.defaultBlockState() : Block.stateById(column[at.getY()+64]);
+                        int[] column = columns.getIntArray(at.getX() + "," + at.getZ()).orElseThrow(() -> new AssertionError("missing column " + at));
+                        yield Block.stateById(column[at.getY() + 64]);
                     }
+                    case "ensureCanWrite" -> ProbeTerrain.canWrite(pass[0], (BlockPos) arguments[0]);
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
-
-                        if (at.getY() < -64 || at.getY() >= 320) yield false;
+                        if (!ProbeTerrain.canWrite(pass[0], at) || proto.isOutsideBuildHeight(at)) yield false;
                         var state = (net.minecraft.world.level.block.state.BlockState) arguments[1];
                         var before = ((WorldGenLevel) proxy).getBlockState(at);
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) proto.setBlockState(at, state, 0);
@@ -143,7 +141,7 @@ public final class RuinedPortalProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
             // Worker chunks also hold every other structure that reaches them, including starts owned by
@@ -152,50 +150,39 @@ public final class RuinedPortalProbe {
             var placed = new ArrayList<>(starts);
             for (var value : input.getListOrEmpty("neighbor_starts")) {
                 var start = StructureStart.loadStaticStart(context, (CompoundTag) value, seed);
-                if (start == null) throw new AssertionError("failed to load neighbor start");
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load neighbor start");
                 placed.add(start);
             }
-            Comparator<StructureStart> step = Comparator.comparingInt(s -> s.getStructure().step().ordinal());
-            placed.sort(step.thenComparingInt(s -> structures.stream()
-                .filter(other -> other.step() == s.getStructure().step()).toList().indexOf(s.getStructure())));
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
+            // Spill from a portal is produced by decoration in the chunk containing its piece center.
+            var portalPasses = new TreeMap<ChunkPos, List<StructureStart>>(Comparator.comparingInt(ChunkPos::x)
+                .thenComparingInt(ChunkPos::z));
+            var targetStarts = new ArrayList<StructureStart>();
             for (var start : placed) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!id.startsWith("minecraft:ruined_portal") || id.endsWith("_nether")) {
-                    if (!all) continue;
-                    var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                    long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                    var structure = start.getStructure();
-                    int index = structures.stream().filter(s -> s.step() == structure.step()).toList().indexOf(structure);
-                    random.setFeatureSeed(decoration, index, structure.step().ordinal());
-                    start.placeInChunk(world, null, null, random, bounds, chunkPos);
-                    continue;
+                var id = structures.getKey(start.getStructure()).getPath();
+                if (id.startsWith("ruined_portal") && !id.endsWith("_nether")) {
+                    var owner = ProbeTerrain.chunkPos(start.getPieces().getFirst().getBoundingBox().getCenter());
+                    if (owner.equals(chunkPos)) targetStarts.add(start);
+                    else portalPasses.computeIfAbsent(owner, key -> new ArrayList<>()).add(start);
+                } else if (all) {
+                    targetStarts.add(start);
                 }
-                var center = start.getPieces().getFirst().getBoundingBox().getCenter();
-                var owner = new ChunkPos(center.getX() >> 4, center.getZ() >> 4);
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, owner.x() * 16, owner.z() * 16);
-                var structure = start.getStructure();
-                int index = structures.stream().filter(s -> s.step() == structure.step()).toList().indexOf(structure);
-                random.setFeatureSeed(decoration, index, 4);
-                start.placeInChunk(world, null, null, random, new BoundingBox(owner.x() * 16, -64, owner.z() * 16, owner.x() * 16 + 15, 319, owner.z() * 16 + 15), owner);
             }
+            for (var entry : portalPasses.entrySet()) {
+                var owner = entry.getKey();
+                pass[0] = owner;
+                var bounds = ProbeTerrain.writableArea(owner, proto.getHeightAccessorForGeneration());
+                ProbeTerrain.decorate(structures, entry.getValue(), seed, owner,
+                    (start, random) -> start.placeInChunk(world, null, null, random, bounds, owner));
+            }
+            pass[0] = chunkPos;
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, targetStarts, seed, chunkPos,
+                (start, random) -> start.placeInChunk(world, null, null, random, bounds, chunkPos));
             entities.entrySet().removeIf(e -> (e.getKey().getX() >> 4) != cx || (e.getKey().getZ() >> 4) != cz);
-            var result = snapshot(proto, starts, entities, context, registries).copy();
-            var post = new ListTag();
-            for (var section : proto.getPostProcessing()) {
-                var entries = new ListTag();
-                if (section != null) for (short value : section) entries.add(ShortTag.valueOf(value));
-                post.add(entries);
-            }
-            result.put("PostProcessing", post);
-            var saved = result.getCompoundOrEmpty("starts");
-            for (var start : starts) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!input.getBooleanOr("keep_neighbor_starts", true) && !start.getChunkPos().equals(chunkPos)) {
-                    saved.remove(id); continue;
-                }
-            }
+            var persisted = starts.stream().filter(start -> input.getBooleanOr("keep_neighbor_starts", true)
+                || start.getChunkPos().equals(chunkPos)).toList();
+            var result = snapshot(proto, persisted, entities, context, registries);
+            result.put("PostProcessing", ProbeTerrain.postProcessing(proto));
             results.put(name, result);
         }
         try (var stream = new java.io.DataOutputStream(new java.io.BufferedOutputStream(java.nio.file.Files.newOutputStream(Path.of(args[1]))))) {
@@ -208,12 +195,7 @@ public final class RuinedPortalProbe {
 
     static CompoundTag snapshot(ProtoChunk proto, List<StructureStart> starts, Map<BlockPos, BlockEntity> entities,
             StructurePieceSerializationContext context, net.minecraft.core.RegistryAccess registries) {
-        var result = BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
-        var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(),
-            start.createTag(context, start.getChunkPos()));
-        result.put("starts", saved);
-        return result;
+        return BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
     }
 
 }

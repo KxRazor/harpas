@@ -31,8 +31,8 @@ import net.minecraft.world.level.levelgen.structure.Structure;
 public final class FeatureBlocksProbe {
     static long key(int x, int z) { return ((long) x << 32) ^ (z & 0xffffffffL); }
 
-    static void finalChunk(PrintWriter out, DataOutputStream discard, long seed, RegistryAccess access,
-            PalettedContainerFactory factory, LevelHeightAccessor height, Registry<Biome> biomes,
+    static void finalChunk(PrintWriter out, long seed, RegistryAccess access,
+            PalettedContainerFactory factory, LevelHeightAccessor height,
             NoiseBasedChunkGenerator generator, RandomState random, int cx, int cz) throws Exception {
         var chunks = new HashMap<Long, ProtoChunk>();
         for (int dx = -2; dx <= 2; dx++) {
@@ -41,7 +41,7 @@ public final class FeatureBlocksProbe {
                 var proto = new ProtoChunk(at, UpgradeData.EMPTY, height, factory, null);
                 var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, proto, seed);
                 var manager = new StructureManager(region, new WorldOptions(seed, false, false), null);
-                ChunkParityProbe.writeChunk(discard, seed, biomes, factory, generator, random, region, manager, proto);
+                ChunkParityProbe.generateCarved(seed, factory, generator, random, region, manager, proto);
                 proto.setPersistedStatus(ChunkStatus.CARVERS);
                 chunks.put(key(at.x(), at.z()), proto);
             }
@@ -53,7 +53,7 @@ public final class FeatureBlocksProbe {
         for (int y = -64; y < 320; y++)
             for (int z = 0; z < 16; z++)
                 for (int x = 0; x < 16; x++)
-                    before[index++] = Block.getId(center.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
+                    before[index++] = Block.getId(ProbeTerrain.paletteState(center, pos.set(cx * 16 + x, y, cz * 16 + z)));
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 var target = chunks.get(key(cx + dx, cz + dz));
@@ -72,7 +72,7 @@ public final class FeatureBlocksProbe {
         for (int y = -64; y < 320; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++, index++) {
-                    int id = Block.getId(center.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z)));
+                    int id = Block.getId(ProbeTerrain.paletteState(center, pos.set(cx * 16 + x, y, cz * 16 + z)));
                     if (before[index] != id) out.println((cx * 16 + x) + " " + y + " " + (cz * 16 + z) + " " + id);
                 }
             }
@@ -144,12 +144,11 @@ public final class FeatureBlocksProbe {
         }
         field.set(generator, (java.util.function.Supplier<List<FeatureSorter.StepFeatureData>>) () -> kept);
 
-        var discard = new DataOutputStream(OutputStream.nullOutputStream());
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             if (args.length > 4 && args[4].equals("final")) {
                 for (int argument = 5; argument < args.length; argument++) {
                     var coordinates = args[argument].split(",");
-                    finalChunk(out, discard, seed, access, factory, height, biomes, generator, random,
+                    finalChunk(out, seed, access, factory, height, generator, random,
                         Integer.parseInt(coordinates[0]), Integer.parseInt(coordinates[1]));
                 }
                 net.minecraft.util.Util.shutdownExecutors();
@@ -165,7 +164,7 @@ public final class FeatureBlocksProbe {
                         var proto = new ProtoChunk(at, UpgradeData.EMPTY, height, factory, null);
                         var region = WorldgenReferenceProbe.TestRegion.create(access, height, factory, proto, seed);
                         var manager = new StructureManager(region, new WorldOptions(seed, false, false), null);
-                        ChunkParityProbe.writeChunk(discard, seed, biomes, factory, generator, random, region, manager, proto);
+                        ChunkParityProbe.generateCarved(seed, factory, generator, random, region, manager, proto);
                         proto.setPersistedStatus(ChunkStatus.CARVERS);
                         chunks.put(key(at.x(), at.z()), proto);
                     }
@@ -188,7 +187,7 @@ public final class FeatureBlocksProbe {
                     for (int y = -64; y < 320; y++) {
                         for (int z = (cz - 1) * 16; z < (cz + 2) * 16; z++) {
                             for (int x = (cx - 1) * 16; x < (cx + 2) * 16; x++, index++) {
-                                int id = Block.getId(chunks.get(key(x >> 4, z >> 4)).getBlockState(pos.set(x, y, z)));
+                                int id = Block.getId(ProbeTerrain.paletteState(chunks.get(key(x >> 4, z >> 4)), pos.set(x, y, z)));
                                 if (pass == 0) before[index] = id;
                                 else if (before[index] != id) out.println(x + " " + y + " " + z + " " + id);
                             }

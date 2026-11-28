@@ -485,8 +485,7 @@ fn fixture(
         &mut |_, _| unreachable!("no pyramid"),
         &mut |_, _, _| unreachable!("no pyramid"),
     );
-    let mut resumed = snapshot(&chunk, &own, entities);
-    resumed.remove("PostProcessing");
+    let resumed = snapshot(&chunk, &own, entities);
     let Some(Nbt::Compound(mut input)) = inputs.remove(name) else {
         panic!("input");
     };

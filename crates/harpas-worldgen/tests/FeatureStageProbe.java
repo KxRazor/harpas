@@ -28,7 +28,7 @@ public final class FeatureStageProbe {
         field.setAccessible(true);
         @SuppressWarnings("unchecked")
         var steps = ((java.util.function.Supplier<List<FeatureSorter.StepFeatureData>>) field.get(generator)).get();
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (var step : steps) {
                 var line = new StringJoiner(" ", "step ", "");
                 for (var feature : step.features()) line.add(names.get(feature));

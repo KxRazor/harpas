@@ -1,8 +1,6 @@
 //! Bamboo's blocks, result, random consumption and survival, compared with the owner's vanilla server.
 mod reference;
 
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
 use harpas_worldgen::BlockGetter;
@@ -58,6 +56,9 @@ fn prepare(test: usize, y: i32) -> RegionFeatureWorld {
         _ => "air",
     };
     world.set_block_state(15, y, -1, state(at));
+    if matches!(test, 23 | 24) {
+        world.set_block_state(0, y, -16, state("stone"));
+    }
     if test < 17 {
         world.set_block_state(15, y + test as i32, -1, state("stone"));
     }
@@ -108,7 +109,7 @@ fn bamboo_matches_vanilla() {
             reference.server_jar.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     for seed in [0, 42, -4_172_144_997_902_289_642] {
         for (name, probability) in [
@@ -124,6 +125,12 @@ fn bamboo_matches_vanilla() {
                     _ => 64,
                 };
                 let mut world = prepare(test, y);
+                if matches!(test, 23 | 24) {
+                    assert_eq!(
+                        world.block_state(15, y, -1),
+                        state(if test == 23 { "cave_air" } else { "void_air" })
+                    );
+                }
                 let before = blocks(&world, y);
                 let mut random = WorldgenRandom::new(XoroshiroRandom::new(seed));
                 let placed = place_feature(&mut world, &feature, &mut random, [15, y, -1]);

@@ -63,17 +63,30 @@ public final class PoolElementProbe {
             for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
                 proto.setBlockState(pos.set(cx * 16 + x, y, cz * 16 + z), terrain(layers, y), 0);
             proto.setPersistedStatus(ChunkStatus.CARVERS);
-            var entities = new HashMap<BlockPos, BlockEntity>();
             // Blocks written to the eight neighboring chunks, which a generation region also lets features write.
             var outside = new HashMap<BlockPos, BlockState>();
+            var chunks = new HashMap<ChunkPos, ProtoChunk>();
+            chunks.put(chunkPos, proto);
+            var factory = PalettedContainerFactory.create(registries);
+            java.util.function.Function<ChunkPos, ProtoChunk> chunkAt = where -> {
+                if (!ProbeTerrain.canRead(chunkPos, where.x(), where.z())) throw new AssertionError("read outside region: " + where);
+                return chunks.computeIfAbsent(where, key -> {
+                    var chunk = new ProtoChunk(key, UpgradeData.EMPTY, LevelHeightAccessor.create(-64, 384), factory, null);
+                    var p = new BlockPos.MutableBlockPos();
+                    for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
+                        chunk.setBlockState(p.set(key.getMinBlockX() + x, y, key.getMinBlockZ() + z), terrain(layers, y), 0);
+                    chunk.setPersistedStatus(ChunkStatus.CARVERS);
+                    return chunk;
+                });
+            };
             var level = CappedProcessorProbe.seedLevel(seed);
-            // Every column has the same layers; heights describe them before placement, as processors read them.
             var world = (WorldGenLevel) Proxy.newProxyInstance(PoolElementProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
-                    case "getHeight" -> arguments == null ? 384 : height(layers, (Heightmap.Types) arguments[0]);
+                    case "getHeight" -> arguments == null ? 384 : ProbeTerrain.height((WorldGenLevel) proxy,
+                        (Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]);
                     case "getHeightmapPos" -> {
                         var at = (BlockPos) arguments[1];
-                        yield new BlockPos(at.getX(), height(layers, (Heightmap.Types) arguments[0]), at.getZ());
+                        yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
                     case "isStateAtPosition" -> ((java.util.function.Predicate<BlockState>) arguments[1])
@@ -81,7 +94,7 @@ public final class PoolElementProbe {
                     case "isFluidAtPosition" -> ((java.util.function.Predicate<net.minecraft.world.level.material.FluidState>) arguments[1])
                         .test(((WorldGenLevel) proxy).getFluidState((BlockPos) arguments[0]));
                     case "isEmptyBlock" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).isAir();
-                    case "getChunk" -> proto;
+                    case "getChunk" -> chunkAt.apply(ProbeTerrain.requestedChunk(arguments));
                     case "registryAccess" -> registries;
                     case "holderLookup" -> registries.lookupOrThrow((net.minecraft.resources.ResourceKey) arguments[0]);
                     case "getLevel" -> level;
@@ -91,36 +104,30 @@ public final class PoolElementProbe {
                     case "getMinY" -> -64;
                     case "getMaxY" -> 319;
                     case "getSeed" -> seed;
-                    case "ensureCanWrite" -> {
-                        var at = (BlockPos) arguments[0];
-                        yield Math.abs((at.getX() >> 4) - cx) <= 1 && Math.abs((at.getZ() >> 4) - cz) <= 1;
-                    }
+                    case "ensureCanWrite" -> ProbeTerrain.canWrite(chunkPos, (BlockPos) arguments[0]);
                     case "getBlockState" -> {
                         var at = (BlockPos) arguments[0];
                         if (at.getY() < -64 || at.getY() >= 320) yield Blocks.VOID_AIR.defaultBlockState();
-                        if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
-                        yield outside.getOrDefault(at, terrain(layers, at.getY()));
+                        yield chunkAt.apply(ProbeTerrain.chunkPos(at)).getBlockState(at);
                     }
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
-                        if (at.getY() < -64 || at.getY() >= 320) yield false;
+                        if (!ProbeTerrain.canWrite(chunkPos, at) || at.getY() < -64 || at.getY() >= 320) yield false;
                         var state = (BlockState) arguments[1];
-                        if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) {
-                            if (Math.abs((at.getX() >> 4) - cx) > 1 || Math.abs((at.getZ() >> 4) - cz) > 1) throw new AssertionError("write outside region " + at);
-                            outside.put(at, state);
-                            yield true;
-                        }
-                        var before = proto.getBlockState(at);
-                        proto.setBlockState(at, state, 0);
-                        if (before.getBlock() != state.getBlock()) entities.remove(at);
+                        var chunk = chunkAt.apply(ProbeTerrain.chunkPos(at));
+                        var before = chunk.getBlockState(at);
+                        chunk.setBlockState(at, state, (int) arguments[2]);
+                        if (chunk != proto) outside.put(at, state);
+                        if (before.getBlock() != state.getBlock()) chunk.removeBlockEntity(at);
                         yield true;
                     }
                     // Like a proto chunk, a block entity exists once something asks for it, not with its block.
                     case "getBlockEntity" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
-                        var state = proto.getBlockState(at);
+                        var state = ((WorldGenLevel) proxy).getBlockState(at);
                         var entity = state.hasBlockEntity()
-                            ? entities.computeIfAbsent(at, k -> ((EntityBlock) state.getBlock()).newBlockEntity(k, state)) : null;
+                            ? chunkAt.apply(ProbeTerrain.chunkPos(at)).getBlockEntities()
+                                .computeIfAbsent(at, k -> ((EntityBlock) state.getBlock()).newBlockEntity(k, state)) : null;
                         yield arguments.length == 1 ? entity : Optional.ofNullable(entity);
                     }
                     default -> throw new UnsupportedOperationException(method.toString());
@@ -136,11 +143,12 @@ public final class PoolElementProbe {
             var result = new CompoundTag();
             var changes = new ArrayList<Integer>();
             for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
-                var state = proto.getBlockState(pos.set(cx * 16 + x, y, cz * 16 + z));
+                var state = ProbeTerrain.paletteState(proto, pos.set(cx * 16 + x, y, cz * 16 + z));
                 if (state != terrain(layers, y)) { changes.add(((y + 64) * 16 + z) * 16 + x); changes.add(Block.getId(state)); }
             }
             result.putIntArray("changes", changes.stream().mapToInt(Integer::intValue).toArray());
             var saved = new ListTag();
+            var entities = proto.getBlockEntities();
             var positions = new ArrayList<>(entities.keySet());
             positions.sort(Comparator.comparingInt((BlockPos p) -> p.getY()).thenComparingInt(BlockPos::getZ).thenComparingInt(BlockPos::getX));
             for (var position : positions) saved.add(entities.get(position).saveWithFullMetadata(registries));

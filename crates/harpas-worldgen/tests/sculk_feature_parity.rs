@@ -1,11 +1,9 @@
 //! Sculk patches and sculk veins compared block by block with vanilla's own features, in test caves.
 mod reference;
 
-use harpas_worldgen::BlockGetter;
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::BlockGetter;
 use harpas_worldgen::{
     CompiledFeature, FeatureCompiler, GeneratedChunk, RegionFeatureWorld, WorldgenData,
     place_feature,
@@ -150,7 +148,7 @@ fn sculk_patches_and_veins_match_vanilla() {
     ]);
     let output = reference.temp.0.join("sculk.txt");
     reference.java("SculkFeatureProbe", [output.display().to_string()]);
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     let mut compiler = FeatureCompiler::new(&data);
     let (mut cases, mut placed) = (0, 0);

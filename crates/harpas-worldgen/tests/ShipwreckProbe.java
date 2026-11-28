@@ -27,10 +27,7 @@ public final class ShipwreckProbe {
         var registries = server.registries();
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var shipwreck = structures.getValue(net.minecraft.resources.Identifier.parse("shipwreck"));
-        var step = shipwreck.step();
-        var inStep = structures.stream().filter(s -> s.step() == step).toList();
-        int index = inStep.indexOf(shipwreck);
-        if (index != 17 || step.ordinal() != 4) throw new AssertionError("26.1 shipwreck seed order");
+        var beached = structures.getValue(net.minecraft.resources.Identifier.parse("shipwreck_beached"));
 
         var storage = net.minecraft.world.level.storage.LevelStorageSource.createDefault(Path.of("shipwreck-worlds")).createAccess("test");
         var manager = new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager(
@@ -59,7 +56,7 @@ public final class ShipwreckProbe {
                 var list = (ListTag) initialPost.get(section);
                 for (var value : list) proto.addPackedPostProcess(new it.unimi.dsi.fastutil.shorts.ShortArrayList(new short[]{((ShortTag) value).shortValue()}), section);
             }
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             for (var value : input.getListOrEmpty("initial_entities")) {
                 var entity = (CompoundTag) value;
                 var at = new BlockPos(entity.getIntOr("x", 0), entity.getIntOr("y", 0), entity.getIntOr("z", 0));
@@ -69,6 +66,7 @@ public final class ShipwreckProbe {
             }
             int[] surrounding = input.getIntArray("surrounding").orElseThrow();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
+            var chunkViews = new ProbeTerrain.ChunkViews(proto, registries);
             var world = (WorldGenLevel) Proxy.newProxyInstance(ShipwreckProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
                     case "getHeight" -> {
@@ -81,7 +79,7 @@ public final class ShipwreckProbe {
                         yield new BlockPos(at.getX(), ((WorldGenLevel) proxy).getHeight((Heightmap.Types) arguments[0], at.getX(), at.getZ()), at.getZ());
                     }
                     case "getFluidState" -> ((WorldGenLevel) proxy).getBlockState((BlockPos) arguments[0]).getFluidState();
-                    case "getChunk" -> proto;
+                    case "getChunk" -> chunkViews.get((WorldGenLevel) proxy, arguments);
                     case "registryAccess" -> registries;
                     case "getLevel" -> null;
                     case "isClientSide" -> false;
@@ -97,7 +95,7 @@ public final class ShipwreckProbe {
                         if ((at.getX() >> 4) == cx && (at.getZ() >> 4) == cz) yield proto.getBlockState(at);
                         int x = at.getX() - cx * 16 + 1, z = at.getZ() - cz * 16 + 1;
                         if (x < 0 || x >= 18 || z < 0 || z >= 18) throw new AssertionError("read outside provided terrain: " + at);
-                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.AIR.defaultBlockState()
+                        yield at.getY() < -64 || at.getY() >= 320 ? Blocks.VOID_AIR.defaultBlockState()
                             : Block.stateById(surrounding[((at.getY() + 64) * 18 + z) * 18 + x]);
                     }
                     case "setBlock" -> {
@@ -117,33 +115,16 @@ public final class ShipwreckProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!id.equals("minecraft:shipwreck") && !id.equals("minecraft:shipwreck_beached")) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, id.endsWith("_beached") ? 18 : index, step.ordinal());
-                start.placeInChunk(world, null, null, random, bounds, chunkPos);
-            }
-            var result = snapshot(proto, starts, entities, context, registries).copy();
-            var post = new ListTag();
-            for (var section : proto.getPostProcessing()) {
-                var entries = new ListTag();
-                if (section != null) for (short value : section) entries.add(ShortTag.valueOf(value));
-                post.add(entries);
-            }
-            result.put("PostProcessing", post);
-            var saved = result.getCompoundOrEmpty("starts");
-            for (var start : starts) {
-                var id = structures.getKey(start.getStructure()).toString();
-                if (!input.getBooleanOr("keep_neighbor_starts", true) && !start.getChunkPos().equals(chunkPos)) {
-                    saved.remove(id); continue;
-                }
-            }
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == shipwreck || s.getStructure() == beached).toList(), seed, chunkPos,
+                (start, random) -> start.placeInChunk(world, null, null, random, bounds, chunkPos));
+            var persisted = starts.stream().filter(start -> input.getBooleanOr("keep_neighbor_starts", true)
+                || start.getChunkPos().equals(chunkPos)).toList();
+            var result = snapshot(proto, persisted, entities, context, registries);
+            result.put("PostProcessing", ProbeTerrain.postProcessing(proto));
             results.put(name, result);
         }
         try (var stream = new java.io.DataOutputStream(new java.io.BufferedOutputStream(java.nio.file.Files.newOutputStream(Path.of(args[1]))))) {
@@ -156,12 +137,7 @@ public final class ShipwreckProbe {
 
     static CompoundTag snapshot(ProtoChunk proto, List<StructureStart> starts, Map<BlockPos, BlockEntity> entities,
             StructurePieceSerializationContext context, net.minecraft.core.RegistryAccess registries) {
-        var result = BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
-        var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(),
-            start.createTag(context, start.getChunkPos()));
-        result.put("starts", saved);
-        return result;
+        return BuriedTreasureProbe.snapshot(proto, starts, entities, context, registries);
     }
 
 }

@@ -3,8 +3,6 @@
 //! then the faces each state occludes light with and whether light passes between every pair of distinct faces.
 mod reference;
 
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::block_behavior::{Face, block_behavior};
 use reference::Reference;
@@ -19,7 +17,7 @@ fn block_behavior_matches_vanilla() {
     )]);
     let output = reference.temp.0.join("block-behavior.txt");
     reference.java("BlockBehaviorProbe", [output.display().to_string()]);
-    let text = fs::read_to_string(&output).expect("read the vanilla block behavior");
+    let text = reference::read_text(&output);
 
     let behavior = block_behavior();
     let states = block_states();

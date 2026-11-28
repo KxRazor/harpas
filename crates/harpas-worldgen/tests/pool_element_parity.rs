@@ -346,9 +346,12 @@ fn pool_elements_place_as_in_vanilla() {
         ],
     );
     let bytes = fs::read(output).unwrap();
-    let (_, Nbt::Compound(results)) = Nbt::read_named(&mut bytes.as_slice()).unwrap() else {
+    let mut payload = bytes.as_slice();
+    let (_, Nbt::Compound(results)) = Nbt::read_named(&mut payload).unwrap() else {
         panic!("output compound")
     };
+    assert!(payload.is_empty(), "trailing pool element output");
+    assert_eq!(results.len(), cases.len(), "pool element case count");
 
     let mut failures = Vec::new();
     let mut placing = 0;

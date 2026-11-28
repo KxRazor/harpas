@@ -73,7 +73,7 @@ public final class BlockBlobFeatureProbe {
             configurations.add(new ConfiguredFeature<>(Feature.BLOCK_BLOB,
                 new BlockBlobConfiguration(Blocks.OAK_LOG.defaultBlockState().setValue(RotatedPillarBlock.AXIS, Direction.Axis.X), predicate)));
         }
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (long seed : new long[] {0, 42, -4172144997902289642L}) for (boolean legacy : new boolean[] {false, true}) {
                 for (int config = 0; config < configurations.size(); config++) for (int test = 0; test < 32; test++) {
                     int y = y(test);

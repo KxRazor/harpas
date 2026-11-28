@@ -3,8 +3,6 @@
 
 mod reference;
 
-use std::fs;
-
 use harpas_core::random::{LegacyRandom, RandomSource};
 use harpas_worldgen::mansion_layout_grids;
 use reference::Reference;
@@ -30,7 +28,7 @@ fn mansion_layouts_match_vanilla() {
     let mut args = vec![output.display().to_string()];
     args.extend(seeds.iter().map(i64::to_string));
     reference.java("MansionLayoutProbe", args);
-    let vanilla = fs::read_to_string(&output).expect("read vanilla's mansion layouts");
+    let vanilla = reference::read_text(&output);
     let mut vanilla = vanilla.lines();
 
     let mut failures = Vec::new();

@@ -3276,7 +3276,9 @@ mod tests {
         assert!(steve.output.overflowed());
 
         // The connection is told to close before anything else that is queued, and the player leaves.
-        assert_eq!(slow.try_recv(), Ok(Output::Disconnect(player::TOO_SLOW)));
+        let mut outputs = slow.try_iter();
+        assert_eq!(outputs.next(), Some(Output::Disconnect(player::TOO_SLOW)));
+        assert_eq!(outputs.next(), None);
         tick(&mut game, 2);
         assert_eq!(game.online_players.load(Ordering::Relaxed), 1);
         assert!(

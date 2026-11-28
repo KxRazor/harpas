@@ -66,7 +66,7 @@ public final class CoralFeatureProbe {
         var vegetation = lookup.getOrThrow(ResourceKey.create(Registries.CONFIGURED_FEATURE, Identifier.parse("minecraft:warm_ocean_vegetation"))).value();
         var features = ((SimpleRandomFeatureConfiguration) vegetation.config()).features.stream()
             .map(holder -> holder.value().feature().value()).toList();
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (long seed : new long[] {0, 42, -4172144997902289642L}) for (boolean legacy : new boolean[] {false, true})
                 for (int shape = 0; shape < features.size(); shape++) for (int test = 0; test < 26; test++) {
                     int y = y(test);

@@ -1,11 +1,9 @@
 //! Surface snow and ice, live heightmaps, random tails and all snow supports compared with vanilla.
 mod reference;
 
-use harpas_worldgen::BlockGetter;
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::random::{RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::BlockGetter;
 use harpas_worldgen::{
     FeatureCompiler, FeatureWorld, GeneratedChunk, HeightmapType, RegionFeatureWorld, WorldgenData,
     compile_block_survival, place_feature,
@@ -74,6 +72,13 @@ fn prepare(biome: u32, ground: i32) -> RegionFeatureWorld {
             }
         }
     }
+    if (62..319).contains(&ground) {
+        for (x, material_index) in [(15, 16), (16, 3)] {
+            world.set_block_state(x, ground - 1, -1, state("stone"));
+            world.set_block_state(x, ground, -1, material(material_index));
+            world.set_block_state(x, ground + 1, -1, state("air"));
+        }
+    }
     world
 }
 
@@ -132,12 +137,24 @@ fn freeze_top_layer_matches_vanilla() {
             reference.server_jar.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines();
     for (name, _) in &data.biomes {
         let biome = data.biome_id(name).unwrap();
         for ground in HEIGHTS {
             let mut world = prepare(biome, ground);
+            if (62..319).contains(&ground) {
+                assert_eq!(
+                    world.block_state(15, ground, -1),
+                    material(16),
+                    "seven snow layers under the feature"
+                );
+                assert_eq!(
+                    world.block_state(16, ground, -1),
+                    state("water"),
+                    "freezable water"
+                );
+            }
             let mut random = WorldgenRandom::new(XoroshiroRandom::new(42));
             for replay in [false, true] {
                 let result = place_feature(

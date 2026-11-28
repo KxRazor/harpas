@@ -77,6 +77,10 @@ fn compare(pack: &Path, expected: &Value) {
         let max = case["maximum"].as_i64().unwrap() as i32;
         let mut almost_broken = with_damage(Some(max - 2));
         assert!(!mining.wear(&codec, &mut almost_broken).unwrap());
+        assert_eq!(
+            almost_broken,
+            with_damage(Some(case["near_limit_damage"].as_i64().unwrap() as i32))
+        );
         let broken = mining.wear(&codec, &mut almost_broken).unwrap();
         assert_eq!(
             broken,
@@ -84,6 +88,12 @@ fn compare(pack: &Path, expected: &Value) {
             "{tool} on {block}"
         );
         assert_eq!(almost_broken.is_empty(), broken);
+        if !broken {
+            assert_eq!(
+                almost_broken,
+                with_damage(Some(case["limit_damage"].as_i64().unwrap() as i32))
+            );
+        }
     }
 }
 

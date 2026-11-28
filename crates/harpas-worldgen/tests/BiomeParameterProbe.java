@@ -1,5 +1,4 @@
 // Test driver only: writes the owner-provided server's overworld climate parameter points, in order.
-import java.io.PrintWriter;
 import java.util.function.Consumer;
 import com.mojang.datafixers.util.Pair;
 import net.minecraft.resources.ResourceKey;
@@ -11,7 +10,7 @@ public final class BiomeParameterProbe {
     public static void main(String[] args) throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();
-        try (var out = new PrintWriter(args[0])) {
+        try (var out = new ProbeOutput(args[0])) {
             Consumer<Pair<Climate.ParameterPoint, ResourceKey<Biome>>> write = entry -> {
                 var point = entry.getFirst();
                 var line = new StringBuilder();

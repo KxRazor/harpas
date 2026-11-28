@@ -53,7 +53,7 @@ public final class BlockBehaviorProbe {
         Bootstrap.bootStrap();
         var propertiesField = BlockBehaviour.class.getDeclaredField("properties");
         propertiesField.setAccessible(true);
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (var block : BuiltInRegistries.BLOCK) {
                 var properties = (BlockBehaviour.Properties) propertiesField.get(block);
                 var line = new StringBuilder("block ").append(BuiltInRegistries.BLOCK.getKey(block));

@@ -50,6 +50,13 @@ pub use start::{
     StructureStart, TemplatePiece,
 };
 
+// Vanilla's structure decoration clip leaves the bottom block layer outside the writable area.
+fn in_writable_area(chunk: &crate::GeneratedChunk, [x, y, z]: [i32; 3]) -> bool {
+    (x >> 4, z >> 4) == (chunk.chunk_x(), chunk.chunk_z())
+        && y > chunk.min_y()
+        && y < chunk.min_y() + chunk.height()
+}
+
 /// Salt of `StructurePlacement.legacyArbitrarySaltProbabilityReducer`.
 const LEGACY_TYPE_2_SALT: i32 = 10_387_320;
 /// How far a ring position moves to reach a preferred biome, in blocks.

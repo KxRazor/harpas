@@ -734,7 +734,7 @@ impl crate::Game {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Condvar, Mutex};
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -821,30 +821,28 @@ mod tests {
 
     #[test]
     fn a_reconnect_and_newer_save_do_not_wait_for_or_lose_to_an_older_write() {
-        let gate = Arc::new((Mutex::new(false), Condvar::new()));
-        let worker_gate = Arc::clone(&gate);
+        let (release, waiting) = mpsc::channel::<()>();
+        let waiting = Mutex::new(waiting);
         let writes = Arc::new(Mutex::new(Vec::new()));
         let saved = Arc::clone(&writes);
         let mut store = PlayerStore::start_with_io(
             Arc::new(|_| panic!("pending snapshots must not be read from disk")),
             Arc::new(move |_, root| {
-                let (lock, changed) = &*worker_gate;
-                let _guard = changed
-                    .wait_while(lock.lock().unwrap(), |open| !*open)
-                    .unwrap();
+                let _ = waiting.lock().unwrap().recv();
                 saved.lock().unwrap().push(root.clone());
                 Ok(())
             }),
         )
         .unwrap();
+        // Release the worker before dropping the store, including while unwinding.
+        let release = release;
         store.save(1, data(1));
         store.poll().unwrap();
         store.save(1, data(2));
         assert_eq!(store.load(10, 1).unwrap().unwrap().slots[36].count, 2);
         store.poll().unwrap();
         assert_eq!(store.jobs, 1, "one outstanding write per UUID");
-        *gate.0.lock().unwrap() = true;
-        gate.1.notify_all();
+        drop(release);
         store.flush().unwrap();
         let writes = writes.lock().unwrap();
         assert_eq!(writes.len(), 2);
@@ -863,12 +861,13 @@ mod tests {
         let waiting = Mutex::new(waiting);
         let mut store = PlayerStore::start_with_io(
             Arc::new(move |_| {
-                waiting.lock().unwrap().recv().unwrap();
+                let _ = waiting.lock().unwrap().recv();
                 Err(invalid("damaged player data"))
             }),
             Arc::new(|_, _| panic!("a failed read must not overwrite player data")),
         )
         .unwrap();
+        let release = release;
         assert!(store.load(11, 1).unwrap().is_none());
         assert!(store.poll().unwrap().is_empty());
         release.send(()).unwrap();

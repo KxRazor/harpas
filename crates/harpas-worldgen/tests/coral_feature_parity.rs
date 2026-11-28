@@ -1,11 +1,9 @@
 //! Reef blocks, live heightmaps, results and random consumption compared with vanilla's coral features.
 mod reference;
 
-use harpas_worldgen::BlockGetter;
-use std::fs;
-
 use harpas_core::block::block_states;
 use harpas_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
+use harpas_worldgen::BlockGetter;
 use harpas_worldgen::{
     CompiledFeature, FeatureCompiler, FeatureWorld, GeneratedChunk, HeightmapType,
     RegionFeatureWorld, WorldgenData, place_feature,
@@ -96,6 +94,11 @@ fn prepare(test: usize, y: i32) -> RegionFeatureWorld {
             y + 1,
             -1,
             state(["air", "tube_coral", "seagrass"][test - 13]),
+        );
+        assert_eq!(world.block_state(15, y, -1), state("water"));
+        assert_eq!(
+            world.block_state(15, y + 1, -1),
+            state(["air", "tube_coral", "seagrass"][test - 13])
         );
     }
     world
@@ -191,7 +194,7 @@ fn coral_reefs_match_vanilla() {
             reference.server_jar.display().to_string(),
         ],
     );
-    let text = fs::read_to_string(output).unwrap();
+    let text = reference::read_text(output);
     let mut lines = text.lines().peekable();
     for seed in [0, 42, -4_172_144_997_902_289_642] {
         for legacy in [false, true] {

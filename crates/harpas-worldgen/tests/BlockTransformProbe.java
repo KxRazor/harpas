@@ -13,7 +13,7 @@ public final class BlockTransformProbe {
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
-        try (var out = new PrintWriter(new BufferedWriter(new FileWriter(args[0])))) {
+        try (var out = new ProbeOutput(args[0])) {
             for (var block : BuiltInRegistries.BLOCK) {
                 for (var state : block.getStateDefinition().getPossibleStates()) {
                     var line = new StringBuilder().append(Block.getId(state));

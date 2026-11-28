@@ -23,10 +23,6 @@ public final class BuriedTreasureProbe {
         var registries = server.registries();
         var structures = registries.lookupOrThrow(Registries.STRUCTURE);
         var treasure = structures.getValue(net.minecraft.resources.Identifier.parse("buried_treasure"));
-        var step = treasure.step();
-        var inStep = structures.stream().filter(s -> s.step() == step).toList();
-        int index = inStep.indexOf(treasure);
-        if (index != 0 || step.ordinal() != 3) throw new AssertionError("26.1 treasure seed order: " + index + ", " + step);
         var context = new StructurePieceSerializationContext(server.resources(), registries, null);
         var cases = NbtIo.read(Path.of(args[0]));
         var results = new CompoundTag();
@@ -43,13 +39,14 @@ public final class BuriedTreasureProbe {
                 proto.setBlockState(pos.set(cx * 16 + x, y, cz * 16 + z), Block.stateById(blocks[((y + 64) * 16 + z) * 16 + x]), 0);
             proto.setPersistedStatus(ChunkStatus.CARVERS);
             Heightmap.primeHeightmaps(proto, EnumSet.allOf(Heightmap.Types.class));
-            var entities = new HashMap<BlockPos, BlockEntity>();
+            var entities = proto.getBlockEntities();
             // Observe real piece placement with a bounded, chunk-backed WorldGenLevel. Unexpected operations fail.
             var world = (WorldGenLevel) Proxy.newProxyInstance(BuriedTreasureProbe.class.getClassLoader(),
                 new Class<?>[] {WorldGenLevel.class}, (proxy, method, arguments) -> switch (method.getName()) {
-                    case "getHeight" -> proto.getHeight((Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]) + 1;
+                    case "getHeight" -> arguments == null ? proto.getHeight() : ProbeTerrain.targetHeight(proto,
+                        (Heightmap.Types) arguments[0], (int) arguments[1], (int) arguments[2]);
                     case "getMinY" -> -64;
-                    case "getBlockState" -> proto.getBlockState((BlockPos) arguments[0]);
+                    case "getBlockState" -> ProbeTerrain.targetState(proto, (BlockPos) arguments[0]);
                     case "setBlock" -> {
                         var at = ((BlockPos) arguments[0]).immutable();
                         if ((at.getX() >> 4) != cx || (at.getZ() >> 4) != cz) throw new AssertionError("write outside target chunk");
@@ -65,17 +62,12 @@ public final class BuriedTreasureProbe {
             var starts = new ArrayList<StructureStart>();
             for (String id : input.getCompoundOrEmpty("starts").keySet()) {
                 var start = StructureStart.loadStaticStart(context, input.getCompoundOrEmpty("starts").getCompoundOrEmpty(id), seed);
-                if (start == null) throw new AssertionError("failed to load start " + id);
+                if (start == null || !start.isValid()) throw new AssertionError("failed to load start " + id);
                 starts.add(start);
             }
-            var bounds = new BoundingBox(cx * 16, -64, cz * 16, cx * 16 + 15, 319, cz * 16 + 15);
-            for (var start : starts) {
-                if (start.getStructure() != treasure) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, index, step.ordinal());
-                start.placeInChunk(world, null, null, random, bounds, chunkPos);
-            }
+            var bounds = ProbeTerrain.writableArea(proto);
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == treasure).toList(), seed, chunkPos,
+                (start, random) -> start.placeInChunk(world, null, null, random, bounds, chunkPos));
             var result = snapshot(proto, starts, entities, context, registries);
             // A carvers chunk will run FEATURES again in vanilla. Reload the saved records before doing so.
             var restored = result.getCompoundOrEmpty("starts");
@@ -84,12 +76,9 @@ public final class BuriedTreasureProbe {
             for (String id : restored.keySet()) {
                 var start = StructureStart.loadStaticStart(context, restored.getCompoundOrEmpty(id), seed);
                 starts.add(start);
-                if (start.getStructure() != treasure) continue;
-                var random = new WorldgenRandom(new XoroshiroRandomSource(0));
-                long decoration = random.setDecorationSeed(seed, cx * 16, cz * 16);
-                random.setFeatureSeed(decoration, index, step.ordinal());
-                start.placeInChunk(world, null, null, random, bounds, chunkPos);
             }
+            ProbeTerrain.decorate(structures, starts.stream().filter(s -> s.getStructure() == treasure).toList(), seed, chunkPos,
+                (start, random) -> start.placeInChunk(world, null, null, random, bounds, chunkPos));
             var resumed = snapshot(proto, starts, entities, context, registries);
             if (!result.equals(resumed)) throw new AssertionError("resuming changed " + name);
             results.put(name, result);
@@ -106,10 +95,10 @@ public final class BuriedTreasureProbe {
         var pos = new BlockPos.MutableBlockPos();
         var cp = proto.getPos();
         for (int y = -64; y < 320; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
-            blocks[((y + 64) * 16 + z) * 16 + x] = Block.getId(proto.getBlockState(pos.set(cp.x() * 16 + x, y, cp.z() * 16 + z)));
+            blocks[((y + 64) * 16 + z) * 16 + x] = Block.getId(ProbeTerrain.paletteState(proto, pos.set(cp.x() * 16 + x, y, cp.z() * 16 + z)));
         result.putIntArray("blocks", blocks);
         var saved = new CompoundTag();
-        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(), start.createTag(context, cp));
+        for (var start : starts) saved.put(registries.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure()).toString(), start.createTag(context, start.getChunkPos()));
         result.put("starts", saved);
         var tags = new ListTag();
         entities.values().stream().sorted(Comparator.comparingLong(be -> be.getBlockPos().asLong()))
@@ -117,7 +106,7 @@ public final class BuriedTreasureProbe {
         result.put("block_entities", tags);
         Heightmap.primeHeightmaps(proto, EnumSet.allOf(Heightmap.Types.class));
         var maps = new CompoundTag();
-        for (var kind : Heightmap.Types.values()) maps.putLongArray(kind.name(), proto.getOrCreateHeightmapUnprimed(kind).getRawData());
+        for (var kind : Heightmap.Types.values()) maps.putLongArray(kind.name(), proto.getOrCreateHeightmapUnprimed(kind).getRawData().clone());
         result.put("Heightmaps", maps);
         return result;
     }
